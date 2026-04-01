@@ -1,14 +1,24 @@
-use std::{fmt, mem, sync::Arc};
+use std::{fmt, sync::Arc};
 
-use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3, Vec4};
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
+    app::ViewerState,
     camera::OrbitalCamera,
-    mesh::{MeshData, Vertex},
+    cross_section::ClipPlane,
+    grid::GridScene,
+    lighting::{self},
+    mesh::MeshData,
+    pipeline::{self, ScenePipelines},
+    scene_bindings::{
+        DepthBuffer, SceneUniform, create_scene_bind_group, create_scene_bind_group_layout,
+        create_scene_uniform_buffer,
+    },
+    section::SectionResources,
+    shadow::{self, ShadowResources},
 };
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -17,7 +27,7 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     b: 0.12,
     a: 1.0,
 };
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -25,7 +35,10 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     depth_buffer: DepthBuffer,
-    scene_pipeline: wgpu::RenderPipeline,
+    grid_scene: GridScene,
+    shadow_resources: ShadowResources,
+    scene_pipelines: ScenePipelines,
+    section_resources: SectionResources,
     scene_bind_group: wgpu::BindGroup,
     scene_uniform_buffer: wgpu::Buffer,
     egui_renderer: egui_wgpu::Renderer,
@@ -38,26 +51,12 @@ pub struct EguiPaintData {
     pub pixels_per_point: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct SceneUniform {
-    view_proj: [[f32; 4]; 4],
-    model: [[f32; 4]; 4],
-    eye_position: [f32; 4],
-    light_direction: [f32; 4],
-}
-
-#[derive(Debug)]
-struct DepthBuffer {
-    _texture: wgpu::Texture,
-    view: wgpu::TextureView,
-}
-
 #[derive(Debug)]
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    bounds: crate::mesh::Bounds,
 }
 
 #[derive(Debug)]
@@ -74,13 +73,20 @@ impl Renderer {
         let (device, queue) = request_device(&adapter).await?;
         let config = build_surface_config(&surface, &adapter, size)?;
         surface.configure(&device, &config);
-        let depth_buffer = DepthBuffer::new(&device, config.width, config.height);
+        let depth_buffer = DepthBuffer::new(&device, config.width, config.height, DEPTH_FORMAT);
         let scene_uniform_buffer = create_scene_uniform_buffer(&device);
         let scene_bind_group_layout = create_scene_bind_group_layout(&device);
-        let scene_bind_group =
-            create_scene_bind_group(&device, &scene_bind_group_layout, &scene_uniform_buffer);
-        let scene_pipeline =
-            create_scene_pipeline(&device, &config, &scene_bind_group_layout);
+        let shadow_resources = ShadowResources::new(&device, &scene_bind_group_layout);
+        let scene_bind_group = create_scene_bind_group(
+            &device,
+            &scene_bind_group_layout,
+            &scene_uniform_buffer,
+            &shadow_resources,
+        );
+        let grid_scene = GridScene::new(&device, &config, &scene_bind_group_layout);
+        let scene_pipelines =
+            pipeline::create_scene_pipelines(&device, &config, &scene_bind_group_layout);
+        let section_resources = SectionResources::new(&device, &config, &scene_bind_group_layout);
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
             config.format,
@@ -92,7 +98,10 @@ impl Renderer {
             queue,
             config,
             depth_buffer,
-            scene_pipeline,
+            grid_scene,
+            shadow_resources,
+            scene_pipelines,
+            section_resources,
             scene_bind_group,
             scene_uniform_buffer,
             egui_renderer,
@@ -108,6 +117,10 @@ impl Renderer {
         self.config.width.max(1) as f32 / self.config.height.max(1) as f32
     }
 
+    pub fn wireframe_supported(&self) -> bool {
+        pipeline::supports_wireframe(self.device.features())
+    }
+
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
         if size.width == 0 || size.height == 0 {
             return;
@@ -115,7 +128,8 @@ impl Renderer {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        self.depth_buffer = DepthBuffer::new(&self.device, size.width, size.height);
+        self.depth_buffer =
+            DepthBuffer::new(&self.device, size.width, size.height, DEPTH_FORMAT);
     }
 
     pub fn set_mesh(&mut self, mesh: MeshData) {
@@ -137,6 +151,7 @@ impl Renderer {
             vertex_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
+            bounds: mesh.bounds,
         });
     }
 
@@ -147,20 +162,29 @@ impl Renderer {
     pub fn render(
         &mut self,
         camera: &OrbitalCamera,
+        viewer_state: &ViewerState,
+        clip_plane: Option<&ClipPlane>,
         egui_paint: EguiPaintData,
     ) -> Result<(), RendererError> {
         let frame = self.acquire_frame()?;
-        self.update_scene_uniforms(camera);
+        self.update_scene_uniforms(camera, viewer_state, clip_plane);
+        if let Some(clip_plane) = clip_plane {
+            self.section_resources.update_buffers(&self.queue, clip_plane);
+        }
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("main_encoder"),
-        });
-        self.draw_scene_pass(&mut encoder, &view);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("main_encoder"),
+            });
+        self.draw_shadow_pass(&mut encoder, viewer_state);
+        self.draw_scene_pass(&mut encoder, &view, viewer_state, clip_plane);
         let extra_buffers = self.upload_egui_resources(&mut encoder, &egui_paint);
         self.draw_egui_pass(&mut encoder, &view, &egui_paint);
-        self.queue.submit(extra_buffers.into_iter().chain([encoder.finish()]));
+        self.queue
+            .submit(extra_buffers.into_iter().chain([encoder.finish()]));
         frame.present();
         self.release_egui_textures(&egui_paint.textures_delta);
         Ok(())
@@ -179,13 +203,47 @@ impl Renderer {
         }
     }
 
-    fn update_scene_uniforms(&mut self, camera: &OrbitalCamera) {
+    fn update_scene_uniforms(
+        &mut self,
+        camera: &OrbitalCamera,
+        viewer_state: &ViewerState,
+        clip_plane: Option<&ClipPlane>,
+    ) {
         let matrices = camera.matrices();
+        let render_mode =
+            pipeline::resolve_render_mode(viewer_state.render_mode, self.device.features());
+        let lighting_state = lighting::encode_lights(&lighting::default_lights());
+        let shadow_light = lighting_state
+            .primary_shadow_light()
+            .unwrap_or_else(|| lighting::default_lights()[1]);
+        let light_view_proj = shadow::build_light_view_proj(shadow_light, self.scene_bounds());
         let scene_uniform = SceneUniform {
             view_proj: matrices.view_proj.to_cols_array_2d(),
             model: Mat4::IDENTITY.to_cols_array_2d(),
+            light_view_proj: light_view_proj.to_cols_array_2d(),
             eye_position: Vec4::from((matrices.eye, 1.0)).to_array(),
-            light_direction: Vec4::from((Vec3::new(-0.5, -0.8, -0.2).normalize(), 0.0)).to_array(),
+            clip_plane: clip_plane
+                .map(|plane| [plane.normal.x, plane.normal.y, plane.normal.z, plane.distance])
+                .unwrap_or([0.0, 1.0, 0.0, 0.0]),
+            render_params: [
+                pipeline::pipeline_alpha_for(render_mode),
+                if viewer_state.shadows_enabled { 1.0 } else { 0.0 },
+                pipeline::pipeline_fog_density(viewer_state.fog_enabled),
+                0.0,
+            ],
+            light_meta: [
+                lighting_state.light_count,
+                lighting_state.shadow_light_index,
+                0,
+                0,
+            ],
+            render_config: [
+                pipeline::pipeline_color_mode(viewer_state.color_mode),
+                pipeline::clip_plane_enabled_flag(clip_plane.is_some()),
+                0,
+                0,
+            ],
+            lights: lighting_state.lights,
         };
         self.queue.write_buffer(
             &self.scene_uniform_buffer,
@@ -194,7 +252,41 @@ impl Renderer {
         );
     }
 
-    fn draw_scene_pass(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    fn draw_shadow_pass(&self, encoder: &mut wgpu::CommandEncoder, viewer_state: &ViewerState) {
+        if !viewer_state.shadows_enabled {
+            return;
+        }
+        let Some(mesh) = &self.mesh else {
+            return;
+        };
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("shadow_pass"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.shadow_resources.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        render_pass.set_pipeline(&self.shadow_resources.pipeline);
+        render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+    }
+
+    fn draw_scene_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        viewer_state: &ViewerState,
+        clip_plane: Option<&ClipPlane>,
+    ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -212,19 +304,45 @@ impl Renderer {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
                 }),
-                stencil_ops: None,
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0),
+                    store: wgpu::StoreOp::Store,
+                }),
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        self.grid_scene.draw(
+            &mut render_pass,
+            &self.scene_bind_group,
+            viewer_state.show_grid,
+            viewer_state.show_build_plate,
+        );
         let Some(mesh) = &self.mesh else {
+            if clip_plane.is_some() {
+                self.section_resources
+                    .draw_preview(&mut render_pass, &self.scene_bind_group);
+            }
             return;
         };
-        render_pass.set_pipeline(&self.scene_pipeline);
+        if clip_plane.is_some() {
+            render_pass.set_pipeline(&self.scene_pipelines.section_stencil);
+            render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        }
+        render_pass.set_pipeline(self.pipeline_for(viewer_state));
         render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        if clip_plane.is_some() {
+            self.section_resources
+                .draw_fill(&mut render_pass, &self.scene_bind_group);
+            self.section_resources
+                .draw_preview(&mut render_pass, &self.scene_bind_group);
+        }
     }
 
     fn upload_egui_resources(
@@ -287,145 +405,24 @@ impl Renderer {
             pixels_per_point,
         }
     }
-}
 
-impl DepthBuffer {
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth_texture"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self {
-            _texture: texture,
-            view,
+    fn pipeline_for(&self, viewer_state: &ViewerState) -> &wgpu::RenderPipeline {
+        match pipeline::resolve_render_mode(viewer_state.render_mode, self.device.features()) {
+            crate::app::RenderMode::Solid => &self.scene_pipelines.solid,
+            crate::app::RenderMode::Wireframe => self
+                .scene_pipelines
+                .wireframe
+                .as_ref()
+                .unwrap_or(&self.scene_pipelines.solid),
+            crate::app::RenderMode::XRay => &self.scene_pipelines.xray,
         }
     }
-}
 
-fn create_scene_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let initial = SceneUniform {
-        view_proj: Mat4::IDENTITY.to_cols_array_2d(),
-        model: Mat4::IDENTITY.to_cols_array_2d(),
-        eye_position: [0.0, 0.0, 3.0, 1.0],
-        light_direction: [0.0, -1.0, 0.0, 0.0],
-    };
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("scene_uniform_buffer"),
-        contents: bytemuck::bytes_of(&initial),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
-}
-
-fn create_scene_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scene_bind_group_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    })
-}
-
-fn create_scene_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("scene_bind_group"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    })
-}
-
-fn create_scene_pipeline(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-    bind_group_layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("scene_shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("scene_pipeline_layout"),
-        bind_group_layouts: &[bind_group_layout],
-        push_constant_ranges: &[],
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("scene_pipeline"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[vertex_buffer_layout()],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview: None,
-        cache: None,
-    })
-}
-
-fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout {
-        array_stride: mem::size_of::<Vertex>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x3,
-            },
-            wgpu::VertexAttribute {
-                offset: mem::size_of::<[f32; 3]>() as u64,
-                shader_location: 1,
-                format: wgpu::VertexFormat::Float32x3,
-            },
-        ],
+    fn scene_bounds(&self) -> crate::mesh::Bounds {
+        self.mesh.as_ref().map(|mesh| mesh.bounds).unwrap_or(crate::mesh::Bounds {
+            min: Vec3::new(-128.0, -1.0, -128.0),
+            max: Vec3::new(128.0, 128.0, 128.0),
+        })
     }
 }
 
@@ -446,10 +443,11 @@ async fn request_adapter(
 async fn request_device(
     adapter: &wgpu::Adapter,
 ) -> Result<(wgpu::Device, wgpu::Queue), RendererError> {
+    let required_features = pipeline::requested_device_features(adapter.features());
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("wgpu_device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,

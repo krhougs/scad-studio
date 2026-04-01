@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[path = "../src/watcher.rs"]
 mod watcher;
 
@@ -18,7 +20,7 @@ fn matches_path_accepts_canonicalized_equivalent_paths() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&file_path, &symlink_path).expect("symlink should be created");
 
-    let matched = watcher::matches_path(&[file_path.clone()], Some(&symlink_path));
+    let matched = watcher::matches_path(std::slice::from_ref(&file_path), Some(&symlink_path));
 
     assert!(matched);
 
@@ -33,4 +35,15 @@ fn matches_path_rejects_unrelated_paths() {
     let changed = vec![PathBuf::from("/tmp/other.scad")];
 
     assert!(!watcher::matches_path(&changed, Some(&watched)));
+}
+
+#[test]
+fn matches_any_watched_path_when_preset_file_changes() {
+    let watched = vec![
+        PathBuf::from("/tmp/example.scad"),
+        PathBuf::from("/tmp/example.scad.json"),
+    ];
+    let changed = vec![PathBuf::from("/tmp/example.scad.json")];
+
+    assert!(watcher::matches_any_path(&changed, &watched));
 }

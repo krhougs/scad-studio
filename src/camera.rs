@@ -1,6 +1,7 @@
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3, Vec4Swizzles};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 
+use crate::app::ProjectionMode;
 use crate::mesh::Bounds;
 
 const MIN_DISTANCE: f32 = 0.05;
@@ -14,6 +15,9 @@ const MAX_PITCH: f32 = 1.54;
 #[derive(Debug, Clone, Copy)]
 pub struct CameraMatrices {
     pub view_proj: Mat4,
+    pub view: Mat4,
+    #[allow(dead_code)]
+    pub projection: Mat4,
     pub eye: Vec3,
 }
 
@@ -25,6 +29,7 @@ pub struct OrbitalCamera {
     elevation: f32,
     aspect_ratio: f32,
     fov_y_radians: f32,
+    projection_mode: ProjectionMode,
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +53,7 @@ impl OrbitalCamera {
             elevation: 0.45,
             aspect_ratio: aspect_ratio.max(0.1),
             fov_y_radians: 45.0_f32.to_radians(),
+            projection_mode: ProjectionMode::Perspective,
         }
     }
 
@@ -55,13 +61,26 @@ impl OrbitalCamera {
         self.aspect_ratio = aspect_ratio.max(0.1);
     }
 
+    pub fn set_projection_mode(&mut self, projection_mode: ProjectionMode) {
+        self.projection_mode = projection_mode;
+    }
+
     pub fn matrices(&self) -> CameraMatrices {
         let eye = self.eye_position();
         let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
-        let projection =
-            Mat4::perspective_rh(self.fov_y_radians, self.aspect_ratio.max(0.1), 0.01, 10_000.0);
+        let projection = match self.projection_mode {
+            ProjectionMode::Perspective => Mat4::perspective_rh(
+                self.fov_y_radians,
+                self.aspect_ratio.max(0.1),
+                0.01,
+                10_000.0,
+            ),
+            ProjectionMode::Orthographic => self.orthographic_projection(),
+        };
         CameraMatrices {
             view_proj: projection * view,
+            view,
+            projection,
             eye,
         }
     }
@@ -69,10 +88,32 @@ impl OrbitalCamera {
     pub fn fit_bounds(&mut self, bounds: Bounds) {
         self.target = bounds.center();
         let radius = bounds.radius().max(0.25);
-        let vertical_half_fov = self.fov_y_radians * 0.5;
-        let horizontal_half_fov = (vertical_half_fov.tan() * self.aspect_ratio.max(0.1)).atan();
-        let limiting_half_fov = vertical_half_fov.min(horizontal_half_fov);
-        let fit_distance = radius / limiting_half_fov.tan();
+        let fit_distance = match self.projection_mode {
+            ProjectionMode::Perspective => {
+                let vertical_half_fov = self.fov_y_radians * 0.5;
+                let horizontal_half_fov =
+                    (vertical_half_fov.tan() * self.aspect_ratio.max(0.1)).atan();
+                let limiting_half_fov = vertical_half_fov.min(horizontal_half_fov);
+                radius / limiting_half_fov.tan()
+            }
+            ProjectionMode::Orthographic => {
+                let eye = self.eye_position();
+                let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
+                let mut min = Vec2::splat(f32::INFINITY);
+                let mut max = Vec2::splat(f32::NEG_INFINITY);
+                for corner in bounds_corners(bounds) {
+                    let view_space = view * corner.extend(1.0);
+                    min = min.min(view_space.xy());
+                    max = max.max(view_space.xy());
+                }
+                let half_extent = (max - min) * 0.5;
+                let half_height = half_extent
+                    .y
+                    .max(half_extent.x / self.aspect_ratio.max(0.1))
+                    .max(0.25);
+                half_height / (self.fov_y_radians * 0.5).tan()
+            }
+        };
         self.distance = (fit_distance * 1.35).clamp(MIN_DISTANCE, MAX_DISTANCE);
     }
 
@@ -101,6 +142,34 @@ impl OrbitalCamera {
         let z = self.distance * self.elevation.cos() * self.azimuth.sin();
         self.target + Vec3::new(x, y, z)
     }
+
+    fn orthographic_projection(&self) -> Mat4 {
+        let half_height = (self.distance * (self.fov_y_radians * 0.5).tan()).max(0.01);
+        let half_width = (half_height * self.aspect_ratio.max(0.1)).max(0.01);
+        Mat4::orthographic_rh(
+            -half_width,
+            half_width,
+            -half_height,
+            half_height,
+            0.01,
+            10_000.0,
+        )
+    }
+}
+
+fn bounds_corners(bounds: Bounds) -> [Vec3; 8] {
+    let min = bounds.min;
+    let max = bounds.max;
+    [
+        Vec3::new(min.x, min.y, min.z),
+        Vec3::new(min.x, min.y, max.z),
+        Vec3::new(min.x, max.y, min.z),
+        Vec3::new(min.x, max.y, max.z),
+        Vec3::new(max.x, min.y, min.z),
+        Vec3::new(max.x, min.y, max.z),
+        Vec3::new(max.x, max.y, min.z),
+        Vec3::new(max.x, max.y, max.z),
+    ]
 }
 
 impl CameraInteraction {
