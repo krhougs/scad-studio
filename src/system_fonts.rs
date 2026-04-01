@@ -72,6 +72,7 @@ pub fn build_font_definitions_for_current_ui(
     Ok((fonts, fallback_fonts))
 }
 
+#[allow(dead_code)]
 pub fn current_language_preferences() -> Vec<String> {
     preferred_language_tags()
 }
@@ -109,9 +110,7 @@ fn normalize_language_tag(raw: &str) -> Option<String> {
 
     let normalized = base.replace('_', "-");
     let mut parts = normalized.split('-').filter(|part| !part.is_empty());
-    let Some(language) = parts.next() else {
-        return None;
-    };
+    let language = parts.next()?;
     let mut result = language.to_ascii_lowercase();
     if let Some(region) = parts.next() {
         result.push('-');
@@ -198,13 +197,16 @@ mod macos {
 
     type CTFontRef = *const c_void;
     type CTFontDescriptorRef = *const c_void;
+    #[allow(dead_code)]
     type CTFontUIFontType = u32;
     type CGFloat = f64;
 
+    #[allow(dead_code)]
     const K_CT_FONT_UIFONT_SYSTEM: CTFontUIFontType = 2;
 
     #[link(name = "CoreText", kind = "framework")]
     unsafe extern "C" {
+        #[allow(dead_code)]
         fn CTFontCreateUIFontForLanguage(
             ui_type: CTFontUIFontType,
             size: CGFloat,

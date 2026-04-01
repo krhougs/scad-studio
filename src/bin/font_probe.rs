@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[path = "../system_fonts.rs"]
 mod system_fonts;
 

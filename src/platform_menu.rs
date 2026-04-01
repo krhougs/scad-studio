@@ -17,6 +17,7 @@ use crate::UserEvent;
 pub const APP_NAME: &str = "scad-studio";
 
 const OPEN_MENU_ID: &str = "file.open";
+const SETTINGS_MENU_ID: &str = "file.settings";
 const ABOUT_MENU_ID: &str = "app.about";
 const QUIT_MENU_ID: &str = "app.quit";
 #[cfg(target_os = "windows")]
@@ -25,6 +26,7 @@ const EXIT_MENU_ID: &str = "file.exit";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuCommand {
     OpenFile,
+    OpenSettings,
     ShowAbout,
     QuitApp,
 }
@@ -33,6 +35,7 @@ pub enum MenuCommand {
 pub struct PlatformMenu {
     menu: Menu,
     open_menu_id: String,
+    settings_menu_id: Option<String>,
     about_menu_id: Option<String>,
     quit_menu_id: Option<String>,
 }
@@ -80,6 +83,7 @@ impl PlatformMenu {
         resolve_menu_command(
             id,
             &self.open_menu_id,
+            self.settings_menu_id.as_deref(),
             self.about_menu_id.as_deref(),
             self.quit_menu_id.as_deref(),
         )
@@ -102,11 +106,15 @@ impl PlatformMenu {
 pub(crate) fn resolve_menu_command(
     id: &str,
     open_menu_id: &str,
+    settings_menu_id: Option<&str>,
     about_menu_id: Option<&str>,
     quit_menu_id: Option<&str>,
 ) -> Option<MenuCommand> {
     if id == open_menu_id {
         return Some(MenuCommand::OpenFile);
+    }
+    if settings_menu_id.is_some_and(|menu_id| id == menu_id) {
+        return Some(MenuCommand::OpenSettings);
     }
     if about_menu_id.is_some_and(|menu_id| id == menu_id) {
         return Some(MenuCommand::ShowAbout);
@@ -135,6 +143,12 @@ fn build_macos_menu() -> PlatformMenu {
         true,
         Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyO)),
     );
+    let settings_item = MenuItem::with_id(
+        SETTINGS_MENU_ID,
+        "设置...",
+        true,
+        Some(Accelerator::new(Some(CMD_OR_CTRL), Code::Comma)),
+    );
     let quit_item = MenuItem::with_id(
         QUIT_MENU_ID,
         format!("退出 {APP_NAME}"),
@@ -147,7 +161,7 @@ fn build_macos_menu() -> PlatformMenu {
         .append_items(&[&about_item, &separator, &quit_item])
         .expect("构建 macOS App 菜单失败");
     file_menu
-        .append(&open_item)
+        .append_items(&[&open_item, &settings_item])
         .expect("构建 macOS File 菜单失败");
     menu.append_items(&[&app_menu, &file_menu])
         .expect("挂载 macOS 菜单栏失败");
@@ -155,6 +169,7 @@ fn build_macos_menu() -> PlatformMenu {
     PlatformMenu {
         menu,
         open_menu_id: open_item.id().as_ref().to_owned(),
+        settings_menu_id: Some(settings_item.id().as_ref().to_owned()),
         about_menu_id: Some(about_item.id().as_ref().to_owned()),
         quit_menu_id: Some(quit_item.id().as_ref().to_owned()),
     }
@@ -174,6 +189,12 @@ fn build_windows_menu() -> PlatformMenu {
         true,
         Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyO)),
     );
+    let settings_item = MenuItem::with_id(
+        SETTINGS_MENU_ID,
+        "&Settings...",
+        true,
+        Some(Accelerator::new(Some(CMD_OR_CTRL), Code::Comma)),
+    );
     let exit_item = MenuItem::with_id(
         EXIT_MENU_ID,
         "E&xit",
@@ -189,7 +210,7 @@ fn build_windows_menu() -> PlatformMenu {
     let separator = PredefinedMenuItem::separator();
 
     file_menu
-        .append_items(&[&open_item, &separator, &exit_item])
+        .append_items(&[&open_item, &settings_item, &separator, &exit_item])
         .expect("构建 Windows File 菜单失败");
     help_menu
         .append(&about_item)
@@ -200,6 +221,7 @@ fn build_windows_menu() -> PlatformMenu {
     PlatformMenu {
         menu,
         open_menu_id: open_item.id().as_ref().to_owned(),
+        settings_menu_id: Some(settings_item.id().as_ref().to_owned()),
         about_menu_id: Some(about_item.id().as_ref().to_owned()),
         quit_menu_id: Some(exit_item.id().as_ref().to_owned()),
     }

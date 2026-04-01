@@ -1,7 +1,6 @@
 use std::{
-    env,
-    fmt,
-    fs,
+    env, fmt, fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
@@ -9,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use crate::app::{LogEntry, LogLevel};
 use crate::mesh::{self, MeshData};
 
 #[derive(Debug, Clone)]
@@ -20,24 +20,48 @@ pub struct RenderedArtifact {
 #[derive(Debug, Clone)]
 pub enum OpenScadMessage {
     Started(PathBuf),
+    Log(LogEntry),
     Finished(Result<RenderedArtifact, OpenScadError>),
 }
 
 #[derive(Debug, Clone)]
 pub struct OpenScadError(String);
 
+impl OpenScadError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
 pub struct OpenScadRunner {
     tx: Sender<RunnerCommand>,
 }
 
 enum RunnerCommand {
-    Render(PathBuf),
+    Render(RenderRequest),
 }
 
 struct RunningJob {
-    source_path: PathBuf,
+    request: RenderRequest,
     stl_path: PathBuf,
     child: Child,
+}
+
+struct JobCompletion {
+    logs: Vec<LogEntry>,
+    result: Result<RenderedArtifact, OpenScadError>,
+}
+
+#[derive(Debug, Clone)]
+struct RenderRequest {
+    source_path: PathBuf,
+    defines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliOutputFormat {
+    BinaryStl,
+    ThreeMf,
 }
 
 impl OpenScadRunner {
@@ -50,8 +74,16 @@ impl OpenScadRunner {
         Self { tx }
     }
 
+    #[allow(dead_code)]
     pub fn render(&self, source_path: PathBuf) {
-        let _ = self.tx.send(RunnerCommand::Render(source_path));
+        self.render_with_defines(source_path, Vec::new());
+    }
+
+    pub fn render_with_defines(&self, source_path: PathBuf, defines: Vec<String>) {
+        let _ = self.tx.send(RunnerCommand::Render(RenderRequest {
+            source_path,
+            defines,
+        }));
     }
 }
 
@@ -62,26 +94,29 @@ where
     let mut active_job: Option<RunningJob> = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(RunnerCommand::Render(source_path)) => {
+            Ok(RunnerCommand::Render(request)) => {
                 cancel_job(&mut active_job);
-                notify(OpenScadMessage::Started(source_path.clone()));
-                active_job = start_job(source_path, &notify);
+                notify(OpenScadMessage::Started(request.source_path.clone()));
+                active_job = start_job(request, &notify);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        if let Some(result) = poll_job(&mut active_job) {
-            notify(OpenScadMessage::Finished(result));
+        if let Some(completion) = poll_job(&mut active_job) {
+            for entry in completion.logs {
+                notify(OpenScadMessage::Log(entry));
+            }
+            notify(OpenScadMessage::Finished(completion.result));
         }
     }
     cancel_job(&mut active_job);
 }
 
-fn start_job<F>(source_path: PathBuf, notify: &F) -> Option<RunningJob>
+fn start_job<F>(request: RenderRequest, notify: &F) -> Option<RunningJob>
 where
     F: Fn(OpenScadMessage),
 {
-    match build_job(&source_path) {
+    match build_job(&request) {
         Ok(job) => Some(job),
         Err(error) => {
             notify(OpenScadMessage::Finished(Err(error)));
@@ -90,42 +125,43 @@ where
     }
 }
 
-fn build_job(source_path: &Path) -> Result<RunningJob, OpenScadError> {
-    let executable = detect_openscad_path()?;
-    let stl_path = temp_stl_path(source_path);
+fn build_job(request: &RenderRequest) -> Result<RunningJob, OpenScadError> {
+    let executable = detect_openscad_path(None)?;
+    let stl_path = temp_stl_path(&request.source_path);
     let child = Command::new(executable)
-        .arg("--export-format")
-        .arg("binstl")
-        .arg("-o")
-        .arg(&stl_path)
-        .arg(source_path)
+        .args(build_cli_args(
+            CliOutputFormat::BinaryStl,
+            &stl_path,
+            &request.defines,
+            &request.source_path,
+        ))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| OpenScadError(format!("启动 OpenSCAD CLI 失败: {error}")))?;
+        .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
     Ok(RunningJob {
-        source_path: source_path.to_path_buf(),
+        request: request.clone(),
         stl_path,
         child,
     })
 }
 
-fn poll_job(job: &mut Option<RunningJob>) -> Option<Result<RenderedArtifact, OpenScadError>> {
+fn poll_job(job: &mut Option<RunningJob>) -> Option<JobCompletion> {
     let status = job.as_mut()?.child.try_wait().ok()??;
     let RunningJob {
-        source_path,
+        request,
         stl_path,
         child,
     } = job.take()?;
     let output = child
         .wait_with_output()
-        .map_err(|error| OpenScadError(format!("等待 OpenSCAD CLI 结束失败: {error}")));
-    Some(finalize_job(
-        source_path,
-        stl_path,
-        status.success(),
-        output,
-    ))
+        .map_err(|error| OpenScadError::new(format!("等待 OpenSCAD CLI 结束失败: {error}")));
+    let logs = output
+        .as_ref()
+        .map(|output| collect_process_logs(&output.stdout, &output.stderr, status.success()))
+        .unwrap_or_default();
+    let result = finalize_job(request.source_path, stl_path, status.success(), output);
+    Some(JobCompletion { logs, result })
 }
 
 fn finalize_job(
@@ -143,35 +179,58 @@ fn finalize_job(
         } else {
             format!("OpenSCAD CLI 执行失败: {stderr}")
         };
-        return Err(OpenScadError(message));
+        return Err(OpenScadError::new(message));
     }
     let mesh = mesh::load_stl(&stl_path)
-        .map_err(|error| OpenScadError(format!("解析 OpenSCAD 输出 STL 失败: {error}")))?;
+        .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 输出 STL 失败: {error}")))?;
     let _ = fs::remove_file(&stl_path);
-    Ok(RenderedArtifact {
-        source_path,
-        mesh,
-    })
+    Ok(RenderedArtifact { source_path, mesh })
 }
 
 fn cancel_job(job: &mut Option<RunningJob>) {
     if let Some(active_job) = job.as_mut() {
         let _ = active_job.child.kill();
         let _ = active_job.child.wait();
+        if let Err(error) = fs::remove_file(&active_job.stl_path)
+            && error.kind() != ErrorKind::NotFound
+        {
+            log::warn!("清理临时 STL 失败: {error}");
+        }
     }
     *job = None;
 }
 
-fn detect_openscad_path() -> Result<PathBuf, OpenScadError> {
-    if let Ok(path) = env::var("OPENSCAD_PATH") {
-        let candidate = PathBuf::from(path);
-        if candidate.is_file() {
-            return Ok(candidate);
+pub fn collect_process_logs(stdout: &[u8], stderr: &[u8], success: bool) -> Vec<LogEntry> {
+    let mut logs = Vec::new();
+    extend_logs(&mut logs, stdout, LogLevel::Info);
+    extend_logs(
+        &mut logs,
+        stderr,
+        if success {
+            LogLevel::Warning
+        } else {
+            LogLevel::Error
+        },
+    );
+    logs
+}
+
+fn extend_logs(entries: &mut Vec<LogEntry>, bytes: &[u8], level: LogLevel) {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let message = line.trim();
+        if message.is_empty() {
+            continue;
         }
+        entries.push(LogEntry {
+            level,
+            message: message.to_owned(),
+        });
     }
-    find_in_path()
-        .or_else(find_platform_path)
-        .ok_or_else(|| OpenScadError("未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH".into()))
+}
+
+pub fn detect_openscad_path(configured_path: Option<PathBuf>) -> Result<PathBuf, OpenScadError> {
+    let env_path = env::var("OPENSCAD_PATH").ok().map(PathBuf::from);
+    resolve_openscad_path(configured_path, env_path, find_in_path().or_else(find_platform_path))
 }
 
 fn find_in_path() -> Option<PathBuf> {
@@ -214,6 +273,46 @@ fn temp_stl_path(source_path: &Path) -> PathBuf {
         .unwrap_or("preview");
     let filename = format!("scad-studio-{stem}-{}.stl", std::process::id());
     env::temp_dir().join(filename)
+}
+
+pub fn build_cli_args(
+    format: CliOutputFormat,
+    output_path: &Path,
+    defines: &[String],
+    source_path: &Path,
+) -> Vec<String> {
+    let mut args = vec![
+        "--export-format".to_string(),
+        format.as_arg().to_string(),
+        "-o".to_string(),
+        output_path.display().to_string(),
+    ];
+    for define in defines {
+        args.push("-D".to_string());
+        args.push(define.clone());
+    }
+    args.push(source_path.display().to_string());
+    args
+}
+
+pub fn resolve_openscad_path(
+    configured_path: Option<PathBuf>,
+    env_path: Option<PathBuf>,
+    auto_path: Option<PathBuf>,
+) -> Result<PathBuf, OpenScadError> {
+    configured_path
+        .or(env_path)
+        .or(auto_path)
+        .ok_or_else(|| OpenScadError::new("未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH"))
+}
+
+impl CliOutputFormat {
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::BinaryStl => "binstl",
+            Self::ThreeMf => "3mf",
+        }
+    }
 }
 
 impl std::error::Error for OpenScadError {}
