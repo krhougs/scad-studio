@@ -15,7 +15,7 @@ use crate::{
     pipeline::{self, ScenePipelines},
     scene_bindings::{
         DepthBuffer, SceneUniform, create_scene_bind_group, create_scene_bind_group_layout,
-        create_scene_uniform_buffer,
+        create_scene_uniform_buffer, create_shadow_bind_group, create_shadow_bind_group_layout,
     },
     section::SectionResources,
     shadow::{self, ShadowResources},
@@ -40,6 +40,7 @@ pub struct Renderer {
     scene_pipelines: ScenePipelines,
     section_resources: SectionResources,
     scene_bind_group: wgpu::BindGroup,
+    shadow_bind_group: wgpu::BindGroup,
     scene_uniform_buffer: wgpu::Buffer,
     egui_renderer: egui_wgpu::Renderer,
     mesh: Option<GpuMesh>,
@@ -76,13 +77,16 @@ impl Renderer {
         let depth_buffer = DepthBuffer::new(&device, config.width, config.height, DEPTH_FORMAT);
         let scene_uniform_buffer = create_scene_uniform_buffer(&device);
         let scene_bind_group_layout = create_scene_bind_group_layout(&device);
-        let shadow_resources = ShadowResources::new(&device, &scene_bind_group_layout);
+        let shadow_bind_group_layout = create_shadow_bind_group_layout(&device);
+        let shadow_resources = ShadowResources::new(&device, &shadow_bind_group_layout);
         let scene_bind_group = create_scene_bind_group(
             &device,
             &scene_bind_group_layout,
             &scene_uniform_buffer,
             &shadow_resources,
         );
+        let shadow_bind_group =
+            create_shadow_bind_group(&device, &shadow_bind_group_layout, &scene_uniform_buffer);
         let grid_scene = GridScene::new(&device, &config, &scene_bind_group_layout);
         let scene_pipelines =
             pipeline::create_scene_pipelines(&device, &config, &scene_bind_group_layout);
@@ -103,6 +107,7 @@ impl Renderer {
             scene_pipelines,
             section_resources,
             scene_bind_group,
+            shadow_bind_group,
             scene_uniform_buffer,
             egui_renderer,
             mesh: None,
@@ -274,7 +279,7 @@ impl Renderer {
             occlusion_query_set: None,
         });
         render_pass.set_pipeline(&self.shadow_resources.pipeline);
-        render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
+        render_pass.set_bind_group(0, &self.shadow_bind_group, &[]);
         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
