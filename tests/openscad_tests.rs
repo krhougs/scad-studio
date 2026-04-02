@@ -10,18 +10,20 @@ mod config;
 mod document;
 #[path = "../src/export.rs"]
 mod export;
-#[path = "../src/params.rs"]
-mod params;
-#[path = "../src/presets.rs"]
-mod presets;
+#[path = "../src/gizmo.rs"]
+mod gizmo;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/openscad.rs"]
 mod openscad;
+#[path = "../src/params.rs"]
+mod params;
+#[path = "../src/presets.rs"]
+mod presets;
+#[path = "../src/three_mf.rs"]
+mod three_mf;
 #[path = "../src/ui/mod.rs"]
 mod ui;
-#[path = "../src/gizmo.rs"]
-mod gizmo;
 
 use app::LogLevel;
 use openscad::collect_process_logs;

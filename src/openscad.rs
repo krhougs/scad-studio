@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::app::{LogEntry, LogLevel};
-use crate::mesh::{self, MeshData};
+use crate::{mesh::MeshData, three_mf};
 
 #[derive(Debug, Clone)]
 pub struct RenderedArtifact {
@@ -43,7 +43,7 @@ enum RunnerCommand {
 
 struct RunningJob {
     request: RenderRequest,
-    stl_path: PathBuf,
+    preview_path: PathBuf,
     child: Child,
 }
 
@@ -126,22 +126,21 @@ where
 }
 
 fn build_job(request: &RenderRequest) -> Result<RunningJob, OpenScadError> {
-    let executable = detect_openscad_path(None)?;
-    let stl_path = temp_stl_path(&request.source_path);
+    let executable = detect_openscad_path(None).map_err(|_| {
+        OpenScadError::new(
+            "未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH；3MF 彩色预览需要可用的 OpenSCAD CLI",
+        )
+    })?;
+    let (preview_path, args) = build_preview_job_args(&request.source_path, &request.defines);
     let child = Command::new(executable)
-        .args(build_cli_args(
-            CliOutputFormat::BinaryStl,
-            &stl_path,
-            &request.defines,
-            &request.source_path,
-        ))
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
     Ok(RunningJob {
         request: request.clone(),
-        stl_path,
+        preview_path,
         child,
     })
 }
@@ -150,7 +149,7 @@ fn poll_job(job: &mut Option<RunningJob>) -> Option<JobCompletion> {
     let status = job.as_mut()?.child.try_wait().ok()??;
     let RunningJob {
         request,
-        stl_path,
+        preview_path,
         child,
     } = job.take()?;
     let output = child
@@ -160,30 +159,42 @@ fn poll_job(job: &mut Option<RunningJob>) -> Option<JobCompletion> {
         .as_ref()
         .map(|output| collect_process_logs(&output.stdout, &output.stderr, status.success()))
         .unwrap_or_default();
-    let result = finalize_job(request.source_path, stl_path, status.success(), output);
+    let result = finalize_job(request.source_path, preview_path, status.success(), output);
     Some(JobCompletion { logs, result })
 }
 
-fn finalize_job(
+pub(crate) fn finalize_job(
     source_path: PathBuf,
-    stl_path: PathBuf,
+    preview_path: PathBuf,
     success: bool,
     output: Result<std::process::Output, OpenScadError>,
 ) -> Result<RenderedArtifact, OpenScadError> {
-    let output = output?;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            remove_preview_file(&preview_path);
+            return Err(error);
+        }
+    };
     if !success {
-        let _ = fs::remove_file(&stl_path);
+        remove_preview_file(&preview_path);
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let message = if stderr.is_empty() {
-            "OpenSCAD CLI 返回失败状态".to_owned()
+            "OpenSCAD 3MF 预览失败：CLI 返回非零状态，当前环境可能不支持 3MF 导出".to_owned()
         } else {
-            format!("OpenSCAD CLI 执行失败: {stderr}")
+            format!("OpenSCAD 3MF 预览失败: {stderr}")
         };
         return Err(OpenScadError::new(message));
     }
-    let mesh = mesh::load_stl(&stl_path)
-        .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 输出 STL 失败: {error}")))?;
-    let _ = fs::remove_file(&stl_path);
+    if !preview_path.is_file() {
+        return Err(OpenScadError::new(
+            "OpenSCAD 3MF 预览失败：CLI 未生成可解析的 3MF 输出文件",
+        ));
+    }
+    let mesh = three_mf::load_3mf(&preview_path)
+        .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 3MF 预览失败: {error}")));
+    remove_preview_file(&preview_path);
+    let mesh = mesh?;
     Ok(RenderedArtifact { source_path, mesh })
 }
 
@@ -191,11 +202,7 @@ fn cancel_job(job: &mut Option<RunningJob>) {
     if let Some(active_job) = job.as_mut() {
         let _ = active_job.child.kill();
         let _ = active_job.child.wait();
-        if let Err(error) = fs::remove_file(&active_job.stl_path)
-            && error.kind() != ErrorKind::NotFound
-        {
-            log::warn!("清理临时 STL 失败: {error}");
-        }
+        remove_preview_file(&active_job.preview_path);
     }
     *job = None;
 }
@@ -230,7 +237,11 @@ fn extend_logs(entries: &mut Vec<LogEntry>, bytes: &[u8], level: LogLevel) {
 
 pub fn detect_openscad_path(configured_path: Option<PathBuf>) -> Result<PathBuf, OpenScadError> {
     let env_path = env::var("OPENSCAD_PATH").ok().map(PathBuf::from);
-    resolve_openscad_path(configured_path, env_path, find_in_path().or_else(find_platform_path))
+    resolve_openscad_path(
+        configured_path,
+        env_path,
+        find_in_path().or_else(find_platform_path),
+    )
 }
 
 fn find_in_path() -> Option<PathBuf> {
@@ -266,13 +277,19 @@ fn find_platform_path() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn temp_stl_path(source_path: &Path) -> PathBuf {
+fn temp_preview_path(source_path: &Path) -> PathBuf {
     let stem = source_path
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("preview");
-    let filename = format!("scad-studio-{stem}-{}.stl", std::process::id());
+    let filename = format!("scad-studio-{stem}-{}.3mf", std::process::id());
     env::temp_dir().join(filename)
+}
+
+pub fn build_preview_job_args(source_path: &Path, defines: &[String]) -> (PathBuf, Vec<String>) {
+    let output_path = temp_preview_path(source_path);
+    let args = build_cli_args(CliOutputFormat::ThreeMf, &output_path, defines, source_path);
+    (output_path, args)
 }
 
 pub fn build_cli_args(
@@ -320,5 +337,13 @@ impl std::error::Error for OpenScadError {}
 impl fmt::Display for OpenScadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+fn remove_preview_file(path: &Path) {
+    if let Err(error) = fs::remove_file(path)
+        && error.kind() != ErrorKind::NotFound
+    {
+        log::warn!("清理临时 3MF 预览文件失败: {error}");
     }
 }

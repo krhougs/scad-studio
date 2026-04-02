@@ -139,6 +139,11 @@ pub fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
                 shader_location: 1,
                 format: wgpu::VertexFormat::Float32x3,
             },
+            wgpu::VertexAttribute {
+                offset: mem::size_of::<[f32; 6]>() as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x4,
+            },
         ],
     }
 }

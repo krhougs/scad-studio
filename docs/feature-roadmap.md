@@ -14,7 +14,7 @@
 - [x] OpenSCAD 可执行文件路径自动检测（macOS / Linux / Windows）
 - [x] OpenSCAD 可执行文件路径手动配置
 - [x] STL 文件解析（二进制 + ASCII）
-- [ ] 3MF 文件解析（支持颜色信息）
+- [x] 3MF 文件解析（支持颜色信息）
 - [x] CLI 进程管理（新请求到来时终止旧进程，防止堆积）
 - [x] CLI 错误信息捕获与 UI 展示
 
@@ -111,7 +111,8 @@
 
 - macOS 与 Windows 当前优先使用平台菜单；Linux 仍回退到应用内嵌菜单，因为现有 `winit` 架构下暂未接入 GTK 原生菜单。
 - OpenSCAD 可执行文件当前同时支持自动检测、环境变量 `OPENSCAD_PATH` 覆盖，以及设置窗口中的手动路径配置。
-- 3MF 导出已实现，但 3MF 导入解析仍未纳入本轮实现范围，因此该项保持未完成状态。
+- 预览链路现已改为优先输出并解析 3MF，保留 `mesh`、`basematerials`、`colorgroup` 与三角面级 `pid/p1/p2/p3` 的颜色语义。
+- 当前 3MF 预览仍不支持 `texture2d`、`texture2dgroup`、`compositematerials` 等扩展资源；遇到这些类型会明确报错，不做静默降级。
 
 ---
 

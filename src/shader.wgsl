@@ -28,13 +28,15 @@ var shadow_sampler: sampler_comparison;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
-    @location(2) light_clip_position: vec4<f32>,
+    @location(2) model_color: vec4<f32>,
+    @location(3) light_clip_position: vec4<f32>,
 };
 
 @vertex
@@ -45,11 +47,15 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.clip_position = scene.view_proj * world_position;
     output.world_position = world_position.xyz;
     output.world_normal = world_normal;
+    output.model_color = input.color;
     output.light_clip_position = scene.light_view_proj * world_position;
     return output;
 }
 
-fn base_color(normal: vec3<f32>) -> vec3<f32> {
+fn base_color(normal: vec3<f32>, model_color: vec4<f32>) -> vec3<f32> {
+    if scene.render_config.x == 1u && model_color.a >= 0.0 {
+        return model_color.rgb;
+    }
     if scene.render_config.x == 1u {
         return 0.32 + abs(normal) * vec3<f32>(0.52, 0.4, 0.36);
     }
@@ -106,7 +112,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     clip_discard(input.world_position);
     let normal = normalize(input.world_normal);
     let view_dir = normalize(scene.eye_position.xyz - input.world_position);
-    let base = base_color(normal);
+    let base = base_color(normal, input.model_color);
     var shaded = vec3<f32>(0.0);
     let shadow = sample_shadow(input.light_clip_position);
     for (var index = 0u; index < scene.light_meta.x; index = index + 1u) {

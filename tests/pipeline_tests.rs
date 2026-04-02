@@ -10,27 +10,29 @@ mod config;
 mod document;
 #[path = "../src/export.rs"]
 mod export;
-#[path = "../src/params.rs"]
-mod params;
-#[path = "../src/presets.rs"]
-mod presets;
-#[path = "../src/openscad.rs"]
-mod openscad;
-#[path = "../src/mesh.rs"]
-mod mesh;
-#[path = "../src/pipeline.rs"]
-mod pipeline;
-#[path = "../src/ui/mod.rs"]
-mod ui;
 #[path = "../src/gizmo.rs"]
 mod gizmo;
+#[path = "../src/mesh.rs"]
+mod mesh;
+#[path = "../src/openscad.rs"]
+mod openscad;
+#[path = "../src/params.rs"]
+mod params;
+#[path = "../src/pipeline.rs"]
+mod pipeline;
+#[path = "../src/presets.rs"]
+mod presets;
+#[path = "../src/three_mf.rs"]
+mod three_mf;
+#[path = "../src/ui/mod.rs"]
+mod ui;
 
 use app::{ColorMode, RenderMode};
 use egui_wgpu::wgpu;
 use pipeline::{
     blend_state_for, clip_plane_enabled_flag, depth_stencil_format, pipeline_alpha_for,
     pipeline_color_mode, pipeline_fog_density, polygon_mode_for, requested_device_features,
-    resolve_render_mode, section_fill_stencil_compare, stencil_depth_compare,
+    resolve_render_mode, section_fill_stencil_compare, stencil_depth_compare, vertex_buffer_layout,
 };
 
 #[test]
@@ -71,7 +73,8 @@ fn color_mode_is_forwarded_to_uniform_flag() {
 #[test]
 fn requested_device_features_enable_line_mode_when_adapter_supports_it() {
     let requested = requested_device_features(
-        wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+        wgpu::Features::POLYGON_MODE_LINE
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
     );
 
     assert!(requested.contains(wgpu::Features::POLYGON_MODE_LINE));
@@ -95,11 +98,30 @@ fn fog_density_is_zero_when_disabled_and_default_when_enabled() {
 fn clip_plane_flag_and_depth_format_match_section_pipeline_requirements() {
     assert_eq!(clip_plane_enabled_flag(false), 0);
     assert_eq!(clip_plane_enabled_flag(true), 1);
-    assert_eq!(depth_stencil_format(), wgpu::TextureFormat::Depth24PlusStencil8);
+    assert_eq!(
+        depth_stencil_format(),
+        wgpu::TextureFormat::Depth24PlusStencil8
+    );
 }
 
 #[test]
 fn section_passes_use_expected_stencil_and_depth_compare_modes() {
-    assert_eq!(section_fill_stencil_compare(), wgpu::CompareFunction::NotEqual);
+    assert_eq!(
+        section_fill_stencil_compare(),
+        wgpu::CompareFunction::NotEqual
+    );
     assert_eq!(stencil_depth_compare(), wgpu::CompareFunction::Always);
+}
+
+#[test]
+fn vertex_buffer_layout_exposes_model_color_attribute() {
+    let layout = vertex_buffer_layout();
+
+    assert_eq!(
+        layout.array_stride,
+        std::mem::size_of::<mesh::Vertex>() as u64
+    );
+    assert_eq!(layout.attributes.len(), 3);
+    assert_eq!(layout.attributes[2].shader_location, 2);
+    assert_eq!(layout.attributes[2].format, wgpu::VertexFormat::Float32x4);
 }

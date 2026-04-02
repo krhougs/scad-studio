@@ -1,27 +1,29 @@
 #![allow(dead_code)]
 
-#[path = "../src/document.rs"]
-mod document;
-#[path = "../src/export.rs"]
-mod export;
-#[path = "../src/config.rs"]
-mod config;
-#[path = "../src/params.rs"]
-mod params;
-#[path = "../src/presets.rs"]
-mod presets;
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/camera.rs"]
 mod camera;
+#[path = "../src/config.rs"]
+mod config;
+#[path = "../src/document.rs"]
+mod document;
+#[path = "../src/export.rs"]
+mod export;
+#[path = "../src/gizmo.rs"]
+mod gizmo;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/openscad.rs"]
 mod openscad;
+#[path = "../src/params.rs"]
+mod params;
+#[path = "../src/presets.rs"]
+mod presets;
+#[path = "../src/three_mf.rs"]
+mod three_mf;
 #[path = "../src/ui/mod.rs"]
 mod ui;
-#[path = "../src/gizmo.rs"]
-mod gizmo;
 
 use document::DocumentState;
 use export::ExportFormat;

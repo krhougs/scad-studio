@@ -14,10 +14,11 @@ mod pipeline;
 mod platform_menu;
 mod presets;
 mod renderer;
-mod section;
 mod scene_bindings;
+mod section;
 mod shadow;
 mod system_fonts;
+mod three_mf;
 mod ui;
 mod watcher;
 
@@ -29,8 +30,8 @@ use config::AppConfig;
 use cross_section::{ClipPlane, EditMode};
 use document::DocumentState;
 use egui::ViewportId;
-use glam::{Vec2, Vec4Swizzles};
 use export::{build_export_filename, detect_slicer_paths, export_model, send_to_slicer};
+use glam::{Vec2, Vec4Swizzles};
 use openscad::{OpenScadMessage, OpenScadRunner, RenderedArtifact};
 use platform_menu::{APP_NAME, MenuCommand, PlatformMenu};
 use presets::{delete_preset, load_presets, save_preset};
@@ -268,7 +269,9 @@ impl DesktopApp {
             Some(result) => result,
             None => return,
         };
-        if ui_actions.open_file && let Some(path) = select_scad_file() {
+        if ui_actions.open_file
+            && let Some(path) = select_scad_file()
+        {
             self.open_source_file(path);
         }
         self.handle_ui_commands(ui_actions.commands);
@@ -306,7 +309,7 @@ impl DesktopApp {
     fn handle_render_started(&mut self, path: PathBuf) {
         if let Some(state) = self.state.as_mut() {
             state.studio.set_current_file(path);
-            state.studio.set_rendering("OpenSCAD 正在渲染模型");
+            state.studio.set_rendering("OpenSCAD 正在生成 3MF 预览");
         }
     }
 
@@ -330,7 +333,9 @@ impl DesktopApp {
                 state.camera.fit_bounds(artifact.mesh.bounds);
                 state.renderer.set_mesh(artifact.mesh);
                 state.studio.set_ready("预览已更新");
-                state.studio.push_log(LogLevel::Info, "OpenSCAD 渲染完成");
+                state
+                    .studio
+                    .push_log(LogLevel::Info, "OpenSCAD 3MF 预览完成");
             }
             Err(error) => {
                 state.renderer.clear_mesh();
@@ -423,18 +428,16 @@ impl DesktopApp {
             .egui_state
             .handle_platform_output(&state.window, platform_output);
         let paint_data = build_paint_data(state, shapes, textures_delta);
-        if let Err(error) = state
-            .renderer
-            .render(
-                &state.camera,
-                state.studio.viewer_state(),
-                state.studio
-                    .viewer_state()
-                    .clip_plane_enabled
-                    .then_some(&state.clip_plane),
-                paint_data,
-            )
-        {
+        if let Err(error) = state.renderer.render(
+            &state.camera,
+            state.studio.viewer_state(),
+            state
+                .studio
+                .viewer_state()
+                .clip_plane_enabled
+                .then_some(&state.clip_plane),
+            paint_data,
+        ) {
             state.studio.set_error(format!("渲染失败: {error}"));
             state
                 .studio
@@ -533,10 +536,13 @@ impl DesktopApp {
                     && let Some(slicer) = detect_slicer_paths(&state.config)
                         .into_iter()
                         .find(|slicer| slicer.name == name)
-                    && let Err(error) = send_to_slicer(&config::SlicerConfig {
-                        name: slicer.name,
-                        path: slicer.path,
-                    }, &output_path)
+                    && let Err(error) = send_to_slicer(
+                        &config::SlicerConfig {
+                            name: slicer.name,
+                            path: slicer.path,
+                        },
+                        &output_path,
+                    )
                 {
                     state.studio.push_log(LogLevel::Error, error);
                     return;
@@ -618,7 +624,9 @@ fn apply_openscad_path_override(config: &AppConfig) {
 fn load_document(state: &mut RuntimeState, source_path: PathBuf) -> Result<(), String> {
     let source_text = std::fs::read_to_string(&source_path)
         .map_err(|error| format!("读取源文件失败: {error}"))?;
-    state.document.load_source(source_path.clone(), &source_text);
+    state
+        .document
+        .load_source(source_path.clone(), &source_text);
     refresh_presets(state);
     flush_document_warnings(state);
     state.studio.set_current_file(source_path);
@@ -627,8 +635,8 @@ fn load_document(state: &mut RuntimeState, source_path: PathBuf) -> Result<(), S
 }
 
 fn reload_source_document(state: &mut RuntimeState, source_path: &PathBuf) -> Result<(), String> {
-    let source_text = std::fs::read_to_string(source_path)
-        .map_err(|error| format!("读取源文件失败: {error}"))?;
+    let source_text =
+        std::fs::read_to_string(source_path).map_err(|error| format!("读取源文件失败: {error}"))?;
     state.document.reload_source(&source_text);
     flush_document_warnings(state);
     Ok(())
@@ -652,9 +660,10 @@ fn flush_document_warnings(state: &mut RuntimeState) {
 
 fn start_render(state: &mut RuntimeState, source_path: PathBuf) {
     state.studio.set_rendering("正在调用 OpenSCAD 生成 STL");
-    state
-        .studio
-        .push_log(LogLevel::Info, format!("开始渲染 {}", source_path.display()));
+    state.studio.push_log(
+        LogLevel::Info,
+        format!("开始渲染 {}", source_path.display()),
+    );
     state
         .openscad
         .render_with_defines(source_path, state.document.current_defines());
@@ -692,7 +701,8 @@ fn handle_cross_section_event(state: &mut RuntimeState, event: &WindowEvent) -> 
             false
         }
         WindowEvent::KeyboardInput { event, .. } => {
-            if event.state != ElementState::Pressed || !state.studio.viewer_state().clip_plane_enabled
+            if event.state != ElementState::Pressed
+                || !state.studio.viewer_state().clip_plane_enabled
             {
                 return false;
             }
@@ -769,7 +779,12 @@ fn update_clip_drag(state: &mut RuntimeState, cursor: Vec2) -> bool {
     }
     let previous = state.cursor_position.unwrap_or(cursor);
     let delta = cursor - previous;
-    let distance_scale = state.camera.matrices().eye.distance(state.clip_plane.center()) * 0.0025;
+    let distance_scale = state
+        .camera
+        .matrices()
+        .eye
+        .distance(state.clip_plane.center())
+        * 0.0025;
     match state.clip_edit_mode {
         EditMode::Translate => {
             let amount = (delta.x - delta.y) * distance_scale;
@@ -782,7 +797,11 @@ fn update_clip_drag(state: &mut RuntimeState, cursor: Vec2) -> bool {
             let inverse_view = camera_matrices.view.inverse();
             let right = inverse_view.x_axis.xyz().normalize_or_zero();
             let up = inverse_view.y_axis.xyz().normalize_or_zero();
-            let axis = if delta.x.abs() >= delta.y.abs() { up } else { right };
+            let axis = if delta.x.abs() >= delta.y.abs() {
+                up
+            } else {
+                right
+            };
             let angle = (delta.x - delta.y) * 0.01;
             state.clip_plane.rotate(angle, axis, state.ctrl_pressed);
         }

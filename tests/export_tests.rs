@@ -1,27 +1,29 @@
 #![allow(dead_code)]
 
-#[path = "../src/config.rs"]
-mod config;
-#[path = "../src/document.rs"]
-mod document;
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/camera.rs"]
 mod camera;
+#[path = "../src/config.rs"]
+mod config;
+#[path = "../src/document.rs"]
+mod document;
 #[path = "../src/export.rs"]
 mod export;
-#[path = "../src/params.rs"]
-mod params;
-#[path = "../src/presets.rs"]
-mod presets;
+#[path = "../src/gizmo.rs"]
+mod gizmo;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/openscad.rs"]
 mod openscad;
+#[path = "../src/params.rs"]
+mod params;
+#[path = "../src/presets.rs"]
+mod presets;
+#[path = "../src/three_mf.rs"]
+mod three_mf;
 #[path = "../src/ui/mod.rs"]
 mod ui;
-#[path = "../src/gizmo.rs"]
-mod gizmo;
 
 use config::{AppConfig, SlicerConfig};
 use export::{ExportFormat, build_export_filename, detect_slicer_paths};
@@ -34,7 +36,10 @@ fn export_filename_uses_selected_format_extension() {
         "widget.stl"
     );
     assert_eq!(
-        build_export_filename(std::path::Path::new("/tmp/widget.scad"), ExportFormat::ThreeMf),
+        build_export_filename(
+            std::path::Path::new("/tmp/widget.scad"),
+            ExportFormat::ThreeMf
+        ),
         "widget.3mf"
     );
 }

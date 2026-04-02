@@ -1,9 +1,5 @@
 use crate::camera::CameraMatrices;
-use crate::{
-    config::AppConfig,
-    document::DocumentState,
-    export::SlicerInstall,
-};
+use crate::{config::AppConfig, document::DocumentState, export::SlicerInstall};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -191,7 +187,7 @@ impl Default for ViewerState {
     fn default() -> Self {
         Self {
             render_mode: RenderMode::Solid,
-            color_mode: ColorMode::Mono,
+            color_mode: ColorMode::Color,
             projection_mode: ProjectionMode::Perspective,
             wireframe_supported: false,
             show_grid: true,

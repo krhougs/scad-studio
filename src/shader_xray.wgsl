@@ -24,12 +24,14 @@ var<uniform> scene: SceneUniform;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
+    @location(2) model_color: vec4<f32>,
 };
 
 @vertex
@@ -40,10 +42,14 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.clip_position = scene.view_proj * world_position;
     output.world_position = world_position.xyz;
     output.world_normal = world_normal;
+    output.model_color = input.color;
     return output;
 }
 
-fn base_color(normal: vec3<f32>) -> vec3<f32> {
+fn base_color(normal: vec3<f32>, model_color: vec4<f32>) -> vec3<f32> {
+    if scene.render_config.x == 1u && model_color.a >= 0.0 {
+        return model_color.rgb;
+    }
     if scene.render_config.x == 1u {
         return 0.35 + abs(normal) * vec3<f32>(0.5, 0.42, 0.38);
     }
@@ -80,7 +86,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let diffuse = max(dot(normal, light), 0.0);
     let specular = pow(max(dot(normal, half_vector), 0.0), 32.0) * 0.2;
-    let shaded = base_color(normal) * (0.16 + diffuse * 0.55)
+    let shaded = base_color(normal, input.model_color) * (0.16 + diffuse * 0.55)
         + vec3<f32>(specular)
         + vec3<f32>(fresnel * 0.45);
     return vec4<f32>(apply_fog(shaded, input.world_position), scene.render_params.x);
