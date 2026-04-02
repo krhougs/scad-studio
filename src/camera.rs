@@ -1,3 +1,5 @@
+use std::f32::consts::{PI, TAU};
+
 use glam::{Mat4, Vec2, Vec3, Vec4Swizzles};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 
@@ -9,8 +11,6 @@ const MAX_DISTANCE: f32 = 5_000.0;
 const ROTATE_SPEED: f32 = 0.01;
 const PAN_SPEED: f32 = 0.002;
 const ZOOM_SPEED: f32 = 0.12;
-const MIN_PITCH: f32 = -1.54;
-const MAX_PITCH: f32 = 1.54;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CameraMatrices {
@@ -67,7 +67,7 @@ impl OrbitalCamera {
 
     pub fn matrices(&self) -> CameraMatrices {
         let eye = self.eye_position();
-        let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
+        let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
         let projection = match self.projection_mode {
             ProjectionMode::Perspective => Mat4::perspective_rh(
                 self.fov_y_radians,
@@ -98,7 +98,7 @@ impl OrbitalCamera {
             }
             ProjectionMode::Orthographic => {
                 let eye = self.eye_position();
-                let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
+                let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
                 let mut min = Vec2::splat(f32::INFINITY);
                 let mut max = Vec2::splat(f32::NEG_INFINITY);
                 for corner in bounds_corners(bounds) {
@@ -118,14 +118,14 @@ impl OrbitalCamera {
     }
 
     pub fn orbit(&mut self, delta: Vec2) {
-        self.azimuth -= delta.x * ROTATE_SPEED;
-        self.elevation = (self.elevation - delta.y * ROTATE_SPEED).clamp(MIN_PITCH, MAX_PITCH);
+        self.azimuth = wrap_angle(self.azimuth - delta.x * ROTATE_SPEED);
+        self.elevation = wrap_angle(self.elevation - delta.y * ROTATE_SPEED);
     }
 
     pub fn pan(&mut self, delta: Vec2) {
         let eye = self.eye_position();
         let forward = (self.target - eye).normalize_or_zero();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let right = forward.cross(self.orbit_up()).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
         let scale = self.distance.max(0.25) * PAN_SPEED;
         self.target += (-delta.x * scale) * right + (delta.y * scale) * up;
@@ -143,6 +143,15 @@ impl OrbitalCamera {
         self.target + Vec3::new(x, y, z)
     }
 
+    fn orbit_up(&self) -> Vec3 {
+        Vec3::new(
+            -self.elevation.sin() * self.azimuth.cos(),
+            self.elevation.cos(),
+            -self.elevation.sin() * self.azimuth.sin(),
+        )
+        .normalize_or_zero()
+    }
+
     fn orthographic_projection(&self) -> Mat4 {
         let half_height = (self.distance * (self.fov_y_radians * 0.5).tan()).max(0.01);
         let half_width = (half_height * self.aspect_ratio.max(0.1)).max(0.01);
@@ -155,6 +164,16 @@ impl OrbitalCamera {
             10_000.0,
         )
     }
+}
+
+fn wrap_angle(angle: f32) -> f32 {
+    let mut wrapped = angle % TAU;
+    if wrapped <= -PI {
+        wrapped += TAU;
+    } else if wrapped > PI {
+        wrapped -= TAU;
+    }
+    wrapped
 }
 
 fn bounds_corners(bounds: Bounds) -> [Vec3; 8] {
@@ -175,7 +194,9 @@ fn bounds_corners(bounds: Bounds) -> [Vec3; 8] {
 impl CameraInteraction {
     pub fn handle_event(&mut self, camera: &mut OrbitalCamera, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::MouseInput { state, button, .. } => self.handle_mouse_input(*state, *button),
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.handle_mouse_input(*state, *button)
+            }
             WindowEvent::CursorMoved { position, .. } => self.handle_cursor(camera, *position),
             WindowEvent::MouseWheel { delta, .. } => self.handle_wheel(camera, delta),
             _ => false,

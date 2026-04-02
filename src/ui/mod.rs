@@ -1,7 +1,7 @@
 pub mod log_panel;
 pub mod param_editor;
-pub mod side_panel;
 pub mod settings_dialog;
+pub mod side_panel;
 pub mod status_bar;
 pub mod toolbar;
 
@@ -40,10 +40,12 @@ pub fn show_app(
     if settings_dialog::show(ctx, frame.settings_open, frame.config) {
         actions.commands.push(crate::app::UiCommand::SaveSettings);
     }
+    let viewport_rect = ctx.available_rect();
     crate::gizmo::paint_overlay(
         ctx,
         studio.viewer_state().show_axis_gizmo,
         camera_matrices.view,
+        viewport_rect,
     );
     actions.viewer_state_changed = previous_viewer_state != *studio.viewer_state();
     actions

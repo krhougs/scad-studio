@@ -1,5 +1,7 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+const OVERLAY_MARGIN: f32 = 44.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GizmoAxis {
     pub start: Vec2,
@@ -25,12 +27,23 @@ fn axis(view: Mat4, center: Vec2, axis_length: f32, direction: Vec3, color: [u8;
     }
 }
 
-pub fn paint_overlay(ctx: &egui::Context, show_axis_gizmo: bool, view: Mat4) {
+pub fn overlay_center(viewport_rect: egui::Rect) -> Vec2 {
+    Vec2::new(
+        viewport_rect.left() + OVERLAY_MARGIN,
+        viewport_rect.bottom() - OVERLAY_MARGIN,
+    )
+}
+
+pub fn paint_overlay(
+    ctx: &egui::Context,
+    show_axis_gizmo: bool,
+    view: Mat4,
+    viewport_rect: egui::Rect,
+) {
     if !show_axis_gizmo {
         return;
     }
-    let screen = ctx.input(|input| input.content_rect());
-    let center = Vec2::new(screen.left() + 44.0, screen.bottom() - 44.0);
+    let center = overlay_center(viewport_rect);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("axis_gizmo"),

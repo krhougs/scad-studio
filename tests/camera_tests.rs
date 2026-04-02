@@ -2,30 +2,32 @@
 
 #[path = "../src/app.rs"]
 mod app;
-#[path = "../src/config.rs"]
-mod config;
 #[path = "../src/camera.rs"]
 mod camera;
+#[path = "../src/config.rs"]
+mod config;
 #[path = "../src/document.rs"]
 mod document;
 #[path = "../src/export.rs"]
 mod export;
-#[path = "../src/params.rs"]
-mod params;
-#[path = "../src/presets.rs"]
-mod presets;
+#[path = "../src/gizmo.rs"]
+mod gizmo;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/openscad.rs"]
 mod openscad;
+#[path = "../src/params.rs"]
+mod params;
+#[path = "../src/presets.rs"]
+mod presets;
+#[path = "../src/three_mf.rs"]
+mod three_mf;
 #[path = "../src/ui/mod.rs"]
 mod ui;
-#[path = "../src/gizmo.rs"]
-mod gizmo;
 
 use app::ProjectionMode;
 use camera::OrbitalCamera;
-use glam::{Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use mesh::Bounds;
 
 #[test]
@@ -119,9 +121,29 @@ fn orthographic_fit_bounds_keeps_all_corners_inside_clip_space() {
 
     for corner in bounds_corners(bounds) {
         let clip = matrices.view_proj * Vec4::new(corner.x, corner.y, corner.z, 1.0);
-        assert!(clip.x.abs() <= 1.0, "x clip out of range for {corner:?}: {}", clip.x);
-        assert!(clip.y.abs() <= 1.0, "y clip out of range for {corner:?}: {}", clip.y);
+        assert!(
+            clip.x.abs() <= 1.0,
+            "x clip out of range for {corner:?}: {}",
+            clip.x
+        );
+        assert!(
+            clip.y.abs() <= 1.0,
+            "y clip out of range for {corner:?}: {}",
+            clip.y
+        );
     }
+}
+
+#[test]
+fn orbit_allows_crossing_over_the_top_of_the_model() {
+    let mut camera = OrbitalCamera::new(1.0);
+
+    camera.orbit(Vec2::new(0.0, -400.0));
+
+    assert!(
+        camera.matrices().eye.y < 0.0,
+        "camera should move below the target after a full vertical orbit"
+    );
 }
 
 fn bounds_corners(bounds: Bounds) -> [Vec3; 8] {
