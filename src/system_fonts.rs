@@ -7,6 +7,15 @@ use std::{
 
 use egui::{FontData, FontDefinitions, FontFamily};
 
+/// 检查字体数据中是否包含指定字符的字形
+#[allow(dead_code)]
+pub fn has_glyph(font_data: &FontData, ch: char) -> bool {
+    ttf_parser::Face::parse(font_data.font.as_ref(), font_data.index)
+        .ok()
+        .and_then(|face| face.glyph_index(ch))
+        .is_some()
+}
+
 pub fn configure_egui_fonts(ctx: &egui::Context) -> Result<Vec<FontSpec>, SystemFontError> {
     let (fonts, fallback_fonts) = build_font_definitions_for_current_ui()?;
     if fallback_fonts.is_empty() {
@@ -471,7 +480,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{fs, time::{SystemTime, UNIX_EPOCH}};
 
-    use super::{normalize_language_tag, parse_line_list, unique_fonts, FontSpec};
+    use super::{has_glyph, normalize_language_tag, parse_line_list, unique_fonts, FontSpec};
 
     #[test]
     fn normalize_language_tag_converts_common_locale_formats() {
@@ -512,5 +521,42 @@ mod tests {
         ]);
         assert_eq!(fonts.len(), 2);
         let _ = fs::remove_file(path);
+    }
+
+    /// 关键字符的字形覆盖探测：关闭符号变体、emoji、CJK、基础拉丁
+    const PROBE_CHARS: &[char] = &[
+        'x', '\u{00D7}',       // ASCII x, 乘号
+        '\u{1F4C1}', '\u{2699}', // 文件夹 emoji, 齿轮 emoji
+        '文', '件', '打', '开', '预', '览', // CJK
+        'A', 'a', '0',          // 基础拉丁
+    ];
+
+    #[test]
+    fn probe_glyph_coverage_in_system_fonts() {
+        let Ok((fonts, _)) = super::build_font_definitions_for_current_ui() else {
+            eprintln!("跳过字形覆盖测试：无法加载系统字体");
+            return;
+        };
+        let proportional = match fonts.families.get(&egui::FontFamily::Proportional) {
+            Some(names) if !names.is_empty() => names.clone(),
+            _ => {
+                eprintln!("跳过字形覆盖测试：Proportional family 为空");
+                return;
+            }
+        };
+
+        for &ch in PROBE_CHARS {
+            let covered = proportional.iter().any(|name| {
+                fonts
+                    .font_data
+                    .get(name)
+                    .is_some_and(|data| has_glyph(data, ch))
+            });
+            assert!(
+                covered,
+                "字符 '{ch}' (U+{:04X}) 未被任何 Proportional family 字体覆盖",
+                ch as u32,
+            );
+        }
     }
 }

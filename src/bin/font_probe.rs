@@ -6,7 +6,6 @@ mod system_fonts;
 use std::sync::Arc;
 
 use egui::{FontData, FontDefinitions, FontFamily, TextStyle};
-use ttf_parser::Face;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let style = egui::Style::default();
@@ -97,7 +96,7 @@ fn first_matching_font(
     let names = fonts.families.get(family)?;
     for (order_index, font_name) in names.iter().enumerate() {
         let font_data = fonts.font_data.get(font_name)?;
-        if has_glyph(font_data, ch) {
+        if system_fonts::has_glyph(font_data, ch) {
             return Some(FontHit {
                 font_name: font_name.clone(),
                 order_index,
@@ -105,13 +104,6 @@ fn first_matching_font(
         }
     }
     None
-}
-
-fn has_glyph(font_data: &FontData, ch: char) -> bool {
-    Face::parse(font_data.font.as_ref(), font_data.index)
-        .ok()
-        .and_then(|face| face.glyph_index(ch))
-        .is_some()
 }
 
 struct FontHit {

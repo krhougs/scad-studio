@@ -1,41 +1,49 @@
+pub mod camera_overlay;
 pub mod log_panel;
 pub mod param_editor;
 pub mod settings_dialog;
 pub mod side_panel;
 pub mod status_bar;
+pub mod theme;
 pub mod toolbar;
 
 use crate::{
     app::{StudioApp, UiActions},
-    camera::CameraMatrices,
+    camera::{CameraMatrices, OrbitalCamera},
 };
 
 pub fn show_app(
     studio: &mut StudioApp,
     ctx: &egui::Context,
-    show_embedded_menu: bool,
+    _show_embedded_menu: bool,
     camera_matrices: CameraMatrices,
+    camera: &OrbitalCamera,
     frame: crate::app::UiFrame<'_>,
 ) -> UiActions {
+    theme::apply(ctx);
     let previous_viewer_state = studio.viewer_state().clone();
     let log_entries = studio.log_entries().to_vec();
     let has_current_file = studio.has_current_file();
+    let is_rendering = studio.is_rendering();
     let mut actions = UiActions::default();
-    if show_embedded_menu {
-        show_menu(studio, ctx, &mut actions, frame.settings_open);
-    }
-    toolbar::show(ctx, studio, &mut actions);
+
+    // 统一顶部工具栏（合并原菜单栏功能）
+    toolbar::show(ctx, studio, &mut actions, frame.settings_open);
+
     status_bar::show(ctx, studio);
-    if log_panel::show(ctx, studio.viewer_state_mut(), &log_entries) {
+    if log_panel::show(ctx, studio.viewer_state_mut(), &log_entries, frame.config) {
         studio.clear_logs();
+        actions.commands.push(crate::app::UiCommand::SaveSettings);
     }
     side_panel::show(
         ctx,
-        studio.viewer_state(),
+        studio.viewer_state_mut(),
         has_current_file,
+        is_rendering,
         frame.document,
         frame.slicers,
         &mut actions,
+        frame.config,
     );
     if settings_dialog::show(ctx, frame.settings_open, frame.config) {
         actions.commands.push(crate::app::UiCommand::SaveSettings);
@@ -47,52 +55,17 @@ pub fn show_app(
         camera_matrices.view,
         viewport_rect,
     );
-    actions.viewer_state_changed = previous_viewer_state != *studio.viewer_state();
-    actions
-}
 
-fn show_menu(
-    studio: &mut StudioApp,
-    ctx: &egui::Context,
-    actions: &mut UiActions,
-    settings_open: &mut bool,
-) {
-    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Open").clicked() {
-                    actions.open_file = true;
-                    ui.close();
-                }
-                if ui.button("设置").clicked() {
-                    *settings_open = true;
-                    ui.close();
-                }
-            });
-            ui.menu_button("View", |ui| {
-                let has_file = studio.has_current_file();
-                let side_label = if studio.viewer_state().side_panel_open {
-                    "隐藏右侧面板"
-                } else {
-                    "显示右侧面板"
-                };
-                if ui
-                    .add_enabled(has_file, egui::Button::new(side_label))
-                    .clicked()
-                {
-                    studio.viewer_state_mut().toggle_side_panel();
-                    ui.close();
-                }
-                let log_label = if studio.viewer_state().log_panel_open {
-                    "折叠日志面板"
-                } else {
-                    "展开日志面板"
-                };
-                if ui.button(log_label).clicked() {
-                    studio.viewer_state_mut().toggle_log_panel();
-                    ui.close();
-                }
-            });
-        });
-    });
+    // 相机控制浮层
+    camera_overlay::show(
+        ctx,
+        camera,
+        &mut actions,
+        frame.config,
+        studio.viewer_state().camera_overlay_open,
+    );
+
+    actions.viewer_state_changed =
+        previous_viewer_state != *studio.viewer_state() || actions.camera_action.is_some();
+    actions
 }

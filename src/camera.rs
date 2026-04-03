@@ -65,8 +65,91 @@ impl OrbitalCamera {
         self.projection_mode = projection_mode;
     }
 
+    pub fn eye(&self) -> Vec3 {
+        self.compute_eye_position()
+    }
+
+    pub fn target(&self) -> Vec3 {
+        self.target
+    }
+
+    pub fn distance(&self) -> f32 {
+        self.distance
+    }
+
+    pub fn azimuth_degrees(&self) -> f32 {
+        self.azimuth.to_degrees()
+    }
+
+    pub fn elevation_degrees(&self) -> f32 {
+        self.elevation.to_degrees()
+    }
+
+    pub fn set_target_x(&mut self, x: f32) {
+        self.target.x = x;
+    }
+
+    pub fn set_target_y(&mut self, y: f32) {
+        self.target.y = y;
+    }
+
+    pub fn set_target_z(&mut self, z: f32) {
+        self.target.z = z;
+    }
+
+    pub fn set_distance(&mut self, distance: f32) {
+        self.distance = distance.clamp(MIN_DISTANCE, MAX_DISTANCE);
+    }
+
+    pub fn set_azimuth_degrees(&mut self, degrees: f32) {
+        self.azimuth = degrees.to_radians();
+    }
+
+    pub fn set_elevation_degrees(&mut self, degrees: f32) {
+        self.elevation = degrees.clamp(-89.9, 89.9).to_radians();
+    }
+
+    pub fn reset_view(&mut self, bounds: Option<Bounds>) {
+        if let Some(bounds) = bounds {
+            self.fit_bounds(bounds);
+        } else {
+            self.target = Vec3::ZERO;
+            self.distance = 3.0;
+        }
+        self.azimuth = 0.7;
+        self.elevation = 0.45;
+    }
+
+    pub fn view_top(&mut self) {
+        self.elevation = std::f32::consts::FRAC_PI_2 * 0.95;
+    }
+
+    pub fn view_bottom(&mut self) {
+        self.elevation = -std::f32::consts::FRAC_PI_2 * 0.95;
+    }
+
+    pub fn view_front(&mut self) {
+        self.azimuth = 0.0;
+        self.elevation = 0.0;
+    }
+
+    pub fn view_back(&mut self) {
+        self.azimuth = std::f32::consts::PI;
+        self.elevation = 0.0;
+    }
+
+    pub fn view_left(&mut self) {
+        self.azimuth = std::f32::consts::FRAC_PI_2;
+        self.elevation = 0.0;
+    }
+
+    pub fn view_right(&mut self) {
+        self.azimuth = -std::f32::consts::FRAC_PI_2;
+        self.elevation = 0.0;
+    }
+
     pub fn matrices(&self) -> CameraMatrices {
-        let eye = self.eye_position();
+        let eye = self.compute_eye_position();
         let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
         let projection = match self.projection_mode {
             ProjectionMode::Perspective => Mat4::perspective_rh(
@@ -97,7 +180,7 @@ impl OrbitalCamera {
                 radius / limiting_half_fov.tan()
             }
             ProjectionMode::Orthographic => {
-                let eye = self.eye_position();
+                let eye = self.compute_eye_position();
                 let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
                 let mut min = Vec2::splat(f32::INFINITY);
                 let mut max = Vec2::splat(f32::NEG_INFINITY);
@@ -123,7 +206,7 @@ impl OrbitalCamera {
     }
 
     pub fn pan(&mut self, delta: Vec2) {
-        let eye = self.eye_position();
+        let eye = self.compute_eye_position();
         let forward = (self.target - eye).normalize_or_zero();
         let right = forward.cross(self.orbit_up()).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
@@ -136,7 +219,7 @@ impl OrbitalCamera {
         self.distance = (self.distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
     }
 
-    fn eye_position(&self) -> Vec3 {
+    fn compute_eye_position(&self) -> Vec3 {
         let x = self.distance * self.elevation.cos() * self.azimuth.cos();
         let y = self.distance * self.elevation.sin();
         let z = self.distance * self.elevation.cos() * self.azimuth.sin();

@@ -52,6 +52,7 @@ fn manual_slicer_paths_are_returned_before_auto_detected_paths() {
             name: "Cura".into(),
             path: PathBuf::from("/custom/Cura.app"),
         }],
+        ..AppConfig::default()
     };
 
     let detected = detect_slicer_paths(&config);

@@ -14,6 +14,7 @@ fn config_json_round_trip_preserves_paths() {
             name: "Bambu Studio".into(),
             path: PathBuf::from("/Applications/Bambu Studio.app"),
         }],
+        ..AppConfig::default()
     };
 
     let json = config.to_json().expect("config should serialize");

@@ -1,4 +1,4 @@
-use crate::camera::CameraMatrices;
+use crate::camera::{CameraMatrices, OrbitalCamera};
 use crate::{config::AppConfig, document::DocumentState, export::SlicerInstall};
 use std::path::{Path, PathBuf};
 
@@ -56,6 +56,24 @@ pub struct ViewerState {
     pub clip_plane_enabled: bool,
     pub side_panel_open: bool,
     pub log_panel_open: bool,
+    pub camera_overlay_open: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum CameraAction {
+    SetTargetX(f32),
+    SetTargetY(f32),
+    SetTargetZ(f32),
+    SetDistance(f32),
+    SetAzimuth(f32),
+    SetElevation(f32),
+    ResetView,
+    ViewTop,
+    ViewBottom,
+    ViewFront,
+    ViewBack,
+    ViewLeft,
+    ViewRight,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -63,6 +81,7 @@ pub struct UiActions {
     pub open_file: bool,
     pub viewer_state_changed: bool,
     pub commands: Vec<UiCommand>,
+    pub camera_action: Option<CameraAction>,
 }
 
 pub struct UiFrame<'a> {
@@ -149,6 +168,10 @@ impl StudioApp {
             .unwrap_or("未打开文件")
     }
 
+    pub fn is_rendering(&self) -> bool {
+        matches!(self.render_state, RenderState::Rendering(_))
+    }
+
     pub fn status_message(&self) -> &str {
         match &self.render_state {
             RenderState::Idle => "等待打开 .scad 文件",
@@ -163,15 +186,16 @@ impl StudioApp {
         ctx: &egui::Context,
         show_embedded_menu: bool,
         camera_matrices: CameraMatrices,
+        camera: &OrbitalCamera,
         frame: UiFrame<'_>,
     ) -> UiActions {
-        crate::ui::show_app(self, ctx, show_embedded_menu, camera_matrices, frame)
+        crate::ui::show_app(self, ctx, show_embedded_menu, camera_matrices, camera, frame)
     }
 }
 
 impl ViewerState {
-    pub fn shows_side_panel(&self, has_current_file: bool) -> bool {
-        has_current_file && self.side_panel_open
+    pub fn shows_side_panel(&self, _has_current_file: bool) -> bool {
+        self.side_panel_open
     }
 
     pub fn toggle_side_panel(&mut self) {
@@ -198,6 +222,7 @@ impl Default for ViewerState {
             clip_plane_enabled: false,
             side_panel_open: true,
             log_panel_open: false,
+            camera_overlay_open: true,
         }
     }
 }

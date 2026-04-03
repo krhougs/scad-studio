@@ -78,6 +78,7 @@ struct RuntimeState {
     cursor_position: Option<Vec2>,
     ctrl_pressed: bool,
     redraw_queued: bool,
+    current_bounds: Option<mesh::Bounds>,
 }
 
 fn main() {
@@ -237,6 +238,7 @@ impl DesktopApp {
             cursor_position: None,
             ctrl_pressed: false,
             redraw_queued: false,
+            current_bounds: None,
         };
         let mut runtime = runtime;
         runtime.studio.viewer_state_mut().wireframe_supported =
@@ -330,6 +332,7 @@ impl DesktopApp {
             Ok(artifact) => {
                 state.clip_plane.visible_extent = artifact.mesh.bounds.radius().max(64.0);
                 state.studio.set_current_file(artifact.source_path.clone());
+                state.current_bounds = Some(artifact.mesh.bounds);
                 state.camera.fit_bounds(artifact.mesh.bounds);
                 state.renderer.set_mesh(artifact.mesh);
                 state.studio.set_ready("预览已更新");
@@ -407,6 +410,7 @@ impl DesktopApp {
                 ctx,
                 show_embedded_menu,
                 camera_matrices,
+                &state.camera,
                 app::UiFrame {
                     document: &mut state.document,
                     config: &mut state.config,
@@ -418,6 +422,13 @@ impl DesktopApp {
         state
             .camera
             .set_projection_mode(state.studio.viewer_state().projection_mode);
+        if let Some(action) = ui_actions.camera_action.take() {
+            if matches!(action, app::CameraAction::ResetView) {
+                state.camera.reset_view(state.current_bounds);
+            } else {
+                apply_camera_action(&mut state.camera, action);
+            }
+        }
         let egui::FullOutput {
             platform_output,
             textures_delta,
@@ -827,4 +838,22 @@ fn schedule_redraw(state: &mut RuntimeState) {
     }
     state.redraw_queued = true;
     state.window.request_redraw();
+}
+
+fn apply_camera_action(camera: &mut OrbitalCamera, action: app::CameraAction) {
+    match action {
+        app::CameraAction::SetTargetX(v) => camera.set_target_x(v),
+        app::CameraAction::SetTargetY(v) => camera.set_target_y(v),
+        app::CameraAction::SetTargetZ(v) => camera.set_target_z(v),
+        app::CameraAction::SetDistance(v) => camera.set_distance(v),
+        app::CameraAction::SetAzimuth(v) => camera.set_azimuth_degrees(v),
+        app::CameraAction::SetElevation(v) => camera.set_elevation_degrees(v),
+        app::CameraAction::ResetView => camera.reset_view(None),
+        app::CameraAction::ViewTop => camera.view_top(),
+        app::CameraAction::ViewBottom => camera.view_bottom(),
+        app::CameraAction::ViewFront => camera.view_front(),
+        app::CameraAction::ViewBack => camera.view_back(),
+        app::CameraAction::ViewLeft => camera.view_left(),
+        app::CameraAction::ViewRight => camera.view_right(),
+    }
 }

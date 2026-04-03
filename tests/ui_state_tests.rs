@@ -29,11 +29,12 @@ use app::{LogLevel, StudioApp};
 use std::path::PathBuf;
 
 #[test]
-fn side_panel_is_hidden_without_file_and_visible_after_opening_file() {
+fn side_panel_is_visible_by_default_regardless_of_file_state() {
     let mut studio = StudioApp::default();
 
+    // 无文件时参数面板仍然可见（显示"请先加载模型"）
     assert!(
-        !studio
+        studio
             .viewer_state()
             .shows_side_panel(studio.current_file().is_some())
     );
