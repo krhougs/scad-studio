@@ -85,7 +85,7 @@ impl Bounds {
 }
 
 #[allow(dead_code)]
-pub(crate) fn openscad_to_viewer(vector: [f32; 3]) -> [f32; 3] {
+pub fn openscad_to_viewer(vector: [f32; 3]) -> [f32; 3] {
     [vector[0], vector[2], -vector[1]]
 }
 

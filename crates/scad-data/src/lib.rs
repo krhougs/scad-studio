@@ -1,3 +1,4 @@
+pub mod logs;
 pub mod openscad;
 pub mod three_mf;
 pub mod document;
