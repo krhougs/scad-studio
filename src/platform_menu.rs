@@ -1,6 +1,6 @@
 use muda::{
-    accelerator::{Accelerator, CMD_OR_CTRL, Code},
     Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+    accelerator::{Accelerator, CMD_OR_CTRL, Code},
 };
 use winit::{
     event_loop::{EventLoopBuilder, EventLoopProxy},

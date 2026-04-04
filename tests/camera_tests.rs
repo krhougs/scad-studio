@@ -89,6 +89,22 @@ fn switching_to_orthographic_keeps_eye_position_but_changes_projection_matrix() 
 }
 
 #[test]
+fn matrices_for_bounds_tighten_depth_range_for_scene_bounds() {
+    let bounds = Bounds {
+        min: Vec3::new(-100.0, -20.0, -80.0),
+        max: Vec3::new(100.0, 120.0, 80.0),
+    };
+    let mut camera = OrbitalCamera::new(1.0);
+    camera.fit_bounds(bounds);
+
+    let (near, far) = camera.clipping_planes(Some(bounds));
+
+    assert!(near > 0.01);
+    assert!(far < 10_000.0);
+    assert!(far > near);
+}
+
+#[test]
 fn orthographic_fit_bounds_still_respects_aspect_ratio() {
     let bounds = Bounds {
         min: Vec3::new(-10.0, -1.0, -1.0),

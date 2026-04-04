@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fmt, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,12 +27,14 @@ pub fn load_presets(path: &Path) -> Result<PresetFile, PresetError> {
     }
     let contents = fs::read_to_string(path)
         .map_err(|error| PresetError(format!("读取预设文件失败: {error}")))?;
-    serde_json::from_str(&contents).map_err(|error| PresetError(format!("解析预设文件失败: {error}")))
+    serde_json::from_str(&contents)
+        .map_err(|error| PresetError(format!("解析预设文件失败: {error}")))
 }
 
 pub fn save_preset(path: &Path, name: &str, store: &ParameterStore) -> Result<(), PresetError> {
     let mut file = load_presets(path)?;
-    file.presets.insert(name.to_string(), store.current_values());
+    file.presets
+        .insert(name.to_string(), store.current_values());
     write_presets(path, &file)
 }
 

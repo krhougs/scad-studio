@@ -51,10 +51,8 @@ pub fn show(
 fn file_group(ui: &mut egui::Ui, actions: &mut UiActions, settings_open: &mut bool) {
     if ui
         .add(
-            egui::Button::new(
-                egui::RichText::new("\u{1f4c2} 打开").size(13.0),
-            )
-            .corner_radius(egui::CornerRadius::same(4)),
+            egui::Button::new(egui::RichText::new("\u{1f4c2} 打开").size(13.0))
+                .corner_radius(egui::CornerRadius::same(4)),
         )
         .clicked()
     {
@@ -62,10 +60,8 @@ fn file_group(ui: &mut egui::Ui, actions: &mut UiActions, settings_open: &mut bo
     }
     if ui
         .add(
-            egui::Button::new(
-                egui::RichText::new("\u{2699}").size(14.0),
-            )
-            .corner_radius(egui::CornerRadius::same(4)),
+            egui::Button::new(egui::RichText::new("\u{2699}").size(14.0))
+                .corner_radius(egui::CornerRadius::same(4)),
         )
         .on_hover_text("设置")
         .clicked()
@@ -74,15 +70,15 @@ fn file_group(ui: &mut egui::Ui, actions: &mut UiActions, settings_open: &mut bo
     }
 }
 
-fn selectable_btn(
-    ui: &mut egui::Ui,
-    selected: bool,
-    label: &str,
-) -> egui::Response {
+fn selectable_btn(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
     let text = if selected {
-        egui::RichText::new(label).color(palette::TEXT_BRIGHT).size(12.0)
+        egui::RichText::new(label)
+            .color(palette::TEXT_BRIGHT)
+            .size(12.0)
     } else {
-        egui::RichText::new(label).color(palette::TEXT_SECONDARY).size(12.0)
+        egui::RichText::new(label)
+            .color(palette::TEXT_SECONDARY)
+            .size(12.0)
     };
     let fill = if selected {
         palette::BG_WIDGET_ACTIVE
@@ -96,15 +92,15 @@ fn selectable_btn(
     )
 }
 
-fn toggle_btn(
-    ui: &mut egui::Ui,
-    on: bool,
-    label: &str,
-) -> egui::Response {
+fn toggle_btn(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     let text = if on {
-        egui::RichText::new(label).color(palette::TEXT_ACCENT).size(12.0)
+        egui::RichText::new(label)
+            .color(palette::TEXT_ACCENT)
+            .size(12.0)
     } else {
-        egui::RichText::new(label).color(palette::TEXT_SECONDARY).size(12.0)
+        egui::RichText::new(label)
+            .color(palette::TEXT_SECONDARY)
+            .size(12.0)
     };
     let fill = if on {
         palette::BG_SELECTION
@@ -146,10 +142,22 @@ fn color_mode_group(ui: &mut egui::Ui, vs: &mut ViewerState) {
 
 fn projection_group(ui: &mut egui::Ui, vs: &mut ViewerState) {
     label(ui, "投影");
-    if selectable_btn(ui, vs.projection_mode == ProjectionMode::Perspective, "透视").clicked() {
+    if selectable_btn(
+        ui,
+        vs.projection_mode == ProjectionMode::Perspective,
+        "透视",
+    )
+    .clicked()
+    {
         vs.projection_mode = ProjectionMode::Perspective;
     }
-    if selectable_btn(ui, vs.projection_mode == ProjectionMode::Orthographic, "正交").clicked() {
+    if selectable_btn(
+        ui,
+        vs.projection_mode == ProjectionMode::Orthographic,
+        "正交",
+    )
+    .clicked()
+    {
         vs.projection_mode = ProjectionMode::Orthographic;
     }
 }
@@ -177,7 +185,11 @@ fn toggle_group(ui: &mut egui::Ui, vs: &mut ViewerState) {
 
 fn panel_group(ui: &mut egui::Ui, vs: &mut ViewerState, _has_current_file: bool) {
     if toggle_btn(ui, vs.side_panel_open, "参数面板")
-        .on_hover_text(if vs.side_panel_open { "隐藏参数面板" } else { "显示参数面板" })
+        .on_hover_text(if vs.side_panel_open {
+            "隐藏参数面板"
+        } else {
+            "显示参数面板"
+        })
         .clicked()
     {
         vs.toggle_side_panel();

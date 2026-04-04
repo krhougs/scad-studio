@@ -1,4 +1,7 @@
-use std::{path::{Path, PathBuf}, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::{
     config::{AppConfig, SlicerConfig},
@@ -51,7 +54,12 @@ pub fn export_model(
 ) -> Result<(), OpenScadError> {
     let executable = detect_openscad_path(config.openscad_path.clone())?;
     let status = Command::new(executable)
-        .args(build_cli_args(format.into(), output_path, defines, source_path))
+        .args(build_cli_args(
+            format.into(),
+            output_path,
+            defines,
+            source_path,
+        ))
         .status()
         .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
     if status.success() {
@@ -90,15 +98,33 @@ impl From<ExportFormat> for CliOutputFormat {
 fn default_slicer_candidates() -> Vec<SlicerInstall> {
     if cfg!(target_os = "macos") {
         vec![
-            slicer("PrusaSlicer", "/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer"),
-            slicer("Bambu Studio", "/Applications/Bambu Studio.app/Contents/MacOS/BambuStudio"),
-            slicer("Cura", "/Applications/Ultimaker Cura.app/Contents/MacOS/UltiMaker-Cura"),
+            slicer(
+                "PrusaSlicer",
+                "/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer",
+            ),
+            slicer(
+                "Bambu Studio",
+                "/Applications/Bambu Studio.app/Contents/MacOS/BambuStudio",
+            ),
+            slicer(
+                "Cura",
+                "/Applications/Ultimaker Cura.app/Contents/MacOS/UltiMaker-Cura",
+            ),
         ]
     } else if cfg!(target_os = "windows") {
         vec![
-            slicer("PrusaSlicer", "C:\\Program Files\\Prusa3D\\PrusaSlicer\\prusa-slicer.exe"),
-            slicer("Bambu Studio", "C:\\Program Files\\Bambu Studio\\BambuStudio.exe"),
-            slicer("Cura", "C:\\Program Files\\UltiMaker Cura 5.0\\UltiMaker-Cura.exe"),
+            slicer(
+                "PrusaSlicer",
+                "C:\\Program Files\\Prusa3D\\PrusaSlicer\\prusa-slicer.exe",
+            ),
+            slicer(
+                "Bambu Studio",
+                "C:\\Program Files\\Bambu Studio\\BambuStudio.exe",
+            ),
+            slicer(
+                "Cura",
+                "C:\\Program Files\\UltiMaker Cura 5.0\\UltiMaker-Cura.exe",
+            ),
         ]
     } else {
         vec![

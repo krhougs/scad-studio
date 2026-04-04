@@ -39,12 +39,8 @@ pub fn floating_frame(opacity: f32) -> egui::Frame {
         (bg.a() as f32 * opacity) as u8,
     );
     let s = palette::STROKE_DIM;
-    let stroke_alpha = egui::Color32::from_rgba_premultiplied(
-        s.r(),
-        s.g(),
-        s.b(),
-        (s.a() as f32 * opacity) as u8,
-    );
+    let stroke_alpha =
+        egui::Color32::from_rgba_premultiplied(s.r(), s.g(), s.b(), (s.a() as f32 * opacity) as u8);
     egui::Frame::default()
         .fill(bg_alpha)
         .corner_radius(egui::CornerRadius::same(8))
@@ -84,11 +80,36 @@ pub fn apply(ctx: &egui::Context) {
 
     // 控件
     let widget_states = [
-        (&mut visuals.widgets.noninteractive, BG_WIDGET, STROKE_DIM, TEXT_SECONDARY),
-        (&mut visuals.widgets.inactive, BG_WIDGET, STROKE_MED, TEXT_PRIMARY),
-        (&mut visuals.widgets.hovered, BG_WIDGET_HOVER, STROKE_BRIGHT, TEXT_BRIGHT),
-        (&mut visuals.widgets.active, BG_WIDGET_ACTIVE, STROKE_BRIGHT, TEXT_BRIGHT),
-        (&mut visuals.widgets.open, Color32::from_rgb(36, 36, 36), STROKE_MED, TEXT_BRIGHT),
+        (
+            &mut visuals.widgets.noninteractive,
+            BG_WIDGET,
+            STROKE_DIM,
+            TEXT_SECONDARY,
+        ),
+        (
+            &mut visuals.widgets.inactive,
+            BG_WIDGET,
+            STROKE_MED,
+            TEXT_PRIMARY,
+        ),
+        (
+            &mut visuals.widgets.hovered,
+            BG_WIDGET_HOVER,
+            STROKE_BRIGHT,
+            TEXT_BRIGHT,
+        ),
+        (
+            &mut visuals.widgets.active,
+            BG_WIDGET_ACTIVE,
+            STROKE_BRIGHT,
+            TEXT_BRIGHT,
+        ),
+        (
+            &mut visuals.widgets.open,
+            Color32::from_rgb(36, 36, 36),
+            STROKE_MED,
+            TEXT_BRIGHT,
+        ),
     ];
     for (w, bg, stroke, fg) in widget_states {
         w.bg_fill = bg;

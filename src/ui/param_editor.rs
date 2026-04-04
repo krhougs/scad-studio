@@ -94,7 +94,8 @@ fn render_control(ui: &mut egui::Ui, document: &mut DocumentState, entry: &Param
         (ParameterKind::Bool, ParameterValue::Bool(value)) => {
             let mut current = *value;
             if ui.checkbox(&mut current, "").changed() {
-                let _ = document.set_parameter(&entry.definition.name, ParameterValue::Bool(current));
+                let _ =
+                    document.set_parameter(&entry.definition.name, ParameterValue::Bool(current));
             }
         }
         (ParameterKind::Choice { options }, ParameterValue::Text(value)) => {
@@ -107,7 +108,8 @@ fn render_control(ui: &mut egui::Ui, document: &mut DocumentState, entry: &Param
                     }
                 });
             if current != *value {
-                let _ = document.set_parameter(&entry.definition.name, ParameterValue::Text(current));
+                let _ =
+                    document.set_parameter(&entry.definition.name, ParameterValue::Text(current));
             }
         }
         _ => {}

@@ -144,10 +144,18 @@ fn preset_section(ui: &mut egui::Ui, document: &mut DocumentState, actions: &mut
                 .add(
                     egui::Button::new(
                         egui::RichText::new(&preset)
-                            .color(if selected { palette::TEXT_ACCENT } else { palette::TEXT_PRIMARY })
+                            .color(if selected {
+                                palette::TEXT_ACCENT
+                            } else {
+                                palette::TEXT_PRIMARY
+                            })
                             .size(12.0),
                     )
-                    .fill(if selected { palette::BG_SELECTION } else { egui::Color32::TRANSPARENT })
+                    .fill(if selected {
+                        palette::BG_SELECTION
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    })
                     .corner_radius(egui::CornerRadius::same(4)),
                 )
                 .clicked()
@@ -172,7 +180,9 @@ fn preset_section(ui: &mut egui::Ui, document: &mut DocumentState, actions: &mut
         if ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new("保存").color(palette::TEXT_PRIMARY).size(12.0),
+                    egui::RichText::new("保存")
+                        .color(palette::TEXT_PRIMARY)
+                        .size(12.0),
                 )
                 .fill(palette::BG_WIDGET)
                 .corner_radius(egui::CornerRadius::same(4)),
@@ -180,9 +190,9 @@ fn preset_section(ui: &mut egui::Ui, document: &mut DocumentState, actions: &mut
             .clicked()
             && !document.preset_name_input.trim().is_empty()
         {
-            actions
-                .commands
-                .push(UiCommand::SavePreset(document.preset_name_input.trim().to_string()));
+            actions.commands.push(UiCommand::SavePreset(
+                document.preset_name_input.trim().to_string(),
+            ));
         }
         let can_delete = document.selected_preset.is_some();
         if ui
@@ -190,7 +200,11 @@ fn preset_section(ui: &mut egui::Ui, document: &mut DocumentState, actions: &mut
                 can_delete,
                 egui::Button::new(
                     egui::RichText::new("删除")
-                        .color(if can_delete { palette::LOG_ERROR } else { palette::TEXT_SECONDARY })
+                        .color(if can_delete {
+                            palette::LOG_ERROR
+                        } else {
+                            palette::TEXT_SECONDARY
+                        })
                         .size(12.0),
                 )
                 .fill(egui::Color32::TRANSPARENT)
@@ -221,10 +235,18 @@ fn export_section(
             .add(
                 egui::Button::new(
                     egui::RichText::new("STL")
-                        .color(if document.export_format == ExportFormat::Stl { palette::TEXT_BRIGHT } else { palette::TEXT_SECONDARY })
+                        .color(if document.export_format == ExportFormat::Stl {
+                            palette::TEXT_BRIGHT
+                        } else {
+                            palette::TEXT_SECONDARY
+                        })
                         .size(12.0),
                 )
-                .fill(if document.export_format == ExportFormat::Stl { palette::BG_WIDGET_ACTIVE } else { egui::Color32::TRANSPARENT })
+                .fill(if document.export_format == ExportFormat::Stl {
+                    palette::BG_WIDGET_ACTIVE
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
                 .corner_radius(egui::CornerRadius::same(4)),
             )
             .clicked()
@@ -235,10 +257,18 @@ fn export_section(
             .add(
                 egui::Button::new(
                     egui::RichText::new("3MF")
-                        .color(if document.export_format == ExportFormat::ThreeMf { palette::TEXT_BRIGHT } else { palette::TEXT_SECONDARY })
+                        .color(if document.export_format == ExportFormat::ThreeMf {
+                            palette::TEXT_BRIGHT
+                        } else {
+                            palette::TEXT_SECONDARY
+                        })
                         .size(12.0),
                 )
-                .fill(if document.export_format == ExportFormat::ThreeMf { palette::BG_WIDGET_ACTIVE } else { egui::Color32::TRANSPARENT })
+                .fill(if document.export_format == ExportFormat::ThreeMf {
+                    palette::BG_WIDGET_ACTIVE
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
                 .corner_radius(egui::CornerRadius::same(4)),
             )
             .clicked()

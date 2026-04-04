@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    fmt,
+    fmt, fs,
     path::PathBuf,
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
     thread,
@@ -129,7 +128,9 @@ pub(crate) fn matches_path(paths: &[PathBuf], watched_file: Option<&std::path::P
         return false;
     };
     let watched_file = normalize_path(watched_file.to_path_buf());
-    paths.iter().any(|path| normalize_path(path.clone()) == watched_file)
+    paths
+        .iter()
+        .any(|path| normalize_path(path.clone()) == watched_file)
 }
 
 pub(crate) fn matches_any_path(paths: &[PathBuf], watched_files: &[PathBuf]) -> bool {

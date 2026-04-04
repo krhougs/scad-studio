@@ -1,9 +1,4 @@
-use std::{
-    collections::HashSet,
-    env, fmt, fs,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashSet, env, fmt, fs, path::PathBuf, sync::Arc};
 
 use egui::{FontData, FontDefinitions, FontFamily};
 
@@ -25,8 +20,8 @@ pub fn configure_egui_fonts(ctx: &egui::Context) -> Result<Vec<FontSpec>, System
     Ok(fallback_fonts)
 }
 
-pub fn build_font_definitions_for_current_ui(
-) -> Result<(FontDefinitions, Vec<FontSpec>), SystemFontError> {
+pub fn build_font_definitions_for_current_ui()
+-> Result<(FontDefinitions, Vec<FontSpec>), SystemFontError> {
     let preferred_languages = preferred_language_tags();
     let primary_fonts = unique_fonts(platform_primary_fonts(&preferred_languages)?);
     let fallback_fonts = unique_fonts(platform_fallback_fonts(&preferred_languages)?);
@@ -319,12 +314,10 @@ mod macos {
         let mut fonts = Vec::new();
         for post_script_name in post_script_names {
             let normalized_name = normalize_post_script_name(&post_script_name);
-            if let Some(face) = database
-                .faces()
-                .find(|face| {
-                    face.post_script_name == normalized_name || face.post_script_name == post_script_name
-                })
-            {
+            if let Some(face) = database.faces().find(|face| {
+                face.post_script_name == normalized_name
+                    || face.post_script_name == post_script_name
+            }) {
                 let path = match &face.source {
                     Source::File(path) => path.clone(),
                     Source::SharedFile(path, _) => path.clone(),
@@ -363,13 +356,10 @@ mod macos {
 mod linux {
     use std::{path::PathBuf, process::Command};
 
-    use super::{parse_line_list, FontSpec, SystemFontError};
+    use super::{FontSpec, SystemFontError, parse_line_list};
 
     pub fn fallback_fonts(language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
-        let language_tag = language_tags
-            .first()
-            .map(String::as_str)
-            .unwrap_or("en-US");
+        let language_tag = language_tags.first().map(String::as_str).unwrap_or("en-US");
         let pattern = format!("sans:lang={language_tag}");
         let output = Command::new("fc-match")
             .args(["-s", "--format", "%{file}\n", &pattern])
@@ -404,7 +394,13 @@ mod windows {
         Ok(entries
             .into_iter()
             .filter_map(|entry| entry.split(',').next().map(str::trim).map(PathBuf::from))
-            .map(|path| if path.is_absolute() { path } else { fonts_dir.join(path) })
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    fonts_dir.join(path)
+                }
+            })
             .map(|path| FontSpec { path, index: 0 })
             .collect())
     }
@@ -478,13 +474,19 @@ impl fmt::Display for SystemFontError {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    use super::{has_glyph, normalize_language_tag, parse_line_list, unique_fonts, FontSpec};
+    use super::{FontSpec, has_glyph, normalize_language_tag, parse_line_list, unique_fonts};
 
     #[test]
     fn normalize_language_tag_converts_common_locale_formats() {
-        assert_eq!(normalize_language_tag("zh_CN.UTF-8"), Some("zh-CN".to_owned()));
+        assert_eq!(
+            normalize_language_tag("zh_CN.UTF-8"),
+            Some("zh-CN".to_owned())
+        );
         assert_eq!(normalize_language_tag("en_US"), Some("en-US".to_owned()));
         assert_eq!(normalize_language_tag("ja-JP"), Some("ja-JP".to_owned()));
     }
@@ -498,7 +500,10 @@ mod tests {
     #[test]
     fn parse_line_list_skips_blank_lines() {
         let parsed = parse_line_list("/tmp/a.ttf\n\n/tmp/b.ttc\n");
-        assert_eq!(parsed, vec![PathBuf::from("/tmp/a.ttf"), PathBuf::from("/tmp/b.ttc")]);
+        assert_eq!(
+            parsed,
+            vec![PathBuf::from("/tmp/a.ttf"), PathBuf::from("/tmp/b.ttc")]
+        );
     }
 
     #[test]
@@ -525,10 +530,19 @@ mod tests {
 
     /// 关键字符的字形覆盖探测：关闭符号变体、emoji、CJK、基础拉丁
     const PROBE_CHARS: &[char] = &[
-        'x', '\u{00D7}',       // ASCII x, 乘号
-        '\u{1F4C1}', '\u{2699}', // 文件夹 emoji, 齿轮 emoji
-        '文', '件', '打', '开', '预', '览', // CJK
-        'A', 'a', '0',          // 基础拉丁
+        'x',
+        '\u{00D7}', // ASCII x, 乘号
+        '\u{1F4C1}',
+        '\u{2699}', // 文件夹 emoji, 齿轮 emoji
+        '文',
+        '件',
+        '打',
+        '开',
+        '预',
+        '览', // CJK
+        'A',
+        'a',
+        '0', // 基础拉丁
     ];
 
     #[test]

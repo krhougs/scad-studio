@@ -62,6 +62,13 @@ fn base_color(normal: vec3<f32>, model_color: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(0.74, 0.78, 0.84);
 }
 
+fn surface_alpha(model_color: vec4<f32>) -> f32 {
+    if scene.render_config.x == 1u && model_color.a >= 0.0 {
+        return model_color.a;
+    }
+    return scene.render_params.x;
+}
+
 fn sample_shadow(light_clip_position: vec4<f32>) -> f32 {
     if scene.render_params.y < 0.5 {
         return 1.0;
@@ -144,10 +151,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         let half_vector = normalize(light_dir + view_dir);
         let diffuse = max(dot(normal, light_dir), 0.0);
-        let specular = pow(max(dot(normal, half_vector), 0.0), 48.0) * 0.35;
+        let specular = pow(max(dot(normal, half_vector), 0.0), 48.0) * 0.35 * scene.render_params.w;
+        let specular_tint = select(
+            color,
+            mix(color, base * color, 0.88),
+            scene.render_config.x == 1u,
+        );
         let shadow_factor = select(1.0, shadow, light.kind_flags.y == 1u);
         shaded += base * color * (diffuse * intensity * attenuation * shadow_factor);
-        shaded += color * (specular * intensity * attenuation * shadow_factor);
+        shaded += specular_tint * (specular * intensity * attenuation * shadow_factor);
     }
-    return vec4<f32>(apply_fog(shaded, input.world_position), scene.render_params.x);
+    return vec4<f32>(apply_fog(shaded, input.world_position), surface_alpha(input.model_color));
 }

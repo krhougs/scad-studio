@@ -9,6 +9,7 @@ use crate::{
 
 pub struct ScenePipelines {
     pub solid: wgpu::RenderPipeline,
+    pub solid_transparent: wgpu::RenderPipeline,
     pub wireframe: Option<wgpu::RenderPipeline>,
     pub xray: wgpu::RenderPipeline,
     pub section_stencil: wgpu::RenderPipeline,
@@ -27,6 +28,15 @@ pub fn create_scene_pipelines(
         bind_group_layout,
         PipelineKind::Solid,
         wgpu::PolygonMode::Fill,
+        false,
+    );
+    let solid_transparent = create_pipeline(
+        device,
+        config,
+        bind_group_layout,
+        PipelineKind::Solid,
+        wgpu::PolygonMode::Fill,
+        true,
     );
     let wireframe = if supports_wireframe(device.features()) {
         Some(create_pipeline(
@@ -35,6 +45,7 @@ pub fn create_scene_pipelines(
             bind_group_layout,
             PipelineKind::Solid,
             wgpu::PolygonMode::Line,
+            false,
         ))
     } else {
         None
@@ -45,10 +56,12 @@ pub fn create_scene_pipelines(
         bind_group_layout,
         PipelineKind::XRay,
         wgpu::PolygonMode::Fill,
+        false,
     );
     let section_stencil = create_stencil_pipeline(device, config, bind_group_layout);
     ScenePipelines {
         solid,
+        solid_transparent,
         wireframe,
         xray,
         section_stencil,
@@ -106,6 +119,21 @@ pub fn pipeline_alpha_for(mode: RenderMode) -> f32 {
 
 pub fn pipeline_fog_density(enabled: bool) -> f32 {
     if enabled { 0.01 } else { 0.0 }
+}
+
+pub fn pipeline_specular_strength(mode: ColorMode) -> f32 {
+    match mode {
+        ColorMode::Mono => 1.0,
+        ColorMode::Color => 0.0,
+    }
+}
+
+pub fn solid_transparent_blend_state() -> Option<wgpu::BlendState> {
+    Some(wgpu::BlendState::ALPHA_BLENDING)
+}
+
+pub fn solid_transparent_depth_write_enabled() -> bool {
+    false
 }
 
 pub fn clip_plane_enabled_flag(enabled: bool) -> u32 {
@@ -228,6 +256,7 @@ fn create_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     kind: PipelineKind,
     polygon_mode: wgpu::PolygonMode,
+    transparent: bool,
 ) -> wgpu::RenderPipeline {
     let shader_source = match kind {
         PipelineKind::Solid => include_str!("shader.wgsl"),
@@ -263,6 +292,8 @@ fn create_pipeline(
             PipelineKind::Solid => {
                 if polygon_mode == wgpu::PolygonMode::Line {
                     "scene_wireframe_pipeline"
+                } else if transparent {
+                    "scene_transparent_pipeline"
                 } else {
                     "scene_pipeline"
                 }
@@ -282,7 +313,11 @@ fn create_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: config.format,
-                blend: blend_state_for(render_mode),
+                blend: if transparent {
+                    solid_transparent_blend_state()
+                } else {
+                    blend_state_for(render_mode)
+                },
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -299,7 +334,11 @@ fn create_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: render_mode != RenderMode::XRay,
+            depth_write_enabled: if transparent {
+                solid_transparent_depth_write_enabled()
+            } else {
+                render_mode != RenderMode::XRay
+            },
             depth_compare: wgpu::CompareFunction::LessEqual,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),

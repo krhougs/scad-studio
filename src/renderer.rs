@@ -29,6 +29,10 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 };
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
+pub fn transparent_index_buffer_usage() -> wgpu::BufferUsages {
+    wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST
+}
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -55,8 +59,13 @@ pub struct EguiPaintData {
 #[derive(Debug)]
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    full_index_buffer: wgpu::Buffer,
+    full_index_count: u32,
+    opaque_index_buffer: Option<wgpu::Buffer>,
+    opaque_index_count: u32,
+    transparent_index_buffer: Option<wgpu::Buffer>,
+    transparent_index_count: u32,
+    mesh_data: MeshData,
     bounds: crate::mesh::Bounds,
 }
 
@@ -133,11 +142,12 @@ impl Renderer {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        self.depth_buffer =
-            DepthBuffer::new(&self.device, size.width, size.height, DEPTH_FORMAT);
+        self.depth_buffer = DepthBuffer::new(&self.device, size.width, size.height, DEPTH_FORMAT);
     }
 
     pub fn set_mesh(&mut self, mesh: MeshData) {
+        let bounds = mesh.bounds;
+        let (opaque_indices, transparent_indices) = mesh.triangle_index_partitions();
         let vertex_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -145,18 +155,31 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&mesh.vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh_index_buffer"),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+        let full_index_buffer = self.create_index_buffer(
+            "mesh_index_buffer",
+            &mesh.indices,
+            wgpu::BufferUsages::INDEX,
+        );
+        let opaque_index_buffer = self.create_optional_index_buffer(
+            "mesh_opaque_index_buffer",
+            &opaque_indices,
+            wgpu::BufferUsages::INDEX,
+        );
+        let transparent_index_buffer = self.create_optional_index_buffer(
+            "mesh_transparent_index_buffer",
+            &transparent_indices,
+            transparent_index_buffer_usage(),
+        );
         self.mesh = Some(GpuMesh {
             vertex_buffer,
-            index_buffer,
-            index_count: mesh.indices.len() as u32,
-            bounds: mesh.bounds,
+            full_index_buffer,
+            full_index_count: mesh.indices.len() as u32,
+            opaque_index_buffer,
+            opaque_index_count: opaque_indices.len() as u32,
+            transparent_index_buffer,
+            transparent_index_count: transparent_indices.len() as u32,
+            mesh_data: mesh,
+            bounds,
         });
     }
 
@@ -174,7 +197,8 @@ impl Renderer {
         let frame = self.acquire_frame()?;
         self.update_scene_uniforms(camera, viewer_state, clip_plane);
         if let Some(clip_plane) = clip_plane {
-            self.section_resources.update_buffers(&self.queue, clip_plane);
+            self.section_resources
+                .update_buffers(&self.queue, clip_plane);
         }
         let view = frame
             .texture
@@ -185,7 +209,7 @@ impl Renderer {
                 label: Some("main_encoder"),
             });
         self.draw_shadow_pass(&mut encoder, viewer_state);
-        self.draw_scene_pass(&mut encoder, &view, viewer_state, clip_plane);
+        self.draw_scene_pass(&mut encoder, &view, camera, viewer_state, clip_plane);
         let extra_buffers = self.upload_egui_resources(&mut encoder, &egui_paint);
         self.draw_egui_pass(&mut encoder, &view, &egui_paint);
         self.queue
@@ -214,7 +238,7 @@ impl Renderer {
         viewer_state: &ViewerState,
         clip_plane: Option<&ClipPlane>,
     ) {
-        let matrices = camera.matrices();
+        let matrices = camera.matrices_for_bounds(Some(self.scene_bounds()));
         let render_mode =
             pipeline::resolve_render_mode(viewer_state.render_mode, self.device.features());
         let lighting_state = lighting::encode_lights(&lighting::default_lights());
@@ -228,13 +252,24 @@ impl Renderer {
             light_view_proj: light_view_proj.to_cols_array_2d(),
             eye_position: Vec4::from((matrices.eye, 1.0)).to_array(),
             clip_plane: clip_plane
-                .map(|plane| [plane.normal.x, plane.normal.y, plane.normal.z, plane.distance])
+                .map(|plane| {
+                    [
+                        plane.normal.x,
+                        plane.normal.y,
+                        plane.normal.z,
+                        plane.distance,
+                    ]
+                })
                 .unwrap_or([0.0, 1.0, 0.0, 0.0]),
             render_params: [
                 pipeline::pipeline_alpha_for(render_mode),
-                if viewer_state.shadows_enabled { 1.0 } else { 0.0 },
+                if viewer_state.shadows_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
                 pipeline::pipeline_fog_density(viewer_state.fog_enabled),
-                0.0,
+                pipeline::pipeline_specular_strength(viewer_state.color_mode),
             ],
             light_meta: [
                 lighting_state.light_count,
@@ -281,14 +316,17 @@ impl Renderer {
         render_pass.set_pipeline(&self.shadow_resources.pipeline);
         render_pass.set_bind_group(0, &self.shadow_bind_group, &[]);
         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        if let Some(index_buffer) = mesh.opaque_index_buffer.as_ref() {
+            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.opaque_index_count, 0, 0..1);
+        }
     }
 
     fn draw_scene_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        camera: &OrbitalCamera,
         viewer_state: &ViewerState,
         clip_plane: Option<&ClipPlane>,
     ) {
@@ -334,14 +372,37 @@ impl Renderer {
             render_pass.set_pipeline(&self.scene_pipelines.section_stencil);
             render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            render_pass
+                .set_index_buffer(mesh.full_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.full_index_count, 0, 0..1);
         }
-        render_pass.set_pipeline(self.pipeline_for(viewer_state));
         render_pass.set_bind_group(0, &self.scene_bind_group, &[]);
         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        match pipeline::resolve_render_mode(viewer_state.render_mode, self.device.features()) {
+            crate::app::RenderMode::Solid => {
+                if let Some(index_buffer) = mesh.opaque_index_buffer.as_ref() {
+                    render_pass.set_pipeline(&self.scene_pipelines.solid);
+                    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.draw_indexed(0..mesh.opaque_index_count, 0, 0..1);
+                }
+                if let Some(index_buffer) = mesh.transparent_index_buffer.as_ref() {
+                    let sorted_indices = mesh
+                        .mesh_data
+                        .sorted_transparent_triangle_indices(camera.eye().to_array());
+                    self.queue
+                        .write_buffer(index_buffer, 0, bytemuck::cast_slice(&sorted_indices));
+                    render_pass.set_pipeline(&self.scene_pipelines.solid_transparent);
+                    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.draw_indexed(0..mesh.transparent_index_count, 0, 0..1);
+                }
+            }
+            crate::app::RenderMode::Wireframe | crate::app::RenderMode::XRay => {
+                render_pass.set_pipeline(self.pipeline_for(viewer_state));
+                render_pass
+                    .set_index_buffer(mesh.full_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..mesh.full_index_count, 0, 0..1);
+            }
+        }
         if clip_plane.is_some() {
             self.section_resources
                 .draw_fill(&mut render_pass, &self.scene_bind_group);
@@ -424,10 +485,40 @@ impl Renderer {
     }
 
     fn scene_bounds(&self) -> crate::mesh::Bounds {
-        self.mesh.as_ref().map(|mesh| mesh.bounds).unwrap_or(crate::mesh::Bounds {
-            min: Vec3::new(-128.0, -1.0, -128.0),
-            max: Vec3::new(128.0, 128.0, 128.0),
-        })
+        self.mesh
+            .as_ref()
+            .map(|mesh| mesh.bounds)
+            .unwrap_or(crate::mesh::Bounds {
+                min: Vec3::new(-128.0, -1.0, -128.0),
+                max: Vec3::new(128.0, 128.0, 128.0),
+            })
+    }
+
+    fn create_index_buffer(
+        &self,
+        label: &'static str,
+        indices: &[u32],
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(indices),
+                usage,
+            })
+    }
+
+    fn create_optional_index_buffer(
+        &self,
+        label: &'static str,
+        indices: &[u32],
+        usage: wgpu::BufferUsages,
+    ) -> Option<wgpu::Buffer> {
+        if indices.is_empty() {
+            None
+        } else {
+            Some(self.create_index_buffer(label, indices, usage))
+        }
     }
 }
 

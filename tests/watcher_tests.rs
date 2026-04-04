@@ -3,7 +3,11 @@
 #[path = "../src/watcher.rs"]
 mod watcher;
 
-use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn matches_path_accepts_canonicalized_equivalent_paths() {

@@ -84,7 +84,11 @@ pub fn encode_lights(lights: &[Light]) -> LightingState {
     LightingState {
         lights: raw,
         light_count: count,
-        shadow_light_index: if shadow_found { shadow_light_index + 1 } else { 0 },
+        shadow_light_index: if shadow_found {
+            shadow_light_index + 1
+        } else {
+            0
+        },
     }
 }
 
@@ -127,14 +131,14 @@ impl LightingState {
 
 fn encode_light(light: Light) -> LightRaw {
     LightRaw {
-        kind_flags: [
-            light.kind as u32,
-            u32::from(light.casts_shadow),
-            0,
-            0,
-        ],
+        kind_flags: [light.kind as u32, u32::from(light.casts_shadow), 0, 0],
         color_intensity: [light.color.x, light.color.y, light.color.z, light.intensity],
-        position_range: [light.position.x, light.position.y, light.position.z, light.range],
+        position_range: [
+            light.position.x,
+            light.position.y,
+            light.position.z,
+            light.range,
+        ],
         direction_spot: [
             light.direction.x,
             light.direction.y,

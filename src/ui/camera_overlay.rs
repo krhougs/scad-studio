@@ -64,7 +64,11 @@ pub fn show(
             ui.add_space(4.0);
 
             // 眼点位置（只读）
-            label_row(ui, "眼点", format!("{:.2}  {:.2}  {:.2}", eye.x, eye.y, eye.z));
+            label_row(
+                ui,
+                "眼点",
+                format!("{:.2}  {:.2}  {:.2}", eye.x, eye.y, eye.z),
+            );
 
             ui.add_space(6.0);
 

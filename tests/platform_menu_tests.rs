@@ -8,7 +8,7 @@ enum UserEvent {
 #[path = "../src/platform_menu.rs"]
 mod platform_menu;
 
-use platform_menu::{resolve_menu_command, MenuCommand};
+use platform_menu::{MenuCommand, resolve_menu_command};
 
 #[test]
 fn resolves_open_about_and_quit_commands() {

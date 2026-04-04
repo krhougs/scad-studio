@@ -8,6 +8,9 @@ use crate::mesh::Bounds;
 
 const MIN_DISTANCE: f32 = 0.05;
 const MAX_DISTANCE: f32 = 5_000.0;
+const MIN_CLIP_NEAR: f32 = 0.05;
+const CLIP_PADDING_FACTOR: f32 = 0.2;
+const MIN_CLIP_PADDING: f32 = 1.0;
 const ROTATE_SPEED: f32 = 0.01;
 const PAN_SPEED: f32 = 0.002;
 const ZOOM_SPEED: f32 = 0.12;
@@ -149,16 +152,18 @@ impl OrbitalCamera {
     }
 
     pub fn matrices(&self) -> CameraMatrices {
+        self.matrices_for_bounds(None)
+    }
+
+    pub fn matrices_for_bounds(&self, bounds: Option<Bounds>) -> CameraMatrices {
         let eye = self.compute_eye_position();
         let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
+        let (near, far) = self.clipping_planes(bounds);
         let projection = match self.projection_mode {
-            ProjectionMode::Perspective => Mat4::perspective_rh(
-                self.fov_y_radians,
-                self.aspect_ratio.max(0.1),
-                0.01,
-                10_000.0,
-            ),
-            ProjectionMode::Orthographic => self.orthographic_projection(),
+            ProjectionMode::Perspective => {
+                Mat4::perspective_rh(self.fov_y_radians, self.aspect_ratio.max(0.1), near, far)
+            }
+            ProjectionMode::Orthographic => self.orthographic_projection(near, far),
         };
         CameraMatrices {
             view_proj: projection * view,
@@ -166,6 +171,28 @@ impl OrbitalCamera {
             projection,
             eye,
         }
+    }
+
+    pub fn clipping_planes(&self, bounds: Option<Bounds>) -> (f32, f32) {
+        let Some(bounds) = bounds else {
+            return (MIN_CLIP_NEAR, 10_000.0);
+        };
+        let eye = self.compute_eye_position();
+        let view = Mat4::look_at_rh(eye, self.target, self.orbit_up());
+        let mut min_depth = f32::INFINITY;
+        let mut max_depth: f32 = 0.0;
+        for corner in bounds_corners(bounds) {
+            let view_space = view * corner.extend(1.0);
+            let depth = -view_space.z;
+            min_depth = min_depth.min(depth);
+            max_depth = max_depth.max(depth);
+        }
+        let padding = bounds
+            .radius()
+            .mul_add(CLIP_PADDING_FACTOR, MIN_CLIP_PADDING);
+        let near = (min_depth - padding).max(MIN_CLIP_NEAR);
+        let far = (max_depth + padding).max(near + 1.0);
+        (near, far)
     }
 
     pub fn fit_bounds(&mut self, bounds: Bounds) {
@@ -235,7 +262,7 @@ impl OrbitalCamera {
         .normalize_or_zero()
     }
 
-    fn orthographic_projection(&self) -> Mat4 {
+    fn orthographic_projection(&self, near: f32, far: f32) -> Mat4 {
         let half_height = (self.distance * (self.fov_y_radians * 0.5).tan()).max(0.01);
         let half_width = (half_height * self.aspect_ratio.max(0.1)).max(0.01);
         Mat4::orthographic_rh(
@@ -243,8 +270,8 @@ impl OrbitalCamera {
             half_width,
             -half_height,
             half_height,
-            0.01,
-            10_000.0,
+            near,
+            far,
         )
     }
 }

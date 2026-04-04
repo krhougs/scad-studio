@@ -9,7 +9,9 @@ use std::path::PathBuf;
 #[test]
 fn config_json_round_trip_preserves_paths() {
     let config = AppConfig {
-        openscad_path: Some(PathBuf::from("/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD")),
+        openscad_path: Some(PathBuf::from(
+            "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD",
+        )),
         slicers: vec![SlicerConfig {
             name: "Bambu Studio".into(),
             path: PathBuf::from("/Applications/Bambu Studio.app"),

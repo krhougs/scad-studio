@@ -403,7 +403,7 @@ impl DesktopApp {
         let raw_input = state.egui_state.take_egui_input(&state.window);
         let mut ui_actions = app::UiActions::default();
         let show_embedded_menu = self.platform_menu.is_none();
-        let camera_matrices = state.camera.matrices();
+        let camera_matrices = state.camera.matrices_for_bounds(state.current_bounds);
         let slicers = detect_slicer_paths(&state.config);
         let full_output = state.egui_context.run(raw_input, |ctx| {
             ui_actions = state.studio.ui(
@@ -765,7 +765,11 @@ fn begin_clip_drag(state: &mut RuntimeState) -> bool {
     let ray = cross_section::screen_ray(
         cursor,
         viewport_size(state),
-        state.camera.matrices().view_proj.inverse(),
+        state
+            .camera
+            .matrices_for_bounds(state.current_bounds)
+            .view_proj
+            .inverse(),
     );
     let Some(ray) = ray else {
         return false;
@@ -792,7 +796,7 @@ fn update_clip_drag(state: &mut RuntimeState, cursor: Vec2) -> bool {
     let delta = cursor - previous;
     let distance_scale = state
         .camera
-        .matrices()
+        .matrices_for_bounds(state.current_bounds)
         .eye
         .distance(state.clip_plane.center())
         * 0.0025;
@@ -804,7 +808,7 @@ fn update_clip_drag(state: &mut RuntimeState, cursor: Vec2) -> bool {
                 .translate_along_normal(amount, state.ctrl_pressed);
         }
         EditMode::Rotate => {
-            let camera_matrices = state.camera.matrices();
+            let camera_matrices = state.camera.matrices_for_bounds(state.current_bounds);
             let inverse_view = camera_matrices.view.inverse();
             let right = inverse_view.x_axis.xyz().normalize_or_zero();
             let up = inverse_view.y_axis.xyz().normalize_or_zero();

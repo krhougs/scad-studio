@@ -46,7 +46,9 @@ fn parameter_store_preserves_overrides_on_reparse() {
     );
     let mut store = params::ParameterStore::from_parsed(original);
 
-    store.set_value("length", ParameterValue::Number(18.0)).unwrap();
+    store
+        .set_value("length", ParameterValue::Number(18.0))
+        .unwrap();
     store.merge_reparsed(reparsed);
 
     assert_eq!(store.value("length"), Some(&ParameterValue::Number(18.0)));
@@ -61,9 +63,13 @@ fn parameter_store_builds_cli_defines_and_restore_default() {
     );
     let mut store = params::ParameterStore::from_parsed(parsed);
 
-    store.set_value("length", ParameterValue::Number(12.5)).unwrap();
+    store
+        .set_value("length", ParameterValue::Number(12.5))
+        .unwrap();
     store.set_value("flag", ParameterValue::Bool(true)).unwrap();
-    store.set_value("name", ParameterValue::Text("B".into())).unwrap();
+    store
+        .set_value("name", ParameterValue::Text("B".into()))
+        .unwrap();
 
     let defines = store.cli_defines();
     assert_eq!(

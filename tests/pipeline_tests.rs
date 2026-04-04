@@ -6,12 +6,18 @@ mod app;
 mod camera;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/cross_section.rs"]
+mod cross_section;
 #[path = "../src/document.rs"]
 mod document;
 #[path = "../src/export.rs"]
 mod export;
 #[path = "../src/gizmo.rs"]
 mod gizmo;
+#[path = "../src/grid.rs"]
+mod grid;
+#[path = "../src/lighting.rs"]
+mod lighting;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/openscad.rs"]
@@ -22,6 +28,14 @@ mod params;
 mod pipeline;
 #[path = "../src/presets.rs"]
 mod presets;
+#[path = "../src/renderer.rs"]
+mod renderer;
+#[path = "../src/scene_bindings.rs"]
+mod scene_bindings;
+#[path = "../src/section.rs"]
+mod section;
+#[path = "../src/shadow.rs"]
+mod shadow;
 #[path = "../src/three_mf.rs"]
 mod three_mf;
 #[path = "../src/ui/mod.rs"]
@@ -31,8 +45,10 @@ use app::{ColorMode, RenderMode};
 use egui_wgpu::wgpu;
 use pipeline::{
     blend_state_for, clip_plane_enabled_flag, depth_stencil_format, pipeline_alpha_for,
-    pipeline_color_mode, pipeline_fog_density, polygon_mode_for, requested_device_features,
-    resolve_render_mode, section_fill_stencil_compare, stencil_depth_compare, vertex_buffer_layout,
+    pipeline_color_mode, pipeline_fog_density, pipeline_specular_strength, polygon_mode_for,
+    requested_device_features, resolve_render_mode, section_fill_stencil_compare,
+    solid_transparent_blend_state, solid_transparent_depth_write_enabled, stencil_depth_compare,
+    vertex_buffer_layout,
 };
 
 #[test]
@@ -92,6 +108,35 @@ fn requested_device_features_stay_empty_when_adapter_lacks_line_mode() {
 fn fog_density_is_zero_when_disabled_and_default_when_enabled() {
     assert_eq!(pipeline_fog_density(false), 0.0);
     assert_eq!(pipeline_fog_density(true), 0.01);
+}
+
+#[test]
+fn color_mode_uses_weaker_specular_strength_than_mono_mode() {
+    assert!(
+        pipeline_specular_strength(ColorMode::Color) < pipeline_specular_strength(ColorMode::Mono)
+    );
+}
+
+#[test]
+fn color_mode_disables_specular_strength_for_color_surfaces() {
+    assert_eq!(pipeline_specular_strength(ColorMode::Color), 0.0);
+}
+
+#[test]
+fn solid_transparent_pipeline_uses_alpha_blend_without_depth_write() {
+    assert_eq!(
+        solid_transparent_blend_state(),
+        Some(wgpu::BlendState::ALPHA_BLENDING)
+    );
+    assert!(!solid_transparent_depth_write_enabled());
+}
+
+#[test]
+fn transparent_index_buffer_usage_supports_copy_dst_updates() {
+    let usage = renderer::transparent_index_buffer_usage();
+
+    assert!(usage.contains(wgpu::BufferUsages::INDEX));
+    assert!(usage.contains(wgpu::BufferUsages::COPY_DST));
 }
 
 #[test]

@@ -38,11 +38,7 @@ objc2-foundation = { version = "0.3", features = ["NSString"] }
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [workspace]
-members = [
-    "crates/scene",
-    "crates/scad-data",
-    # "crates/scad-ui",  # enabled during Phase 2 (gpui integration)
-]
+members = []
 resolver = "2"
 
 [workspace.package]

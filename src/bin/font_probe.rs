@@ -20,7 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .expect("body font should exist");
 
-    println!("当前语言优先级: {:?}", system_fonts::current_language_preferences());
+    println!(
+        "当前语言优先级: {:?}",
+        system_fonts::current_language_preferences()
+    );
     println!(
         "TextStyle::Button -> {:?} {:.1}",
         button_font.family, button_font.size
@@ -61,11 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_family_summary(fonts: &FontDefinitions, family: &FontFamily, label: &str) {
-    let names = fonts
-        .families
-        .get(family)
-        .cloned()
-        .unwrap_or_default();
+    let names = fonts.families.get(family).cloned().unwrap_or_default();
     println!("\n{label} family 字体顺序前 16 项:");
     for (index, name) in names.iter().take(16).enumerate() {
         let suffix = if is_system_fallback_font(name) {
@@ -88,11 +87,7 @@ fn system_font_suffix(font_data: Option<&Arc<FontData>>) -> String {
     format!(" (face #{})", font_data.index)
 }
 
-fn first_matching_font(
-    fonts: &FontDefinitions,
-    family: &FontFamily,
-    ch: char,
-) -> Option<FontHit> {
+fn first_matching_font(fonts: &FontDefinitions, family: &FontFamily, ch: char) -> Option<FontHit> {
     let names = fonts.families.get(family)?;
     for (order_index, font_name) in names.iter().enumerate() {
         let font_data = fonts.font_data.get(font_name)?;

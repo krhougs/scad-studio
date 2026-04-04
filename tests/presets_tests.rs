@@ -29,8 +29,12 @@ fn save_load_and_delete_presets_round_trip() {
 
     let parsed = parse_parameters("size = 10; // [1:1:20]\nname = \"A\"; // [A, B]\n");
     let mut store = ParameterStore::from_parsed(parsed);
-    store.set_value("size", ParameterValue::Number(14.0)).unwrap();
-    store.set_value("name", ParameterValue::Text("B".into())).unwrap();
+    store
+        .set_value("size", ParameterValue::Number(14.0))
+        .unwrap();
+    store
+        .set_value("name", ParameterValue::Text("B".into()))
+        .unwrap();
 
     save_preset(&preset_path, "draft", &store).expect("preset should be written");
     let loaded = load_presets(&preset_path).expect("preset should load");

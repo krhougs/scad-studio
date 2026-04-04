@@ -98,11 +98,7 @@ impl EditMode {
 }
 
 fn snap_distance(amount: f32, snap: bool) -> f32 {
-    if snap {
-        amount.round()
-    } else {
-        amount
-    }
+    if snap { amount.round() } else { amount }
 }
 
 fn snap_angle(angle_radians: f32, snap: bool) -> f32 {

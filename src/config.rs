@@ -81,7 +81,8 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let json = fs::read_to_string(&path).map_err(|error| ConfigError(format!("读取配置失败: {error}")))?;
+    let json =
+        fs::read_to_string(&path).map_err(|error| ConfigError(format!("读取配置失败: {error}")))?;
     AppConfig::from_json(&json)
 }
 
@@ -91,7 +92,8 @@ pub fn save_config(config: &AppConfig) -> Result<(), ConfigError> {
         fs::create_dir_all(parent)
             .map_err(|error| ConfigError(format!("创建配置目录失败: {error}")))?;
     }
-    fs::write(path, config.to_json()?).map_err(|error| ConfigError(format!("写入配置失败: {error}")))
+    fs::write(path, config.to_json()?)
+        .map_err(|error| ConfigError(format!("写入配置失败: {error}")))
 }
 
 impl std::error::Error for ConfigError {}

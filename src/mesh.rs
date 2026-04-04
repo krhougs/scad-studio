@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     fs::File,
     io::{BufReader, Read, Seek},
@@ -39,6 +40,16 @@ pub struct MeshTriangle {
 #[derive(Debug)]
 pub struct MeshError(String);
 
+const NORMAL_SMOOTHING_DOT_THRESHOLD: f32 = 0.5;
+const SOLID_TRANSPARENCY_ALPHA_THRESHOLD: f32 = 0.9;
+
+#[derive(Clone, Copy)]
+struct VertexNormalSample {
+    vertex_index: usize,
+    face_normal: Vec3,
+    weighted_normal: Vec3,
+}
+
 impl MeshData {
     pub fn from_triangles(triangles: &[MeshTriangle]) -> Result<Self, MeshError> {
         if triangles.is_empty() {
@@ -47,22 +58,74 @@ impl MeshData {
         let mut vertices = Vec::with_capacity(triangles.len() * 3);
         let mut indices = Vec::with_capacity(triangles.len() * 3);
         let mut bounds = Bounds::empty();
+        let mut shared_normals: HashMap<[u32; 3], Vec<VertexNormalSample>> = HashMap::new();
         for (triangle_index, triangle) in triangles.iter().enumerate() {
+            let face_normal = normalized_normal(triangle.normal);
+            let weighted_normal = triangle_weighted_normal(triangle, face_normal);
             for (vertex_index, position) in triangle.positions.iter().copied().enumerate() {
                 bounds.include(Vec3::from_array(position));
+                let output_index = vertices.len();
                 vertices.push(Vertex {
                     position,
-                    normal: triangle.normal,
+                    normal: face_normal.to_array(),
                     color: triangle.colors[vertex_index].unwrap_or([0.0, 0.0, 0.0, -1.0]),
                 });
+                shared_normals
+                    .entry(position_key(position))
+                    .or_default()
+                    .push(VertexNormalSample {
+                        vertex_index: output_index,
+                        face_normal,
+                        weighted_normal,
+                    });
             }
             let base = (triangle_index * 3) as u32;
             indices.extend_from_slice(&[base, base + 1, base + 2]);
         }
+        apply_smoothed_normals(&mut vertices, &shared_normals);
         Ok(Self {
             vertices,
             indices,
             bounds,
+        })
+    }
+
+    pub fn triangle_index_partitions(&self) -> (Vec<u32>, Vec<u32>) {
+        let mut opaque = Vec::with_capacity(self.indices.len());
+        let mut transparent = Vec::new();
+        for triangle in self.indices.chunks_exact(3) {
+            if self.triangle_is_transparent(triangle) {
+                transparent.extend_from_slice(triangle);
+            } else {
+                opaque.extend_from_slice(triangle);
+            }
+        }
+        (opaque, transparent)
+    }
+
+    pub fn sorted_transparent_triangle_indices(&self, eye_position: [f32; 3]) -> Vec<u32> {
+        let eye = Vec3::from_array(eye_position);
+        let mut triangles = self
+            .indices
+            .chunks_exact(3)
+            .filter(|triangle| self.triangle_is_transparent(triangle))
+            .map(|triangle| {
+                let centroid = triangle_centroid(&self.vertices, triangle);
+                let distance_sq = centroid.distance_squared(eye);
+                ([triangle[0], triangle[1], triangle[2]], distance_sq)
+            })
+            .collect::<Vec<_>>();
+        triangles.sort_by(|left, right| right.1.total_cmp(&left.1));
+        triangles
+            .into_iter()
+            .flat_map(|(triangle, _)| triangle)
+            .collect()
+    }
+
+    fn triangle_is_transparent(&self, triangle: &[u32]) -> bool {
+        triangle.iter().any(|index| {
+            let alpha = self.vertices[*index as usize].color[3];
+            (0.0..SOLID_TRANSPARENCY_ALPHA_THRESHOLD).contains(&alpha)
         })
     }
 }
@@ -121,6 +184,62 @@ where
 
 pub(crate) fn openscad_to_viewer(vector: [f32; 3]) -> [f32; 3] {
     [vector[0], vector[2], -vector[1]]
+}
+
+fn apply_smoothed_normals(
+    vertices: &mut [Vertex],
+    shared_normals: &HashMap<[u32; 3], Vec<VertexNormalSample>>,
+) {
+    for samples in shared_normals.values() {
+        for sample in samples {
+            vertices[sample.vertex_index].normal = smoothed_normal(*sample, samples);
+        }
+    }
+}
+
+fn smoothed_normal(sample: VertexNormalSample, samples: &[VertexNormalSample]) -> [f32; 3] {
+    let blended = samples
+        .iter()
+        .filter(|candidate| {
+            sample.face_normal.dot(candidate.face_normal) >= NORMAL_SMOOTHING_DOT_THRESHOLD
+        })
+        .fold(Vec3::ZERO, |sum, candidate| sum + candidate.weighted_normal);
+    if blended == Vec3::ZERO {
+        sample.face_normal.to_array()
+    } else {
+        blended.normalize().to_array()
+    }
+}
+
+fn normalized_normal(normal: [f32; 3]) -> Vec3 {
+    let normal = Vec3::from_array(normal).normalize_or_zero();
+    if normal == Vec3::ZERO {
+        Vec3::Y
+    } else {
+        normal
+    }
+}
+
+fn triangle_weighted_normal(triangle: &MeshTriangle, fallback: Vec3) -> Vec3 {
+    let a = Vec3::from_array(triangle.positions[0]);
+    let b = Vec3::from_array(triangle.positions[1]);
+    let c = Vec3::from_array(triangle.positions[2]);
+    let weighted = (b - a).cross(c - a);
+    if weighted == Vec3::ZERO {
+        fallback
+    } else {
+        weighted
+    }
+}
+
+fn position_key(position: [f32; 3]) -> [u32; 3] {
+    position.map(|value| if value == 0.0 { 0.0 } else { value }.to_bits())
+}
+
+fn triangle_centroid(vertices: &[Vertex], triangle: &[u32]) -> Vec3 {
+    triangle.iter().fold(Vec3::ZERO, |sum, index| {
+        sum + Vec3::from_array(vertices[*index as usize].position)
+    }) / 3.0
 }
 
 impl std::error::Error for MeshError {}

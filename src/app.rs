@@ -189,7 +189,14 @@ impl StudioApp {
         camera: &OrbitalCamera,
         frame: UiFrame<'_>,
     ) -> UiActions {
-        crate::ui::show_app(self, ctx, show_embedded_menu, camera_matrices, camera, frame)
+        crate::ui::show_app(
+            self,
+            ctx,
+            show_embedded_menu,
+            camera_matrices,
+            camera,
+            frame,
+        )
     }
 }
 

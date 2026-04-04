@@ -114,14 +114,7 @@ pub fn build_light_view_proj(light: Light, bounds: Bounds) -> Mat4 {
     let radius = bounds.radius().max(16.0);
     let eye = center - direction * radius * 2.0;
     let view = Mat4::look_at_rh(eye, center, Vec3::Y);
-    let projection = Mat4::orthographic_rh(
-        -radius,
-        radius,
-        -radius,
-        radius,
-        0.1,
-        radius * 6.0,
-    );
+    let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.1, radius * 6.0);
     projection * view
 }
 

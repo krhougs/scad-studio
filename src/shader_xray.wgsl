@@ -79,15 +79,22 @@ fn clip_discard(world_position: vec3<f32>) {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     clip_discard(input.world_position);
     let normal = normalize(input.world_normal);
+    let base = base_color(normal, input.model_color);
     let light = normalize(-scene.lights[1].direction_spot.xyz);
     let view_dir = normalize(scene.eye_position.xyz - input.world_position);
     let half_vector = normalize(light + view_dir);
     let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.6);
+    let fresnel_strength = select(0.45, 0.14, scene.render_config.x == 1u);
 
     let diffuse = max(dot(normal, light), 0.0);
-    let specular = pow(max(dot(normal, half_vector), 0.0), 32.0) * 0.2;
-    let shaded = base_color(normal, input.model_color) * (0.16 + diffuse * 0.55)
-        + vec3<f32>(specular)
-        + vec3<f32>(fresnel * 0.45);
+    let specular = pow(max(dot(normal, half_vector), 0.0), 32.0) * 0.2 * scene.render_params.w;
+    let specular_tint = select(
+        vec3<f32>(1.0),
+        mix(vec3<f32>(1.0), base, 0.88),
+        scene.render_config.x == 1u,
+    );
+    let shaded = base * (0.16 + diffuse * 0.55)
+        + specular_tint * specular
+        + specular_tint * (fresnel * fresnel_strength);
     return vec4<f32>(apply_fog(shaded, input.world_position), scene.render_params.x);
 }
