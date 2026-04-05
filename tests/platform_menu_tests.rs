@@ -8,62 +8,113 @@ enum UserEvent {
 #[path = "../src/platform_menu.rs"]
 mod platform_menu;
 
-use platform_menu::{MenuCommand, resolve_menu_command};
+use platform_menu::{CommandIds, MenuCommand, resolve_menu_command};
+use std::path::PathBuf;
 
 #[test]
-fn resolves_open_about_and_quit_commands() {
-    assert_eq!(
+fn resolves_window_and_workspace_commands() {
+    let recent = vec![("file.recent.0".to_string(), PathBuf::from("/tmp/workspace-a"))];
+
+    assert!(matches!(
         resolve_menu_command(
-            "file.open",
-            "file.open",
-            Some("file.settings"),
-            Some("app.about"),
-            Some("app.quit")
+            "file.new-window",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
         ),
-        Some(MenuCommand::OpenFile)
-    );
-    assert_eq!(
+        Some(MenuCommand::NewWindow)
+    ));
+    assert!(matches!(
         resolve_menu_command(
-            "file.settings",
-            "file.open",
-            Some("file.settings"),
-            Some("app.about"),
-            Some("app.quit")
+            "file.open-folder",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
         ),
-        Some(MenuCommand::OpenSettings)
-    );
-    assert_eq!(
+        Some(MenuCommand::OpenFolder)
+    ));
+    assert!(matches!(
         resolve_menu_command(
-            "app.about",
-            "file.open",
-            Some("file.settings"),
-            Some("app.about"),
-            Some("app.quit")
+            "file.close-window",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
         ),
-        Some(MenuCommand::ShowAbout)
-    );
-    assert_eq!(
-        resolve_menu_command(
-            "app.quit",
-            "file.open",
-            Some("file.settings"),
-            Some("app.about"),
-            Some("app.quit")
-        ),
-        Some(MenuCommand::QuitApp)
-    );
+        Some(MenuCommand::CloseWindow)
+    ));
 }
 
 #[test]
-fn ignores_unknown_menu_ids() {
-    assert_eq!(
+fn resolves_recent_and_view_commands() {
+    let recent = vec![("file.recent.0".to_string(), PathBuf::from("/tmp/workspace-a"))];
+
+    assert!(matches!(
         resolve_menu_command(
-            "window.minimize",
-            "file.open",
-            Some("file.settings"),
-            Some("app.about"),
-            Some("app.quit")
+            "file.recent.0",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
         ),
-        None
-    );
+        Some(MenuCommand::OpenRecent(path)) if path == std::path::Path::new("/tmp/workspace-a")
+    ));
+    assert!(matches!(
+        resolve_menu_command(
+            "view.toggle-left-panel",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
+        ),
+        Some(MenuCommand::ToggleLeftPanel)
+    ));
+    assert!(matches!(
+        resolve_menu_command(
+            "view.toggle-log-panel",
+            CommandIds {
+                new_window_id: "file.new-window",
+                open_folder_id: "file.open-folder",
+                close_window_id: "file.close-window",
+                toggle_left_panel_id: "view.toggle-left-panel",
+                toggle_log_panel_id: "view.toggle-log-panel",
+                about_id: Some("app.about"),
+                quit_id: Some("app.quit"),
+            },
+            &recent,
+        ),
+        Some(MenuCommand::ToggleLogPanel)
+    ));
 }

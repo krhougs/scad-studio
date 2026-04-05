@@ -1,145 +1,114 @@
-use crate::camera::{CameraMatrices, OrbitalCamera};
-use crate::{config::AppConfig, document::DocumentState, export::SlicerInstall};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
-pub enum RenderState {
-    Idle,
-    Rendering(String),
-    Ready(String),
-    Error(String),
+use scad_data::{LogEntry, LogLevel};
+use scad_ui::{
+    chat_panel::ChatPanel,
+    file_tree::FileTree,
+    tab_system::{TabId, TabManager},
+};
+
+use crate::{
+    welcome::WelcomeTab,
+    workspace::{remember_workspace, workspace_name},
+};
+
+const DEFAULT_LEFT_PANEL_WIDTH: f32 = 280.0;
+const MIN_LEFT_PANEL_WIDTH: f32 = 220.0;
+const MAX_LEFT_PANEL_WIDTH: f32 = 480.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeftPanelTab {
+    Chat,
+    #[default]
+    Files,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogEntry {
-    pub level: LogLevel,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderMode {
-    Solid,
-    Wireframe,
-    XRay,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorMode {
-    Color,
-    Mono,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectionMode {
-    Perspective,
-    Orthographic,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ViewerState {
-    pub render_mode: RenderMode,
-    pub color_mode: ColorMode,
-    pub projection_mode: ProjectionMode,
-    pub wireframe_supported: bool,
-    pub show_grid: bool,
-    pub show_build_plate: bool,
-    pub show_axis_gizmo: bool,
-    pub shadows_enabled: bool,
-    pub fog_enabled: bool,
-    pub clip_plane_enabled: bool,
-    pub side_panel_open: bool,
-    pub log_panel_open: bool,
-    pub camera_overlay_open: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum CameraAction {
-    SetTargetX(f32),
-    SetTargetY(f32),
-    SetTargetZ(f32),
-    SetDistance(f32),
-    SetAzimuth(f32),
-    SetElevation(f32),
-    ResetView,
-    ViewTop,
-    ViewBottom,
-    ViewFront,
-    ViewBack,
-    ViewLeft,
-    ViewRight,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct UiActions {
-    pub open_file: bool,
-    pub viewer_state_changed: bool,
-    pub commands: Vec<UiCommand>,
-    pub camera_action: Option<CameraAction>,
-}
-
-pub struct UiFrame<'a> {
-    pub document: &'a mut DocumentState,
-    pub config: &'a mut AppConfig,
-    pub settings_open: &'a mut bool,
-    pub slicers: &'a [SlicerInstall],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UiCommand {
-    SavePreset(String),
-    DeletePreset(String),
-    ExportModel,
-    SendToSlicer(String),
-    SaveSettings,
-}
-
-#[derive(Debug, Default)]
 pub struct StudioApp {
-    current_file: Option<PathBuf>,
-    render_state: RenderState,
-    viewer_state: ViewerState,
+    workspace_path: Option<PathBuf>,
+    recent_workspaces: Vec<PathBuf>,
+    left_panel_tab: LeftPanelTab,
+    left_panel_width: f32,
+    left_panel_open: bool,
+    log_panel_open: bool,
     logs: Vec<LogEntry>,
+    tabs: TabManager,
+    chat_panel: ChatPanel,
+    file_tree: Option<FileTree>,
 }
 
 impl StudioApp {
-    #[allow(dead_code)]
-    pub fn current_file(&self) -> Option<&Path> {
-        self.current_file.as_deref()
+    pub fn new(recent_workspaces: Vec<PathBuf>) -> Self {
+        let mut app = Self {
+            workspace_path: None,
+            recent_workspaces,
+            left_panel_tab: LeftPanelTab::Files,
+            left_panel_width: DEFAULT_LEFT_PANEL_WIDTH,
+            left_panel_open: true,
+            log_panel_open: false,
+            logs: Vec::new(),
+            tabs: TabManager::default(),
+            chat_panel: ChatPanel::default(),
+            file_tree: None,
+        };
+        app.ensure_welcome_tab();
+        app
     }
 
-    pub fn has_current_file(&self) -> bool {
-        self.current_file.is_some()
+    pub fn workspace_path(&self) -> Option<&Path> {
+        self.workspace_path.as_deref()
     }
 
-    pub fn set_current_file(&mut self, path: PathBuf) {
-        self.current_file = Some(path);
+    pub fn workspace_name(&self) -> Option<String> {
+        self.workspace_path().map(workspace_name)
     }
 
-    pub fn set_rendering(&mut self, message: impl Into<String>) {
-        self.render_state = RenderState::Rendering(message.into());
+    pub fn set_workspace_path(&mut self, path: PathBuf) {
+        self.recent_workspaces = remember_workspace(&self.recent_workspaces, &path);
+        self.file_tree = Some(FileTree::new(path.clone()));
+        self.workspace_path = Some(path);
+        self.refresh_welcome_tab();
     }
 
-    pub fn set_ready(&mut self, message: impl Into<String>) {
-        self.render_state = RenderState::Ready(message.into());
+    pub fn window_title(&self) -> String {
+        self.workspace_name()
+            .map(|name| format!("SCAD Studio — {name}"))
+            .unwrap_or_else(|| "SCAD Studio".to_string())
     }
 
-    pub fn set_error(&mut self, message: impl Into<String>) {
-        self.render_state = RenderState::Error(message.into());
+    pub fn recent_workspaces(&self) -> &[PathBuf] {
+        &self.recent_workspaces
     }
 
-    pub fn viewer_state(&self) -> &ViewerState {
-        &self.viewer_state
+    pub fn left_panel_tab(&self) -> LeftPanelTab {
+        self.left_panel_tab
     }
 
-    pub fn viewer_state_mut(&mut self) -> &mut ViewerState {
-        &mut self.viewer_state
+    pub fn set_left_panel_tab(&mut self, tab: LeftPanelTab) {
+        self.left_panel_tab = tab;
+    }
+
+    pub fn left_panel_width(&self) -> f32 {
+        self.left_panel_width
+    }
+
+    pub fn set_left_panel_width(&mut self, width: f32) {
+        self.left_panel_width = width.clamp(MIN_LEFT_PANEL_WIDTH, MAX_LEFT_PANEL_WIDTH);
+    }
+
+    pub fn left_panel_open(&self) -> bool {
+        self.left_panel_open
+    }
+
+    pub fn toggle_left_panel(&mut self) {
+        self.left_panel_open = !self.left_panel_open;
+    }
+
+    pub fn log_panel_open(&self) -> bool {
+        self.log_panel_open
+    }
+
+    pub fn toggle_log_panel(&mut self) {
+        self.log_panel_open = !self.log_panel_open;
     }
 
     pub fn log_entries(&self) -> &[LogEntry] {
@@ -152,7 +121,7 @@ impl StudioApp {
 
     pub fn push_log(&mut self, level: LogLevel, message: impl Into<String>) {
         if level == LogLevel::Error {
-            self.viewer_state.log_panel_open = true;
+            self.log_panel_open = true;
         }
         self.logs.push(LogEntry {
             level,
@@ -160,82 +129,58 @@ impl StudioApp {
         });
     }
 
-    pub fn current_file_label(&self) -> &str {
-        self.current_file
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("未打开文件")
+    pub fn status_text(&self) -> String {
+        self.workspace_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "未打开 Workspace".to_string())
     }
 
-    pub fn is_rendering(&self) -> bool {
-        matches!(self.render_state, RenderState::Rendering(_))
+    pub fn tabs(&self) -> &TabManager {
+        &self.tabs
     }
 
-    pub fn status_message(&self) -> &str {
-        match &self.render_state {
-            RenderState::Idle => "等待打开 .scad 文件",
-            RenderState::Rendering(message) => message,
-            RenderState::Ready(message) => message,
-            RenderState::Error(message) => message,
+    pub fn tabs_mut(&mut self) -> &mut TabManager {
+        &mut self.tabs
+    }
+
+    #[allow(dead_code)]
+    pub fn tab_ids(&self) -> Vec<TabId> {
+        self.tabs.tab_ids()
+    }
+
+    #[allow(dead_code)]
+    pub fn close_tab(&mut self, id: TabId) {
+        self.tabs.close_tab(id);
+        self.ensure_welcome_tab();
+    }
+
+    pub fn begin_document_tab(&mut self) {
+        if self.tabs.contains(WelcomeTab::tab_id()) {
+            self.tabs.close_tab(WelcomeTab::tab_id());
         }
     }
 
-    pub fn ui(
-        &mut self,
-        ctx: &egui::Context,
-        show_embedded_menu: bool,
-        camera_matrices: CameraMatrices,
-        camera: &OrbitalCamera,
-        frame: UiFrame<'_>,
-    ) -> UiActions {
-        crate::ui::show_app(
-            self,
-            ctx,
-            show_embedded_menu,
-            camera_matrices,
-            camera,
-            frame,
-        )
-    }
-}
-
-impl ViewerState {
-    pub fn shows_side_panel(&self, _has_current_file: bool) -> bool {
-        self.side_panel_open
+    pub fn ensure_welcome_tab(&mut self) {
+        if !self.tabs.is_empty() {
+            return;
+        }
+        self.tabs
+            .open_tab(Box::new(WelcomeTab::new(self.recent_workspaces.clone())));
     }
 
-    pub fn toggle_side_panel(&mut self) {
-        self.side_panel_open = !self.side_panel_open;
-    }
-
-    pub fn toggle_log_panel(&mut self) {
-        self.log_panel_open = !self.log_panel_open;
-    }
-}
-
-impl Default for ViewerState {
-    fn default() -> Self {
-        Self {
-            render_mode: RenderMode::Solid,
-            color_mode: ColorMode::Color,
-            projection_mode: ProjectionMode::Perspective,
-            wireframe_supported: false,
-            show_grid: true,
-            show_build_plate: false,
-            show_axis_gizmo: true,
-            shadows_enabled: false,
-            fog_enabled: false,
-            clip_plane_enabled: false,
-            side_panel_open: true,
-            log_panel_open: false,
-            camera_overlay_open: true,
+    fn refresh_welcome_tab(&mut self) {
+        if let Some(tab) = self.tabs.tab_mut(WelcomeTab::tab_id())
+            && let Some(tab) = tab.as_any_mut().downcast_mut::<WelcomeTab>()
+        {
+            tab.set_recent_workspaces(self.recent_workspaces.clone());
         }
     }
-}
 
-impl Default for RenderState {
-    fn default() -> Self {
-        Self::Idle
+    pub fn chat_panel_mut(&mut self) -> &mut ChatPanel {
+        &mut self.chat_panel
+    }
+
+    pub fn file_tree_mut(&mut self) -> Option<&mut FileTree> {
+        self.file_tree.as_mut()
     }
 }

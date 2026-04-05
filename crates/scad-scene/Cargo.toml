@@ -1,0 +1,31 @@
+[package]
+name = "scad-scene"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "scad_scene"
+path = "src/lib.rs"
+
+[dependencies]
+bytemuck.workspace = true
+egui = "0.33"
+egui-wgpu = "0.33"
+fontdb = "0.23"
+glam.workspace = true
+log.workspace = true
+roxmltree = "0.21.1"
+stl_io = "0.7"
+ttf-parser = "0.25"
+wgpu.workspace = true
+winit = "0.30"
+zip = { version = "8.5.0", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+objc2-app-kit = { version = "0.3", features = ["NSFont", "NSFontDescriptor", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }

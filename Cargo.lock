@@ -1335,6 +1335,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "getopts"
+version = "0.2.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2993,6 +3002,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c3a14896dfa883796f1cb410461aef38810ea05f2b2c33c5aded3649095fdad"
+dependencies = [
+ "bitflags 2.11.0",
+ "getopts",
+ "memchr",
+ "pulldown-cmark-escape",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
+
+[[package]]
 name = "pxfm"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3250,36 +3278,90 @@ dependencies = [
 ]
 
 [[package]]
-name = "scad-studio"
+name = "scad-data"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "log",
+ "notify",
+ "regex",
+ "rfd",
+ "scad-scene",
+ "serde",
+ "serde_json",
+ "stl_io",
+]
+
+[[package]]
+name = "scad-scene"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
  "core-foundation 0.10.1",
  "core-foundation-sys",
- "dirs",
  "egui",
  "egui-wgpu",
- "egui-winit",
- "env_logger",
  "fontdb",
  "glam",
  "log",
- "muda",
- "notify",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "pollster",
- "regex",
- "rfd",
  "roxmltree 0.21.1",
- "serde",
- "serde_json",
  "stl_io",
  "ttf-parser",
  "wgpu",
  "windows-sys 0.61.2",
  "winit",
  "zip",
+]
+
+[[package]]
+name = "scad-studio"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-winit",
+ "env_logger",
+ "glam",
+ "log",
+ "muda",
+ "pollster",
+ "rfd",
+ "scad-data",
+ "scad-scene",
+ "scad-ui",
+ "scad-viewer",
+ "winit",
+]
+
+[[package]]
+name = "scad-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "log",
+ "muda",
+ "pulldown-cmark",
+ "scad-scene",
+ "winit",
+]
+
+[[package]]
+name = "scad-viewer"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-winit",
+ "env_logger",
+ "glam",
+ "log",
+ "muda",
+ "pollster",
+ "rfd",
+ "scad-data",
+ "scad-scene",
+ "scad-ui",
+ "winit",
 ]
 
 [[package]]
@@ -3862,6 +3944,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-ident"

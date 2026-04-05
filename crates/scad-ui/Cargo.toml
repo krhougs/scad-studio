@@ -1,0 +1,16 @@
+[package]
+name = "scad-ui"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "scad_ui"
+path = "src/lib.rs"
+
+[dependencies]
+egui = "0.33"
+log.workspace = true
+muda = "0.17"
+pulldown-cmark = "0.13.3"
+scad-scene = { path = "../scad-scene" }
+winit = "0.30"

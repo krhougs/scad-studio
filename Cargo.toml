@@ -5,40 +5,22 @@ edition = "2024"
 default-run = "scad-studio"
 
 [dependencies]
-bytemuck = { version = "1.24", features = ["derive"] }
-dirs = "6"
 egui = "0.33"
-egui-wgpu = "0.33"
 egui-winit = "0.33"
 env_logger = "0.11"
-fontdb = "0.23"
-glam = "0.30"
+glam.workspace = true
 log = "0.4"
-notify = "8.2"
-pollster = "0.4"
-regex = "1.12"
-rfd = "0.15"
-roxmltree = "0.21.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-stl_io = "0.7"
-ttf-parser = "0.25"
-wgpu = "27"
-winit = "0.30"
 muda = "0.17"
-zip = { version = "8.5.0", default-features = false, features = ["deflate"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.10"
-core-foundation-sys = "0.8"
-objc2-app-kit = { version = "0.3", features = ["NSFont", "NSFontDescriptor", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", features = ["NSString"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+pollster = "0.4"
+rfd = "0.15"
+scad-data = { path = "crates/scad-data" }
+scad-scene = { path = "crates/scad-scene" }
+scad-ui = { path = "crates/scad-ui" }
+scad-viewer = { path = "crates/scad-viewer" }
+winit = "0.30"
 
 [workspace]
-members = []
+members = ["crates/scad-data", "crates/scad-scene", "crates/scad-ui", "crates/scad-viewer"]
 resolver = "2"
 
 [workspace.package]
