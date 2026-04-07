@@ -2,9 +2,9 @@
 //! 原生全屏下不在应用内容区对齐系统按钮（左侧 inset 为 0，与 Windows / Linux 一致），由系统边缘标题栏展示默认红绿灯。
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
 use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "macos")]
 use objc2::rc::Retained;
@@ -58,11 +58,9 @@ pub fn horizontal_drag_tail(ui: &mut egui::Ui, min_width: f32) {
         let w = ui.available_width();
         let h = ui.available_height();
         if w >= min_width && h > 1.0 {
-            let response =
-                ui.allocate_response(egui::vec2(w, h), egui::Sense::click_and_drag());
+            let response = ui.allocate_response(egui::vec2(w, h), egui::Sense::click_and_drag());
             if response.drag_started() {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
         }
     }
@@ -111,8 +109,7 @@ pub fn sync_traffic_lights_with_tab_rail(
     elevate_traffic_light_cluster_above_content(ns_window, content_view);
     let strip_center = f64::from(strip_pills_center_y);
     let tab_h = f64::from(tab_height_pts);
-    let Some(ds) =
-        traffic_lights_superview_delta(ns_window, content_view, strip_center, tab_h)
+    let Some(ds) = traffic_lights_superview_delta(ns_window, content_view, strip_center, tab_h)
     else {
         return;
     };
@@ -154,8 +151,7 @@ fn traffic_lights_superview_delta(
     let cur_cy = f64::from(r.origin.y) + f64::from(r.size.height) * 0.5;
     let cur_left = f64::from(r.origin.x);
     let nominal_h = tab_height_pts.max(1.0);
-    let target_cy = strip_pills_center_y
-        + (nominal_h - TRAFFIC_LIGHT_VISUAL_DIAMETER_PT) * 0.5
+    let target_cy = strip_pills_center_y + (nominal_h - TRAFFIC_LIGHT_VISUAL_DIAMETER_PT) * 0.5
         - TRAFFIC_LIGHTS_TARGET_NUDGE_UP_PT;
     let delta_y = target_cy - cur_cy;
     let delta_x = TRAFFIC_LIGHTS_CLOSE_LEFT_IN_CONTENT_X - cur_left;
@@ -165,10 +161,7 @@ fn traffic_lights_superview_delta(
     let sv_ret = unsafe { close.superview() }?;
     let sv: &NSView = &sv_ret;
     let p0 = content_view.convertPoint_toView(NSPoint::new(0.0, 0.0), Some(sv));
-    let p1 = content_view.convertPoint_toView(
-        NSPoint::new(delta_x, delta_y),
-        Some(sv),
-    );
+    let p1 = content_view.convertPoint_toView(NSPoint::new(delta_x, delta_y), Some(sv));
     Some(NSPoint::new(p1.x - p0.x, p1.y - p0.y))
 }
 
@@ -176,7 +169,10 @@ fn traffic_lights_superview_delta(
 fn traffic_light_cluster_host(
     ns_window: &objc2_app_kit::NSWindow,
     content: &objc2_app_kit::NSView,
-) -> Option<(Retained<objc2_app_kit::NSView>, Retained<objc2_app_kit::NSView>)> {
+) -> Option<(
+    Retained<objc2_app_kit::NSView>,
+    Retained<objc2_app_kit::NSView>,
+)> {
     use objc2_app_kit::{NSButton, NSView, NSWindowButton};
     use std::ptr;
 
@@ -210,11 +206,7 @@ fn elevate_traffic_light_cluster_above_content(
     let cluster: &NSView = cluster_ret.as_ref();
     cluster.setHidden(false);
     cluster.setAlphaValue(1.0);
-    cp.addSubview_positioned_relativeTo(
-        cluster,
-        NSWindowOrderingMode::Above,
-        Some(content),
-    );
+    cp.addSubview_positioned_relativeTo(cluster, NSWindowOrderingMode::Above, Some(content));
     TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(true, Ordering::Relaxed);
 }
 
@@ -231,11 +223,7 @@ fn demote_traffic_light_cluster_below_content(
     };
     let cp: &NSView = cp_ret.as_ref();
     let cluster: &NSView = cluster_ret.as_ref();
-    cp.addSubview_positioned_relativeTo(
-        cluster,
-        NSWindowOrderingMode::Below,
-        Some(content),
-    );
+    cp.addSubview_positioned_relativeTo(cluster, NSWindowOrderingMode::Below, Some(content));
     TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(false, Ordering::Relaxed);
 }
 
@@ -275,10 +263,7 @@ fn move_traffic_light_buttons_by(
         if let Some(btn_ret) = ns_window.standardWindowButton(kind) {
             let btn: &NSButton = &btn_ret;
             let f = btn.frame();
-            btn.setFrameOrigin(NSPoint::new(
-                f.origin.x + ds.x,
-                f.origin.y + ds.y,
-            ));
+            btn.setFrameOrigin(NSPoint::new(f.origin.x + ds.x, f.origin.y + ds.y));
             NSView::setNeedsDisplay(btn, true);
         }
     }

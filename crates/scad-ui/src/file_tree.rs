@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use egui::{pos2, Sense, Stroke};
+use egui::{Sense, Stroke, pos2};
 
 use crate::{
     document_tabs::{self, DocumentTabKind},
@@ -120,16 +120,10 @@ impl FileTree {
         let mut folder_row_clicked = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = TREE_ROW_SPACING_X;
-            let guides_clicked =
-                draw_indent_guides(ui, depth, stack, row_h, Sense::click());
+            let guides_clicked = draw_indent_guides(ui, depth, stack, row_h, Sense::click());
             let chevron = expand_toggle(ui, is_expanded, row_h);
-            let label_response = document_tabs::show_document_tab_inner_row_sized(
-                ui,
-                &label,
-                selected,
-                None,
-                row_h,
-            );
+            let label_response =
+                document_tabs::show_document_tab_inner_row_sized(ui, &label, selected, None, row_h);
             if guides_clicked || chevron.clicked() || label_response.clicked() {
                 folder_row_clicked = true;
                 self.selected = Some(dir.clone());
@@ -169,9 +163,7 @@ impl FileTree {
                 FileTreeEntryKind::Directory => {
                     self.show_dir(ui, child.path.clone(), depth + 1, &next_stack)
                 }
-                FileTreeEntryKind::File => {
-                    self.show_file(ui, child, depth + 1, &next_stack)
-                }
+                FileTreeEntryKind::File => self.show_file(ui, child, depth + 1, &next_stack),
             };
             if child_action.is_some() {
                 action = child_action;
@@ -245,8 +237,7 @@ fn draw_indent_guides(
 }
 
 fn expand_toggle(ui: &mut egui::Ui, expanded: bool, row_h: f32) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(CHEVRON_COL_W, row_h), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(CHEVRON_COL_W, row_h), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     paint_tree_chevron(ui, rect, expanded, response.hovered());
     response
@@ -279,12 +270,15 @@ fn paint_tree_chevron(ui: &egui::Ui, rect: egui::Rect, expanded: bool, hovered: 
     }
 }
 
-/// 与文档标签左侧类型块对应的扩展名：仅 `.scad`、`.md` / `.markdown` 视为支持并在树行显示类型块。
+/// 与文档标签左侧类型块对应的扩展名：支持的模型、Markdown、常见栅格图在树行显示类型块。
 pub fn supported_document_tab_kind(path: &Path) -> Option<DocumentTabKind> {
     let ext = path.extension()?.to_str()?;
     match ext.to_ascii_lowercase().as_str() {
         "scad" => Some(DocumentTabKind::Viewer),
         "md" | "markdown" => Some(DocumentTabKind::Markdown),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "ico" => {
+            Some(DocumentTabKind::Image)
+        }
         _ => None,
     }
 }

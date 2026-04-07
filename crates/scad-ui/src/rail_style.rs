@@ -214,8 +214,7 @@ pub fn paint_rail_item_surface(
     corner_radius: CornerRadius,
 ) {
     if visuals.stroke == Stroke::NONE {
-        ui.painter()
-            .rect_filled(rect, corner_radius, visuals.fill);
+        ui.painter().rect_filled(rect, corner_radius, visuals.fill);
     } else {
         ui.painter().rect(
             rect,

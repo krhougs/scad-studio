@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use crate::{
     app::StudioApp,
     left_panel::{self, LeftPanelAction},
-    log_panel, viewer_tab::ViewerUiOutcome, welcome, work_area,
+    log_panel,
+    viewer_tab::ViewerUiOutcome,
+    welcome, work_area,
 };
 use scad_data::AppConfig;
 use scad_ui::theme;

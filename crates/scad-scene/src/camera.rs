@@ -342,7 +342,11 @@ impl CameraInteraction {
         true
     }
 
-    pub fn handle_wheel_delta(&mut self, camera: &mut OrbitalCamera, delta: &MouseScrollDelta) -> bool {
+    pub fn handle_wheel_delta(
+        &mut self,
+        camera: &mut OrbitalCamera,
+        delta: &MouseScrollDelta,
+    ) -> bool {
         let amount = match delta {
             MouseScrollDelta::LineDelta(_, y) => *y,
             MouseScrollDelta::PixelDelta(position) => position.y as f32 / 120.0,

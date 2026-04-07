@@ -124,10 +124,14 @@ fn stored_panel_pos(
     let offset = stored_offset
         .map(|offset| egui::vec2(offset[0], offset[1]))
         .unwrap_or(default_offset);
-    let x = (viewport_rect.min.x + offset.x)
-        .clamp(viewport_rect.min.x, (viewport_rect.max.x - panel_size.x).max(viewport_rect.min.x));
-    let y = (viewport_rect.min.y + offset.y)
-        .clamp(viewport_rect.min.y, (viewport_rect.max.y - panel_size.y).max(viewport_rect.min.y));
+    let x = (viewport_rect.min.x + offset.x).clamp(
+        viewport_rect.min.x,
+        (viewport_rect.max.x - panel_size.x).max(viewport_rect.min.x),
+    );
+    let y = (viewport_rect.min.y + offset.y).clamp(
+        viewport_rect.min.y,
+        (viewport_rect.max.y - panel_size.y).max(viewport_rect.min.y),
+    );
     egui::pos2(x, y)
 }
 

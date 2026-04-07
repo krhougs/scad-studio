@@ -13,7 +13,10 @@ use std::path::PathBuf;
 
 #[test]
 fn resolves_window_and_workspace_commands() {
-    let recent = vec![("file.recent.0".to_string(), PathBuf::from("/tmp/workspace-a"))];
+    let recent = vec![(
+        "file.recent.0".to_string(),
+        PathBuf::from("/tmp/workspace-a"),
+    )];
 
     assert!(matches!(
         resolve_menu_command(
@@ -67,7 +70,10 @@ fn resolves_window_and_workspace_commands() {
 
 #[test]
 fn resolves_recent_and_view_commands() {
-    let recent = vec![("file.recent.0".to_string(), PathBuf::from("/tmp/workspace-a"))];
+    let recent = vec![(
+        "file.recent.0".to_string(),
+        PathBuf::from("/tmp/workspace-a"),
+    )];
 
     assert!(matches!(
         resolve_menu_command(

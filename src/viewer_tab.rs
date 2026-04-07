@@ -16,9 +16,7 @@ use scad_scene::{
 };
 use scad_ui::tab_system::{TabContext, TabId, WorkTab};
 use scad_ui::theme;
-use scad_viewer::app::{
-    CameraAction, StudioApp as ViewerStudioApp, UiActions, UiCommand, UiFrame,
-};
+use scad_viewer::app::{CameraAction, StudioApp as ViewerStudioApp, UiActions, UiCommand, UiFrame};
 use scad_viewer::ui::{show_viewer_overlays, status_bar, toolbar};
 use winit::{
     event::{ElementState, WindowEvent},
@@ -28,9 +26,9 @@ use winit::{
 };
 
 use crate::UserEvent;
+use crate::macos_fused_titlebar;
 use crate::viewer_camera;
 use crate::viewer_viewport;
-use crate::macos_fused_titlebar;
 
 pub struct ViewerTab {
     id: TabId,
@@ -273,7 +271,10 @@ impl ViewerTab {
         }
 
         ViewerUiOutcome {
-            save_settings: actions.commands.iter().any(|cmd| matches!(cmd, UiCommand::SaveSettings)),
+            save_settings: actions
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, UiCommand::SaveSettings)),
             render_requested: self.document.take_pending_render(),
             pending_render: pending_render || previous_state != *self.viewer.viewer_state(),
             viewport_rect: viewport_rect_physical,
@@ -363,7 +364,8 @@ impl ViewerTab {
         let Some(source_path) = self.document.current_source().map(PathBuf::from) else {
             return;
         };
-        let Some(output_path) = export_output_path(self, &source_path, slicer_name.as_deref()) else {
+        let Some(output_path) = export_output_path(self, &source_path, slicer_name.as_deref())
+        else {
             return;
         };
         match export_model(
@@ -411,8 +413,8 @@ impl ViewerTab {
     }
 
     fn load_scad_document(&mut self) -> Result<(), String> {
-        let source_text =
-            std::fs::read_to_string(&self.path).map_err(|error| format!("读取源文件失败: {error}"))?;
+        let source_text = std::fs::read_to_string(&self.path)
+            .map_err(|error| format!("读取源文件失败: {error}"))?;
         self.document.load_source(self.path.clone(), &source_text);
         self.refresh_presets();
         self.flush_document_warnings();
@@ -468,10 +470,8 @@ impl ViewerTab {
             return;
         };
         self.viewer.set_rendering("正在调用 OpenSCAD 生成 3MF");
-        self.viewer.push_log(
-            LogLevel::Info,
-            format!("开始渲染 {}", self.path.display()),
-        );
+        self.viewer
+            .push_log(LogLevel::Info, format!("开始渲染 {}", self.path.display()));
         openscad.render_with_defines(self.path.clone(), self.document.current_defines());
     }
 
@@ -615,7 +615,8 @@ fn handle_cross_section_event(
             false
         }
         WindowEvent::KeyboardInput { event, .. } => {
-            if event.state != ElementState::Pressed || !tab.viewer.viewer_state().clip_plane_enabled {
+            if event.state != ElementState::Pressed || !tab.viewer.viewer_state().clip_plane_enabled
+            {
                 return false;
             }
             match event.physical_key {
@@ -658,14 +659,19 @@ fn handle_cross_section_event(
     }
 }
 
-fn handle_camera_event(tab: &mut ViewerTab, event: &WindowEvent, viewport_rect: egui::Rect) -> bool {
+fn handle_camera_event(
+    tab: &mut ViewerTab,
+    event: &WindowEvent,
+    viewport_rect: egui::Rect,
+) -> bool {
     match event {
         WindowEvent::MouseInput { state, button, .. } => tab
             .camera_interaction
             .handle_mouse_input_event(*state, *button),
-        WindowEvent::CursorMoved { position, .. } => tab
-            .camera_interaction
-            .handle_cursor_position(&mut tab.camera, viewport_local_cursor(*position, viewport_rect)),
+        WindowEvent::CursorMoved { position, .. } => tab.camera_interaction.handle_cursor_position(
+            &mut tab.camera,
+            viewport_local_cursor(*position, viewport_rect),
+        ),
         WindowEvent::MouseWheel { delta, .. } => tab
             .camera_interaction
             .handle_wheel_delta(&mut tab.camera, delta),
@@ -722,11 +728,20 @@ fn update_clip_drag(tab: &mut ViewerTab, cursor: Vec2) -> bool {
                 .translate_along_normal(amount, tab.ctrl_pressed);
         }
         EditMode::Rotate => {
-            let inverse_view = tab.camera.matrices_for_bounds(tab.current_bounds).view.inverse();
+            let inverse_view = tab
+                .camera
+                .matrices_for_bounds(tab.current_bounds)
+                .view
+                .inverse();
             let right = inverse_view.x_axis.xyz().normalize_or_zero();
             let up = inverse_view.y_axis.xyz().normalize_or_zero();
-            let axis = if delta.x.abs() >= delta.y.abs() { up } else { right };
-            tab.clip_plane.rotate((delta.x - delta.y) * 0.01, axis, tab.ctrl_pressed);
+            let axis = if delta.x.abs() >= delta.y.abs() {
+                up
+            } else {
+                right
+            };
+            tab.clip_plane
+                .rotate((delta.x - delta.y) * 0.01, axis, tab.ctrl_pressed);
         }
     }
     tab.cursor_position = Some(cursor);

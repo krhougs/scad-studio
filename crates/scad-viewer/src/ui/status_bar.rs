@@ -23,7 +23,11 @@ pub fn paint_status_row(ui: &mut egui::Ui, studio: &StudioApp) {
 /// 供 SCAD Studio 内嵌标签页按可用宽度预留行高；独立 `scad-viewer` 二进制使用底部面板固定高度。
 #[allow(dead_code)]
 pub fn embedded_height(available_width: f32) -> f32 {
-    if wraps_for_width(available_width) { 46.0 } else { 28.0 }
+    if wraps_for_width(available_width) {
+        46.0
+    } else {
+        28.0
+    }
 }
 
 fn paint_status_row_wide(ui: &mut egui::Ui, studio: &StudioApp) {

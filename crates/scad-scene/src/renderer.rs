@@ -6,6 +6,7 @@ use glam::{Mat4, Vec3, Vec4};
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
+    RenderMode, RenderSettings,
     camera::OrbitalCamera,
     cross_section::ClipPlane,
     grid::GridScene,
@@ -18,7 +19,6 @@ use crate::{
     },
     section::SectionResources,
     shadow::{self, ShadowResources},
-    RenderMode, RenderSettings,
 };
 
 const APP_BG_COLOR: wgpu::Color = wgpu::Color {
@@ -227,8 +227,9 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("main_encoder"),
             });
-        let scene_viewport =
-            viewport.and_then(|rect| RenderViewport::from_physical(rect, self.config.width, self.config.height));
+        let scene_viewport = viewport.and_then(|rect| {
+            RenderViewport::from_physical(rect, self.config.width, self.config.height)
+        });
         let draw_scene = viewport.is_none() || scene_viewport.is_some();
         if draw_scene {
             self.draw_shadow_pass(&mut encoder, settings);
@@ -291,7 +292,8 @@ impl Renderer {
         clip_plane: Option<&ClipPlane>,
     ) {
         let matrices = camera.matrices_for_bounds(Some(self.scene_bounds()));
-        let render_mode = pipeline::resolve_render_mode(settings.render_mode, self.device.features());
+        let render_mode =
+            pipeline::resolve_render_mode(settings.render_mode, self.device.features());
         let lighting_state = lighting::encode_lights(&lighting::default_lights());
         let shadow_light = lighting_state
             .primary_shadow_light()
@@ -314,11 +316,7 @@ impl Renderer {
                 .unwrap_or([0.0, 1.0, 0.0, 0.0]),
             render_params: [
                 pipeline::pipeline_alpha_for(render_mode),
-                if settings.shadows_enabled {
-                    1.0
-                } else {
-                    0.0
-                },
+                if settings.shadows_enabled { 1.0 } else { 0.0 },
                 pipeline::pipeline_fog_density(settings.fog_enabled),
                 pipeline::pipeline_specular_strength(settings.color_mode),
             ],

@@ -6,7 +6,9 @@ pub mod params;
 pub mod presets;
 pub mod watcher;
 
-pub use config::{AppConfig, ConfigError, SlicerConfig, config_file_path, load_config, save_config};
+pub use config::{
+    AppConfig, ConfigError, SlicerConfig, config_file_path, load_config, save_config,
+};
 pub use document::DocumentState;
 pub use export::{
     ExportFormat, SlicerInstall, build_export_filename, detect_slicer_paths, export_model,

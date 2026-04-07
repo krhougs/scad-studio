@@ -1,10 +1,10 @@
 use crate::{
     app::StudioApp,
     document_session::DocumentKind,
+    macos_fused_titlebar,
     viewer_tab::ViewerUiOutcome,
     viewer_viewport,
     welcome::{self, WelcomeAction},
-    macos_fused_titlebar,
     work_area_frame,
 };
 use scad_data::AppConfig;
@@ -71,6 +71,10 @@ pub fn show(
                 *viewer_outcome = Some(viewer.run_model_tab_frame(ctx, ui, config));
                 return;
             }
+            if let Some(image) = app.active_image_mut() {
+                image.show_document(ctx, ui);
+                return;
+            }
             if let Some(markdown) = app.active_markdown_mut() {
                 markdown.show_document(ui);
                 return;
@@ -89,6 +93,7 @@ fn show_document_tab_bar(ui: &mut egui::Ui, app: &mut StudioApp) {
             kind: match tab.kind {
                 DocumentKind::Viewer => DocumentTabKind::Viewer,
                 DocumentKind::Markdown => DocumentTabKind::Markdown,
+                DocumentKind::Image => DocumentTabKind::Image,
             },
             active: tab.active,
             state: DocumentTabState::Normal,

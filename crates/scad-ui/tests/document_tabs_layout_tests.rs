@@ -1,15 +1,9 @@
+use egui::Stroke;
 use scad_ui::document_tabs::{
-    active_tab_extension_height,
-    rail_bottom_padding,
-    rail_frame,
-    rail_height,
-    rail_inner_content_height,
-    rail_show_separator_line,
-    rail_vertical_padding,
-    tab_height,
+    active_tab_extension_height, rail_bottom_padding, rail_frame, rail_height,
+    rail_inner_content_height, rail_show_separator_line, rail_vertical_padding, tab_height,
     tab_rail_pills_center_y_from_strip_top,
 };
-use egui::Stroke;
 
 #[test]
 fn rail_height_fits_tab_height_with_vertical_padding() {
@@ -29,8 +23,7 @@ fn rail_height_matches_padding_plus_inner_content_region() {
 
 #[test]
 fn tab_rail_pills_center_y_matches_inner_region_midpoint() {
-    let expected =
-        f32::from(rail_vertical_padding()) + rail_inner_content_height() * 0.5;
+    let expected = f32::from(rail_vertical_padding()) + rail_inner_content_height() * 0.5;
     assert_eq!(tab_rail_pills_center_y_from_strip_top(), expected);
 }
 

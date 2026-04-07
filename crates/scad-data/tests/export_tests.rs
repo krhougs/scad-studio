@@ -1,4 +1,6 @@
-use scad_data::{AppConfig, ExportFormat, SlicerConfig, build_export_filename, detect_slicer_paths};
+use scad_data::{
+    AppConfig, ExportFormat, SlicerConfig, build_export_filename, detect_slicer_paths,
+};
 use std::path::PathBuf;
 
 #[test]

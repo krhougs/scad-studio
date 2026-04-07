@@ -154,9 +154,7 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
                 WindowEvent::RedrawRequested => {
                     redraw_result = redraw_window(state, self.platform_menu.is_none())
                 }
-                WindowEvent::KeyboardInput { ref event, .. }
-                    if !egui_response.consumed =>
-                {
+                WindowEvent::KeyboardInput { ref event, .. } if !egui_response.consumed => {
                     shortcut_action = shortcut_action_for(event, state.modifiers);
                 }
                 other if !egui_response.consumed => {

@@ -1,5 +1,5 @@
-use scad_data::openscad::collect_process_logs;
 use scad_data::LogLevel;
+use scad_data::openscad::collect_process_logs;
 
 #[test]
 fn collect_process_logs_ignores_blank_lines_and_tags_stdout_as_info() {

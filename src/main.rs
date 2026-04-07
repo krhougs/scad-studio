@@ -1,18 +1,21 @@
 mod app;
 mod document_session;
 mod document_workspace;
+mod image_decode;
+mod image_tab;
+mod image_zoom_math;
 mod layout;
 mod left_panel;
 mod log_panel;
+mod macos_fused_titlebar;
 mod markdown_tab;
 mod platform_menu;
 mod studio_document;
+mod viewer_camera;
 mod viewer_event_routing;
 mod viewer_tab;
-mod viewer_camera;
 mod viewer_viewport;
 mod welcome;
-mod macos_fused_titlebar;
 mod work_area;
 mod work_area_frame;
 mod workspace;
@@ -22,24 +25,25 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use app::StudioApp;
 use document_session::{DocumentDescriptor, DocumentKind};
 use egui::ViewportId;
+use image_tab::ImageTab;
 use layout::LayoutAction;
 use markdown_tab::MarkdownTab;
 use platform_menu::{APP_NAME, MenuCommand, PlatformMenu};
 use scad_data::{AppConfig, FileWatcher, OpenScadMessage, WatchMessage, load_config, save_config};
 use scad_scene::{ClipPlane, EguiPaintData, MeshData, OrbitalCamera, RenderSettings, Renderer};
-use scad_ui::{document_tabs, font_setup, theme, tab_system::TabId};
+use scad_ui::{document_tabs, font_setup, tab_system::TabId, theme};
 use studio_document::StudioDocumentSession;
-use viewer_tab::{ViewerTab, ViewerUiOutcome};
 use viewer_event_routing::ViewerEventKind;
-use workspace::sanitize_recent_workspaces;
+use viewer_tab::{ViewerTab, ViewerUiOutcome};
 use winit::{
     application::ApplicationHandler,
+    dpi::PhysicalPosition,
     event::{Modifiers, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, ModifiersState, PhysicalKey},
-    dpi::PhysicalPosition,
     window::{Window, WindowId},
 };
+use workspace::sanitize_recent_workspaces;
 
 #[derive(Debug, Clone)]
 enum UserEvent {
@@ -111,7 +115,9 @@ fn main() {
 
 impl ApplicationHandler<UserEvent> for StudioDesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.windows.is_empty() && let Err(error) = self.create_window(event_loop) {
+        if self.windows.is_empty()
+            && let Err(error) = self.create_window(event_loop)
+        {
             log::error!("{error}");
             event_loop.exit();
         }
@@ -138,7 +144,10 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if matches!(event, WindowEvent::Focused(true) | WindowEvent::RedrawRequested) {
+        if matches!(
+            event,
+            WindowEvent::Focused(true) | WindowEvent::RedrawRequested
+        ) {
             self.last_active_window = Some(window_id);
         }
         let mut close_window = false;
@@ -180,10 +189,8 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
                 }
                 other => {
                     let event_kind = viewer_event_kind(&other);
-                    let dispatch = viewer_event_routing::dispatch_effects(
-                        event_kind,
-                        egui_response.consumed,
-                    );
+                    let dispatch =
+                        viewer_event_routing::dispatch_effects(event_kind, egui_response.consumed);
                     if dispatch.update_modifiers
                         && let WindowEvent::ModifiersChanged(modifiers) = &other
                     {
@@ -194,22 +201,16 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
                     {
                         shortcut_action = shortcut_action_for(event, state.modifiers);
                     }
-                    let route_viewer_event = state
-                        .app
-                        .active_viewer()
-                        .is_some_and(|tab| {
-                            should_route_viewer_event(
-                                state,
-                                tab,
-                                &other,
-                                egui_response.consumed,
-                            )
-                        });
+                    let route_viewer_event = state.app.active_viewer().is_some_and(|tab| {
+                        should_route_viewer_event(state, tab, &other, egui_response.consumed)
+                    });
                     if route_viewer_event
                         && let Some(tab) = state.app.active_viewer_mut()
                         && tab.handle_window_event(
                             &other,
-                            state.last_viewport_rect.unwrap_or_else(default_viewport_rect),
+                            state
+                                .last_viewport_rect
+                                .unwrap_or_else(default_viewport_rect),
                         )
                     {
                         schedule_redraw(state);
@@ -395,6 +396,10 @@ impl StudioDesktopApp {
                 && let Err(error) = tab.reload()
             {
                 state.app.push_log(scad_data::LogLevel::Error, error);
+            } else if let Some(tab) = session.as_image_mut()
+                && tab.path() == path.as_path()
+            {
+                tab.invalidate_texture();
             }
             schedule_redraw(state);
         }
@@ -516,8 +521,7 @@ impl StudioDesktopApp {
             return;
         };
         let descriptor = DocumentDescriptor::new(kind, path.clone());
-        if state.app.contains_document(&descriptor.key)
-        {
+        if state.app.contains_document(&descriptor.key) {
             state.app.set_active_document(descriptor.key);
             schedule_redraw(state);
             return;
@@ -534,6 +538,8 @@ impl StudioDesktopApp {
                 MarkdownTab::open(path.clone(), self.proxy.clone(), window_id)
                     .map(StudioDocumentSession::Markdown)
             }
+            DocumentKind::Image => ImageTab::open(path.clone(), self.proxy.clone(), window_id)
+                .map(StudioDocumentSession::Image),
         };
         match open_result {
             Ok(document) => {
@@ -582,7 +588,9 @@ impl StudioDesktopApp {
         };
         match save_config(&self.config) {
             Ok(()) => state.app.push_log(scad_data::LogLevel::Info, "配置已保存"),
-            Err(error) => state.app.push_log(scad_data::LogLevel::Error, error.to_string()),
+            Err(error) => state
+                .app
+                .push_log(scad_data::LogLevel::Error, error.to_string()),
         }
     }
 
@@ -708,7 +716,11 @@ fn build_paint_data(
 
 fn render_ui(state: &mut StudioRuntime, paint_data: EguiPaintData) -> Result<(), String> {
     let snapshot = active_viewer_snapshot(&state.app, state.last_viewport_rect);
-    sync_active_viewer_mesh(&mut state.renderer, &mut state.active_viewer_binding, snapshot.as_ref());
+    sync_active_viewer_mesh(
+        &mut state.renderer,
+        &mut state.active_viewer_binding,
+        snapshot.as_ref(),
+    );
     if let Some(snapshot) = snapshot.as_ref() {
         return state
             .renderer
@@ -859,18 +871,12 @@ fn current_pointer_position(state: &StudioRuntime) -> Option<PhysicalPosition<f6
 }
 
 fn current_pointer_position_in_points(state: &StudioRuntime) -> Option<egui::Pos2> {
-    state
-        .egui_context
-        .input(|input| input.pointer.latest_pos())
+    state.egui_context.input(|input| input.pointer.latest_pos())
 }
 
-fn point_in_viewport(
-    viewport_rect: Option<egui::Rect>,
-    position: PhysicalPosition<f64>,
-) -> bool {
-    viewport_rect.is_some_and(|rect| {
-        rect.contains(egui::pos2(position.x as f32, position.y as f32))
-    })
+fn point_in_viewport(viewport_rect: Option<egui::Rect>, position: PhysicalPosition<f64>) -> bool {
+    viewport_rect
+        .is_some_and(|rect| rect.contains(egui::pos2(position.x as f32, position.y as f32)))
 }
 
 fn default_viewport_rect() -> egui::Rect {
@@ -889,6 +895,9 @@ fn document_kind_for_extension(extension: &str) -> Option<DocumentKind> {
     match extension {
         "scad" | "stl" | "3mf" => Some(DocumentKind::Viewer),
         "md" | "markdown" => Some(DocumentKind::Markdown),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "ico" => {
+            Some(DocumentKind::Image)
+        }
         _ => None,
     }
 }

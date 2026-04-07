@@ -169,8 +169,12 @@ fn build_menu(recent: &[PathBuf]) -> PlatformMenu {
         None::<Accelerator>,
     );
     let recent_menu = build_recent_menu(recent);
-    let about_item =
-        MenuItem::with_id(ABOUT_MENU_ID, format!("About {APP_NAME}"), true, None::<Accelerator>);
+    let about_item = MenuItem::with_id(
+        ABOUT_MENU_ID,
+        format!("About {APP_NAME}"),
+        true,
+        None::<Accelerator>,
+    );
     let quit_item = MenuItem::with_id(
         QUIT_MENU_ID,
         format!("Quit {APP_NAME}"),

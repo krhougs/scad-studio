@@ -28,9 +28,5 @@ pub fn line_ranges(item_widths: &[f32], max_width: f32, item_spacing_x: f32) -> 
 
 pub fn line_count(item_widths: &[f32], max_width: f32, item_spacing_x: f32) -> usize {
     let ranges = line_ranges(item_widths, max_width, item_spacing_x);
-    if ranges.is_empty() {
-        1
-    } else {
-        ranges.len()
-    }
+    if ranges.is_empty() { 1 } else { ranges.len() }
 }

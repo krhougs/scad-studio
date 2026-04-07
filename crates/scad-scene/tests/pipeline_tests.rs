@@ -119,10 +119,7 @@ fn section_passes_use_expected_stencil_and_depth_compare_modes() {
 fn vertex_buffer_layout_exposes_model_color_attribute() {
     let layout = vertex_buffer_layout();
 
-    assert_eq!(
-        layout.array_stride,
-        std::mem::size_of::<Vertex>() as u64
-    );
+    assert_eq!(layout.array_stride, std::mem::size_of::<Vertex>() as u64);
     assert_eq!(layout.attributes.len(), 3);
     assert_eq!(layout.attributes[2].shader_location, 2);
     assert_eq!(layout.attributes[2].format, wgpu::VertexFormat::Float32x4);

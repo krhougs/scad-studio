@@ -13,6 +13,7 @@ const TAB_BAR_ITEM_SPACING: f32 = 4.0;
 pub enum DocumentTabKind {
     Viewer,
     Markdown,
+    Image,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,12 +146,13 @@ impl Default for SingleTabResponse {
 }
 
 fn measure_title_width(ui: &egui::Ui, title: &str) -> f32 {
-    let galley = WidgetText::from(RichText::new(title).size(12.0).color(palette::TEXT_PRIMARY)).into_galley(
-        ui,
-        Some(TextWrapMode::Truncate),
-        f32::INFINITY,
-        TextStyle::Button,
-    );
+    let galley = WidgetText::from(RichText::new(title).size(12.0).color(palette::TEXT_PRIMARY))
+        .into_galley(
+            ui,
+            Some(TextWrapMode::Truncate),
+            f32::INFINITY,
+            TextStyle::Button,
+        );
     galley.size().x
 }
 
@@ -180,7 +182,12 @@ fn show_single_tab(ui: &mut egui::Ui, item: &DocumentTabItem<'_>) -> SingleTabRe
     let state =
         rail_style::resolve_item_state(item.active, response.hovered(), response.has_focus());
     let visuals = rail_style::document_tab_visuals(state);
-    rail_style::paint_rail_item_surface(ui, rect, visuals, rail_style::document_tab_corner_radius());
+    rail_style::paint_rail_item_surface(
+        ui,
+        rect,
+        visuals,
+        rail_style::document_tab_corner_radius(),
+    );
 
     let inner_rect = rect.shrink2(egui::vec2(
         f32::from(metrics.item_padding_x),
@@ -241,13 +248,7 @@ pub fn show_document_tab_inner_row(
     active: bool,
     kind: Option<DocumentTabKind>,
 ) -> egui::Response {
-    show_document_tab_inner_row_sized(
-        ui,
-        title,
-        active,
-        kind,
-        rail_style::content_height(),
-    )
+    show_document_tab_inner_row_sized(ui, title, active, kind, rail_style::content_height())
 }
 
 /// 与 [`show_document_tab_inner_row`] 相同，可指定行高（文件树与展开箭头列对齐时使用）。
@@ -263,16 +264,10 @@ pub fn show_document_tab_inner_row_sized(
     const COMPACT_CHIP_TITLE_GAP: f32 = 4.0;
 
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(width, row_height),
-        egui::Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let state = rail_style::resolve_item_state(
-        active,
-        response.hovered(),
-        response.has_focus(),
-    );
+    let state = rail_style::resolve_item_state(active, response.hovered(), response.has_focus());
     let row_visuals = rail_style::document_tab_visuals(state);
     let chip_visuals = file_tree_kind_chip_visuals(state);
 
@@ -372,6 +367,7 @@ fn paint_kind_chip(
     let label = match kind {
         DocumentTabKind::Viewer => "3D",
         DocumentTabKind::Markdown => "MD",
+        DocumentTabKind::Image => "IMG",
     };
     let chip_rect = egui::Rect::from_min_size(
         egui::pos2(
@@ -445,7 +441,8 @@ fn paint_close_button(ui: &mut egui::Ui, rect: egui::Rect, emphasized: bool, hov
         ),
     );
     if hovered {
-        ui.painter().rect_filled(icon_rect, CornerRadius::same(6), palette::BG_WIDGET);
+        ui.painter()
+            .rect_filled(icon_rect, CornerRadius::same(6), palette::BG_WIDGET);
     }
     let color = rail_style::close_button_color(emphasized || hovered);
     let galley = WidgetText::from(RichText::new("\u{00D7}").size(12.0).color(color)).into_galley(

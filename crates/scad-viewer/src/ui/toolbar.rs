@@ -37,13 +37,11 @@ fn show_toolbar(
 ) {
     egui::TopBottomPanel::top("toolbar")
         .frame(theme::panel_bar_frame(8, 4))
-        .show(ctx, |ui| {
-            match settings_open {
-                Some(so) => paint_toolbar_row(ui, studio, actions, true, so),
-                None => {
-                    let mut sink = false;
-                    paint_toolbar_row(ui, studio, actions, false, &mut sink);
-                }
+        .show(ctx, |ui| match settings_open {
+            Some(so) => paint_toolbar_row(ui, studio, actions, true, so),
+            None => {
+                let mut sink = false;
+                paint_toolbar_row(ui, studio, actions, false, &mut sink);
             }
         });
 }
@@ -73,29 +71,24 @@ pub fn paint_toolbar_row(
             }
             ui.push_id(row_i, |ui| {
                 ui.set_max_height(TOOLBAR_ROW_HEIGHT);
-                ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        for (k, block_idx) in (line.start..line.end).enumerate() {
-                            if k > 0 {
-                                ui.add(
-                                    egui::Separator::default().spacing(ROW_BLOCK_GAP).vertical(),
-                                );
-                            }
-                            if include_file && block_idx == 0 {
-                                file_group(ui, actions, settings_open);
-                            } else {
-                                paint_toolbar_block(
-                                    ui,
-                                    block_idx,
-                                    include_file,
-                                    studio,
-                                    has_current_file,
-                                );
-                            }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    for (k, block_idx) in (line.start..line.end).enumerate() {
+                        if k > 0 {
+                            ui.add(egui::Separator::default().spacing(ROW_BLOCK_GAP).vertical());
                         }
-                    },
-                );
+                        if include_file && block_idx == 0 {
+                            file_group(ui, actions, settings_open);
+                        } else {
+                            paint_toolbar_block(
+                                ui,
+                                block_idx,
+                                include_file,
+                                studio,
+                                has_current_file,
+                            );
+                        }
+                    }
+                });
             });
         }
     });

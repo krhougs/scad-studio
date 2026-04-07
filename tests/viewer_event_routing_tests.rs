@@ -1,8 +1,8 @@
 #[path = "../src/viewer_event_routing.rs"]
 mod viewer_event_routing;
 
-use viewer_event_routing::{ViewerEventKind, should_route_event};
 use viewer_event_routing::dispatch_effects;
+use viewer_event_routing::{ViewerEventKind, should_route_event};
 
 #[test]
 fn mouse_press_inside_viewport_background_routes_to_viewer() {

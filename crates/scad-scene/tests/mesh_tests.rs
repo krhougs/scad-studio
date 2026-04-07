@@ -158,7 +158,8 @@ fn load_stl_from_reader_parses_binary_stl_bytes() {
     stl_io::write_stl(&mut bytes, triangles.iter()).expect("binary stl should be written");
     let mut reader = Cursor::new(bytes);
 
-    let mesh = scad_scene::mesh::load_stl_from_reader(&mut reader).expect("binary stl should parse");
+    let mesh =
+        scad_scene::mesh::load_stl_from_reader(&mut reader).expect("binary stl should parse");
 
     assert_eq!(mesh.vertices.len(), 3);
     assert_eq!(mesh.indices, vec![0, 1, 2]);
@@ -183,7 +184,8 @@ fn load_stl_from_reader_maps_openscad_xy_plane_to_viewer_ground_plane() {
     stl_io::write_stl(&mut bytes, triangles.iter()).expect("binary stl should be written");
     let mut reader = Cursor::new(bytes);
 
-    let mesh = scad_scene::mesh::load_stl_from_reader(&mut reader).expect("binary stl should parse");
+    let mesh =
+        scad_scene::mesh::load_stl_from_reader(&mut reader).expect("binary stl should parse");
 
     assert!(mesh.vertices.iter().all(|vertex| vertex.position[1] == 0.0));
     assert_eq!(mesh.vertices[0].normal, [0.0, 1.0, 0.0]);

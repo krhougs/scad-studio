@@ -15,8 +15,14 @@ fn opening_new_document_activates_it_and_preserves_order() {
     let alpha = slot("/tmp/alpha/model.scad", DocumentKind::Viewer);
     let beta = slot("/tmp/beta/readme.md", DocumentKind::Markdown);
 
-    assert_eq!(workspace.open_or_activate(alpha), DocumentOpenOutcome::Opened);
-    assert_eq!(workspace.open_or_activate(beta), DocumentOpenOutcome::Opened);
+    assert_eq!(
+        workspace.open_or_activate(alpha),
+        DocumentOpenOutcome::Opened
+    );
+    assert_eq!(
+        workspace.open_or_activate(beta),
+        DocumentOpenOutcome::Opened
+    );
 
     assert_eq!(
         workspace
@@ -28,18 +34,18 @@ fn opening_new_document_activates_it_and_preserves_order() {
     );
     assert_eq!(
         workspace.active_key(),
-        Some(DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/beta/readme.md")).key),
+        Some(
+            DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/beta/readme.md"))
+                .key
+        ),
     );
 }
 
 #[test]
 fn opening_same_document_twice_reuses_existing_session() {
     let mut workspace = DocumentWorkspace::default();
-    let key = DocumentDescriptor::new(
-        DocumentKind::Viewer,
-        PathBuf::from("/tmp/demo/model.scad"),
-    )
-    .key;
+    let key =
+        DocumentDescriptor::new(DocumentKind::Viewer, PathBuf::from("/tmp/demo/model.scad")).key;
 
     assert_eq!(
         workspace.open_or_activate(slot("/tmp/demo/model.scad", DocumentKind::Viewer)),
@@ -61,13 +67,12 @@ fn setting_active_document_changes_focus_before_close_routing() {
     workspace.open_or_activate(slot("/tmp/beta/readme.md", DocumentKind::Markdown));
     workspace.open_or_activate(slot("/tmp/gamma/notes.md", DocumentKind::Markdown));
 
-    let alpha_key = DocumentDescriptor::new(
-        DocumentKind::Viewer,
-        PathBuf::from("/tmp/alpha/model.scad"),
-    )
-    .key;
-    let beta_key = DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/beta/readme.md")).key;
-    let gamma_key = DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/gamma/notes.md")).key;
+    let alpha_key =
+        DocumentDescriptor::new(DocumentKind::Viewer, PathBuf::from("/tmp/alpha/model.scad")).key;
+    let beta_key =
+        DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/beta/readme.md")).key;
+    let gamma_key =
+        DocumentDescriptor::new(DocumentKind::Markdown, PathBuf::from("/tmp/gamma/notes.md")).key;
 
     workspace.set_active(alpha_key.clone());
     assert_eq!(workspace.active_key(), Some(alpha_key.clone()));
@@ -78,10 +83,7 @@ fn setting_active_document_changes_focus_before_close_routing() {
     assert_eq!(workspace.active_key(), Some(beta_key.clone()));
 
     workspace.close(&gamma_key);
-    assert_eq!(
-        workspace.active_key(),
-        Some(beta_key)
-    );
+    assert_eq!(workspace.active_key(), Some(beta_key));
 }
 
 #[test]

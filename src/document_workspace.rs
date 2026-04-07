@@ -65,7 +65,11 @@ impl<T> Default for DocumentWorkspace<T> {
 
 impl<T> DocumentWorkspace<T> {
     pub fn open_or_activate(&mut self, slot: DocumentSlot<T>) -> DocumentOpenOutcome {
-        if let Some(existing) = self.documents.iter().position(|current| current.key() == slot.key()) {
+        if let Some(existing) = self
+            .documents
+            .iter()
+            .position(|current| current.key() == slot.key())
+        {
             self.active_key = Some(self.documents[existing].key().clone());
             return DocumentOpenOutcome::ActivatedExisting;
         }
@@ -75,7 +79,10 @@ impl<T> DocumentWorkspace<T> {
     }
 
     pub fn close(&mut self, key: &DocumentKey) -> Option<DocumentSlot<T>> {
-        let index = self.documents.iter().position(|current| current.key() == key)?;
+        let index = self
+            .documents
+            .iter()
+            .position(|current| current.key() == key)?;
         let removed = self.documents.remove(index);
         if self.active_key.as_ref() == Some(key) {
             self.active_key = self

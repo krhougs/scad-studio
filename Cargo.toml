@@ -4,12 +4,26 @@ version = "0.1.0"
 edition = "2024"
 default-run = "scad-studio"
 
+[[bin]]
+name = "scad-studio"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 egui = "0.33"
 egui-winit = "0.33"
 env_logger = "0.11"
 egui_commonmark.workspace = true
 glam.workspace = true
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "tiff",
+    "ico",
+] }
 log = "0.4"
 muda = "0.17"
 pollster = "0.4"

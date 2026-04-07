@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 pub enum DocumentKind {
     Viewer,
     Markdown,
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

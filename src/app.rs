@@ -3,10 +3,17 @@ use std::path::{Path, PathBuf};
 use scad_data::{LogEntry, LogLevel};
 use scad_ui::{chat_panel::ChatPanel, file_tree::FileTree};
 
-use crate::{document_session::DocumentKey, document_workspace::{DocumentTab, DocumentWorkspace}, workspace::{remember_workspace, workspace_name}};
+use crate::{
+    document_session::DocumentKey,
+    document_workspace::{DocumentTab, DocumentWorkspace},
+    workspace::{remember_workspace, workspace_name},
+};
 
 #[cfg(not(test))]
-use crate::{document_workspace::DocumentOpenOutcome, markdown_tab::MarkdownTab, studio_document::StudioDocumentSession, viewer_tab::ViewerTab};
+use crate::{
+    document_workspace::DocumentOpenOutcome, image_tab::ImageTab, markdown_tab::MarkdownTab,
+    studio_document::StudioDocumentSession, viewer_tab::ViewerTab,
+};
 
 #[cfg(not(test))]
 use scad_ui::tab_system::TabId;
@@ -181,7 +188,9 @@ impl StudioApp {
     pub fn open_document(&mut self, document: AppDocumentSession) -> DocumentOpenOutcome {
         let descriptor = document.descriptor();
         self.documents
-            .open_or_activate(crate::document_workspace::DocumentSlot::new(descriptor, document))
+            .open_or_activate(crate::document_workspace::DocumentSlot::new(
+                descriptor, document,
+            ))
     }
 
     #[cfg(not(test))]
@@ -200,10 +209,12 @@ impl StudioApp {
     }
 
     #[cfg(not(test))]
-    pub fn document_by_legacy_tab_id_mut(
-        &mut self,
-        id: TabId,
-    ) -> Option<&mut AppDocumentSession> {
+    pub fn active_image_mut(&mut self) -> Option<&mut ImageTab> {
+        self.documents.active_mut()?.session_mut().as_image_mut()
+    }
+
+    #[cfg(not(test))]
+    pub fn document_by_legacy_tab_id_mut(&mut self, id: TabId) -> Option<&mut AppDocumentSession> {
         self.documents
             .slots_mut()
             .iter_mut()

@@ -1,5 +1,5 @@
 use scad_ui::document_tabs::DocumentTabKind;
-use scad_ui::file_tree::{supported_document_tab_kind, FileTree, FileTreeEntryKind};
+use scad_ui::file_tree::{FileTree, FileTreeEntryKind, supported_document_tab_kind};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -85,6 +85,10 @@ fn supported_tab_kind_maps_scad_and_markdown() {
     assert_eq!(
         supported_document_tab_kind(Path::new("long.markdown")),
         Some(DocumentTabKind::Markdown)
+    );
+    assert_eq!(
+        supported_document_tab_kind(Path::new("photo.PNG")),
+        Some(DocumentTabKind::Image)
     );
 }
 

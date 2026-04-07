@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     app::{LeftPanelTab, StudioApp},
-    viewer_viewport,
-    macos_fused_titlebar,
+    macos_fused_titlebar, viewer_viewport,
 };
 use scad_ui::{
     chat_panel::ChatAction,

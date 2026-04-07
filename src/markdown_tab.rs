@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use scad_data::{FileWatcher, WatchMessage};
 use egui_commonmark::CommonMarkCache;
+use scad_data::{FileWatcher, WatchMessage};
 use scad_ui::{
     markdown::MarkdownDocument,
     tab_system::{TabContext, TabId, WorkTab},
@@ -30,10 +30,14 @@ impl MarkdownTab {
         proxy: EventLoopProxy<UserEvent>,
         window_id: WindowId,
     ) -> Result<Self, String> {
-        let source =
-            std::fs::read_to_string(&path).map_err(|error| format!("读取 Markdown 失败: {error}"))?;
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| format!("读取 Markdown 失败: {error}"))?;
         let document = MarkdownDocument::parse(&source);
-        let watcher = FileWatcher::new(build_source_notifier(proxy, window_id, tab_id_for_path("markdown", &path)));
+        let watcher = FileWatcher::new(build_source_notifier(
+            proxy,
+            window_id,
+            tab_id_for_path("markdown", &path),
+        ));
         let tab = Self {
             id: tab_id_for_path("markdown", &path),
             title: path
