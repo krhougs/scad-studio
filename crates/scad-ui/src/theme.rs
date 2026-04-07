@@ -74,7 +74,7 @@ pub fn floating_frame(opacity: f32) -> egui::Frame {
         })
 }
 
-/// 贴靠窗口边缘的侧栏：无圆角、无浮起阴影，与 `floating_frame` 的填色与内边距一致
+/// 贴靠窗口边缘的侧栏：无圆角、无描边、无浮起阴影；填色与内边距与 `floating_frame` 一致。
 pub fn docked_side_panel_frame(opacity: f32) -> egui::Frame {
     let bg = palette::BG_PANEL;
     let bg_alpha = egui::Color32::from_rgba_premultiplied(
@@ -83,13 +83,10 @@ pub fn docked_side_panel_frame(opacity: f32) -> egui::Frame {
         bg.b(),
         (bg.a() as f32 * opacity) as u8,
     );
-    let s = palette::STROKE_DIM;
-    let stroke_alpha =
-        egui::Color32::from_rgba_premultiplied(s.r(), s.g(), s.b(), (s.a() as f32 * opacity) as u8);
     egui::Frame::default()
         .fill(bg_alpha)
         .corner_radius(egui::CornerRadius::ZERO)
-        .stroke(egui::Stroke::new(1.0, stroke_alpha))
+        .stroke(Stroke::NONE)
         .inner_margin(egui::Margin {
             left: palette::FLOATING_PANEL_MARGIN_H,
             right: palette::FLOATING_PANEL_MARGIN_H,

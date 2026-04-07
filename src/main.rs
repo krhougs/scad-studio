@@ -667,6 +667,9 @@ fn redraw_window(state: &mut StudioRuntime, config: &mut AppConfig) -> RedrawRes
     state.redraw_queued = false;
     #[cfg(target_os = "macos")]
     sync_macos_traffic_lights_with_tab_rail(state.window.as_ref());
+    state
+        .app
+        .set_root_viewport_fullscreen(state.window.fullscreen().is_some());
     let raw_input = state.egui_state.take_egui_input(&state.window);
     let mut layout_action = None;
     let mut viewer_outcome = None;

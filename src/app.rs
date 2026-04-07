@@ -29,6 +29,8 @@ pub enum LeftPanelTab {
 }
 
 pub struct StudioApp {
+    /// 根视口是否处于 winit 全屏（用于 macOS 左侧红绿灯占位与系统标题栏分工）。
+    root_viewport_fullscreen: bool,
     workspace_path: Option<PathBuf>,
     recent_workspaces: Vec<PathBuf>,
     left_panel_tab: LeftPanelTab,
@@ -44,6 +46,7 @@ pub struct StudioApp {
 impl StudioApp {
     pub fn new(recent_workspaces: Vec<PathBuf>) -> Self {
         Self {
+            root_viewport_fullscreen: false,
             workspace_path: None,
             recent_workspaces,
             left_panel_tab: LeftPanelTab::Files,
@@ -75,6 +78,14 @@ impl StudioApp {
         self.workspace_name()
             .map(|name| format!("SCAD Studio — {name}"))
             .unwrap_or_else(|| "SCAD Studio".to_string())
+    }
+
+    pub fn root_viewport_fullscreen(&self) -> bool {
+        self.root_viewport_fullscreen
+    }
+
+    pub fn set_root_viewport_fullscreen(&mut self, fullscreen: bool) {
+        self.root_viewport_fullscreen = fullscreen;
     }
 
     pub fn recent_workspaces(&self) -> &[PathBuf] {

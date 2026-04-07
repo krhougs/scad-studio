@@ -40,7 +40,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut StudioApp) -> Option<LeftPanelAction> {
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.horizontal(|ui| {
-                let inset = macos_fused_titlebar::traffic_lights_left_inset();
+                let inset = macos_fused_titlebar::traffic_lights_left_inset(
+                    !app.root_viewport_fullscreen(),
+                );
                 if inset > 0.0 {
                     ui.add_space(inset);
                 }

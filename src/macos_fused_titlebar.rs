@@ -1,6 +1,13 @@
-//! macOS：融合标题栏（FullSizeContentView + 透明标题栏）、首行红绿灯与标签条对齐、可拖区域。
-//! Windows / Linux 下除 `traffic_lights_left_inset` 为 0 外均为空操作。
+//! macOS：融合标题栏（FullSizeContentView + 透明标题栏）、非全屏时首行红绿灯与标签条对齐、可拖区域。
+//! 原生全屏下不在应用内容区对齐系统按钮（左侧 inset 为 0，与 Windows / Linux 一致），由系统边缘标题栏展示默认红绿灯。
 
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
+
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use winit::platform::macos::WindowAttributesExtMacOS;
 use winit::window::WindowAttributes;
@@ -8,6 +15,12 @@ use winit::window::WindowAttributes;
 /// 关闭键左缘在内容视图（flipped）中的目标 X，略大于系统默认，使整组按钮右移。
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS_CLOSE_LEFT_IN_CONTENT_X: f64 = 20.0;
+
+#[cfg(target_os = "macos")]
+static TRAFFIC_LIGHT_CLUSTER_ELEVATED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+static TRAFFIC_LIGHT_NUDGE_CUMULATIVE_SV: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
 
 pub fn apply_macos_fused_titlebar_attributes(mut attrs: WindowAttributes) -> WindowAttributes {
     #[cfg(target_os = "macos")]
@@ -20,14 +33,20 @@ pub fn apply_macos_fused_titlebar_attributes(mut attrs: WindowAttributes) -> Win
     attrs
 }
 
-/// 为系统窗口按钮预留的左侧间距（逻辑点，与 `TRAFFIC_LIGHTS_CLOSE_LEFT_IN_CONTENT_X` 右移量匹配）。
-pub fn traffic_lights_left_inset() -> f32 {
+/// 为与首行 Tab 对齐的系统按钮在 UI 中预留的左侧间距（逻辑点）。
+/// macOS 下仅当 `content_syncs_with_tab_rail` 为 true（非原生全屏）时使用 88；全屏或非 macOS 为 0。
+pub fn traffic_lights_left_inset(content_syncs_with_tab_rail: bool) -> f32 {
     #[cfg(target_os = "macos")]
     {
-        88.0
+        if content_syncs_with_tab_rail {
+            88.0
+        } else {
+            0.0
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = content_syncs_with_tab_rail;
         0.0
     }
 }
@@ -49,9 +68,7 @@ pub fn horizontal_drag_tail(ui: &mut egui::Ui, min_width: f32) {
     }
 }
 
-/// 将系统关闭 / 最小化 / 缩放按钮与首行药丸标签条对齐：水平略右移、垂直与药丸 **视觉** 中线一致。
-/// `strip_pills_center_y`：与 `document_tabs::tab_rail_pills_center_y_from_strip_top` 一致（内容视图 flipped）。
-/// `tab_height_pts`：与 `document_tabs::tab_height` 一致，**不读取** AppKit 按钮外框高度，避免随系统/机型变化。
+/// 非原生全屏：与首行药丸对齐并抬升视图簇；原生全屏：恢复系统标题栏默认布局（撤销位移与抬升）。
 #[cfg(target_os = "macos")]
 pub fn sync_traffic_lights_with_tab_rail(
     window: &winit::window::Window,
@@ -85,6 +102,13 @@ pub fn sync_traffic_lights_with_tab_rail(
         return;
     };
     let content_view: &NSView = &cv_ret;
+
+    if window.fullscreen().is_some() {
+        reset_traffic_lights_for_native_fullscreen(ns_window, content_view);
+        return;
+    }
+
+    elevate_traffic_light_cluster_above_content(ns_window, content_view);
     let strip_center = f64::from(strip_pills_center_y);
     let tab_h = f64::from(tab_height_pts);
     let Some(ds) =
@@ -93,6 +117,17 @@ pub fn sync_traffic_lights_with_tab_rail(
         return;
     };
     nudge_traffic_lights_by(ns_window, ds);
+}
+
+#[cfg(target_os = "macos")]
+fn reset_traffic_lights_for_native_fullscreen(
+    ns_window: &objc2_app_kit::NSWindow,
+    content_view: &objc2_app_kit::NSView,
+) {
+    undo_traffic_light_nudge_cumulative(ns_window);
+    if TRAFFIC_LIGHT_CLUSTER_ELEVATED.load(Ordering::Relaxed) {
+        demote_traffic_light_cluster_below_content(ns_window, content_view);
+    }
 }
 
 /// 写死的红绿灯 **圆点**近似直径（pt），仅用于与 `tab_height_pts` 组合换算目标外框中心，不读系统几何。
@@ -119,7 +154,6 @@ fn traffic_lights_superview_delta(
     let cur_cy = f64::from(r.origin.y) + f64::from(r.size.height) * 0.5;
     let cur_left = f64::from(r.origin.x);
     let nominal_h = tab_height_pts.max(1.0);
-    // 假定外框顶缘与条带顶缘对齐：目标外框中心 = 药丸中线 + (Tab 药丸高度 − 圆点直径)/2；nominal_h 一律用 UI Tab 高度。
     let target_cy = strip_pills_center_y
         + (nominal_h - TRAFFIC_LIGHT_VISUAL_DIAMETER_PT) * 0.5
         - TRAFFIC_LIGHTS_TARGET_NUDGE_UP_PT;
@@ -136,6 +170,73 @@ fn traffic_lights_superview_delta(
         Some(sv),
     );
     Some(NSPoint::new(p1.x - p0.x, p1.y - p0.y))
+}
+
+#[cfg(target_os = "macos")]
+fn traffic_light_cluster_host(
+    ns_window: &objc2_app_kit::NSWindow,
+    content: &objc2_app_kit::NSView,
+) -> Option<(Retained<objc2_app_kit::NSView>, Retained<objc2_app_kit::NSView>)> {
+    use objc2_app_kit::{NSButton, NSView, NSWindowButton};
+    use std::ptr;
+
+    let close_ret = ns_window.standardWindowButton(NSWindowButton::CloseButton)?;
+    let close: &NSButton = &close_ret;
+    let cp_ret = unsafe { content.superview() }?;
+    let cp_ref: &NSView = cp_ret.as_ref();
+    let mut v = unsafe { close.superview() }?;
+    for _ in 0..48 {
+        let p = unsafe { v.superview() }?;
+        if ptr::eq(ptr::from_ref(p.as_ref()), ptr::from_ref(cp_ref)) {
+            return Some((cp_ret, v));
+        }
+        v = p;
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn elevate_traffic_light_cluster_above_content(
+    ns_window: &objc2_app_kit::NSWindow,
+    content: &objc2_app_kit::NSView,
+) {
+    use objc2_app_kit::{NSView, NSWindowOrderingMode};
+
+    let Some((cp_ret, cluster_ret)) = traffic_light_cluster_host(ns_window, content) else {
+        TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(false, Ordering::Relaxed);
+        return;
+    };
+    let cp: &NSView = cp_ret.as_ref();
+    let cluster: &NSView = cluster_ret.as_ref();
+    cluster.setHidden(false);
+    cluster.setAlphaValue(1.0);
+    cp.addSubview_positioned_relativeTo(
+        cluster,
+        NSWindowOrderingMode::Above,
+        Some(content),
+    );
+    TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(target_os = "macos")]
+fn demote_traffic_light_cluster_below_content(
+    ns_window: &objc2_app_kit::NSWindow,
+    content: &objc2_app_kit::NSView,
+) {
+    use objc2_app_kit::{NSView, NSWindowOrderingMode};
+
+    let Some((cp_ret, cluster_ret)) = traffic_light_cluster_host(ns_window, content) else {
+        TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(false, Ordering::Relaxed);
+        return;
+    };
+    let cp: &NSView = cp_ret.as_ref();
+    let cluster: &NSView = cluster_ret.as_ref();
+    cp.addSubview_positioned_relativeTo(
+        cluster,
+        NSWindowOrderingMode::Below,
+        Some(content),
+    );
+    TRAFFIC_LIGHT_CLUSTER_ELEVATED.store(false, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "macos")]
@@ -156,7 +257,10 @@ fn ensure_standard_titlebar_controls_visible(ns_window: &objc2_app_kit::NSWindow
 }
 
 #[cfg(target_os = "macos")]
-fn nudge_traffic_lights_by(ns_window: &objc2_app_kit::NSWindow, ds: objc2_foundation::NSPoint) {
+fn move_traffic_light_buttons_by(
+    ns_window: &objc2_app_kit::NSWindow,
+    ds: objc2_foundation::NSPoint,
+) {
     use objc2_app_kit::{NSButton, NSView, NSWindowButton};
     use objc2_foundation::NSPoint;
     use objc2_quartz_core::CATransaction;
@@ -179,6 +283,32 @@ fn nudge_traffic_lights_by(ns_window: &objc2_app_kit::NSWindow, ds: objc2_founda
         }
     }
     CATransaction::commit();
+}
+
+#[cfg(target_os = "macos")]
+fn nudge_traffic_lights_by(ns_window: &objc2_app_kit::NSWindow, ds: objc2_foundation::NSPoint) {
+    move_traffic_light_buttons_by(ns_window, ds);
+    if let Ok(mut c) = TRAFFIC_LIGHT_NUDGE_CUMULATIVE_SV.lock() {
+        c.0 += f64::from(ds.x);
+        c.1 += f64::from(ds.y);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn undo_traffic_light_nudge_cumulative(ns_window: &objc2_app_kit::NSWindow) {
+    let (nx, ny) = {
+        let Ok(mut c) = TRAFFIC_LIGHT_NUDGE_CUMULATIVE_SV.lock() else {
+            return;
+        };
+        let (x, y) = *c;
+        if x.abs() < 1e-6 && y.abs() < 1e-6 {
+            return;
+        }
+        *c = (0.0, 0.0);
+        (x, y)
+    };
+    use objc2_foundation::NSPoint;
+    move_traffic_light_buttons_by(ns_window, NSPoint::new(-nx, -ny));
 }
 
 #[cfg(not(target_os = "macos"))]
