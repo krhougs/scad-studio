@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::{
     app::{LeftPanelTab, StudioApp},
     viewer_viewport,
+    macos_fused_titlebar,
 };
 use scad_ui::{
     chat_panel::ChatAction,
@@ -38,12 +39,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut StudioApp) -> Option<LeftPanelAction> {
         document_tabs::rail_fill_color(),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            if let Some(index) = panel_switcher::show_panel_switcher(ui, &items) {
-                app.set_left_panel_tab(match index {
-                    0 => LeftPanelTab::Chat,
-                    _ => LeftPanelTab::Files,
-                });
-            }
+            ui.horizontal(|ui| {
+                let inset = macos_fused_titlebar::traffic_lights_left_inset();
+                if inset > 0.0 {
+                    ui.add_space(inset);
+                }
+                if let Some(index) = panel_switcher::show_panel_switcher(ui, &items) {
+                    app.set_left_panel_tab(match index {
+                        0 => LeftPanelTab::Chat,
+                        _ => LeftPanelTab::Files,
+                    });
+                }
+                macos_fused_titlebar::horizontal_drag_tail(ui, 8.0);
+            });
         },
     );
     ui.add_space(palette::TAB_STRIP_GAP_BELOW);

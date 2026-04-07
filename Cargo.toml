@@ -20,6 +20,13 @@ scad-ui = { path = "crates/scad-ui" }
 scad-viewer = { path = "crates/scad-viewer" }
 winit = "0.30"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CATransaction",
+] }
+
 [workspace]
 members = ["crates/scad-data", "crates/scad-scene", "crates/scad-ui", "crates/scad-viewer"]
 resolver = "2"

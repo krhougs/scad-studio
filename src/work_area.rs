@@ -4,11 +4,14 @@ use crate::{
     viewer_tab::ViewerUiOutcome,
     viewer_viewport,
     welcome::{self, WelcomeAction},
+    macos_fused_titlebar,
     work_area_frame,
 };
 use scad_data::AppConfig;
 use scad_ui::{
-    document_tabs::{self, DocumentTabItem, DocumentTabKind, DocumentTabState},
+    document_tabs::{
+        self, DocumentTabItem, DocumentTabKind, DocumentTabState, DocumentTabsResponse,
+    },
     theme::palette,
 };
 
@@ -92,7 +95,25 @@ fn show_document_tab_bar(ui: &mut egui::Ui, app: &mut StudioApp) {
             closable: true,
         })
         .collect::<Vec<_>>();
-    let response = document_tabs::show_document_tabs(ui, &items);
+
+    let mut response = DocumentTabsResponse::default();
+    ui.horizontal(|ui| {
+        #[cfg(target_os = "macos")]
+        {
+            let total = ui.available_width();
+            let drag_reserve = 32.0f32;
+            let tabs_max = (total - drag_reserve).max(0.0);
+            ui.scope(|ui| {
+                ui.set_max_width(tabs_max);
+                response = document_tabs::show_document_tabs(ui, &items);
+            });
+            macos_fused_titlebar::horizontal_drag_tail(ui, 8.0);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            response = document_tabs::show_document_tabs(ui, &items);
+        }
+    });
 
     if let Some(index) = response.activate {
         app.set_active_document(tabs[index].key.clone());

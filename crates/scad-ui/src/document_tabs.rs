@@ -46,6 +46,12 @@ pub fn rail_height() -> f32 {
     f32::from(RAIL_PADDING_TOP) + rail_inner_content_height() + f32::from(RAIL_PADDING_BOTTOM)
 }
 
+/// 首行标签条（`rail_height()` 高）内，药丸标签在 **flipped、顶边为 y=0** 的坐标系里相对条带顶边的垂直中心 Y。
+/// 与 `allocate_filled_strip_ui(..., rail_margin(), ...)` 内 `Align::Center` 的药丸对齐。
+pub fn tab_rail_pills_center_y_from_strip_top() -> f32 {
+    f32::from(RAIL_PADDING_TOP) + rail_inner_content_height() * 0.5
+}
+
 pub fn rail_vertical_padding() -> i8 {
     RAIL_PADDING_TOP
 }

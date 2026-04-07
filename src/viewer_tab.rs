@@ -30,6 +30,7 @@ use winit::{
 use crate::UserEvent;
 use crate::viewer_camera;
 use crate::viewer_viewport;
+use crate::macos_fused_titlebar;
 
 pub struct ViewerTab {
     id: TabId,
@@ -171,14 +172,36 @@ impl ViewerTab {
                             theme::palette::BG_PANEL,
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                let mut settings_sink = false;
-                                toolbar::paint_toolbar_row(
-                                    ui,
-                                    &mut self.viewer,
-                                    &mut actions,
-                                    false,
-                                    &mut settings_sink,
-                                );
+                                ui.horizontal(|ui| {
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        let total = ui.available_width();
+                                        let drag_reserve = 40.0f32;
+                                        ui.scope(|ui| {
+                                            ui.set_max_width((total - drag_reserve).max(1.0));
+                                            let mut settings_sink = false;
+                                            toolbar::paint_toolbar_row(
+                                                ui,
+                                                &mut self.viewer,
+                                                &mut actions,
+                                                false,
+                                                &mut settings_sink,
+                                            );
+                                        });
+                                        macos_fused_titlebar::horizontal_drag_tail(ui, 8.0);
+                                    }
+                                    #[cfg(not(target_os = "macos"))]
+                                    {
+                                        let mut settings_sink = false;
+                                        toolbar::paint_toolbar_row(
+                                            ui,
+                                            &mut self.viewer,
+                                            &mut actions,
+                                            false,
+                                            &mut settings_sink,
+                                        );
+                                    }
+                                });
                             },
                         );
                     },

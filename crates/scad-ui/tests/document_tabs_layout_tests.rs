@@ -7,6 +7,7 @@ use scad_ui::document_tabs::{
     rail_show_separator_line,
     rail_vertical_padding,
     tab_height,
+    tab_rail_pills_center_y_from_strip_top,
 };
 use egui::Stroke;
 
@@ -24,6 +25,13 @@ fn rail_height_matches_padding_plus_inner_content_region() {
         rail_height(),
         f32::from(rail_vertical_padding() + rail_bottom_padding()) + rail_inner_content_height(),
     );
+}
+
+#[test]
+fn tab_rail_pills_center_y_matches_inner_region_midpoint() {
+    let expected =
+        f32::from(rail_vertical_padding()) + rail_inner_content_height() * 0.5;
+    assert_eq!(tab_rail_pills_center_y_from_strip_top(), expected);
 }
 
 #[test]

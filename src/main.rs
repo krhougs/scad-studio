@@ -12,6 +12,7 @@ mod viewer_tab;
 mod viewer_camera;
 mod viewer_viewport;
 mod welcome;
+mod macos_fused_titlebar;
 mod work_area;
 mod work_area_frame;
 mod workspace;
@@ -26,7 +27,7 @@ use markdown_tab::MarkdownTab;
 use platform_menu::{APP_NAME, MenuCommand, PlatformMenu};
 use scad_data::{AppConfig, FileWatcher, OpenScadMessage, WatchMessage, load_config, save_config};
 use scad_scene::{ClipPlane, EguiPaintData, MeshData, OrbitalCamera, RenderSettings, Renderer};
-use scad_ui::{font_setup, theme, tab_system::TabId};
+use scad_ui::{document_tabs, font_setup, theme, tab_system::TabId};
 use studio_document::StudioDocumentSession;
 use viewer_tab::{ViewerTab, ViewerUiOutcome};
 use viewer_event_routing::ViewerEventKind;
@@ -156,10 +157,20 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
             }
             match event {
                 WindowEvent::CloseRequested => close_window = true,
-                WindowEvent::Resized(size) => resize_runtime(state, size),
+                WindowEvent::Resized(size) => {
+                    resize_runtime(state, size);
+                    #[cfg(target_os = "macos")]
+                    sync_macos_traffic_lights_with_tab_rail(state.window.as_ref());
+                }
                 WindowEvent::ScaleFactorChanged { .. } => {
                     let size = state.window.inner_size();
                     resize_runtime(state, size);
+                    #[cfg(target_os = "macos")]
+                    sync_macos_traffic_lights_with_tab_rail(state.window.as_ref());
+                }
+                WindowEvent::Focused(true) => {
+                    #[cfg(target_os = "macos")]
+                    sync_macos_traffic_lights_with_tab_rail(state.window.as_ref());
                 }
                 WindowEvent::CursorLeft { .. } => {
                     state.last_cursor_position = None;
@@ -602,13 +613,14 @@ fn create_runtime(
     proxy: EventLoopProxy<UserEvent>,
 ) -> Result<StudioRuntime, String> {
     let app = StudioApp::new(config.recent_workspaces.clone());
+    let window_attrs = macos_fused_titlebar::apply_macos_fused_titlebar_attributes(
+        Window::default_attributes()
+            .with_title(app.window_title())
+            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0)),
+    );
     let window = Arc::new(
         event_loop
-            .create_window(
-                Window::default_attributes()
-                    .with_title(app.window_title())
-                    .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0)),
-            )
+            .create_window(window_attrs)
             .map_err(|error| format!("创建 Studio 窗口失败: {error}"))?,
     );
     let renderer = pollster::block_on(Renderer::new(window.clone()))
@@ -642,8 +654,19 @@ fn create_runtime(
     })
 }
 
+#[cfg(target_os = "macos")]
+fn sync_macos_traffic_lights_with_tab_rail(window: &Window) {
+    macos_fused_titlebar::sync_traffic_lights_with_tab_rail(
+        window,
+        document_tabs::tab_rail_pills_center_y_from_strip_top(),
+        document_tabs::tab_height(),
+    );
+}
+
 fn redraw_window(state: &mut StudioRuntime, config: &mut AppConfig) -> RedrawResult {
     state.redraw_queued = false;
+    #[cfg(target_os = "macos")]
+    sync_macos_traffic_lights_with_tab_rail(state.window.as_ref());
     let raw_input = state.egui_state.take_egui_input(&state.window);
     let mut layout_action = None;
     let mut viewer_outcome = None;
