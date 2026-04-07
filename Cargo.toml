@@ -9,6 +9,10 @@ name = "scad-studio"
 path = "src/main.rs"
 test = false
 
+[package.metadata.bundle]
+name = "SCAD Studio"
+identifier = "studio.scad.scad-studio"
+
 [dependencies]
 egui = "0.33"
 egui-winit = "0.33"
