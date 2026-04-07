@@ -1,0 +1,3 @@
+# 在 macOS 上交叉编译 Windows GNU 目标时使用 Homebrew `mingw-w64` 提供的链接器。
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"

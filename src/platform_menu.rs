@@ -186,11 +186,12 @@ fn build_menu(recent: &[PathBuf]) -> PlatformMenu {
         file_items.push(submenu);
     }
     let file_separator = PredefinedMenuItem::separator();
+    #[cfg(not(target_os = "macos"))]
+    let file_quit_separator = PredefinedMenuItem::separator();
     file_items.push(&file_separator);
     file_items.push(&close_window_item);
     #[cfg(not(target_os = "macos"))]
     {
-        let file_quit_separator = PredefinedMenuItem::separator();
         file_items.push(&file_quit_separator);
         file_items.push(&quit_item);
     }

@@ -130,6 +130,21 @@ fn mesh_data_sorts_transparent_triangles_back_to_front_for_eye_position() {
 }
 
 #[test]
+fn mesh_data_treats_zero_alpha_vertex_color_as_opaque_for_solid_partition() {
+    let triangles = [MeshTriangle {
+        positions: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        normal: [0.0, 0.0, 1.0],
+        colors: [Some([1.0, 0.0, 0.0, 0.0]); 3],
+    }];
+
+    let mesh = MeshData::from_triangles(&triangles).expect("triangle mesh should build");
+    let (opaque, transparent) = mesh.triangle_index_partitions();
+
+    assert_eq!(opaque, vec![0, 1, 2]);
+    assert!(transparent.is_empty());
+}
+
+#[test]
 fn mesh_data_treats_near_opaque_triangles_as_opaque_for_solid_partition() {
     let triangles = [MeshTriangle {
         positions: [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],

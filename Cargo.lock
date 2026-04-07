@@ -3580,6 +3580,7 @@ dependencies = [
  "log",
  "muda",
  "scad-scene",
+ "windows-sys 0.52.0",
  "winit",
 ]
 

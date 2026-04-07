@@ -64,6 +64,10 @@ fn base_color(normal: vec3<f32>, model_color: vec4<f32>) -> vec3<f32> {
 
 fn surface_alpha(model_color: vec4<f32>) -> f32 {
     if scene.render_config.x == 1u && model_color.a >= 0.0 {
+        // 部分 3MF / 导出使用 alpha=0 表示“未写透明度”，与 Mono 一致按不透明绘制。
+        if model_color.a <= 0.0 {
+            return scene.render_params.x;
+        }
         return model_color.a;
     }
     return scene.render_params.x;

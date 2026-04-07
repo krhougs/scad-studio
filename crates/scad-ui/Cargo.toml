@@ -14,3 +14,6 @@ log.workspace = true
 muda = "0.17"
 scad-scene = { path = "../scad-scene" }
 winit = "0.30"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging"] }

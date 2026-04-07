@@ -139,6 +139,16 @@ fn unique_fonts(fonts: Vec<FontSpec>) -> Vec<FontSpec> {
     result
 }
 
+#[cfg(any(test, target_os = "windows"))]
+fn font_link_entry_file_name(entry: &str) -> Option<&str> {
+    let part = entry.split(',').next()?.trim();
+    if part.is_empty() {
+        None
+    } else {
+        Some(part)
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn platform_primary_fonts(language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
     macos::primary_fonts(language_tags)
@@ -150,8 +160,8 @@ fn platform_primary_fonts(_language_tags: &[String]) -> Result<Vec<FontSpec>, Sy
 }
 
 #[cfg(target_os = "windows")]
-fn platform_primary_fonts(_language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
-    Ok(Vec::new())
+fn platform_primary_fonts(language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
+    windows::primary_fonts(language_tags)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -380,73 +390,210 @@ mod linux {
 
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::{env, path::PathBuf, process::Command};
+    use std::env;
+    use std::path::{Path, PathBuf};
 
-    use super::{FontSpec, SystemFontError};
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_MULTI_SZ, REG_VALUE_TYPE, RegCloseKey,
+        RegOpenKeyExW, RegQueryValueExW,
+    };
 
-    pub fn fallback_fonts(_language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
-        let base_family = query_message_font_family()?;
-        let entries = query_system_link_entries(&base_family)?;
-        let fonts_dir = env::var("WINDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(r"C:\Windows"))
-            .join("Fonts");
-        Ok(entries
-            .into_iter()
-            .filter_map(|entry| entry.split(',').next().map(str::trim).map(PathBuf::from))
-            .map(|path| {
-                if path.is_absolute() {
-                    path
-                } else {
-                    fonts_dir.join(path)
+    use super::{FontSpec, SystemFontError, font_link_entry_file_name};
+
+    const FONTLINK_SUBKEY: &str =
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink";
+
+    pub fn primary_fonts(language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
+        let dir = fonts_directory();
+        let prefer_cjk = language_tags
+            .iter()
+            .any(|t| t.to_ascii_lowercase().starts_with("zh"));
+        let order: &[&str] = if prefer_cjk {
+            &["msyh.ttc", "segoeui.ttf"]
+        } else {
+            &["segoeui.ttf", "msyh.ttc"]
+        };
+        for name in order {
+            let path = dir.join(name);
+            if path.is_file() {
+                return Ok(vec![FontSpec { path, index: 0 }]);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn fallback_fonts(language_tags: &[String]) -> Result<Vec<FontSpec>, SystemFontError> {
+        let fonts_dir = fonts_directory();
+        let prefer_cjk = language_tags
+            .iter()
+            .any(|t| t.to_ascii_lowercase().starts_with("zh"));
+        let mut paths: Vec<PathBuf> = Vec::new();
+
+        if let Ok(hkey) = open_fontlink_key() {
+            for key in chain_keys(prefer_cjk) {
+                for line in read_font_link_lines(hkey, key) {
+                    push_resolved_unique(&mut paths, &line, &fonts_dir);
                 }
-            })
+            }
+            unsafe {
+                let _ = RegCloseKey(hkey);
+            }
+        }
+
+        append_well_known(&mut paths, &fonts_dir);
+
+        if paths.is_empty() {
+            return Err(SystemFontError(
+                "未在 Windows Fonts 目录找到可用字体（FontLink 或常见字体文件）".into(),
+            ));
+        }
+
+        Ok(paths
+            .into_iter()
             .map(|path| FontSpec { path, index: 0 })
             .collect())
     }
 
-    fn query_message_font_family() -> Result<String, SystemFontError> {
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "[System.Drawing.SystemFonts]::MessageBoxFont.Name",
-            ])
-            .output()
-            .map_err(|error| SystemFontError(format!("读取系统消息字体失败: {error}")))?;
-        if !output.status.success() {
-            return Err(SystemFontError(format!(
-                "读取系统消息字体返回失败状态: {}",
-                output.status
-            )));
-        }
-        let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if name.is_empty() {
-            return Err(SystemFontError("系统消息字体名称为空".into()));
-        }
-        Ok(name)
+    fn fonts_directory() -> PathBuf {
+        env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join("Fonts")
     }
 
-    fn query_system_link_entries(base_family: &str) -> Result<Vec<String>, SystemFontError> {
-        let script = format!(
-            "$props=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontLink\\SystemLink'; $value=$props.PSObject.Properties['{base_family}'].Value; if ($value) {{ $value }}"
-        );
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .output()
-            .map_err(|error| SystemFontError(format!("读取 Windows 字体回退链失败: {error}")))?;
-        if !output.status.success() {
+    fn chain_keys(prefer_cjk: bool) -> &'static [&'static str] {
+        if prefer_cjk {
+            &[
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+                "Segoe UI",
+            ]
+        } else {
+            &[
+                "Segoe UI",
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+            ]
+        }
+    }
+
+    fn open_fontlink_key() -> Result<HKEY, SystemFontError> {
+        let wide: Vec<u16> = FONTLINK_SUBKEY.encode_utf16().chain(Some(0)).collect();
+        let mut hkey: HKEY = std::ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                wide.as_ptr(),
+                0,
+                KEY_READ,
+                &mut hkey,
+            )
+        };
+        if status != ERROR_SUCCESS {
             return Err(SystemFontError(format!(
-                "读取 Windows 字体回退链返回失败状态: {}",
-                output.status
+                "打开 FontLink 注册表项失败（错误码 {status}）"
             )));
         }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(ToOwned::to_owned)
-            .collect())
+        Ok(hkey)
+    }
+
+    fn read_font_link_lines(hkey: HKEY, value_name: &str) -> Vec<String> {
+        let name_w: Vec<u16> = value_name.encode_utf16().chain(Some(0)).collect();
+        let mut value_type: REG_VALUE_TYPE = 0;
+        let mut byte_len: u32 = 0;
+        let q1 = unsafe {
+            RegQueryValueExW(
+                hkey,
+                name_w.as_ptr(),
+                std::ptr::null(),
+                &mut value_type,
+                std::ptr::null_mut(),
+                &mut byte_len,
+            )
+        };
+        if q1 != ERROR_SUCCESS || byte_len == 0 {
+            return Vec::new();
+        }
+
+        let mut buf = vec![0u8; byte_len as usize];
+        let q2 = unsafe {
+            RegQueryValueExW(
+                hkey,
+                name_w.as_ptr(),
+                std::ptr::null(),
+                &mut value_type,
+                buf.as_mut_ptr(),
+                &mut byte_len,
+            )
+        };
+        if q2 != ERROR_SUCCESS || value_type != REG_MULTI_SZ {
+            return Vec::new();
+        }
+
+        decode_multisz_utf16(&buf[..byte_len as usize])
+    }
+
+    fn decode_multisz_utf16(bytes: &[u8]) -> Vec<String> {
+        if bytes.len() < 2 {
+            return Vec::new();
+        }
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let mut out = Vec::new();
+        for chunk in units.split(|&u| u == 0) {
+            if chunk.is_empty() {
+                continue;
+            }
+            if let Ok(text) = String::from_utf16(chunk) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_owned());
+                }
+            }
+        }
+        out
+    }
+
+    fn resolve_font_file_path(file_part: &str, fonts_dir: &Path) -> PathBuf {
+        let raw = Path::new(file_part);
+        if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            fonts_dir.join(file_part)
+        }
+    }
+
+    fn contains_same_path(paths: &[PathBuf], candidate: &Path) -> bool {
+        let cand = candidate.to_string_lossy().to_ascii_lowercase();
+        paths.iter().any(|p| p.to_string_lossy().to_ascii_lowercase() == cand)
+    }
+
+    fn push_resolved_unique(paths: &mut Vec<PathBuf>, raw_line: &str, fonts_dir: &Path) {
+        let Some(file_part) = font_link_entry_file_name(raw_line) else {
+            return;
+        };
+        let path = resolve_font_file_path(file_part, fonts_dir);
+        if path.is_file() && !contains_same_path(paths, &path) {
+            paths.push(path);
+        }
+    }
+
+    fn append_well_known(paths: &mut Vec<PathBuf>, fonts_dir: &Path) {
+        for name in [
+            "segoeui.ttf",
+            "msyh.ttc",
+            "seguiemj.ttf",
+            "Segoe UI Emoji.ttf",
+            "seguiemj.ttc",
+        ] {
+            let path = fonts_dir.join(name);
+            if path.is_file() && !contains_same_path(paths, &path) {
+                paths.push(path);
+            }
+        }
     }
 }
 
@@ -504,6 +651,20 @@ mod tests {
             parsed,
             vec![PathBuf::from("/tmp/a.ttf"), PathBuf::from("/tmp/b.ttc")]
         );
+    }
+
+    #[test]
+    fn font_link_entry_file_name_parses_comma_form() {
+        assert_eq!(
+            super::font_link_entry_file_name("msyh.ttc,Microsoft YaHei"),
+            Some("msyh.ttc")
+        );
+        assert_eq!(
+            super::font_link_entry_file_name("  MSGOTHIC.TTC  , Meiryo"),
+            Some("MSGOTHIC.TTC")
+        );
+        assert_eq!(super::font_link_entry_file_name(""), None);
+        assert_eq!(super::font_link_entry_file_name(" , "), None);
     }
 
     #[test]

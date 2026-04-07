@@ -125,7 +125,7 @@ impl MeshData {
     fn triangle_is_transparent(&self, triangle: &[u32]) -> bool {
         triangle.iter().any(|index| {
             let alpha = self.vertices[*index as usize].color[3];
-            (0.0..SOLID_TRANSPARENCY_ALPHA_THRESHOLD).contains(&alpha)
+            alpha > 0.0 && alpha < SOLID_TRANSPARENCY_ALPHA_THRESHOLD
         })
     }
 }

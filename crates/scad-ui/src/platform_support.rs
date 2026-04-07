@@ -52,9 +52,11 @@ pub fn install_native_menu(menu: &Menu, window: &Window) -> Result<(), String> {
             .map_err(|error| format!("获取窗口句柄失败: {error}"))?
             .as_raw();
         match raw {
-            winit::raw_window_handle::RawWindowHandle::Win32(handle) => menu
-                .init_for_hwnd(handle.hwnd.get() as _)
-                .map_err(|error| format!("安装 Windows 菜单失败: {error}")),
+            winit::raw_window_handle::RawWindowHandle::Win32(handle) => unsafe {
+                menu
+                    .init_for_hwnd(handle.hwnd.get() as _)
+                    .map_err(|error| format!("安装 Windows 菜单失败: {error}"))
+            },
             _ => Err("当前平台不支持的窗口句柄".into()),
         }
     }

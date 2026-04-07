@@ -277,8 +277,8 @@ fn find_platform_path() -> Option<PathBuf> {
         ]
     } else if cfg!(target_os = "windows") {
         vec![
-            "C:\\Program Files\\OpenSCAD\\openscad.exe",
             "C:\\Program Files\\OpenSCAD (Nightly)\\openscad.exe",
+            "C:\\Program Files\\OpenSCAD\\openscad.exe",
         ]
     } else {
         vec!["/usr/bin/openscad", "/usr/local/bin/openscad"]
