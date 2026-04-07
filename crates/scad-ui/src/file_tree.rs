@@ -3,10 +3,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use egui::{pos2, Sense, Stroke};
+
 use crate::{
+    document_tabs::{self, DocumentTabKind},
+    rail_style,
     theme::palette,
-    widgets::{section_header, small_button},
 };
+
+const INDENT: f32 = 12.0;
+const CHEVRON_COL_W: f32 = 17.0;
+const TREE_ROW_SPACING_X: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileTreeEntryKind {
@@ -90,15 +97,7 @@ impl FileTree {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<FileTreeAction> {
-        let mut action = None;
-        egui::Frame::default()
-            .fill(palette::BG_PANEL)
-            .inner_margin(egui::Margin::same(8))
-            .show(ui, |ui| {
-                section_header(ui, "files");
-                action = self.show_dir(ui, self.root.clone(), 0);
-            });
-        action
+        self.show_dir(ui, self.root.clone(), 0, &[])
     }
 
     fn show_dir(
@@ -106,47 +105,78 @@ impl FileTree {
         ui: &mut egui::Ui,
         dir: PathBuf,
         depth: usize,
+        stack: &[bool],
     ) -> Option<FileTreeAction> {
+        debug_assert_eq!(stack.len(), depth);
         let mut action = None;
-        let indent = 14.0 * depth as f32;
+        let row_h = row_height(ui);
         let is_expanded = self.expanded.contains(&dir);
         let label = dir
             .file_name()
             .and_then(|name| name.to_str())
             .map_or_else(|| dir.display().to_string(), ToOwned::to_owned);
 
+        let selected = self.selected.as_ref() == Some(&dir);
+        let mut folder_row_clicked = false;
         ui.horizontal(|ui| {
-            ui.add_space(indent);
-            if small_button(ui, if is_expanded { "▼" } else { "▶" }).clicked() {
-                self.toggle(&dir);
-            }
-            let selected = self.selected.as_ref() == Some(&dir);
-            let response = ui.selectable_label(selected, label);
-            if response.clicked() {
+            ui.spacing_mut().item_spacing.x = TREE_ROW_SPACING_X;
+            let guides_clicked =
+                draw_indent_guides(ui, depth, stack, row_h, Sense::click());
+            let chevron = expand_toggle(ui, is_expanded, row_h);
+            let label_response = document_tabs::show_document_tab_inner_row_sized(
+                ui,
+                &label,
+                selected,
+                None,
+                row_h,
+            );
+            if guides_clicked || chevron.clicked() || label_response.clicked() {
+                folder_row_clicked = true;
                 self.selected = Some(dir.clone());
                 action = Some(FileTreeAction::Select(dir.clone()));
             }
         });
+        if folder_row_clicked {
+            self.toggle(&dir);
+        }
 
-        if is_expanded && let Ok(children) = self.ensure_children(&dir) {
-            let children = children.to_vec();
-            for child in children {
-                match child.kind {
-                    FileTreeEntryKind::Directory => {
-                        if let Some(child_action) = self.show_dir(ui, child.path.clone(), depth + 1)
-                        {
-                            action = Some(child_action);
-                        }
-                    }
-                    FileTreeEntryKind::File => {
-                        if let Some(file_action) = self.show_file(ui, &child, depth + 1) {
-                            action = Some(file_action);
-                        }
-                    }
-                }
+        if is_expanded {
+            let entries: Vec<FileTreeEntry> = match self.ensure_children(&dir) {
+                Ok(slice) => slice.to_vec(),
+                Err(_) => Vec::new(),
+            };
+            if let Some(child_action) = self.show_children(ui, &entries, depth, stack) {
+                action = Some(child_action);
             }
         }
 
+        action
+    }
+
+    fn show_children(
+        &mut self,
+        ui: &mut egui::Ui,
+        children: &[FileTreeEntry],
+        depth: usize,
+        stack: &[bool],
+    ) -> Option<FileTreeAction> {
+        let mut action = None;
+        let n = children.len();
+        for (i, child) in children.iter().enumerate() {
+            let mut next_stack = stack.to_vec();
+            next_stack.push(i + 1 < n);
+            let child_action = match child.kind {
+                FileTreeEntryKind::Directory => {
+                    self.show_dir(ui, child.path.clone(), depth + 1, &next_stack)
+                }
+                FileTreeEntryKind::File => {
+                    self.show_file(ui, child, depth + 1, &next_stack)
+                }
+            };
+            if child_action.is_some() {
+                action = child_action;
+            }
+        }
         action
     }
 
@@ -155,16 +185,24 @@ impl FileTree {
         ui: &mut egui::Ui,
         entry: &FileTreeEntry,
         depth: usize,
+        stack: &[bool],
     ) -> Option<FileTreeAction> {
-        let indent = 14.0 * depth as f32;
+        debug_assert_eq!(stack.len(), depth);
         let selected = self.selected.as_ref() == Some(&entry.path);
-        let color = file_color(&entry.path);
         let mut action = None;
-
+        let row_h = row_height(ui);
         ui.horizontal(|ui| {
-            ui.add_space(indent + 16.0);
-            let label = egui::RichText::new(&entry.name).color(color);
-            let response = ui.selectable_label(selected, label);
+            ui.spacing_mut().item_spacing.x = TREE_ROW_SPACING_X;
+            draw_indent_guides(ui, depth, stack, row_h, Sense::hover());
+            ui.allocate_exact_size(egui::vec2(CHEVRON_COL_W, row_h), Sense::hover());
+            let kind = supported_document_tab_kind(&entry.path);
+            let response = document_tabs::show_document_tab_inner_row_sized(
+                ui,
+                &entry.name,
+                selected,
+                kind,
+                row_h,
+            );
             if response.clicked() {
                 self.selected = Some(entry.path.clone());
                 action = Some(FileTreeAction::Select(entry.path.clone()));
@@ -173,8 +211,81 @@ impl FileTree {
                 action = Some(FileTreeAction::OpenFile(entry.path.clone()));
             }
         });
-
         action
+    }
+}
+
+fn row_height(_ui: &egui::Ui) -> f32 {
+    rail_style::content_height()
+}
+
+fn draw_indent_guides(
+    ui: &mut egui::Ui,
+    depth: usize,
+    stack: &[bool],
+    row_h: f32,
+    sense: Sense,
+) -> bool {
+    let mut any_clicked = false;
+    let stroke = Stroke::new(1.0, palette::STROKE_DIM);
+    for k in 0..depth {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(INDENT, row_h), sense);
+        if response.clicked() {
+            any_clicked = true;
+        }
+        if stack[k] {
+            let cx = rect.center().x;
+            ui.painter().line_segment(
+                [egui::pos2(cx, rect.top()), egui::pos2(cx, rect.bottom())],
+                stroke,
+            );
+        }
+    }
+    any_clicked
+}
+
+fn expand_toggle(ui: &mut egui::Ui, expanded: bool, row_h: f32) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(CHEVRON_COL_W, row_h), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    paint_tree_chevron(ui, rect, expanded, response.hovered());
+    response
+}
+
+fn paint_tree_chevron(ui: &egui::Ui, rect: egui::Rect, expanded: bool, hovered: bool) {
+    let c = rect.center();
+    let color = if hovered {
+        palette::TEXT_PRIMARY
+    } else {
+        palette::TEXT_SECONDARY
+    };
+    let stroke = Stroke::new(1.1, color);
+    let hh = (rect.height() * 0.19).clamp(2.8, 4.0);
+    let hw = (rect.width() * 0.32).clamp(2.8, 4.2);
+    let painter = ui.painter();
+
+    if expanded {
+        let tip = pos2(c.x, c.y + hh * 0.55);
+        let left = pos2(c.x - hw, c.y - hh * 0.2);
+        let right = pos2(c.x + hw, c.y - hh * 0.2);
+        painter.line_segment([left, tip], stroke);
+        painter.line_segment([right, tip], stroke);
+    } else {
+        let tip = pos2(c.x + hw * 0.5, c.y);
+        let top = pos2(c.x - hw * 0.35, c.y - hh);
+        let bot = pos2(c.x - hw * 0.35, c.y + hh);
+        painter.line_segment([top, tip], stroke);
+        painter.line_segment([bot, tip], stroke);
+    }
+}
+
+/// 与文档标签左侧类型块对应的扩展名：仅 `.scad`、`.md` / `.markdown` 视为支持并在树行显示类型块。
+pub fn supported_document_tab_kind(path: &Path) -> Option<DocumentTabKind> {
+    let ext = path.extension()?.to_str()?;
+    match ext.to_ascii_lowercase().as_str() {
+        "scad" => Some(DocumentTabKind::Viewer),
+        "md" | "markdown" => Some(DocumentTabKind::Markdown),
+        _ => None,
     }
 }
 
@@ -209,16 +320,4 @@ fn sort_key(entry: &FileTreeEntry) -> (u8, String, String) {
 
 fn path_relation_matches(base: &Path, candidate: &Path) -> bool {
     candidate == base || candidate.starts_with(base) || base.starts_with(candidate)
-}
-
-fn file_color(path: &Path) -> egui::Color32 {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-    {
-        Some(ext) if ext == "scad" => palette::TEXT_ACCENT,
-        Some(ext) if ext == "md" || ext == "markdown" => palette::TEXT_BRIGHT,
-        _ => palette::TEXT_SECONDARY,
-    }
 }

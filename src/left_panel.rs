@@ -11,7 +11,6 @@ use scad_ui::{
     file_tree::FileTreeAction,
     panel_switcher::{self, PanelSwitchItem},
     theme::palette,
-    widgets::section_header,
 };
 
 #[derive(Debug, Clone)]
@@ -64,9 +63,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut StudioApp) -> Option<LeftPanelAction> {
             }
         }
         LeftPanelTab::Files => {
-            section_header(ui, "workspace files");
             if let Some(tree) = app.file_tree_mut() {
-                if let Some(FileTreeAction::OpenFile(path)) = tree.show(ui) {
+                let mut open_file = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("studio_left_file_tree")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        if let Some(FileTreeAction::OpenFile(path)) = tree.show(ui) {
+                            open_file = Some(path);
+                        }
+                    });
+                if let Some(path) = open_file {
                     action = Some(LeftPanelAction::OpenFile(path));
                 }
             } else {

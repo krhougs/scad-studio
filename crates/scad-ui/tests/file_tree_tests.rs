@@ -1,7 +1,8 @@
-use scad_ui::file_tree::{FileTree, FileTreeEntryKind};
+use scad_ui::document_tabs::DocumentTabKind;
+use scad_ui::file_tree::{supported_document_tab_kind, FileTree, FileTreeEntryKind};
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -69,4 +70,27 @@ fn children_cache_is_reused_until_invalidated() {
     assert_eq!(names, vec!["first.scad", "second.scad"]);
 
     fs::remove_dir_all(root).expect("temp dir should be removed");
+}
+
+#[test]
+fn supported_tab_kind_maps_scad_and_markdown() {
+    assert_eq!(
+        supported_document_tab_kind(Path::new("a.scad")),
+        Some(DocumentTabKind::Viewer)
+    );
+    assert_eq!(
+        supported_document_tab_kind(Path::new("b.MD")),
+        Some(DocumentTabKind::Markdown)
+    );
+    assert_eq!(
+        supported_document_tab_kind(Path::new("long.markdown")),
+        Some(DocumentTabKind::Markdown)
+    );
+}
+
+#[test]
+fn unsupported_extensions_have_no_tab_kind() {
+    assert_eq!(supported_document_tab_kind(Path::new("x.rs")), None);
+    assert_eq!(supported_document_tab_kind(Path::new("Makefile")), None);
+    assert_eq!(supported_document_tab_kind(Path::new("noext.")), None);
 }

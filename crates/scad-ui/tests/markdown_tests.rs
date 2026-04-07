@@ -1,5 +1,16 @@
+use egui::TextStyle;
 use egui_commonmark::CommonMarkCache;
-use scad_ui::markdown::MarkdownDocument;
+use scad_ui::markdown::{MarkdownDocument, reading_typography_style};
+
+#[test]
+fn reading_typography_sets_article_scale_font_sizes() {
+    let base = egui::Style::default();
+    let s = reading_typography_style(&base);
+    assert_eq!(s.text_styles[&TextStyle::Body].size, 14.0);
+    assert_eq!(s.text_styles[&TextStyle::Heading].size, 26.0);
+    assert_eq!(s.text_styles[&TextStyle::Monospace].size, 12.5);
+    assert_eq!(s.text_styles[&TextStyle::Small].size, 12.0);
+}
 
 #[test]
 fn parse_keeps_markdown_source_intact() {

@@ -1,4 +1,4 @@
-use egui::{Align2, CornerRadius, RichText, Stroke, TextStyle, TextWrapMode, WidgetText};
+use egui::{Align2, Color32, CornerRadius, RichText, Stroke, TextStyle, TextWrapMode, WidgetText};
 
 use crate::{rail_style, theme::palette};
 
@@ -232,6 +232,103 @@ fn show_single_tab(ui: &mut egui::Ui, item: &DocumentTabItem<'_>) -> SingleTabRe
         close: close_clicked,
         rect,
     }
+}
+
+/// 侧栏文件树等：与标签内部相同的 chip + 标题绘制；默认行高为 `content_height()`。
+pub fn show_document_tab_inner_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    active: bool,
+    kind: Option<DocumentTabKind>,
+) -> egui::Response {
+    show_document_tab_inner_row_sized(
+        ui,
+        title,
+        active,
+        kind,
+        rail_style::content_height(),
+    )
+}
+
+/// 与 [`show_document_tab_inner_row`] 相同，可指定行高（文件树与展开箭头列对齐时使用）。
+pub fn show_document_tab_inner_row_sized(
+    ui: &mut egui::Ui,
+    title: &str,
+    active: bool,
+    kind: Option<DocumentTabKind>,
+    row_height: f32,
+) -> egui::Response {
+    const COMPACT_PAD_X: f32 = 3.0;
+    const COMPACT_PAD_Y: f32 = 0.0;
+    const COMPACT_CHIP_TITLE_GAP: f32 = 4.0;
+
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, row_height),
+        egui::Sense::click(),
+    );
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let state = rail_style::resolve_item_state(
+        active,
+        response.hovered(),
+        response.has_focus(),
+    );
+    let row_visuals = rail_style::document_tab_visuals(state);
+    let chip_visuals = file_tree_kind_chip_visuals(state);
+
+    let inner_rect = rect.shrink2(egui::vec2(COMPACT_PAD_X, COMPACT_PAD_Y));
+    paint_document_tab_inner_content(
+        ui,
+        &response,
+        inner_rect,
+        title,
+        kind,
+        row_visuals,
+        chip_visuals,
+        COMPACT_CHIP_TITLE_GAP,
+    );
+    response
+}
+
+fn file_tree_kind_chip_visuals(state: rail_style::RailItemState) -> rail_style::RailItemVisuals {
+    let mut v = rail_style::document_tab_visuals(state);
+    match state {
+        rail_style::RailItemState::Idle => {
+            v.chip_fill = Color32::from_rgb(38, 38, 38);
+            v.chip_text = palette::TEXT_PRIMARY;
+        }
+        rail_style::RailItemState::Hovered => {
+            v.chip_fill = Color32::from_rgb(48, 48, 48);
+            v.chip_text = palette::TEXT_BRIGHT;
+        }
+        rail_style::RailItemState::Active | rail_style::RailItemState::Focused => {
+            v.chip_fill = Color32::from_rgb(56, 56, 58);
+        }
+    }
+    v
+}
+
+fn paint_document_tab_inner_content(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    inner_rect: egui::Rect,
+    title: &str,
+    kind: Option<DocumentTabKind>,
+    row_visuals: rail_style::RailItemVisuals,
+    chip_visuals: rail_style::RailItemVisuals,
+    chip_title_gap: f32,
+) {
+    let title_left = if let Some(k) = kind {
+        let chip_rect = paint_kind_chip(ui, inner_rect, k, chip_visuals);
+        chip_rect.right() + chip_title_gap
+    } else {
+        inner_rect.left()
+    };
+    let title_rect = egui::Rect::from_min_max(
+        egui::pos2(title_left, inner_rect.top()),
+        egui::pos2(inner_rect.right(), inner_rect.bottom()),
+    );
+    paint_title(ui, response, title_rect, title, row_visuals.text);
 }
 
 fn paint_active_tab_extension(ui: &egui::Ui, rect: egui::Rect, rail_bottom: f32) {

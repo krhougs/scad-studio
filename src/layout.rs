@@ -26,6 +26,7 @@ pub fn show(
     if app.left_panel_open() && app.workspace_path().is_some() {
         egui::SidePanel::left("studio_left_panel")
             .resizable(true)
+            .show_separator_line(false)
             .default_width(app.left_panel_width())
             .width_range(220.0..=480.0)
             .frame(theme::docked_side_panel_frame(1.0))
