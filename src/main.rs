@@ -1,32 +1,42 @@
 mod app;
+mod document_session;
+mod document_workspace;
 mod layout;
 mod left_panel;
 mod log_panel;
 mod markdown_tab;
 mod platform_menu;
+mod studio_document;
+mod viewer_event_routing;
 mod viewer_tab;
+mod viewer_camera;
+mod viewer_viewport;
 mod welcome;
 mod work_area;
+mod work_area_frame;
 mod workspace;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use app::StudioApp;
+use document_session::{DocumentDescriptor, DocumentKind};
 use egui::ViewportId;
-use glam::Vec2;
 use layout::LayoutAction;
 use markdown_tab::MarkdownTab;
 use platform_menu::{APP_NAME, MenuCommand, PlatformMenu};
 use scad_data::{AppConfig, FileWatcher, OpenScadMessage, WatchMessage, load_config, save_config};
 use scad_scene::{ClipPlane, EguiPaintData, MeshData, OrbitalCamera, RenderSettings, Renderer};
 use scad_ui::{font_setup, theme, tab_system::TabId};
+use studio_document::StudioDocumentSession;
 use viewer_tab::{ViewerTab, ViewerUiOutcome};
+use viewer_event_routing::ViewerEventKind;
 use workspace::sanitize_recent_workspaces;
 use winit::{
     application::ApplicationHandler,
     event::{Modifiers, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, ModifiersState, PhysicalKey},
+    dpi::PhysicalPosition,
     window::{Window, WindowId},
 };
 
@@ -48,6 +58,8 @@ struct StudioRuntime {
     redraw_queued: bool,
     modifiers: ModifiersState,
     active_viewer_binding: Option<(TabId, u64)>,
+    last_viewport_rect: Option<egui::Rect>,
+    last_cursor_position: Option<PhysicalPosition<f64>>,
 }
 
 const WORKSPACE_TREE_WATCH_ID: TabId = 0;
@@ -66,11 +78,12 @@ struct RedrawResult {
 }
 
 struct ViewerSceneSnapshot {
-    binding: (TabId, u64),
+    binding: Option<(TabId, u64)>,
     mesh: Option<MeshData>,
     camera: OrbitalCamera,
     settings: RenderSettings,
     clip_plane: Option<ClipPlane>,
+    viewport_rect: egui::Rect,
 }
 
 fn main() {
@@ -138,6 +151,9 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
             if egui_response.repaint {
                 schedule_redraw(state);
             }
+            if let WindowEvent::CursorMoved { position, .. } = event {
+                state.last_cursor_position = Some(position);
+            }
             match event {
                 WindowEvent::CloseRequested => close_window = true,
                 WindowEvent::Resized(size) => resize_runtime(state, size),
@@ -145,25 +161,49 @@ impl ApplicationHandler<UserEvent> for StudioDesktopApp {
                     let size = state.window.inner_size();
                     resize_runtime(state, size);
                 }
-                WindowEvent::ModifiersChanged(modifiers) => {
-                    state.modifiers = modifiers.state();
+                WindowEvent::CursorLeft { .. } => {
+                    state.last_cursor_position = None;
                 }
                 WindowEvent::RedrawRequested => {
                     redraw_result = Some(redraw_window(state, &mut self.config));
                 }
-                WindowEvent::KeyboardInput { ref event, .. }
-                    if !egui_response.consumed =>
-                {
-                    shortcut_action = shortcut_action_for(event, state.modifiers);
-                }
-                other if !egui_response.consumed => {
-                    if let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>()
-                        && tab.handle_window_event(&other, viewport_size(state.window.as_ref()))
+                other => {
+                    let event_kind = viewer_event_kind(&other);
+                    let dispatch = viewer_event_routing::dispatch_effects(
+                        event_kind,
+                        egui_response.consumed,
+                    );
+                    if dispatch.update_modifiers
+                        && let WindowEvent::ModifiersChanged(modifiers) = &other
+                    {
+                        state.modifiers = modifiers.state();
+                    }
+                    if dispatch.evaluate_shortcuts
+                        && let WindowEvent::KeyboardInput { event, .. } = &other
+                    {
+                        shortcut_action = shortcut_action_for(event, state.modifiers);
+                    }
+                    let route_viewer_event = state
+                        .app
+                        .active_viewer()
+                        .is_some_and(|tab| {
+                            should_route_viewer_event(
+                                state,
+                                tab,
+                                &other,
+                                egui_response.consumed,
+                            )
+                        });
+                    if route_viewer_event
+                        && let Some(tab) = state.app.active_viewer_mut()
+                        && tab.handle_window_event(
+                            &other,
+                            state.last_viewport_rect.unwrap_or_else(default_viewport_rect),
+                        )
                     {
                         schedule_redraw(state);
                     }
                 }
-                _ => {}
             }
         }
         if let Some(action) = shortcut_action {
@@ -267,26 +307,27 @@ impl StudioDesktopApp {
 
     fn handle_viewer_outcome(&mut self, window_id: WindowId, outcome: ViewerUiOutcome) {
         if let Some(state) = self.windows.get_mut(&window_id) {
+            state.last_viewport_rect = Some(outcome.viewport_rect);
             let mut needs_save = outcome.save_settings;
             for command in outcome.commands {
                 match command {
                     scad_viewer::app::UiCommand::SavePreset(name) => {
-                        if let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>() {
+                        if let Some(tab) = state.app.active_viewer_mut() {
                             tab.save_preset(name);
                         }
                     }
                     scad_viewer::app::UiCommand::DeletePreset(name) => {
-                        if let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>() {
+                        if let Some(tab) = state.app.active_viewer_mut() {
                             tab.delete_preset(name);
                         }
                     }
                     scad_viewer::app::UiCommand::ExportModel => {
-                        if let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>() {
+                        if let Some(tab) = state.app.active_viewer_mut() {
                             tab.export_current_model(&self.config, None);
                         }
                     }
                     scad_viewer::app::UiCommand::SendToSlicer(name) => {
-                        if let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>() {
+                        if let Some(tab) = state.app.active_viewer_mut() {
                             tab.export_current_model(&self.config, Some(name));
                         }
                     }
@@ -294,7 +335,7 @@ impl StudioDesktopApp {
                 }
             }
             if outcome.render_requested
-                && let Some(tab) = state.app.tabs_mut().active_tab_as_mut::<ViewerTab>()
+                && let Some(tab) = state.app.active_viewer_mut()
             {
                 tab.request_render();
             }
@@ -316,8 +357,8 @@ impl StudioDesktopApp {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        if let Some(tab) = state.app.tabs_mut().tab_mut(tab_id)
-            && let Some(tab) = tab.as_any_mut().downcast_mut::<ViewerTab>()
+        if let Some(session) = state.app.document_by_legacy_tab_id_mut(tab_id)
+            && let Some(tab) = session.as_viewer_mut()
         {
             tab.handle_openscad_message(message);
             schedule_redraw(state);
@@ -335,10 +376,10 @@ impl StudioDesktopApp {
             schedule_redraw(state);
             return;
         }
-        if let Some(tab) = state.app.tabs_mut().tab_mut(tab_id) {
-            if let Some(tab) = tab.as_any_mut().downcast_mut::<ViewerTab>() {
+        if let Some(session) = state.app.document_by_legacy_tab_id_mut(tab_id) {
+            if let Some(tab) = session.as_viewer_mut() {
                 tab.handle_source_change(&path);
-            } else if let Some(tab) = tab.as_any_mut().downcast_mut::<MarkdownTab>()
+            } else if let Some(tab) = session.as_markdown_mut()
                 && tab.path() == path.as_path()
                 && let Err(error) = tab.reload()
             {
@@ -357,8 +398,8 @@ impl StudioDesktopApp {
             schedule_redraw(state);
             return;
         }
-        if let Some(tab) = state.app.tabs_mut().tab_mut(tab_id) {
-            if let Some(tab) = tab.as_any_mut().downcast_mut::<ViewerTab>() {
+        if let Some(session) = state.app.document_by_legacy_tab_id_mut(tab_id) {
+            if let Some(tab) = session.as_viewer_mut() {
                 tab.handle_watch_error(message);
             } else {
                 state.app.push_log(scad_data::LogLevel::Error, message);
@@ -455,33 +496,38 @@ impl StudioDesktopApp {
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.to_ascii_lowercase())
             .unwrap_or_default();
-        let existing_tab_id = match extension.as_str() {
-            "scad" | "stl" | "3mf" => Some(ViewerTab::tab_id_for(&path)),
-            "md" | "markdown" => Some(MarkdownTab::tab_id_for(&path)),
-            _ => None,
+        let Some(kind) = document_kind_for_extension(&extension) else {
+            state.app.push_log(
+                scad_data::LogLevel::Error,
+                format!("暂不支持的文件类型: {}", path.display()),
+            );
+            schedule_redraw(state);
+            return;
         };
-        if let Some(tab_id) = existing_tab_id
-            && state.app.tabs().contains(tab_id)
+        let descriptor = DocumentDescriptor::new(kind, path.clone());
+        if state.app.contains_document(&descriptor.key)
         {
-            state.app.tabs_mut().set_active(tab_id);
+            state.app.set_active_document(descriptor.key);
             schedule_redraw(state);
             return;
         }
-        state.app.begin_document_tab();
-        let open_result = match extension.as_str() {
-            "scad" | "stl" | "3mf" => ViewerTab::open(
+        let open_result = match kind {
+            DocumentKind::Viewer => ViewerTab::open(
                 path.clone(),
                 state.renderer.aspect_ratio(),
                 self.proxy.clone(),
                 window_id,
             )
-            .map(|tab| Box::new(tab) as Box<dyn scad_ui::tab_system::WorkTab>),
-            "md" | "markdown" => MarkdownTab::open(path.clone(), self.proxy.clone(), window_id)
-                .map(|tab| Box::new(tab) as Box<dyn scad_ui::tab_system::WorkTab>),
-            _ => Err(format!("暂不支持的文件类型: {}", path.display())),
+            .map(StudioDocumentSession::Viewer),
+            DocumentKind::Markdown => {
+                MarkdownTab::open(path.clone(), self.proxy.clone(), window_id)
+                    .map(StudioDocumentSession::Markdown)
+            }
         };
         match open_result {
-            Ok(tab) => state.app.tabs_mut().open_tab(tab),
+            Ok(document) => {
+                let _ = state.app.open_document(document);
+            }
             Err(error) => state.app.push_log(scad_data::LogLevel::Error, error),
         }
         schedule_redraw(state);
@@ -591,6 +637,8 @@ fn create_runtime(
         redraw_queued: false,
         modifiers: Modifiers::default().state(),
         active_viewer_binding: None,
+        last_viewport_rect: None,
+        last_cursor_position: None,
     })
 }
 
@@ -601,23 +649,14 @@ fn redraw_window(state: &mut StudioRuntime, config: &mut AppConfig) -> RedrawRes
     let mut viewer_outcome = None;
     let full_output = state.egui_context.run(raw_input, |ctx| {
         theme::apply(ctx);
-        let show_viewer = state.app.tabs().active_tab_as::<ViewerTab>().is_some();
-        if show_viewer {
-            let outcome = {
-                let viewer = state
-                    .app
-                    .tabs_mut()
-                    .active_tab_as_mut::<ViewerTab>()
-                    .expect("active viewer tab should exist");
-                viewer.show_viewer_ui(ctx, config)
-            };
-            viewer_outcome = Some(outcome);
-        }
-        layout_action = layout::show(ctx, &mut state.app, !show_viewer);
+        let (layout, outcome) = layout::show(ctx, &mut state.app, config);
+        layout_action = layout;
+        viewer_outcome = outcome;
     });
     state
         .egui_state
         .handle_platform_output(&state.window, full_output.platform_output);
+    state.last_viewport_rect = viewer_outcome.as_ref().map(|outcome| outcome.viewport_rect);
     let paint_data = build_paint_data(state, full_output.shapes, full_output.textures_delta);
     if let Err(error) = render_ui(state, paint_data) {
         log::error!("渲染 Studio 界面失败: {error}");
@@ -642,43 +681,41 @@ fn build_paint_data(
 }
 
 fn render_ui(state: &mut StudioRuntime, paint_data: EguiPaintData) -> Result<(), String> {
-    let snapshot = active_viewer_snapshot(&state.app, state.renderer.aspect_ratio());
+    let snapshot = active_viewer_snapshot(&state.app, state.last_viewport_rect);
     sync_active_viewer_mesh(&mut state.renderer, &mut state.active_viewer_binding, snapshot.as_ref());
-    let mut fallback_camera = OrbitalCamera::new(state.renderer.aspect_ratio());
-    fallback_camera.set_aspect_ratio(state.renderer.aspect_ratio());
-    let default_settings = RenderSettings {
-        show_grid: false,
-        show_build_plate: false,
-        shadows_enabled: false,
-        fog_enabled: false,
-        ..RenderSettings::default()
-    };
-    let camera = snapshot
-        .as_ref()
-        .map(|scene| &scene.camera)
-        .unwrap_or(&fallback_camera);
-    let settings = snapshot
-        .as_ref()
-        .map(|scene| scene.settings)
-        .unwrap_or(default_settings);
-    let clip_plane = snapshot.as_ref().and_then(|scene| scene.clip_plane.as_ref());
+    if let Some(snapshot) = snapshot.as_ref() {
+        return state
+            .renderer
+            .render(
+                &snapshot.camera,
+                &snapshot.settings,
+                snapshot.clip_plane.as_ref(),
+                Some(rect_to_viewport(snapshot.viewport_rect)),
+                paint_data,
+            )
+            .map_err(|error| error.to_string());
+    }
     state
         .renderer
-        .render(camera, &settings, clip_plane, paint_data)
+        .render_egui_only(paint_data)
         .map_err(|error| error.to_string())
 }
 
-fn active_viewer_snapshot(app: &StudioApp, aspect_ratio: f32) -> Option<ViewerSceneSnapshot> {
-    let tab = app.tabs().active_tab_as::<ViewerTab>()?;
+fn active_viewer_snapshot(
+    app: &StudioApp,
+    viewport_rect: Option<egui::Rect>,
+) -> Option<ViewerSceneSnapshot> {
+    let tab = app.active_viewer()?;
+    let viewport_rect = viewport_rect?;
     let mut camera = *tab.camera();
-    camera.set_aspect_ratio(aspect_ratio);
-    let binding = tab.mesh_signature()?;
+    camera.set_aspect_ratio(viewport_aspect_ratio(viewport_rect));
     Some(ViewerSceneSnapshot {
-        binding,
+        binding: tab.mesh_signature(),
         mesh: tab.mesh().cloned(),
         camera,
         settings: tab.render_settings(),
         clip_plane: tab.clip_plane().copied(),
+        viewport_rect,
     })
 }
 
@@ -693,7 +730,7 @@ fn sync_active_viewer_mesh(
         }
         return;
     };
-    if *active_binding == Some(snapshot.binding) {
+    if *active_binding == snapshot.binding {
         return;
     }
     if let Some(mesh) = snapshot.mesh.clone() {
@@ -701,7 +738,7 @@ fn sync_active_viewer_mesh(
     } else {
         renderer.clear_mesh();
     }
-    *active_binding = Some(snapshot.binding);
+    *active_binding = snapshot.binding;
 }
 
 fn resize_runtime(state: &mut StudioRuntime, size: winit::dpi::PhysicalSize<u32>) {
@@ -734,9 +771,100 @@ fn select_workspace_folder() -> Option<PathBuf> {
     rfd::FileDialog::new().pick_folder()
 }
 
-fn viewport_size(window: &Window) -> Vec2 {
-    let size = window.inner_size();
-    Vec2::new(size.width.max(1) as f32, size.height.max(1) as f32)
+fn should_route_viewer_event(
+    state: &StudioRuntime,
+    tab: &ViewerTab,
+    event: &WindowEvent,
+    egui_consumed: bool,
+) -> bool {
+    let event_kind = viewer_event_kind(event);
+    if matches!(event_kind, ViewerEventKind::KeyboardInput) {
+        return !egui_consumed;
+    }
+    viewer_event_routing::should_route_event(
+        event_kind,
+        point_in_viewport_from_cursor(state),
+        current_pointer_layer_order(state),
+        tab.captures_pointer(),
+    )
+}
+
+fn viewer_event_kind(event: &WindowEvent) -> ViewerEventKind {
+    match event {
+        WindowEvent::CursorMoved { .. } => ViewerEventKind::CursorMoved,
+        WindowEvent::MouseWheel { .. } => ViewerEventKind::MouseWheel,
+        WindowEvent::MouseInput {
+            state: winit::event::ElementState::Pressed,
+            ..
+        } => ViewerEventKind::MousePressed,
+        WindowEvent::MouseInput {
+            state: winit::event::ElementState::Released,
+            ..
+        } => ViewerEventKind::MouseReleased,
+        WindowEvent::KeyboardInput { .. } => ViewerEventKind::KeyboardInput,
+        WindowEvent::ModifiersChanged { .. } => ViewerEventKind::ModifiersChanged,
+        _ => ViewerEventKind::Other,
+    }
+}
+
+fn point_in_viewport_from_cursor(state: &StudioRuntime) -> bool {
+    let Some(position) = current_pointer_position(state) else {
+        return false;
+    };
+    point_in_viewport(state.last_viewport_rect, position)
+}
+
+fn current_pointer_layer_order(state: &StudioRuntime) -> Option<egui::Order> {
+    current_pointer_position_in_points(state)
+        .and_then(|position| state.egui_context.layer_id_at(position))
+        .map(|layer_id| layer_id.order)
+}
+
+fn current_pointer_position(state: &StudioRuntime) -> Option<PhysicalPosition<f64>> {
+    state.last_cursor_position.or_else(|| {
+        current_pointer_position_in_points(state).map(|position| {
+            let pixels_per_point = state.egui_context.pixels_per_point() as f64;
+            PhysicalPosition::new(
+                position.x as f64 * pixels_per_point,
+                position.y as f64 * pixels_per_point,
+            )
+        })
+    })
+}
+
+fn current_pointer_position_in_points(state: &StudioRuntime) -> Option<egui::Pos2> {
+    state
+        .egui_context
+        .input(|input| input.pointer.latest_pos())
+}
+
+fn point_in_viewport(
+    viewport_rect: Option<egui::Rect>,
+    position: PhysicalPosition<f64>,
+) -> bool {
+    viewport_rect.is_some_and(|rect| {
+        rect.contains(egui::pos2(position.x as f32, position.y as f32))
+    })
+}
+
+fn default_viewport_rect() -> egui::Rect {
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0))
+}
+
+fn rect_to_viewport(rect: egui::Rect) -> [f32; 4] {
+    [rect.min.x, rect.min.y, rect.width(), rect.height()]
+}
+
+fn viewport_aspect_ratio(viewport_rect: egui::Rect) -> f32 {
+    (viewport_rect.width() / viewport_rect.height().max(1.0)).max(0.1)
+}
+
+fn document_kind_for_extension(extension: &str) -> Option<DocumentKind> {
+    match extension {
+        "scad" | "stl" | "3mf" => Some(DocumentKind::Viewer),
+        "md" | "markdown" => Some(DocumentKind::Markdown),
+        _ => None,
+    }
 }
 
 fn build_workspace_notifier(

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[path = "../src/wrap_line_pack.rs"]
+mod wrap_line_pack;
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/ui/mod.rs"]

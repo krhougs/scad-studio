@@ -1,16 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use scad_data::{LogEntry, LogLevel};
-use scad_ui::{
-    chat_panel::ChatPanel,
-    file_tree::FileTree,
-    tab_system::{TabId, TabManager},
-};
+use scad_ui::{chat_panel::ChatPanel, file_tree::FileTree};
 
-use crate::{
-    welcome::WelcomeTab,
-    workspace::{remember_workspace, workspace_name},
-};
+use crate::{document_session::DocumentKey, document_workspace::{DocumentTab, DocumentWorkspace}, workspace::{remember_workspace, workspace_name}};
+
+#[cfg(not(test))]
+use crate::{document_workspace::DocumentOpenOutcome, markdown_tab::MarkdownTab, studio_document::StudioDocumentSession, viewer_tab::ViewerTab};
+
+#[cfg(not(test))]
+use scad_ui::tab_system::TabId;
+
+#[cfg(test)]
+type AppDocumentSession = ();
+
+#[cfg(not(test))]
+type AppDocumentSession = StudioDocumentSession;
 
 const DEFAULT_LEFT_PANEL_WIDTH: f32 = 280.0;
 const MIN_LEFT_PANEL_WIDTH: f32 = 220.0;
@@ -31,14 +36,14 @@ pub struct StudioApp {
     left_panel_open: bool,
     log_panel_open: bool,
     logs: Vec<LogEntry>,
-    tabs: TabManager,
+    documents: DocumentWorkspace<AppDocumentSession>,
     chat_panel: ChatPanel,
     file_tree: Option<FileTree>,
 }
 
 impl StudioApp {
     pub fn new(recent_workspaces: Vec<PathBuf>) -> Self {
-        let mut app = Self {
+        Self {
             workspace_path: None,
             recent_workspaces,
             left_panel_tab: LeftPanelTab::Files,
@@ -46,12 +51,10 @@ impl StudioApp {
             left_panel_open: true,
             log_panel_open: false,
             logs: Vec::new(),
-            tabs: TabManager::default(),
+            documents: DocumentWorkspace::default(),
             chat_panel: ChatPanel::default(),
             file_tree: None,
-        };
-        app.ensure_welcome_tab();
-        app
+        }
     }
 
     pub fn workspace_path(&self) -> Option<&Path> {
@@ -66,7 +69,6 @@ impl StudioApp {
         self.recent_workspaces = remember_workspace(&self.recent_workspaces, &path);
         self.file_tree = Some(FileTree::new(path.clone()));
         self.workspace_path = Some(path);
-        self.refresh_welcome_tab();
     }
 
     pub fn window_title(&self) -> String {
@@ -135,45 +137,67 @@ impl StudioApp {
             .unwrap_or_else(|| "未打开 Workspace".to_string())
     }
 
-    pub fn tabs(&self) -> &TabManager {
-        &self.tabs
+    pub fn show_welcome_state(&self) -> bool {
+        self.workspace_path.is_none() && self.documents.is_empty()
     }
 
-    pub fn tabs_mut(&mut self) -> &mut TabManager {
-        &mut self.tabs
+    #[cfg(test)]
+    pub fn documents(&self) -> &DocumentWorkspace<AppDocumentSession> {
+        &self.documents
     }
 
-    #[allow(dead_code)]
-    pub fn tab_ids(&self) -> Vec<TabId> {
-        self.tabs.tab_ids()
+    pub fn has_open_documents(&self) -> bool {
+        !self.documents.is_empty()
     }
 
-    #[allow(dead_code)]
-    pub fn close_tab(&mut self, id: TabId) {
-        self.tabs.close_tab(id);
-        self.ensure_welcome_tab();
+    pub fn document_tabs(&self) -> Vec<DocumentTab> {
+        self.documents.tabs()
     }
 
-    pub fn begin_document_tab(&mut self) {
-        if self.tabs.contains(WelcomeTab::tab_id()) {
-            self.tabs.close_tab(WelcomeTab::tab_id());
-        }
+    pub fn set_active_document(&mut self, key: DocumentKey) {
+        self.documents.set_active(key);
     }
 
-    pub fn ensure_welcome_tab(&mut self) {
-        if !self.tabs.is_empty() {
-            return;
-        }
-        self.tabs
-            .open_tab(Box::new(WelcomeTab::new(self.recent_workspaces.clone())));
+    pub fn close_document(&mut self, key: &DocumentKey) {
+        let _ = self.documents.close(key);
     }
 
-    fn refresh_welcome_tab(&mut self) {
-        if let Some(tab) = self.tabs.tab_mut(WelcomeTab::tab_id())
-            && let Some(tab) = tab.as_any_mut().downcast_mut::<WelcomeTab>()
-        {
-            tab.set_recent_workspaces(self.recent_workspaces.clone());
-        }
+    pub fn contains_document(&self, key: &DocumentKey) -> bool {
+        self.documents.contains(key)
+    }
+
+    #[cfg(not(test))]
+    pub fn open_document(&mut self, document: AppDocumentSession) -> DocumentOpenOutcome {
+        let descriptor = document.descriptor();
+        self.documents
+            .open_or_activate(crate::document_workspace::DocumentSlot::new(descriptor, document))
+    }
+
+    #[cfg(not(test))]
+    pub fn active_viewer(&self) -> Option<&ViewerTab> {
+        self.documents.active()?.session().as_viewer()
+    }
+
+    #[cfg(not(test))]
+    pub fn active_viewer_mut(&mut self) -> Option<&mut ViewerTab> {
+        self.documents.active_mut()?.session_mut().as_viewer_mut()
+    }
+
+    #[cfg(not(test))]
+    pub fn active_markdown_mut(&mut self) -> Option<&mut MarkdownTab> {
+        self.documents.active_mut()?.session_mut().as_markdown_mut()
+    }
+
+    #[cfg(not(test))]
+    pub fn document_by_legacy_tab_id_mut(
+        &mut self,
+        id: TabId,
+    ) -> Option<&mut AppDocumentSession> {
+        self.documents
+            .slots_mut()
+            .iter_mut()
+            .find(|slot| slot.session().legacy_tab_id() == id)
+            .map(|slot| slot.session_mut())
     }
 
     pub fn chat_panel_mut(&mut self) -> &mut ChatPanel {

@@ -21,6 +21,12 @@ use crate::{
     RenderMode, RenderSettings,
 };
 
+const APP_BG_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.07,
     g: 0.09,
@@ -54,6 +60,18 @@ pub struct EguiPaintData {
     pub clipped_primitives: Vec<egui::ClippedPrimitive>,
     pub textures_delta: egui::TexturesDelta,
     pub pixels_per_point: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RenderViewport {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scissor_x: u32,
+    scissor_y: u32,
+    scissor_width: u32,
+    scissor_height: u32,
 }
 
 #[derive(Debug)]
@@ -192,6 +210,7 @@ impl Renderer {
         camera: &OrbitalCamera,
         settings: &RenderSettings,
         clip_plane: Option<&ClipPlane>,
+        viewport: Option<[f32; 4]>,
         egui_paint: EguiPaintData,
     ) -> Result<(), RendererError> {
         let frame = self.acquire_frame()?;
@@ -208,8 +227,41 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("main_encoder"),
             });
-        self.draw_shadow_pass(&mut encoder, settings);
-        self.draw_scene_pass(&mut encoder, &view, camera, settings, clip_plane);
+        let scene_viewport =
+            viewport.and_then(|rect| RenderViewport::from_physical(rect, self.config.width, self.config.height));
+        let draw_scene = viewport.is_none() || scene_viewport.is_some();
+        if draw_scene {
+            self.draw_shadow_pass(&mut encoder, settings);
+        }
+        self.draw_scene_pass(
+            &mut encoder,
+            &view,
+            camera,
+            settings,
+            clip_plane,
+            scene_viewport,
+            draw_scene,
+        );
+        let extra_buffers = self.upload_egui_resources(&mut encoder, &egui_paint);
+        self.draw_egui_pass(&mut encoder, &view, &egui_paint);
+        self.queue
+            .submit(extra_buffers.into_iter().chain([encoder.finish()]));
+        frame.present();
+        self.release_egui_textures(&egui_paint.textures_delta);
+        Ok(())
+    }
+
+    pub fn render_egui_only(&mut self, egui_paint: EguiPaintData) -> Result<(), RendererError> {
+        let frame = self.acquire_frame()?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("egui_only_encoder"),
+            });
+        self.clear_surface_pass(&mut encoder, &view);
         let extra_buffers = self.upload_egui_resources(&mut encoder, &egui_paint);
         self.draw_egui_pass(&mut encoder, &view, &egui_paint);
         self.queue
@@ -328,6 +380,8 @@ impl Renderer {
         camera: &OrbitalCamera,
         settings: &RenderSettings,
         clip_plane: Option<&ClipPlane>,
+        viewport: Option<RenderViewport>,
+        draw_scene: bool,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene_pass"),
@@ -335,7 +389,11 @@ impl Renderer {
                 view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                    load: wgpu::LoadOp::Clear(if draw_scene {
+                        CLEAR_COLOR
+                    } else {
+                        APP_BG_COLOR
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
                 depth_slice: None,
@@ -354,6 +412,25 @@ impl Renderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        if !draw_scene {
+            return;
+        }
+        if let Some(viewport) = viewport {
+            render_pass.set_viewport(
+                viewport.x,
+                viewport.y,
+                viewport.width,
+                viewport.height,
+                0.0,
+                1.0,
+            );
+            render_pass.set_scissor_rect(
+                viewport.scissor_x,
+                viewport.scissor_y,
+                viewport.scissor_width,
+                viewport.scissor_height,
+            );
+        }
         self.grid_scene.draw(
             &mut render_pass,
             &self.scene_bind_group,
@@ -408,6 +485,24 @@ impl Renderer {
             self.section_resources
                 .draw_preview(&mut render_pass, &self.scene_bind_group);
         }
+    }
+
+    fn clear_surface_pass(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("app_bg_clear_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(APP_BG_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
     }
 
     fn upload_egui_resources(
@@ -518,6 +613,32 @@ impl Renderer {
         } else {
             Some(self.create_index_buffer(label, indices, usage))
         }
+    }
+}
+
+impl RenderViewport {
+    fn from_physical(rect: [f32; 4], surface_width: u32, surface_height: u32) -> Option<Self> {
+        let max_x = surface_width.max(1) as f32;
+        let max_y = surface_height.max(1) as f32;
+        let left = rect[0].clamp(0.0, max_x).floor();
+        let top = rect[1].clamp(0.0, max_y).floor();
+        let right = (rect[0] + rect[2]).clamp(left, max_x).ceil();
+        let bottom = (rect[1] + rect[3]).clamp(top, max_y).ceil();
+        let width = (right - left).max(0.0);
+        let height = (bottom - top).max(0.0);
+        if width < 1.0 || height < 1.0 {
+            return None;
+        }
+        Some(Self {
+            x: left,
+            y: top,
+            width,
+            height,
+            scissor_x: left as u32,
+            scissor_y: top as u32,
+            scissor_width: width as u32,
+            scissor_height: height as u32,
+        })
     }
 }
 

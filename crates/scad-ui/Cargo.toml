@@ -9,8 +9,8 @@ path = "src/lib.rs"
 
 [dependencies]
 egui = "0.33"
+egui_commonmark = { workspace = true, features = ["better_syntax_highlighting"] }
 log.workspace = true
 muda = "0.17"
-pulldown-cmark = "0.13.3"
 scad-scene = { path = "../scad-scene" }
 winit = "0.30"

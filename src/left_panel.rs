@@ -1,10 +1,16 @@
 use std::path::PathBuf;
 
-use crate::app::{LeftPanelTab, StudioApp};
+use crate::{
+    app::{LeftPanelTab, StudioApp},
+    viewer_viewport,
+};
 use scad_ui::{
     chat_panel::ChatAction,
+    document_tabs,
     file_tree::FileTreeAction,
-    widgets::{section_header, selectable_button},
+    panel_switcher::{self, PanelSwitchItem},
+    theme::palette,
+    widgets::section_header,
 };
 
 #[derive(Debug, Clone)]
@@ -15,11 +21,32 @@ pub enum LeftPanelAction {
 
 pub fn show(ui: &mut egui::Ui, app: &mut StudioApp) -> Option<LeftPanelAction> {
     let mut action = None;
-    ui.horizontal(|ui| {
-        tab_button(ui, app, LeftPanelTab::Chat, "Chat");
-        tab_button(ui, app, LeftPanelTab::Files, "Files");
-    });
-    ui.add_space(12.0);
+    let items = [
+        PanelSwitchItem {
+            label: "Chat",
+            active: app.left_panel_tab() == LeftPanelTab::Chat,
+        },
+        PanelSwitchItem {
+            label: "Files",
+            active: app.left_panel_tab() == LeftPanelTab::Files,
+        },
+    ];
+    let _ = viewer_viewport::allocate_filled_strip_ui(
+        ui,
+        egui::vec2(ui.available_width(), document_tabs::rail_height()),
+        document_tabs::rail_margin(),
+        document_tabs::rail_fill_color(),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            if let Some(index) = panel_switcher::show_panel_switcher(ui, &items) {
+                app.set_left_panel_tab(match index {
+                    0 => LeftPanelTab::Chat,
+                    _ => LeftPanelTab::Files,
+                });
+            }
+        },
+    );
+    ui.add_space(palette::TAB_STRIP_GAP_BELOW);
     match app.left_panel_tab() {
         LeftPanelTab::Chat => {
             if let Some(ChatAction::SendMessage(message)) = app.chat_panel_mut().show(ui) {
@@ -38,11 +65,4 @@ pub fn show(ui: &mut egui::Ui, app: &mut StudioApp) -> Option<LeftPanelAction> {
         }
     }
     action
-}
-
-fn tab_button(ui: &mut egui::Ui, app: &mut StudioApp, tab: LeftPanelTab, label: &str) {
-    let selected = app.left_panel_tab() == tab;
-    if selectable_button(ui, selected, label).clicked() {
-        app.set_left_panel_tab(tab);
-    }
 }

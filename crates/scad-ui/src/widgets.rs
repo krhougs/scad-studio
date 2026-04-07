@@ -34,21 +34,25 @@ pub fn selectable_button(ui: &mut egui::Ui, selected: bool, label: &str) -> egui
             .size(12.0)
     };
     let fill = if selected {
-        palette::BG_WIDGET_ACTIVE
+        palette::BG_WIDGET_HOVER
     } else {
         egui::Color32::TRANSPARENT
     };
     ui.add(
         egui::Button::new(text)
+            .selected(selected)
             .fill(fill)
-            .corner_radius(egui::CornerRadius::same(4)),
+            .stroke(egui::Stroke::NONE)
+            .corner_radius(egui::CornerRadius::same(palette::SEGMENT_CORNER_RADIUS))
+            .frame(true)
+            .frame_when_inactive(selected),
     )
 }
 
 pub fn toggle_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
     let text = if enabled {
         egui::RichText::new(label)
-            .color(palette::TEXT_ACCENT)
+            .color(palette::TEXT_BRIGHT)
             .size(12.0)
     } else {
         egui::RichText::new(label)
@@ -56,14 +60,18 @@ pub fn toggle_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Res
             .size(12.0)
     };
     let fill = if enabled {
-        palette::BG_SELECTION
+        palette::BG_WIDGET_HOVER
     } else {
         egui::Color32::TRANSPARENT
     };
     ui.add(
         egui::Button::new(text)
+            .selected(enabled)
             .fill(fill)
-            .corner_radius(egui::CornerRadius::same(4)),
+            .stroke(egui::Stroke::NONE)
+            .corner_radius(egui::CornerRadius::same(palette::SEGMENT_CORNER_RADIUS))
+            .frame(true)
+            .frame_when_inactive(enabled),
     )
 }
 

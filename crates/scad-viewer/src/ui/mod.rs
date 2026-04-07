@@ -49,9 +49,6 @@ fn show_app_with_mode(
 ) -> UiActions {
     theme::apply(ctx);
     let previous_viewer_state = studio.viewer_state().clone();
-    let log_entries = studio.log_entries().to_vec();
-    let has_current_file = studio.has_current_file();
-    let is_rendering = studio.is_rendering();
     let mut actions = UiActions::default();
 
     if embedded_mode {
@@ -61,8 +58,48 @@ fn show_app_with_mode(
     }
 
     status_bar::show(ctx, studio);
-    if log_panel::show(ctx, studio.viewer_state_mut(), &log_entries, frame.config) {
+    let viewport_rect = ctx.available_rect();
+    show_viewer_overlays(
+        ctx,
+        studio,
+        camera_matrices,
+        camera,
+        frame,
+        viewport_rect,
+        &mut actions,
+    );
+
+    actions.viewer_state_changed =
+        previous_viewer_state != *studio.viewer_state() || actions.camera_action.is_some();
+    actions
+}
+
+/// 日志、侧栏、设置、gizmo、相机浮层；`viewport_rect` 为 3D 区域在屏幕上的矩形（用于坐标轴 gizmo 定位）。
+pub fn show_viewer_overlays(
+    ctx: &egui::Context,
+    studio: &mut StudioApp,
+    camera_matrices: CameraMatrices,
+    camera: &OrbitalCamera,
+    frame: crate::app::UiFrame<'_>,
+    viewport_rect: egui::Rect,
+    actions: &mut UiActions,
+) {
+    let log_entries = studio.log_entries().to_vec();
+    let has_current_file = studio.has_current_file();
+    let is_rendering = studio.is_rendering();
+
+    let log_outcome = log_panel::show(
+        ctx,
+        studio.viewer_state_mut(),
+        &log_entries,
+        frame.config,
+        viewport_rect,
+    );
+    if log_outcome.clear_requested {
         studio.clear_logs();
+        actions.commands.push(crate::app::UiCommand::SaveSettings);
+    }
+    if log_outcome.save_settings {
         actions.commands.push(crate::app::UiCommand::SaveSettings);
     }
     side_panel::show(
@@ -70,7 +107,8 @@ fn show_app_with_mode(
         studio.viewer_state_mut(),
         has_current_file,
         is_rendering,
-        &mut actions,
+        actions,
+        viewport_rect,
         side_panel::SidePanelFrame {
             document: frame.document,
             slicers: frame.slicers,
@@ -80,7 +118,6 @@ fn show_app_with_mode(
     if settings_dialog::show(ctx, frame.settings_open, frame.config) {
         actions.commands.push(crate::app::UiCommand::SaveSettings);
     }
-    let viewport_rect = ctx.available_rect();
     scad_scene::gizmo::paint_overlay(
         ctx,
         studio.viewer_state().show_axis_gizmo,
@@ -88,16 +125,12 @@ fn show_app_with_mode(
         viewport_rect,
     );
 
-    // 相机控制浮层
     camera_overlay::show(
         ctx,
         camera,
-        &mut actions,
+        actions,
         frame.config,
         studio.viewer_state().camera_overlay_open,
+        viewport_rect,
     );
-
-    actions.viewer_state_changed =
-        previous_viewer_state != *studio.viewer_state() || actions.camera_action.is_some();
-    actions
 }

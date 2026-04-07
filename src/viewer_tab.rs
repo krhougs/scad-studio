@@ -15,15 +15,21 @@ use scad_scene::{
     three_mf,
 };
 use scad_ui::tab_system::{TabContext, TabId, WorkTab};
-use scad_viewer::app::{CameraAction, StudioApp as ViewerStudioApp, UiCommand, UiFrame};
+use scad_ui::theme;
+use scad_viewer::app::{
+    CameraAction, StudioApp as ViewerStudioApp, UiActions, UiCommand, UiFrame,
+};
+use scad_viewer::ui::{show_viewer_overlays, status_bar, toolbar};
 use winit::{
     event::{ElementState, WindowEvent},
     event_loop::EventLoopProxy,
     keyboard::{KeyCode, PhysicalKey},
-        window::WindowId,
+    window::WindowId,
 };
 
 use crate::UserEvent;
+use crate::viewer_camera;
+use crate::viewer_viewport;
 
 pub struct ViewerTab {
     id: TabId,
@@ -58,6 +64,7 @@ pub struct ViewerUiOutcome {
     pub save_settings: bool,
     pub render_requested: bool,
     pub pending_render: bool,
+    pub viewport_rect: egui::Rect,
     pub commands: Vec<UiCommand>,
 }
 
@@ -100,8 +107,12 @@ impl ViewerTab {
         Ok(tab)
     }
 
-    pub fn tab_id_for(path: &Path) -> TabId {
-        tab_id_for_path("viewer", path)
+    pub fn legacy_tab_id(&self) -> TabId {
+        self.id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn mesh_signature(&self) -> Option<(TabId, u64)> {
@@ -127,17 +138,102 @@ impl ViewerTab {
             .then_some(&self.clip_plane)
     }
 
-    pub fn show_viewer_ui(
+    /// 在标签页 `Ui` 内绘制工具栏、状态栏与中间透明视口，并在 `ctx` 上绘制浮层（参数面板、gizmo 等）。
+    pub fn run_model_tab_frame(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         config: &mut AppConfig,
     ) -> ViewerUiOutcome {
         let previous_state = self.viewer.viewer_state().clone();
         let pending_render = self.document.has_pending_render();
         let slicers = detect_slicer_paths(config);
-        let mut actions = self.viewer.embedded_ui(
+        let mut actions = UiActions::default();
+
+        let viewport_rect = ui
+            .vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // 与条带分配使用同一 `Ui` 的可用宽度；水平边距 8+8=16；垂直边距与 `toolbar_strip_outer_height` 中 `STRIP_VERT_MARGIN` 一致。
+                let strip_outer_w = ui.available_width();
+                let toolbar_inner_w = (strip_outer_w - 16.0).max(1.0);
+                let status_inner_w = (strip_outer_w - 20.0).max(1.0);
+                let toolbar_h = toolbar::embedded_height(toolbar_inner_w, false);
+                let status_h = status_bar::embedded_height(status_inner_w);
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), toolbar_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        let _ = viewer_viewport::allocate_filled_strip_ui(
+                            ui,
+                            egui::vec2(ui.available_width(), toolbar_h),
+                            egui::Margin::symmetric(8, 1),
+                            theme::palette::BG_PANEL,
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                let mut settings_sink = false;
+                                toolbar::paint_toolbar_row(
+                                    ui,
+                                    &mut self.viewer,
+                                    &mut actions,
+                                    false,
+                                    &mut settings_sink,
+                                );
+                            },
+                        );
+                    },
+                );
+
+                let mid_h = (ui.available_height() - status_h).max(1.0);
+                let (viewport_rect, ()) = viewer_viewport::allocate_viewport_ui(
+                    ui,
+                    egui::vec2(ui.available_width(), mid_h),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        if self.mesh.is_none() {
+                            ui.vertical_centered(|ui| {
+                                let space = (ui.available_height() * 0.35).max(0.0);
+                                ui.add_space(space);
+                                ui.spinner();
+                                ui.add_space(12.0);
+                                ui.label(self.viewer.status_message());
+                            });
+                        }
+                    },
+                );
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), status_h),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let _ = viewer_viewport::allocate_filled_strip_ui(
+                            ui,
+                            egui::vec2(ui.available_width(), status_h),
+                            egui::Margin::symmetric(10, 3),
+                            theme::palette::BG_PANEL,
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                status_bar::paint_status_row(ui, &self.viewer);
+                            },
+                        );
+                    },
+                );
+
+                viewport_rect
+            })
+            .inner;
+        viewer_camera::sync_camera_to_viewport(
+            &mut self.camera,
+            self.viewer.viewer_state().projection_mode,
+            viewport_rect,
+        );
+        let camera_matrices = self.camera.matrices_for_bounds(self.current_bounds);
+        let viewport_rect_physical = physical_viewport_rect(viewport_rect, ctx.pixels_per_point());
+
+        show_viewer_overlays(
             ctx,
-            self.camera.matrices_for_bounds(self.current_bounds),
+            &mut self.viewer,
+            camera_matrices,
             &self.camera,
             UiFrame {
                 document: &mut self.document,
@@ -145,21 +241,30 @@ impl ViewerTab {
                 settings_open: &mut self.settings_open,
                 slicers: &slicers,
             },
+            viewport_rect,
+            &mut actions,
         );
+
         if let Some(action) = actions.camera_action.take() {
             apply_camera_action(&mut self.camera, action, self.current_bounds);
         }
+
         ViewerUiOutcome {
             save_settings: actions.commands.iter().any(|cmd| matches!(cmd, UiCommand::SaveSettings)),
             render_requested: self.document.take_pending_render(),
             pending_render: pending_render || previous_state != *self.viewer.viewer_state(),
+            viewport_rect: viewport_rect_physical,
             commands: actions.commands,
         }
     }
 
-    pub fn handle_window_event(&mut self, event: &WindowEvent, viewport_size: Vec2) -> bool {
-        handle_cross_section_event(self, event, viewport_size)
-            || self.camera_interaction.handle_event(&mut self.camera, event)
+    pub fn handle_window_event(&mut self, event: &WindowEvent, viewport_rect: egui::Rect) -> bool {
+        handle_cross_section_event(self, event, viewport_rect)
+            || handle_camera_event(self, event, viewport_rect)
+    }
+
+    pub fn captures_pointer(&self) -> bool {
+        self.clip_drag_active || self.camera_interaction.is_dragging()
     }
 
     pub fn handle_openscad_message(&mut self, message: OpenScadMessage) {
@@ -388,19 +493,10 @@ impl WorkTab for ViewerTab {
     }
 
     fn show(&mut self, ui: &mut egui::Ui, _ctx: &mut TabContext<'_>) {
-        ui.allocate_ui_with_layout(
-            ui.available_size(),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                if self.mesh.is_none() {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(64.0);
-                        ui.spinner();
-                        ui.add_space(12.0);
-                        ui.label(self.viewer.status_message());
-                    });
-                }
-            },
+        ui.label(
+            egui::RichText::new("模型预览由主窗口在每帧传入 AppConfig 时绘制；不应通过 TabManager::show_active_content 单独调用。")
+                .color(theme::palette::TEXT_SECONDARY)
+                .size(12.0),
         );
     }
 
@@ -485,7 +581,11 @@ fn export_output_path(
         .save_file()
 }
 
-fn handle_cross_section_event(tab: &mut ViewerTab, event: &WindowEvent, viewport_size: Vec2) -> bool {
+fn handle_cross_section_event(
+    tab: &mut ViewerTab,
+    event: &WindowEvent,
+    viewport_rect: egui::Rect,
+) -> bool {
     match event {
         WindowEvent::ModifiersChanged(modifiers) => {
             tab.ctrl_pressed = modifiers.state().control_key();
@@ -511,7 +611,10 @@ fn handle_cross_section_event(tab: &mut ViewerTab, event: &WindowEvent, viewport
             state: ElementState::Pressed,
             button: winit::event::MouseButton::Left,
             ..
-        } => begin_clip_drag(tab, viewport_size),
+        } => begin_clip_drag(
+            tab,
+            Vec2::new(viewport_rect.width(), viewport_rect.height()),
+        ),
         WindowEvent::MouseInput {
             state: ElementState::Released,
             button: winit::event::MouseButton::Left,
@@ -521,13 +624,28 @@ fn handle_cross_section_event(tab: &mut ViewerTab, event: &WindowEvent, viewport
             false
         }
         WindowEvent::CursorMoved { position, .. } => {
-            let cursor = Vec2::new(position.x as f32, position.y as f32);
+            let cursor = viewport_local_cursor(*position, viewport_rect);
             if update_clip_drag(tab, cursor) {
                 return true;
             }
             tab.cursor_position = Some(cursor);
             false
         }
+        _ => false,
+    }
+}
+
+fn handle_camera_event(tab: &mut ViewerTab, event: &WindowEvent, viewport_rect: egui::Rect) -> bool {
+    match event {
+        WindowEvent::MouseInput { state, button, .. } => tab
+            .camera_interaction
+            .handle_mouse_input_event(*state, *button),
+        WindowEvent::CursorMoved { position, .. } => tab
+            .camera_interaction
+            .handle_cursor_position(&mut tab.camera, viewport_local_cursor(*position, viewport_rect)),
+        WindowEvent::MouseWheel { delta, .. } => tab
+            .camera_interaction
+            .handle_wheel_delta(&mut tab.camera, delta),
         _ => false,
     }
 }
@@ -608,4 +726,27 @@ fn apply_camera_action(camera: &mut OrbitalCamera, action: CameraAction, bounds:
         CameraAction::ViewLeft => camera.view_left(),
         CameraAction::ViewRight => camera.view_right(),
     }
+}
+
+fn viewport_local_cursor(
+    position: winit::dpi::PhysicalPosition<f64>,
+    viewport_rect: egui::Rect,
+) -> Vec2 {
+    Vec2::new(
+        position.x as f32 - viewport_rect.min.x,
+        position.y as f32 - viewport_rect.min.y,
+    )
+}
+
+fn physical_viewport_rect(viewport_rect: egui::Rect, pixels_per_point: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(
+            viewport_rect.min.x * pixels_per_point,
+            viewport_rect.min.y * pixels_per_point,
+        ),
+        egui::pos2(
+            viewport_rect.max.x * pixels_per_point,
+            viewport_rect.max.y * pixels_per_point,
+        ),
+    )
 }

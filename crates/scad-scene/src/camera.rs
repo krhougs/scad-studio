@@ -304,18 +304,19 @@ impl CameraInteraction {
     pub fn handle_event(&mut self, camera: &mut OrbitalCamera, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::MouseInput { state, button, .. } => {
-                self.handle_mouse_input(*state, *button)
+                self.handle_mouse_input_event(*state, *button)
             }
-            WindowEvent::CursorMoved { position, .. } => self.handle_cursor(camera, *position),
-            WindowEvent::MouseWheel { delta, .. } => self.handle_wheel(camera, delta),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handle_cursor_position(camera, Vec2::new(position.x as f32, position.y as f32))
+            }
+            WindowEvent::MouseWheel { delta, .. } => self.handle_wheel_delta(camera, delta),
             _ => false,
         }
     }
 
-    fn handle_mouse_input(&mut self, state: ElementState, button: MouseButton) -> bool {
+    pub fn handle_mouse_input_event(&mut self, state: ElementState, button: MouseButton) -> bool {
         if state == ElementState::Released {
-            self.drag_mode = None;
-            self.last_cursor = None;
+            self.reset_pointer();
             return false;
         }
         self.drag_mode = match button {
@@ -326,12 +327,7 @@ impl CameraInteraction {
         self.drag_mode.is_some()
     }
 
-    fn handle_cursor(
-        &mut self,
-        camera: &mut OrbitalCamera,
-        position: winit::dpi::PhysicalPosition<f64>,
-    ) -> bool {
-        let current = Vec2::new(position.x as f32, position.y as f32);
+    pub fn handle_cursor_position(&mut self, camera: &mut OrbitalCamera, current: Vec2) -> bool {
         let Some(last) = self.last_cursor.replace(current) else {
             return false;
         };
@@ -346,12 +342,21 @@ impl CameraInteraction {
         true
     }
 
-    fn handle_wheel(&mut self, camera: &mut OrbitalCamera, delta: &MouseScrollDelta) -> bool {
+    pub fn handle_wheel_delta(&mut self, camera: &mut OrbitalCamera, delta: &MouseScrollDelta) -> bool {
         let amount = match delta {
             MouseScrollDelta::LineDelta(_, y) => *y,
             MouseScrollDelta::PixelDelta(position) => position.y as f32 / 120.0,
         };
         camera.zoom(amount);
         true
+    }
+
+    pub fn is_dragging(&self) -> bool {
+        self.drag_mode.is_some()
+    }
+
+    pub fn reset_pointer(&mut self) {
+        self.drag_mode = None;
+        self.last_cursor = None;
     }
 }

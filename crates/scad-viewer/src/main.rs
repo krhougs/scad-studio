@@ -1,6 +1,7 @@
 mod app;
 mod platform_menu;
 mod ui;
+mod wrap_line_pack;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -686,6 +687,7 @@ fn redraw_window(
             .viewer_state()
             .clip_plane_enabled
             .then_some(&state.clip_plane),
+        None,
         paint_data,
     ) {
         state.studio.set_error(format!("渲染失败: {error}"));

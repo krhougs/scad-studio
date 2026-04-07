@@ -1,60 +1,29 @@
-use scad_ui::markdown::{MarkdownBlock, MarkdownDocument, MarkdownInline, MarkdownListKind};
+use egui_commonmark::CommonMarkCache;
+use scad_ui::markdown::MarkdownDocument;
 
 #[test]
-fn parse_markdown_extracts_basic_block_types() {
+fn parse_keeps_markdown_source_intact() {
+    let source = "# Title\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
+    let doc = MarkdownDocument::parse(source);
+    assert_eq!(doc.source(), source);
+}
+
+#[test]
+fn show_renders_commonmark_features_without_panicking() {
     let source = r#"# Title
 
-Paragraph with **bold**, *italic*, and `code`.
-
-- first item
-- second item
+| Feature | Status |
+| --- | --- |
+| Table | yes |
 
 ```rust
 fn main() {}
 ```
 "#;
-
     let doc = MarkdownDocument::parse(source);
-    assert_eq!(doc.blocks().len(), 4);
 
-    match &doc.blocks()[0] {
-        MarkdownBlock::Heading { level, content } => {
-            assert_eq!(*level, 1);
-            assert_eq!(content.plain_text(), "Title");
-        }
-        other => panic!("expected heading, got {other:?}"),
-    }
-
-    match &doc.blocks()[1] {
-        MarkdownBlock::Paragraph(content) => {
-            assert_eq!(
-                content.plain_text(),
-                "Paragraph with bold, italic, and code."
-            );
-            assert!(
-                content
-                    .iter()
-                    .any(|span| matches!(span, MarkdownInline::Code(text) if text == "code"))
-            );
-        }
-        other => panic!("expected paragraph, got {other:?}"),
-    }
-
-    match &doc.blocks()[2] {
-        MarkdownBlock::List { kind, items } => {
-            assert_eq!(*kind, MarkdownListKind::Unordered);
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].plain_text(), "first item");
-            assert_eq!(items[1].plain_text(), "second item");
-        }
-        other => panic!("expected list, got {other:?}"),
-    }
-
-    match &doc.blocks()[3] {
-        MarkdownBlock::CodeBlock { language, content } => {
-            assert_eq!(language.as_deref(), Some("rust"));
-            assert!(content.contains("fn main() {}"));
-        }
-        other => panic!("expected code block, got {other:?}"),
-    }
+    egui::__run_test_ui(|ui| {
+        let mut cache = CommonMarkCache::default();
+        doc.show(ui, &mut cache);
+    });
 }

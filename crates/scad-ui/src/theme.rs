@@ -27,6 +27,21 @@ pub mod palette {
     pub const LOG_ERROR: Color32 = Color32::from_rgb(255, 110, 110);
 
     pub const CORNER_RADIUS: u8 = 6;
+
+    /// 分段控件、工具栏选项等扁平大块面的圆角（与 `rail_style::metrics().corner_radius` 保持一致）
+    pub const SEGMENT_CORNER_RADIUS: u8 = 10;
+
+    /// 浮动侧栏与窗口顶部的间距（与顶栏 tab 对齐；尽量贴顶，其余空白多来自系统标题栏区域）
+    pub const FLOATING_PANEL_MARGIN_TOP: i8 = 0;
+
+    /// 浮动侧栏与顶部文档标签条左右的内缩（与 tab 条对齐）
+    pub const FLOATING_PANEL_MARGIN_H: i8 = 6;
+
+    /// 浮动侧栏底部的内边距
+    pub const FLOATING_PANEL_MARGIN_BOTTOM: i8 = 10;
+
+    /// 标签条与下方内容区之间的留白（Studio 顶栏与侧栏 Chat/Files 下统一）
+    pub const TAB_STRIP_GAP_BELOW: f32 = 8.0;
 }
 
 /// 共享浮动面板 frame，支持透明度
@@ -45,12 +60,41 @@ pub fn floating_frame(opacity: f32) -> egui::Frame {
         .fill(bg_alpha)
         .corner_radius(egui::CornerRadius::same(8))
         .stroke(egui::Stroke::new(1.0, stroke_alpha))
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin {
+            left: palette::FLOATING_PANEL_MARGIN_H,
+            right: palette::FLOATING_PANEL_MARGIN_H,
+            top: palette::FLOATING_PANEL_MARGIN_TOP,
+            bottom: palette::FLOATING_PANEL_MARGIN_BOTTOM,
+        })
         .shadow(egui::epaint::Shadow {
             offset: [0, 0],
             blur: 16,
             spread: 4,
             color: egui::Color32::from_black_alpha(48),
+        })
+}
+
+/// 贴靠窗口边缘的侧栏：无圆角、无浮起阴影，与 `floating_frame` 的填色与内边距一致
+pub fn docked_side_panel_frame(opacity: f32) -> egui::Frame {
+    let bg = palette::BG_PANEL;
+    let bg_alpha = egui::Color32::from_rgba_premultiplied(
+        bg.r(),
+        bg.g(),
+        bg.b(),
+        (bg.a() as f32 * opacity) as u8,
+    );
+    let s = palette::STROKE_DIM;
+    let stroke_alpha =
+        egui::Color32::from_rgba_premultiplied(s.r(), s.g(), s.b(), (s.a() as f32 * opacity) as u8);
+    egui::Frame::default()
+        .fill(bg_alpha)
+        .corner_radius(egui::CornerRadius::ZERO)
+        .stroke(egui::Stroke::new(1.0, stroke_alpha))
+        .inner_margin(egui::Margin {
+            left: palette::FLOATING_PANEL_MARGIN_H,
+            right: palette::FLOATING_PANEL_MARGIN_H,
+            top: palette::FLOATING_PANEL_MARGIN_TOP,
+            bottom: palette::FLOATING_PANEL_MARGIN_BOTTOM,
         })
 }
 

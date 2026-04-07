@@ -1,8 +1,11 @@
 pub mod chat_panel;
+pub mod document_tabs;
 pub mod file_tree;
 pub mod font_setup;
 pub mod markdown;
+pub mod panel_switcher;
 pub mod platform_support;
+pub mod rail_style;
 pub mod tab_system;
 pub mod theme;
 pub mod widgets;

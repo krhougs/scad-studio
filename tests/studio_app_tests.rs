@@ -2,15 +2,17 @@
 
 #[path = "../src/app.rs"]
 mod app;
+#[path = "../src/document_session.rs"]
+mod document_session;
+#[path = "../src/document_workspace.rs"]
+mod document_workspace;
 #[path = "../src/welcome.rs"]
 mod welcome;
 #[path = "../src/workspace.rs"]
 mod workspace;
 
 use app::StudioApp;
-use scad_ui::tab_system::WorkTab;
 use std::path::PathBuf;
-use welcome::WelcomeTab;
 use workspace::{remember_workspace, sanitize_recent_workspaces, workspace_name};
 
 #[test]
@@ -58,54 +60,15 @@ fn sanitize_recent_workspaces_keeps_existing_directories_only_once() {
 fn new_studio_app_starts_with_welcome_tab() {
     let app = StudioApp::new(Vec::new());
 
-    assert_eq!(app.tab_ids(), vec![WelcomeTab::tab_id()]);
+    assert!(app.show_welcome_state());
+    assert!(app.documents().is_empty());
 }
 
 #[test]
-fn closing_last_closable_tab_restores_welcome_tab() {
+fn setting_workspace_hides_welcome_state_without_creating_document() {
     let mut app = StudioApp::new(Vec::new());
-    app.tabs_mut()
-        .open_tab(Box::new(FakeClosableTab::new(99, "README.md")));
+    app.set_workspace_path(PathBuf::from("/tmp/demo-workspace"));
 
-    app.close_tab(99);
-
-    assert_eq!(app.tab_ids(), vec![WelcomeTab::tab_id()]);
-}
-
-struct FakeClosableTab {
-    id: u64,
-    title: String,
-}
-
-impl FakeClosableTab {
-    fn new(id: u64, title: &str) -> Self {
-        Self {
-            id,
-            title: title.to_owned(),
-        }
-    }
-}
-
-impl WorkTab for FakeClosableTab {
-    fn id(&self) -> u64 {
-        self.id
-    }
-
-    fn title(&self) -> &str {
-        &self.title
-    }
-
-    fn is_closable(&self) -> bool {
-        true
-    }
-
-    fn show(&mut self, _ui: &mut egui::Ui, _ctx: &mut scad_ui::tab_system::TabContext<'_>) {}
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+    assert!(!app.show_welcome_state());
+    assert!(app.documents().is_empty());
 }

@@ -5,6 +5,7 @@ use std::{
 };
 
 use scad_data::{FileWatcher, WatchMessage};
+use egui_commonmark::CommonMarkCache;
 use scad_ui::{
     markdown::MarkdownDocument,
     tab_system::{TabContext, TabId, WorkTab},
@@ -19,6 +20,7 @@ pub struct MarkdownTab {
     title: String,
     source: String,
     document: MarkdownDocument,
+    cache: CommonMarkCache,
     watcher: FileWatcher,
 }
 
@@ -42,14 +44,15 @@ impl MarkdownTab {
             path: path.clone(),
             source,
             document,
+            cache: CommonMarkCache::default(),
             watcher,
         };
         tab.watcher.watch_files(vec![path]);
         Ok(tab)
     }
 
-    pub fn tab_id_for(path: &Path) -> TabId {
-        tab_id_for_path("markdown", path)
+    pub fn legacy_tab_id(&self) -> TabId {
+        self.id
     }
 
     pub fn path(&self) -> &Path {
@@ -60,7 +63,12 @@ impl MarkdownTab {
         self.source = std::fs::read_to_string(&self.path)
             .map_err(|error| format!("读取 Markdown 失败: {error}"))?;
         self.document = MarkdownDocument::parse(&self.source);
+        self.cache = CommonMarkCache::default();
         Ok(())
+    }
+
+    pub fn show_document(&mut self, ui: &mut egui::Ui) {
+        self.document.show(ui, &mut self.cache);
     }
 }
 
@@ -78,7 +86,7 @@ impl WorkTab for MarkdownTab {
     }
 
     fn show(&mut self, ui: &mut egui::Ui, _ctx: &mut TabContext<'_>) {
-        self.document.show(ui);
+        self.show_document(ui);
     }
 
     fn as_any(&self) -> &dyn Any {

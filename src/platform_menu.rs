@@ -132,6 +132,8 @@ pub(crate) fn resolve_menu_command(
 
 fn build_menu(recent: &[PathBuf]) -> PlatformMenu {
     let menu = Menu::new();
+    #[cfg(target_os = "macos")]
+    let app_menu = Submenu::new(APP_NAME, true);
     let file_menu = Submenu::new("File", true);
     let view_menu = Submenu::new("View", true);
     let help_menu = Submenu::new("Help", true);
@@ -175,27 +177,42 @@ fn build_menu(recent: &[PathBuf]) -> PlatformMenu {
         true,
         Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyQ)),
     );
-    let separator = PredefinedMenuItem::separator();
-
     let mut file_items: Vec<&dyn muda::IsMenuItem> = vec![&new_window_item, &open_folder_item];
     if let Some(submenu) = recent_menu.0.as_ref() {
         file_items.push(submenu);
     }
-    file_items.push(&separator);
+    let file_separator = PredefinedMenuItem::separator();
+    file_items.push(&file_separator);
     file_items.push(&close_window_item);
-    file_items.push(&separator);
-    file_items.push(&quit_item);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let file_quit_separator = PredefinedMenuItem::separator();
+        file_items.push(&file_quit_separator);
+        file_items.push(&quit_item);
+    }
     file_menu
         .append_items(&file_items)
         .expect("构建 Studio File 菜单失败");
     view_menu
         .append_items(&[&toggle_left_panel_item, &toggle_log_panel_item])
         .expect("构建 Studio View 菜单失败");
-    help_menu
-        .append(&about_item)
-        .expect("构建 Studio Help 菜单失败");
-    menu.append_items(&[&file_menu, &view_menu, &help_menu])
-        .expect("挂载 Studio 菜单栏失败");
+    #[cfg(target_os = "macos")]
+    {
+        let app_separator = PredefinedMenuItem::separator();
+        app_menu
+            .append_items(&[&about_item, &app_separator, &quit_item])
+            .expect("构建 Studio App 菜单失败");
+        menu.append_items(&[&app_menu, &file_menu, &view_menu, &help_menu])
+            .expect("挂载 Studio 菜单栏失败");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        help_menu
+            .append(&about_item)
+            .expect("构建 Studio Help 菜单失败");
+        menu.append_items(&[&file_menu, &view_menu, &help_menu])
+            .expect("挂载 Studio 菜单栏失败");
+    }
 
     PlatformMenu {
         menu,

@@ -17,6 +17,7 @@ pub fn show(
     has_current_file: bool,
     is_rendering: bool,
     actions: &mut UiActions,
+    viewport_rect: egui::Rect,
     frame: SidePanelFrame<'_>,
 ) {
     let SidePanelFrame {
@@ -30,17 +31,16 @@ pub fn show(
 
     let opacity = config.floating_panel_opacity.clamp(0.1, 1.0);
 
-    let screen = ctx.content_rect();
-    let default_pos = egui::pos2(screen.max.x - PANEL_WIDTH - 12.0, screen.min.y + 52.0);
-    let pos = config
-        .param_panel_pos
-        .map(|p| egui::pos2(p[0], p[1]))
-        .unwrap_or(default_pos);
-
     let default_size = config
         .param_panel_size
         .map(|s| egui::vec2(s[0], s[1]))
         .unwrap_or(egui::vec2(PANEL_WIDTH, 400.0));
+    let pos = stored_panel_pos(
+        config.param_panel_pos,
+        viewport_rect,
+        default_size,
+        egui::vec2(viewport_rect.width() - PANEL_WIDTH - 12.0, 12.0),
+    );
 
     let response = egui::Window::new("param_panel")
         .title_bar(false)
@@ -48,8 +48,9 @@ pub fn show(
         .resizable(true)
         .movable(true)
         .constrain(true)
+        .constrain_to(viewport_rect)
         .default_size(default_size)
-        .default_pos(pos)
+        .current_pos(pos)
         .frame(theme::floating_frame(opacity))
         .show(ctx, |ui| {
             ui.set_min_width(PANEL_WIDTH);
@@ -115,7 +116,7 @@ pub fn show(
     if let Some(inner) = response {
         if inner.response.dragged() || inner.response.drag_stopped() {
             let rect = inner.response.rect;
-            config.param_panel_pos = Some([rect.min.x, rect.min.y]);
+            config.param_panel_pos = Some(panel_offset(rect, viewport_rect));
         }
         if inner.response.drag_stopped() {
             let rect = inner.response.rect;
@@ -123,6 +124,29 @@ pub fn show(
             actions.commands.push(UiCommand::SaveSettings);
         }
     }
+}
+
+fn stored_panel_pos(
+    stored_offset: Option<[f32; 2]>,
+    viewport_rect: egui::Rect,
+    panel_size: egui::Vec2,
+    default_offset: egui::Vec2,
+) -> egui::Pos2 {
+    let offset = stored_offset
+        .map(|offset| egui::vec2(offset[0], offset[1]))
+        .unwrap_or(default_offset);
+    let x = (viewport_rect.min.x + offset.x)
+        .clamp(viewport_rect.min.x, (viewport_rect.max.x - panel_size.x).max(viewport_rect.min.x));
+    let y = (viewport_rect.min.y + offset.y)
+        .clamp(viewport_rect.min.y, (viewport_rect.max.y - panel_size.y).max(viewport_rect.min.y));
+    egui::pos2(x, y)
+}
+
+fn panel_offset(rect: egui::Rect, viewport_rect: egui::Rect) -> [f32; 2] {
+    [
+        rect.min.x - viewport_rect.min.x,
+        rect.min.y - viewport_rect.min.y,
+    ]
 }
 
 fn preset_section(ui: &mut egui::Ui, document: &mut DocumentState, actions: &mut UiActions) {
