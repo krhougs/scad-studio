@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientEnvelope,
-    ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequestKind,
-    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
-    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
-    web_file_read_capability,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientCommand,
+    ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle,
+    PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
+    RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
+    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, web_file_read_capability,
 };
 use serde_json::Value;
 use studio_common::{
@@ -514,5 +514,186 @@ fn client_event_serde_tags_match_contract() {
     assert_eq!(
         json,
         "{\"type\":\"watch_resubscribed\",\"payload\":{\"request_id\":9}}"
+    );
+}
+
+fn preview_request_for(name: &str) -> PreviewRequest {
+    PreviewRequest {
+        source: path_handle(name),
+        defines: Vec::new(),
+        kind: PreviewRequestKind::GeometryArtifact,
+        configured_openscad_path: None,
+    }
+}
+
+fn preview_protocol_error_bytes(request_id: RequestId, message: &str) -> Vec<u8> {
+    encode_response(&ServerResponseEnvelope {
+        request_id,
+        result: Err(ProtocolError::new(ProtocolErrorCode::Internal, message)),
+    })
+}
+
+#[test]
+fn stale_preview_response_does_not_overwrite_current_preview_state() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let req_a = client
+        .dispatch_preview_request(preview_request_for("a.scad"))
+        .expect("dispatch preview A");
+    let _ = drain_outbound(&mut client);
+
+    let req_b = client
+        .dispatch_preview_request(preview_request_for("b.scad"))
+        .expect("dispatch preview B");
+    let _ = drain_outbound(&mut client);
+
+    let snapshot_before = client.snapshot();
+    assert_eq!(
+        snapshot_before.active_preview_target,
+        Some(path_handle("b.scad"))
+    );
+    assert!(snapshot_before.preview_error.is_none());
+
+    client
+        .receive_inbound(&preview_protocol_error_bytes(req_a, "stale preview boom"))
+        .expect("receive stale preview error");
+
+    let snapshot_after = client.snapshot();
+    assert!(
+        snapshot_after.preview_error.is_none(),
+        "stale preview error must not overwrite preview_error, got {:?}",
+        snapshot_after.preview_error
+    );
+    assert_eq!(
+        snapshot_after.active_preview_target,
+        Some(path_handle("b.scad")),
+        "stale preview error must not flip active_preview_target"
+    );
+    assert!(
+        snapshot_after
+            .preview_tasks
+            .iter()
+            .all(|task| task.request_id != req_a),
+        "stale preview A should be removed from preview_tasks"
+    );
+    assert!(
+        snapshot_after
+            .preview_tasks
+            .iter()
+            .any(|task| task.request_id == req_b),
+        "active preview B should remain in preview_tasks"
+    );
+
+    let events = client.drain_events();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClientEvent::RequestFailed { request_id: rid, .. } if *rid == req_a
+    )));
+}
+
+#[test]
+fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let req_a = client.dispatch_workspace_current().unwrap();
+    let _ = drain_outbound(&mut client);
+
+    client.mark_transport_closed(TransportCloseReason {
+        code: 1006,
+        reason: "disconnect".into(),
+        was_clean: false,
+    });
+    assert!(
+        client.next_outbound().is_none(),
+        "mark_transport_closed clears outbound"
+    );
+    let _ = client.drain_events();
+
+    assert_eq!(client.snapshot().transport_status, TransportStatus::Reconnecting);
+    let cancel_id = client.cancel(req_a).expect("cancel during reconnect");
+    assert_ne!(cancel_id, req_a);
+
+    assert!(
+        client.next_outbound().is_none(),
+        "cancel during reconnect must not enqueue outbound immediately"
+    );
+
+    let events_after_cancel = client.drain_events();
+    assert!(events_after_cancel.iter().any(|event| matches!(
+        event,
+        ClientEvent::RequestFailed { request_id: rid, error: ClientError::Cancelled } if *rid == req_a
+    )));
+
+    client.begin_handshake(handshake_request()).unwrap();
+    let queued = drain_outbound(&mut client);
+    assert_eq!(queued.len(), 3, "expected reconnect + A replay + cancel replay");
+
+    let first: ClientEnvelope =
+        serde_json::from_slice(&queued[0]).expect("reconnect decodes");
+    assert!(matches!(first, ClientEnvelope::Reconnect(_)));
+
+    match serde_json::from_slice::<ClientEnvelope>(&queued[1]).expect("A replay decodes") {
+        ClientEnvelope::Request(ClientRequestEnvelope { request_id, command }) => {
+            assert_eq!(request_id, req_a);
+            assert!(matches!(command, ClientCommand::WorkspaceCurrent));
+        }
+        other => panic!("expected request envelope for A, got {other:?}"),
+    }
+    match serde_json::from_slice::<ClientEnvelope>(&queued[2]).expect("cancel replay decodes") {
+        ClientEnvelope::Request(ClientRequestEnvelope { request_id, command }) => {
+            assert_eq!(request_id, cancel_id);
+            match command {
+                ClientCommand::Cancel(cancel) => assert_eq!(cancel.request_id, req_a),
+                other => panic!("expected Cancel command, got {other:?}"),
+            }
+        }
+        other => panic!("expected request envelope for cancel, got {other:?}"),
+    }
+}
+
+#[test]
+fn watch_subscribe_respects_handshake_timeout() {
+    let mut timeouts = ClientTimeouts::default();
+    timeouts.watch = Some(1000);
+    let mut client = ManagedClient::with_timeouts(FakeTransport::default(), timeouts);
+    open_client_with_handshake(&mut client);
+
+    client.tick(0);
+    let watch_request_id = client
+        .subscribe_directory_watch(WatchParams {
+            request: WatchSubscribeRequest { directory: None },
+            throttle_ms: Some(100),
+        })
+        .expect("subscribe during open");
+    let _ = drain_outbound(&mut client);
+
+    client.tick(1001);
+    let events = client.drain_events();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClientEvent::RequestTimedOut { request_id: rid } if *rid == watch_request_id
+    )));
+
+    let snapshot = client.snapshot();
+    assert_eq!(
+        snapshot.watch_lifecycle.active_subscriptions, 0,
+        "timed-out watch subscribe should not leave a registry entry"
+    );
+
+    let push_bytes = encode_push(&ServerPushEnvelope {
+        event: ServerPushEvent::WatchChanged(WatchChangedEvent {
+            subscription_id: sample_subscription_id(),
+            changed_paths: vec![path_handle("late.scad")],
+        }),
+    });
+    client.receive_inbound(&push_bytes).unwrap();
+    let late_events = client.drain_events();
+    assert!(
+        !late_events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::WatchEvent { .. })),
+        "late push for timed-out subscription must not produce watch events"
     );
 }

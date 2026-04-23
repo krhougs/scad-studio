@@ -60,6 +60,12 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             });
             return;
         };
+        if info.cancelled {
+            self.last_error = Some(ClientError::UnknownRequest {
+                request_id: response.request_id,
+            });
+            return;
+        }
         match response.result {
             Ok(success) => self.handle_success(response.request_id, info, success),
             Err(error) => self.handle_protocol_error(response.request_id, info, error),
@@ -80,10 +86,14 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 self.workspace_list = Some(response.clone());
             }
             CommandSuccess::PreviewReady(_) => {
-                if let Some(task) = self.preview_tasks.get_mut(&request_id) {
-                    task.phase = PreviewPhase::Ready;
+                if self.is_latest_preview(request_id) {
+                    if let Some(task) = self.preview_tasks.get_mut(&request_id) {
+                        task.phase = PreviewPhase::Ready;
+                    }
+                    self.preview_error = None;
+                } else {
+                    self.preview_tasks.remove(&request_id);
                 }
-                self.preview_error = None;
             }
             _ => {}
         }
@@ -106,19 +116,37 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             message: error.message,
         };
         if let PendingKind::Preview { .. } = info.kind {
-            if let Some(task) = self.preview_tasks.get_mut(&request_id) {
-                task.phase = PreviewPhase::Error;
+            if self.is_latest_preview(request_id) {
+                if let Some(task) = self.preview_tasks.get_mut(&request_id) {
+                    task.phase = PreviewPhase::Error;
+                }
+                self.preview_error = Some(match &client_error {
+                    ClientError::ProtocolError { message, .. } => message.clone(),
+                    _ => String::new(),
+                });
+            } else {
+                self.preview_tasks.remove(&request_id);
+                self.last_error = Some(client_error.clone());
+                self.events.push_back(ClientEvent::RequestFailed {
+                    request_id,
+                    error: client_error,
+                });
+                return;
             }
-            self.preview_error = Some(match &client_error {
-                ClientError::ProtocolError { message, .. } => message.clone(),
-                _ => String::new(),
-            });
         }
         self.last_error = Some(client_error.clone());
         self.events.push_back(ClientEvent::RequestFailed {
             request_id,
             error: client_error,
         });
+    }
+
+    fn is_latest_preview(&self, request_id: RequestId) -> bool {
+        self.preview_tasks
+            .keys()
+            .max_by_key(|id| id.0)
+            .map(|latest| *latest == request_id)
+            .unwrap_or(false)
     }
 
     fn register_watch_ack(&mut self, request_id: RequestId, ack: WatchSubscriptionAck) {
@@ -131,6 +159,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             entry.subscription_id = Some(ack.subscription_id);
             entry.awaiting_resubscribe = false;
         }
+        self.pending.remove(&request_id);
         if is_resubscribe {
             self.watch_resubscribe_count = self.watch_resubscribe_count.saturating_add(1);
             self.events

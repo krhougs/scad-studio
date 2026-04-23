@@ -105,6 +105,9 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         pending_ids.sort_by_key(|id| id.0);
         for request_id in pending_ids {
             if let Some(info) = self.pending.get(&request_id) {
+                if matches!(info.kind, PendingKind::WatchSubscribe) {
+                    continue;
+                }
                 self.outbound.push_back(info.envelope_bytes.clone());
             }
         }
@@ -202,16 +205,30 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 deadline_ms: self.deadline_for(self.timeouts.workspace_current),
                 issued_at_ms: self.last_tick_ms,
                 envelope_bytes: envelope_bytes.clone(),
+                cancelled: false,
             },
         );
-        self.outbound.push_back(envelope_bytes);
-
-        if let Some(info) = self.pending.remove(&target) {
-            self.finalize_pending_cancellation(target, &info);
-            self.events.push_back(ClientEvent::RequestFailed {
-                request_id: target,
-                error: ClientError::Cancelled,
+        if self.transport_status == TransportStatus::Open {
+            self.outbound.push_back(envelope_bytes);
+            if let Some(info) = self.pending.remove(&target) {
+                self.finalize_pending_cancellation(target, &info);
+                self.events.push_back(ClientEvent::RequestFailed {
+                    request_id: target,
+                    error: ClientError::Cancelled,
+                });
+            }
+        } else {
+            let target_kind = self.pending.get_mut(&target).map(|info| {
+                info.cancelled = true;
+                info.kind.clone()
             });
+            if let Some(kind) = target_kind {
+                self.finalize_cancellation_by_kind(target, &kind);
+                self.events.push_back(ClientEvent::RequestFailed {
+                    request_id: target,
+                    error: ClientError::Cancelled,
+                });
+            }
         }
         Ok(cancel_id)
     }
@@ -227,11 +244,17 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             .collect();
         for request_id in expired {
             if let Some(info) = self.pending.remove(&request_id) {
-                if let PendingKind::Preview { .. } = info.kind {
-                    if let Some(task) = self.preview_tasks.get_mut(&request_id) {
-                        task.phase = PreviewPhase::TimedOut;
+                match info.kind {
+                    PendingKind::Preview { .. } => {
+                        if let Some(task) = self.preview_tasks.get_mut(&request_id) {
+                            task.phase = PreviewPhase::TimedOut;
+                        }
+                        self.preview_error = Some("preview timed out".into());
                     }
-                    self.preview_error = Some("preview timed out".into());
+                    PendingKind::WatchSubscribe => {
+                        self.watches.remove(&request_id);
+                    }
+                    _ => {}
                 }
                 self.events
                     .push_back(ClientEvent::RequestTimedOut { request_id });
@@ -268,7 +291,11 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
     }
 
     fn finalize_pending_cancellation(&mut self, target: RequestId, info: &PendingRequestInfo) {
-        if let PendingKind::Preview { .. } = info.kind {
+        self.finalize_cancellation_by_kind(target, &info.kind);
+    }
+
+    fn finalize_cancellation_by_kind(&mut self, target: RequestId, kind: &PendingKind) {
+        if let PendingKind::Preview { .. } = kind {
             if let Some(task) = self.preview_tasks.get_mut(&target) {
                 task.phase = PreviewPhase::Cancelled;
             }

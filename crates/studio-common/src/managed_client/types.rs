@@ -99,6 +99,7 @@ pub struct ClientTimeouts {
     pub config_save: Option<u64>,
     pub slicer_list: Option<u64>,
     pub export_run: Option<u64>,
+    /// watch 订阅握手超时；订阅 ack 返回后不再受此约束，活跃订阅本身不设超时。
     pub watch: Option<u64>,
 }
 
@@ -114,7 +115,7 @@ impl Default for ClientTimeouts {
             config_save: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             slicer_list: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             export_run: None,
-            watch: None,
+            watch: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
         }
     }
 }

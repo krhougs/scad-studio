@@ -12,6 +12,7 @@ pub enum PendingKind {
     SlicerList,
     ExportRun,
     Cancel { target: RequestId },
+    WatchSubscribe,
 }
 
 #[derive(Debug, Clone)]
@@ -21,4 +22,5 @@ pub struct PendingRequestInfo {
     #[allow(dead_code)]
     pub issued_at_ms: u64,
     pub envelope_bytes: Vec<u8>,
+    pub cancelled: bool,
 }

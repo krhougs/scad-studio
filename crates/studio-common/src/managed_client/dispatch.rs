@@ -140,6 +140,16 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 awaiting_resubscribe: false,
             },
         );
+        self.pending.insert(
+            request_id,
+            PendingRequestInfo {
+                kind: PendingKind::WatchSubscribe,
+                deadline_ms: self.deadline_for(self.timeouts.watch),
+                issued_at_ms: self.last_tick_ms,
+                envelope_bytes: envelope_bytes.clone(),
+                cancelled: false,
+            },
+        );
         self.outbound.push_back(envelope_bytes);
         Ok(request_id)
     }
@@ -162,6 +172,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 deadline_ms: self.deadline_for(timeout_ms),
                 issued_at_ms: self.last_tick_ms,
                 envelope_bytes: envelope_bytes.clone(),
+                cancelled: false,
             },
         );
         self.outbound.push_back(envelope_bytes);
