@@ -11,7 +11,7 @@ import { once } from "node:events";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 const SPEC_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +24,10 @@ const WS_URL = `ws://${HOST_BIND}`;
 const WATCH_SMOKE_FILE = path.join(
   HOST_WORKSPACE,
   "watch-smoke-generated.txt",
+);
+const AUTORENDER_SCAD = path.join(
+  HOST_WORKSPACE,
+  "watch-smoke-scad.scad",
 );
 
 let hostProc: ChildProcess | null = null;
@@ -84,6 +88,7 @@ test.afterAll(async () => {
   viteProc = null;
   hostProc = null;
   await rm(WATCH_SMOKE_FILE, { force: true });
+  await rm(AUTORENDER_SCAD, { force: true });
 });
 
 test.beforeEach(async ({ page }) => {
@@ -99,6 +104,39 @@ test.beforeEach(async ({ page }) => {
         .then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
     }
   });
+});
+
+test("@scad-autorerender writing to an open .scad triggers rerender", async ({
+  page,
+}) => {
+  // seed the scad file before navigation so the Inspector lists it
+  await writeFile(AUTORENDER_SCAD, "cube([10, 10, 10]);\n");
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await expect(page.getByTestId("entry-watch-smoke-scad.scad")).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-watch-smoke-scad.scad").click();
+  await expect(page.getByTestId("scad-workbench")).toBeVisible();
+  await expect(page.getByTestId("scad-preview-status")).toContainText(
+    /preview pending|preview ready|preview error/,
+    { timeout: 30_000 },
+  );
+
+  // mutate file on disk → watch push → workbench bumps refreshSignal → viewer
+  // re-runs PreviewRequest and the log panel adds an auto-rerender entry.
+  const existing = await readFile(AUTORENDER_SCAD, "utf-8");
+  await writeFile(AUTORENDER_SCAD, `${existing}\n// rerender sentinel\n`);
+
+  await expect(page.getByTestId("log-panel")).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        const text = (await page.getByTestId("log-list").textContent()) ?? "";
+        return /auto rerender triggered by/.test(text);
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 });
 
 test("watch push triggers Inspector re-render with new file", async ({ page }) => {

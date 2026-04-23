@@ -15,6 +15,7 @@ type ScadSplitViewerProps = {
   path: unknown;
   client: WasmClient;
   label: string;
+  defines?: string[];
   onPreviewStatus?: (status: string) => void;
 };
 
@@ -27,6 +28,7 @@ export function ScadSplitViewer({
   path,
   client,
   label,
+  defines,
   onPreviewStatus,
 }: ScadSplitViewerProps) {
   const [source, setSource] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function ScadSplitViewer({
     client
       .dispatchPreviewRequest({
         source: path,
-        defines: [],
+        defines: defines ?? [],
         kind: "geometry_artifact",
         configured_openscad_path: null,
       })
@@ -89,7 +91,7 @@ export function ScadSplitViewer({
     return () => {
       cancelled = true;
     };
-  }, [client, path, onPreviewStatus]);
+  }, [client, path, defines, onPreviewStatus]);
 
   const sourceBody =
     source != null

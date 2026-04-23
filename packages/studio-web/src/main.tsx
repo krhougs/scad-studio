@@ -7,6 +7,7 @@ import "./styles/workbench.css";
 import "./styles/workbench-zones.css";
 import "./styles/primitives.css";
 import "./styles/viewers.css";
+import "./styles/phase7.css";
 
 const root = document.getElementById("app");
 if (!root) {

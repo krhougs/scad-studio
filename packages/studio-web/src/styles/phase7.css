@@ -1,0 +1,250 @@
+/*
+ * Phase 7 surfaces: canvas toolbar / statusbar, parameter & preset panels,
+ * slicer / export panels, log panel. Dark-only, hairline, zero radius per
+ * docs/design-system/studio-datasheet-workbench.md.
+ */
+
+/* Canvas toolbar + statusbar ---------------------------------------- */
+.canvas-toolbar {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  display: flex;
+  gap: var(--space-3);
+  z-index: 3;
+  background: rgba(11, 11, 13, 0.78);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: var(--border-hairline);
+  padding: var(--space-2);
+  flex-wrap: wrap;
+}
+.canvas-toolbar__group {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+.canvas-toolbar .btn.is-active {
+  color: var(--fg-primary);
+  border-color: var(--border-strong-color);
+  background: var(--bg-surface-raised);
+}
+
+.canvas-statusbar {
+  position: absolute;
+  bottom: calc(var(--space-4) + 44px);
+  left: var(--space-4);
+  display: flex;
+  gap: var(--space-4);
+  z-index: 3;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(11, 11, 13, 0.78);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: var(--border-hairline);
+}
+.canvas-statusbar__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  min-width: 96px;
+}
+.canvas-statusbar__cell span {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-primary);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* Shared panel skeleton --------------------------------------------- */
+.panel {
+  border: var(--border-hairline);
+  background: rgba(11, 11, 13, 0.78);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  border-bottom: var(--border-hairline);
+  padding-bottom: var(--space-1);
+}
+.panel__title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.panel__sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+  white-space: nowrap;
+}
+.panel__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.panel__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.panel__row--compose {
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--border-hairline);
+}
+.panel__empty {
+  color: var(--fg-subtle);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+.panel__label {
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.panel__meta {
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel__input,
+.panel select.panel__input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: var(--border-hairline);
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 2px var(--space-2);
+  height: 26px;
+}
+.panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.panel__field-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.panel__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* Canvas Zone side panels layout (mesh tab) ------------------------- */
+.canvas__side-panels {
+  position: absolute;
+  right: var(--space-4);
+  bottom: calc(var(--space-4) + 44px);
+  width: 280px;
+  max-width: 35%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 3;
+}
+
+/* Scad workbench: split viewer above, panels below ------------------ */
+.scad-workbench {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100%;
+}
+.scad-workbench .viewer--scad-split {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+  min-height: 200px;
+  height: 220px;
+}
+.scad-workbench__panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  position: relative;
+  z-index: 4;
+}
+
+/* Pointer stage wraps viewers so the orbit controller has a target. In the
+ * canvas zone the stage is absolutely positioned to cover the space between
+ * the tab bar and the status strip, matching the generic .viewer rule.
+ */
+.viewer__pointer-stage {
+  position: absolute;
+  inset: 32px 0 40px 0;
+  display: flex;
+  flex-direction: column;
+  touch-action: none;
+  overflow: auto;
+}
+
+/* Log panel --------------------------------------------------------- */
+.log-panel__list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.log-panel__row {
+  display: grid;
+  grid-template-columns: 72px 48px 1fr;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  color: var(--fg-muted);
+  border-bottom: var(--border-hairline);
+}
+.log-panel__row:last-child {
+  border-bottom: 0;
+}
+.log-panel__row--warn .log-panel__level { color: var(--signal-warn); }
+.log-panel__row--error .log-panel__level { color: var(--signal-err); }
+.log-panel__row--info .log-panel__level { color: var(--fg-subtle); }
+.log-panel__time { color: var(--fg-dim); }
+.log-panel__message {
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inspector__section--bottom {
+  margin-top: auto;
+}

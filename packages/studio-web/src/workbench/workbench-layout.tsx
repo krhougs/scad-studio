@@ -18,6 +18,8 @@ import {
   type InspectorDirectoryNode,
   type InspectorEntry,
 } from "./inspector";
+import { LogPanel } from "./log-panel";
+import { useLogBuffer } from "./use-log-buffer";
 import { pathKey, pathLabel } from "./path-utils";
 import { Rail } from "./rail";
 import { resolveTabKind, extensionOf } from "./tab-kind";
@@ -109,6 +111,14 @@ export function WorkbenchLayout() {
   const clientRef = useRef<WasmClient | null>(null);
   const expandedRef = useRef<Map<string, InspectorDirectoryNode>>(new Map());
   const watchActiveRef = useRef(false);
+  const log = useLogBuffer();
+  const logRef = useRef(log);
+  logRef.current = log;
+  const [scadRefreshSignal, setScadRefreshSignal] = useState(0);
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
 
   const setExpandedBoth = useCallback(
     (
@@ -232,6 +242,7 @@ export function WorkbenchLayout() {
         },
         onHandshakeAccepted: () => {
           if (disposed) return;
+          logRef.current.append("info", "handshake accepted");
           void onHandshakeAck(client, {
             setPhase,
             setMessage,
@@ -240,10 +251,49 @@ export function WorkbenchLayout() {
             refreshRoot: () => refreshRootListing(client),
           });
         },
-        onWatchEvent: () => {
+        onTransportOpen: () => {
+          if (disposed) return;
+          logRef.current.append("info", "transport open");
+        },
+        onTransportClosed: (reason) => {
+          if (disposed) return;
+          logRef.current.append(
+            "warn",
+            `transport closed: ${describeError(reason)}`,
+          );
+        },
+        onWatchEvent: (_requestId: bigint, payload: unknown) => {
           if (disposed) return;
           refreshRootListing(client);
           refreshExpandedDirectories(client);
+          const changed = extractChangedPaths(payload);
+          const activeId = activeTabIdRef.current;
+          const activeTab =
+            openTabsRef.current.find((t) => t.id === activeId) ?? null;
+          // Server-side watch currently reports directory-level changes (the
+          // changed_paths list can be empty or hold the directory handle
+          // only). To keep the auto-rerender behaviour useful we conservatively
+          // bump the refresh signal whenever the active tab is a .scad and any
+          // watch event fires; if a per-file payload arrives in the future the
+          // pathKey match below can still narrow the trigger further.
+          if (activeTab && activeTab.kind === "scad") {
+            const activeKey = pathKey(activeTab.path);
+            const matchedSpecific = changed.has(activeKey);
+            setScadRefreshSignal((n) => n + 1);
+            logRef.current.append(
+              "info",
+              matchedSpecific
+                ? `auto rerender triggered by ${activeKey}`
+                : `auto rerender triggered by ${activeKey} (directory change)`,
+            );
+          }
+          for (const key of changed) {
+            logRef.current.append("info", `watch event: ${key}`);
+          }
+        },
+        onWatchResubscribed: () => {
+          if (disposed) return;
+          logRef.current.append("info", "watch resubscribed");
         },
       }),
     );
@@ -333,6 +383,8 @@ export function WorkbenchLayout() {
         onCloseTab={closeTab}
         onPreviewStatus={setMessage}
         client={client}
+        refreshSignal={scadRefreshSignal}
+        onLog={log.append}
       />
       <Inspector
         rootName={rootName}
@@ -345,9 +397,31 @@ export function WorkbenchLayout() {
         meshSummary={null}
         expandedDirectories={expanded}
         directoryKey={pathKey}
+        bottomSlot={<LogPanel entries={log.entries} />}
       />
     </div>
   );
+}
+
+function extractChangedPaths(payload: unknown): Set<string> {
+  const out = new Set<string>();
+  if (!payload || typeof payload !== "object") return out;
+  const outer = payload as Record<string, unknown>;
+  // WatchEventPayload uses {type, payload} via serde(tag,content). Dig one
+  // level before pulling changed_paths; fall back to the top level for
+  // payload shapes we have not yet encountered.
+  const inner =
+    (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
+  const changed = inner["changed_paths"] ?? outer["changed_paths"];
+  if (!Array.isArray(changed)) return out;
+  for (const item of changed) {
+    if (!item || typeof item !== "object") continue;
+    const segs = (item as Record<string, unknown>)["path_segments"];
+    if (!Array.isArray(segs)) continue;
+    const key = segs.filter((s): s is string => typeof s === "string").join("/");
+    if (key.length > 0) out.add(key);
+  }
+  return out;
 }
 
 type HandshakeCtx = {

@@ -85,11 +85,17 @@ export function describeError(err: unknown): string {
 export function buildClientCallbacks(params: {
   onSnapshotDirty: () => void;
   onHandshakeAccepted: () => void;
-  onWatchEvent: () => void;
+  onWatchEvent: (requestId: bigint, payload: unknown) => void;
+  onTransportOpen?: () => void;
+  onTransportClosed?: (reason: unknown) => void;
+  onWatchResubscribed?: (requestId: bigint) => void;
 }): WasmClientCallbacks {
   return {
     onSnapshotDirty: params.onSnapshotDirty,
     onHandshakeAccepted: params.onHandshakeAccepted,
     onWatchEvent: params.onWatchEvent,
+    onTransportOpen: params.onTransportOpen,
+    onTransportClosed: params.onTransportClosed,
+    onWatchResubscribed: params.onWatchResubscribed,
   };
 }

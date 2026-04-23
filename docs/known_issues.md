@@ -1,6 +1,41 @@
 # 已知问题记录
 
-## 2026-04-22 15:40:00: CLI 会话无法完成桌面 GUI 的完整交互式回归
+## 2026-04-23 20:10:00: `WatchChangedEvent.changed_paths` 只给目录级路径，Web 端无法精确匹配文件
+
+- 来源：执行 Phase 7 步骤 E（`.scad` 自动重渲染）时，Playwright smoke 观察 `client_drain_events` 产出的 `WatchEvent` payload：`changed_paths` 往往只包含目录级 `PathHandle`（`path_segments: []`），没有被修改的具体文件 handle。
+- 原因：`app-server-host::watch` 聚合 notify 事件后目前只回传监听的目录 handle；文件级变更事件未投递到 `WatchChangedEvent`。
+- 影响范围：
+  - Web 端 WorkbenchLayout 不能仅凭 `changed_paths` 判断"当前激活的 scad 文件是否被修改"。现行退让方案：凡是 scad tab 激活且有任何 watch 事件，均触发 refreshSignal，smoke 写入 "auto rerender triggered by {path} (directory change)"。桌面端不受影响（桌面 client 可直接观察 notify 事件）。
+  - 若多个文件同时变更，Web 端会做一次粗粒度重渲染而不是按文件去抖；对 preview 成本可控但理论上浪费。
+- 可能的解法：
+  - 服务端把 notify 事件里的文件 handle 透传到 `WatchChangedEvent.changed_paths` 而不是只回目录；需要在 `app-server-host::watch` 中按事件类型填充 `changed_paths`。
+  - 或在协议层新增 `WatchChangedEvent.reason`（`DirectoryChanged` vs `FileChanged { paths }`）让 client 显式知道粒度。
+- 当前处理方式：Phase 7 web 端先走"目录级触发重渲染"方案；日志 tail 明示 "directory change" 后缀，避免假装自己做了文件级匹配。
+
+## 2026-04-23 20:05:00: `PreviewRequest` 链路未返回 `ParsedParameters`，Web 参数面板无法自动解析 .scad 参数
+
+- 来源：执行 Phase 7（`prompt-archives/2026042300-studio-web-feature-parity/plan-00.md` §Phase 7 步骤 B）时，按计划应"优先走协议层 `ParsedParameters`，无法做到时回退到源码字符串解析"。审查 `crates/app-server-core/src/preview.rs` 与 `crates/app-server-host/src/dispatcher.rs` 后确认，`CommandSuccess::PreviewReady` 当前只带回 `PreviewReadyResponse { requested_kind, artifact }`，不包含 `ParsedParameters`；`studio-common` 的 re-export 也没有把解析能力接到 `ManagedClient` 的正常流程。
+- 原因：协议层 `ParameterDefinition` / `ParsedParameters` 类型虽已存在，但没有命令能把它们投递给客户端；web 端想拿到参数定义就必须新增协议命令或给 `PreviewRequest` 加返回字段——都超出 Phase 7 范围（Phase 7 明确禁止改协议/server-core）。
+- 影响范围：
+  - Web 参数面板只能依赖"用户手工输入 `name=value` 后由 `PreviewRequest.defines` 透传"这一退化路径，没法像桌面端一样先解析 `.scad` 顶部的变量默认值再渲染成带类型控件。
+  - `docs/web-platform-limits.md §9` 明确声明这条限制；但从协议层看，这属于"能力缺口"而非"平台差异"，放已知问题而不是平台限制页。
+  - 未来若 Phase 8+ 想做参数 UI 的"恢复默认值"语义，必须先补协议层支持。
+- 可能的解法：
+  - 给 `PreviewRequest` / `PreviewReadyResponse` 增加可选 `ParsedParameters` 字段；或单独添加 `ParametersInspect` 命令返回 `ParsedParameters`。任一都要同步 `app-server-core` 的解析实现与 `studio-common::ManagedClient` 的回执处理。
+  - 另起 plan，在其中定义协议扩展、兼容策略（`#[serde(default)]`）和两端同步改动。
+- 当前处理方式：Phase 7 web 端参数面板走手工 `name=value` 回退路径；`docs/web-platform-limits.md §9` 记录用户可见约束；本条记录解释为什么不是"平台限制"。
+
+## 2026-04-23 20:05:00: `ExportRun.output_path` 要求 server 侧绝对 `PathBuf`，web 端无法决定目标目录
+
+- 来源：执行 Phase 7 步骤 C（Export 流）时，检查 `app-server-protocol::ExportRunRequest.output_path: PathBuf` 与 `crates/app-server-core/src/export.rs::export_model`。Web 端发的是浏览器侧 UTF-8 字符串，该字符串被 server 作为 CLI `-o` 参数传给 OpenSCAD，按 server 进程 cwd 或绝对路径解析。
+- 原因：协议在定义 `ExportRunRequest` 时假定客户端知道 server 机器真实文件系统；这在桌面端成立，在 web 端不成立。没有 `PathHandle`-化的导出接口，也没有"写到 workspace 下某个相对路径"的语义。
+- 影响范围：
+  - Web 端 Phase 7 导出 UI 只接受用户输入文件名（默认 `<stem>.stl`），实际落地到 server 进程 cwd，不保证在 workspace 根目录下，也不保证对用户可见。
+  - smoke（`@export-slicer`）只能断言 `export done|export error`，不能验证导出文件位置。
+- 可能的解法：
+  - 扩展协议：`ExportRunRequest.output` 改为 `PathHandleWritable`（新增路径类型），由 server 解析为 workspace 根下的相对路径；或复用现有 `PathHandle` 作为目录 + 文件名两字段。
+  - 需求上若只要求"导出到 workspace 某目录"，可先约定 server 端默认写到 `workspace_root/exports/<filename>`。
+- 当前处理方式：Phase 7 web 端记录在 `docs/web-platform-limits.md §10`；协议不改，以相对文件名透传为准。
 
 - 来源：执行 `prompt-archives/2026042200-studio-app-server-unification/plan-00.md` 的验收过程中，已能通过 workspace 构建/测试和桌面二进制编译确认 `studio-app` 可进入运行路径，但当前会话没有桌面自动化能力，无法在同一条执行链中继续点击菜单、打开工作区、切换文档标签并观察真实窗口渲染。
 - 原因：当前环境具备编译、测试和进程级启动能力，但不具备桌面 GUI 级别的交互自动化工具；已有自动化测试主要覆盖状态机和纯逻辑，不能等价替代完整的人机交互回归。

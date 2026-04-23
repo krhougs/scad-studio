@@ -1,17 +1,23 @@
-// Canvas zone: tab bar + active viewer container + bottom status strip.
-// Phase 6 change: the zone hosts whatever viewer corresponds to the active
-// DocumentTab. When no tab is open, the placeholder canvas (Phase 4) is
-// rendered instead so the handshake flow still has something to show.
+// Canvas zone: tab bar + viewer container + camera toolbar/statusbar +
+// per-tab panels (parameters / presets / slicers / export). The zone owns
+// camera state through useCameraController; preview state itself still lives
+// inside individual viewer components.
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
+import { useCameraController } from "../canvas/use-camera-controller";
 import { useCanvasRendererController } from "../canvas/renderer-controller";
 import type { DocumentTab } from "../state/ui-store";
 import type { WasmClient } from "../wasm-bridge";
 import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
 import { MeshViewer } from "../viewers/mesh-viewer";
-import { ScadSplitViewer } from "../viewers/scad-split-viewer";
 import { TabBar } from "./tabbar";
+import { CanvasToolbar } from "./canvas-toolbar";
+import { CanvasStatusbar } from "./canvas-statusbar";
+import { ExportPanel } from "./export-panel";
+import { SlicerPanel } from "./slicer-panel";
+import { ScadWorkbench } from "./scad-workbench";
+import { pathLabel } from "./path-utils";
 
 type CanvasZoneProps = {
   phase: string;
@@ -23,24 +29,37 @@ type CanvasZoneProps = {
   onCloseTab: (id: string) => void;
   onPreviewStatus: (status: string) => void;
   client: WasmClient | null;
+  refreshSignal: number;
+  onLog: (level: "info" | "warn" | "error", message: string) => void;
 };
 
-export function CanvasZone({
-  phase,
-  message,
-  previewTargetLabel,
-  tabs,
-  activeTabId,
-  onActivateTab,
-  onCloseTab,
-  onPreviewStatus,
-  client,
-}: CanvasZoneProps) {
+export function CanvasZone(props: CanvasZoneProps) {
+  const {
+    phase,
+    message,
+    previewTargetLabel,
+    tabs,
+    activeTabId,
+    onActivateTab,
+    onCloseTab,
+    onPreviewStatus,
+    client,
+    refreshSignal,
+    onLog,
+  } = props;
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderer = useCanvasRendererController(canvasRef);
-  const activeTab =
-    tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const camera = useCameraController();
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 
+  useEffect(() => {
+    // Re-publish camera state to the renderer whenever it changes; stub
+    // backend no-ops, but real backend picks it up unchanged.
+    renderer.setCameraState(camera.camera);
+  }, [renderer, camera.camera]);
+
+  const showCanvasChrome = activeTab && (activeTab.kind === "mesh" || activeTab.kind === "scad");
   const rendererStatus = renderer.ready
     ? "renderer ready"
     : `renderer stub (${renderer.lastError ?? "pending"})`;
@@ -57,11 +76,23 @@ export function CanvasZone({
         onActivate={onActivateTab}
         onClose={onCloseTab}
       />
+      {showCanvasChrome ? (
+        <CanvasToolbar
+          activePreset={camera.activePreset}
+          onApplyPreset={camera.applyPreset}
+          onReset={camera.reset}
+          onZoomIn={camera.zoomIn}
+          onZoomOut={camera.zoomOut}
+        />
+      ) : null}
       {activeTab ? (
-        <ActiveViewer
+        <ActiveViewerSlot
           tab={activeTab}
           client={client}
           onPreviewStatus={onPreviewStatus}
+          pointerTargetRef={camera.pointerTargetRef}
+          refreshSignal={refreshSignal}
+          onLog={onLog}
         />
       ) : (
         <PlaceholderCanvas
@@ -70,6 +101,9 @@ export function CanvasZone({
           phase={phase}
         />
       )}
+      {showCanvasChrome ? (
+        <CanvasStatusbar camera={camera.camera} activePreset={camera.activePreset} />
+      ) : null}
       <div className="canvas__chrome-bot">
         <div className="canvas__status" data-testid="canvas-status">
           <b>{activeTab ? activeTab.label : previewTargetLabel}</b>
@@ -82,6 +116,17 @@ export function CanvasZone({
           </div>
         </div>
       </div>
+      {activeTab && activeTab.kind === "mesh" && client ? (
+        <div className="canvas__side-panels" data-testid="canvas-mesh-panels">
+          <ExportPanel
+            client={client}
+            source={activeTab.path}
+            defaultFilename={defaultExportFilename(activeTab)}
+            onStatus={onPreviewStatus}
+          />
+          <SlicerPanel client={client} />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -90,9 +135,19 @@ type ActiveViewerProps = {
   tab: DocumentTab;
   client: WasmClient | null;
   onPreviewStatus: (status: string) => void;
+  pointerTargetRef: (el: HTMLElement | null) => void;
+  refreshSignal: number;
+  onLog: (level: "info" | "warn" | "error", message: string) => void;
 };
 
-function ActiveViewer({ tab, client, onPreviewStatus }: ActiveViewerProps) {
+function ActiveViewerSlot({
+  tab,
+  client,
+  onPreviewStatus,
+  pointerTargetRef,
+  refreshSignal,
+  onLog,
+}: ActiveViewerProps) {
   if (!client) {
     return (
       <p className="viewer__loading" data-testid="viewer-waiting">
@@ -108,26 +163,40 @@ function ActiveViewer({ tab, client, onPreviewStatus }: ActiveViewerProps) {
   }
   if (tab.kind === "scad") {
     return (
-      <ScadSplitViewer
+      <div
+        ref={pointerTargetRef}
+        className="viewer__pointer-stage"
+        data-testid="viewer-pointer-stage"
+      >
+        <ScadWorkbench
+          path={tab.path}
+          client={client}
+          label={tab.label}
+          onPreviewStatus={onPreviewStatus}
+          refreshSignal={refreshSignal}
+          onLog={onLog}
+        />
+      </div>
+    );
+  }
+  return (
+    <div
+      ref={pointerTargetRef}
+      className="viewer__pointer-stage"
+      data-testid="viewer-pointer-stage"
+    >
+      <MeshViewer
         path={tab.path}
         client={client}
         label={tab.label}
         onPreviewStatus={onPreviewStatus}
       />
-    );
-  }
-  return (
-    <MeshViewer
-      path={tab.path}
-      client={client}
-      label={tab.label}
-      onPreviewStatus={onPreviewStatus}
-    />
+    </div>
   );
 }
 
 type PlaceholderCanvasProps = {
-  canvasRef: React.RefObject<HTMLCanvasElement>;
+  canvasRef: React.MutableRefObject<HTMLCanvasElement | null>;
   rendererStatus: string;
   phase: string;
 };
@@ -137,6 +206,9 @@ function PlaceholderCanvas({
   rendererStatus,
   phase,
 }: PlaceholderCanvasProps) {
+  const attach = (el: HTMLCanvasElement | null) => {
+    canvasRef.current = el;
+  };
   return (
     <>
       <div className="canvas__grid" aria-hidden="true" />
@@ -151,7 +223,7 @@ function PlaceholderCanvas({
       </div>
       <div className="canvas__stage">
         <canvas
-          ref={canvasRef}
+          ref={attach}
           className="canvas__surface"
           width={720}
           height={420}
@@ -166,4 +238,12 @@ function messageClass(phase: string): string | undefined {
   if (phase.includes("error")) return "is-err";
   if (phase === "preview-ready") return "is-ok";
   return undefined;
+}
+
+function defaultExportFilename(tab: DocumentTab): string {
+  const label = pathLabel(tab.path) || tab.label;
+  if (!label) return "export.stl";
+  const idx = label.lastIndexOf(".");
+  const stem = idx >= 0 ? label.slice(0, idx) : label;
+  return `${stem || "export"}.stl`;
 }

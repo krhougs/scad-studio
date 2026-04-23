@@ -36,6 +36,7 @@ type InspectorProps = {
   meshSummary: InspectorMeshSummary | null;
   expandedDirectories: Map<string, InspectorDirectoryNode>;
   directoryKey: (path: unknown) => string;
+  bottomSlot?: React.ReactNode;
 };
 
 export function Inspector({
@@ -49,6 +50,7 @@ export function Inspector({
   meshSummary,
   expandedDirectories,
   directoryKey,
+  bottomSlot,
 }: InspectorProps) {
   return (
     <aside
@@ -111,6 +113,14 @@ export function Inspector({
             </div>
           ) : null}
         </section>
+        {bottomSlot ? (
+          <section
+            className="inspector__section inspector__section--bottom"
+            data-testid="inspector-bottom-slot"
+          >
+            {bottomSlot}
+          </section>
+        ) : null}
       </div>
     </aside>
   );

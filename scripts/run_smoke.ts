@@ -5,8 +5,10 @@
 //
 // 支持 case：wasm_package_smoke / browser_smoke / browser_watch_smoke / all
 //           / markdown_view / image_view / scad_split_view（Phase 6 扩展）
+//           / canvas_interaction / parameters_presets / export_slicer /
+//             config_settings / scad_autorerender（Phase 7 扩展）
 // S1a / S1b / S4 通过直接命令调度。
-// all 仅覆盖 S1a-S4 基本用例，不跑 Phase 6 扩展用例（需手动触发）。
+// all 仅覆盖 S1a-S4 基本用例，不跑 Phase 6 / 7 扩展用例（需手动触发）。
 
 import path from "node:path";
 import { runWasmPackageSmoke } from "./smoke/wasm_package_smoke";
@@ -19,6 +21,11 @@ type Case =
   | "markdown_view"
   | "image_view"
   | "scad_split_view"
+  | "canvas_interaction"
+  | "parameters_presets"
+  | "export_slicer"
+  | "config_settings"
+  | "scad_autorerender"
   | "all";
 
 const VALID_CASES: readonly Case[] = [
@@ -28,6 +35,11 @@ const VALID_CASES: readonly Case[] = [
   "markdown_view",
   "image_view",
   "scad_split_view",
+  "canvas_interaction",
+  "parameters_presets",
+  "export_slicer",
+  "config_settings",
+  "scad_autorerender",
   "all",
 ];
 
@@ -126,6 +138,10 @@ async function runPhase6Case(tag: string): Promise<number> {
   return runPlaywrightSpec("tests/playwright/browser-smoke.spec.ts", tag);
 }
 
+async function runPhase7Spec(spec: string, tag?: string): Promise<number> {
+  return runPlaywrightSpec(spec, tag);
+}
+
 async function commandExists(command: string): Promise<boolean> {
   const proc = Bun.spawn(["sh", "-lc", `command -v ${command}`], {
     cwd: REPO_ROOT,
@@ -171,6 +187,31 @@ async function dispatch(which: Case): Promise<number> {
       return runPhase6Case("@image");
     case "scad_split_view":
       return runPhase6Case("@scad-split");
+    case "canvas_interaction":
+      return runPhase7Spec(
+        "tests/playwright/canvas-interaction.spec.ts",
+        "@canvas-interaction",
+      );
+    case "parameters_presets":
+      return runPhase7Spec(
+        "tests/playwright/parameters-presets.spec.ts",
+        "@parameters-presets",
+      );
+    case "export_slicer":
+      return runPhase7Spec(
+        "tests/playwright/export-slicer.spec.ts",
+        "@export-slicer",
+      );
+    case "config_settings":
+      return runPhase7Spec(
+        "tests/playwright/config-settings.spec.ts",
+        "@config-settings",
+      );
+    case "scad_autorerender":
+      return runPhase7Spec(
+        "tests/playwright/browser-watch-smoke.spec.ts",
+        "@scad-autorerender",
+      );
     case "all":
       return runAll();
   }

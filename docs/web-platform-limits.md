@@ -73,3 +73,52 @@
   但用户会通过 DevTools 看到告警。
 - Object URL 在组件卸载或 `path` 变化时 `URL.revokeObjectURL`，避免
   内存泄漏。
+
+## 8. 3D 交互与相机（Phase 7）
+
+- `packages/studio-web/src/canvas/camera-*` 负责相机状态机与工具栏/
+  状态栏输入处理。桩 renderer（`renderer_create` 返回 Err）不会真的
+  把 camera 状态画出像素；本 Phase 只对齐交互与协议接线，不涉及真实
+  GPU 渲染。
+- 具体 renderer 接入要等到未来 Phase（见 plan-00 Phase 8 之后）。
+
+## 9. 参数编辑与预设（Phase 7）
+
+- Web 端不能通过 `FileRead` 读 `.scad` 源码（server `denied_extensions`
+  覆盖了 `.scad`；见 §2）。因此参数编辑**不做源码解析**：用户在参数
+  面板里手动输入 `name=value` 形式的 overrides，这些字符串作为
+  `PreviewRequest.defines` 直接送回 server，由 OpenSCAD CLI 处理。
+- 预设以同级 `<source>.presets.json` 文件持久化，读写走 `FileRead` /
+  `FileWriteText`。格式：`{ "version": 1, "presets": [{ name, defines:
+  string[] }] }`。
+- 协议 `ParsedParameters` / `PresetFile` 类型虽然已经在
+  `app-server-protocol` 中导出，但 `PreviewRequest` 服务端链路目前不会
+  返回解析后的参数定义；这条路径尚未打通，web 端无法接。已记录为
+  `docs/known_issues.md` 中的独立条目，不视为平台限制。
+
+## 10. 导出与切片器（Phase 7）
+
+- `SlicerList` 面板列出的是 **server 机器**上的安装，不是浏览器机器。
+  面板空列表显示 "no slicer configured"，web 端绝不尝试调起本地切片器
+  进程（参见 §1）。
+- `ExportRun` 的 `output_path` 在协议上是 server 侧 `PathBuf`；浏览器
+  无法知道 server 的绝对路径。web 端目前发相对文件名（如
+  `params-cube.stl`），由 OpenSCAD CLI 相对 server 进程的 cwd 解析。
+  涉及真实多 workspace 的输出路径语义待 Phase 8+ 评估。
+
+## 11. 配置与设置（Phase 7）
+
+- `/settings` 路由加载完整 `AppConfig` JSON 后只显示少数常用字段
+  （OpenSCAD path、recent workspaces 数量、slicers 数量）。`AppConfig`
+  是协议层数据，只放在该路由的本地 `useState`，**不**进入 Zustand
+  store；保证 UI store 的协议纯净边界。
+
+## 12. 日志面板与 `.scad` 自动重渲染（Phase 7）
+
+- 日志面板挂在 Inspector 底部，使用 React 内 ring buffer（默认 50
+  条），不写入 store、不做持久化。监听的事件：transport open/close、
+  handshake accepted、watch resubscribed、watch push、自动重渲染触发。
+- 当激活 tab 是 `.scad` 且 watch 推送的 `changed_paths` 命中当前文件
+  时，WorkbenchLayout 递增 `scadRefreshSignal`，ScadWorkbench 将该
+  signal 和 defines 一起作为 key 传给 `ScadSplitViewer`，触发其内部
+  effect 重新发 `PreviewRequest`。
