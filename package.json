@@ -1,0 +1,9 @@
+{
+  "name": "scad-studio-tooling",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web": "bun scripts/run_studio_web.ts",
+    "web:smoke": "bash tests/studio_web_smoke.sh"
+  }
+}

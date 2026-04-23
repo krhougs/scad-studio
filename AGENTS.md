@@ -33,6 +33,10 @@
   - 预期受众为技术人员，使用简洁、专业的语言和专业术语。
   - 原则上包含背景、目标、设计思路、任务清单、验收标准、风险评估等，但由实际情况决定，不生搬硬套。
   - 阅读门槛保持在中级工程师水平，只写专业、必要的文档。
+- **工具链约束**:
+  - 相关工具链、repo-local 启动脚本、静态资源服务与一次性辅助脚本默认优先使用 `bun`。
+  - 项目内**禁止新增** `python` / `python3` 调用；已有 python 调用在相关任务中应优先替换，避免继续扩散。
+  - 若确实无法绕开非 bun 方案，必须先说明原因与替代方案评估，再由用户拍板。
 - **已知问题记录**:
   - 当任务过程中确认存在当前无法直接解决、无法在本轮拍板、但又会影响后续开发判断的问题时，必须同步更新 `docs/known_issues.md`。
   - 记录至少包含：发现时间、来源、原因、影响范围、可能的解法、当前处理方式。
@@ -147,6 +151,75 @@
   - 性能敏感的查询需要确认优化方案
 - **行动**：全局分析代码，在不影响进度的前提下及时输出解决方案和风险评估。
 
+### 当前架构长期约束（严格执行）
+
+以下约束为当前项目层面的**长期架构关系**。涉及 Studio / Web / Preview / App Server 重构时，必须以此为准；若局部实现、旧文档或历史方案与这些约束冲突，以这里和最新已确认的计划存档为准。
+
+#### 1. App Server / Protocol / Transport 统一约束
+
+- `app server` 是唯一能力层，统一承接文件系统 I/O、目录列举、文件读取、文件监听、OpenSCAD 与预览相关外部调用，以及未来云 Agent / 沙盒扩展入口。
+- 桌面 GUI 和网页必须走**同一份 app server 核心代码**与**同一份 protocol**。
+- 禁止桌面保留绕过 protocol 的本地直连 I/O 或外部调用路径。
+- GUI 场景下，app server 在同进程内以 Tokio task 启动；客户端与 server 的通信走 `tokio::mpsc` transport。
+- 网页或未来其他 client 走 WebSocket 或其他 transport，但消费的必须是同一份 protocol。
+- transport 必须以 trait 抽象；transport 与 protocol 必须彻底分离。
+- protocol 只描述命令、事件、错误、能力与数据模型，不绑定 HTTP、WebSocket、`tokio::mpsc` 或平台私有类型。
+- protocol 设计必须显式考虑平台差异和 I/O 差异，例如：同步/异步完成、文件系统可见路径差异、能力协商、错误模型、取消语义、watch 事件节流与重连。
+
+#### 2. 根 crate 与 workspace 关系
+
+- 根 crate `scad-studio` 不应包含任何业务代码，只作为 workspace 根、统一工具链配置和顶层文档入口使用。
+- 现有 Studio 相关业务代码至少拆分为：`studio-app`、`studio-web`、`studio-common`。
+- 与 App Server 重构并行存在的核心包边界为：
+  - `app-server-protocol`
+  - `app-server-transport`
+  - `app-server-core`
+  - `app-server-host`
+  - `studio-common`
+  - `studio-app`
+  - `studio-web`
+  - `scad-ui`
+  - `scad-scene`
+
+#### 3. 三个 Studio 包的能力边界
+
+- `studio-common`：
+  - 只放跨端共享且不依赖平台入口的内容；
+  - 管共享状态与行为；
+  - 承接文档 / workspace session 领域模型、目录树与当前目录文件列表共享状态机、预览请求编排、预览任务状态、当前激活预览目标、预览错误状态、共享事件、共享错误模型、端无关 protocol client facade；
+  - **允许**少量 `egui` 基础类型和无平台共享 UI 状态；
+  - **禁止**页面级布局、widget 组装、`egui::Context` 驱动逻辑、浏览器 API、桌面平台 API、事件循环接线；
+  - **允许依赖** `app-server-protocol`；
+  - **禁止依赖** `app-server-transport`；
+  - **允许谨慎依赖** `scad-scene` 的纯渲染数据结构；
+  - **禁止依赖** renderer / window / GPU 生命周期相关能力。
+
+- `studio-app`：
+  - 只放桌面专属外壳；
+  - 承接桌面 GUI 入口、多窗口生命周期、平台菜单、快捷键、同进程 `app-server-host` 启动、`tokio::mpsc` transport 客户端接线、桌面平台特有 UI 编排与预览区域呈现；
+  - 不直接触碰 I/O 或外部调用。
+
+- `studio-web`：
+  - 只放网页专属外壳；
+  - 承接 Web 入口、浏览器环境接线、Web transport 客户端接线、浏览器主界面、目录树、当前目录文件列表、网页端预览区域呈现和不可避免的网页平台差异处理；
+  - 不直接触碰 I/O 或外部调用。
+
+#### 4. `studio-common` 与 `scad-ui` 的分工
+
+- `studio-common` 管“当前是什么状态、收到什么命令、转移到什么状态”。
+- `scad-ui` 管“长什么样、怎么排版、怎么被画出来、如何组合多个 widget”。
+- 如果一段代码主要负责**状态与行为**，优先归入 `studio-common`。
+- 如果一段代码主要负责**组件与呈现**，优先归入 `scad-ui`。
+- 若代码同时混合状态机与呈现逻辑，优先拆分，禁止整块塞进 `studio-common`。
+
+#### 5. Studio / Preview 边界
+
+- `Studio` 是正式产品边界，预览能力属于 `Studio` 的组成部分。
+- 不要把预览相关重构表述为“把预览迁回 Studio”，因为 `Studio` 已包含 Viewer 的全部功能。
+- 预览属于跨端共享正式能力。
+- 预览状态机必须统一放在 `studio-common`，不得在 `studio-app` 与 `studio-web` 中各自维护一套独立预览状态。
+- 若历史边界（例如独立 `scad-viewer` 壳）中仍存在共享预览库职责，必须先迁到 `scad-ui`、`scad-scene`、`studio-common` 或对应端壳层，再删除旧壳。
+
 ### 透明沟通与进度同步
 
 - 明确说明当前进度和遇到的问题，不隐藏不确定性，不做假设性推进。
@@ -165,13 +238,13 @@
 
 #### GUI 共享边界（严格执行）
 
-- `scad-ui` 是本项目两个 GUI 应用（`scad-viewer`、`scad-studio`）的共享界面基础层，不只是放主题常量。
+- `scad-ui` 是本项目两个 Studio 客户端壳层（`studio-app`、`studio-web`）的共享界面基础层，不只是放主题常量。
 - 凡是同时属于以下任一类别的内容，原则上都必须优先抽到 `scad-ui`，由两个 GUI crate 调用，而不是各自复制或平行演化：
   - GUI 主题、调色板、字体 fallback、视觉样式约束
   - 平台菜单接入、快捷键约定、窗口级 GUI 初始化辅助逻辑
   - 通用基础组件与样式壳层，例如工具栏片段、状态栏片段、日志视图、浮动面板壳层、通用按钮/切换按钮、共享布局片段
-- `scad-viewer` 和 `scad-studio` 应只保留各自业务特有的界面编排与状态管理；若某段 GUI 逻辑未来会被另一端复用，应在首次实现时就优先评估是否放入 `scad-ui`。
-- 禁止在 `scad-viewer` 与 `scad-studio` 中分别维护语义相同但实现不同的主题、样式或基础组件；若发现已出现分叉，当前任务涉及该区域时必须优先收敛到 `scad-ui`。
+- `studio-app` 和 `studio-web` 应只保留各自业务特有的界面编排与平台壳层接线；若某段 GUI 逻辑未来会被另一端复用，应在首次实现时就优先评估是否放入 `scad-ui` 或 `studio-common`。
+- 禁止在 `studio-app` 与 `studio-web` 中分别维护语义相同但实现不同的主题、样式或基础组件；若发现已出现分叉，当前任务涉及该区域时必须优先收敛到 `scad-ui`。
 - 新增或修改 GUI 行为时，必须显式检查：这次改动属于“共享基础层”还是“单应用业务层”；若判断为共享基础层，未同步抽到 `scad-ui` 视为边界违规。
 
 写 GUI/前端代码时，请使用以下 skill：

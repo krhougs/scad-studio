@@ -2,4 +2,9 @@ target/
 .DS_Store
 .agents/
 .claude/
+.codex/
+.context/
+.playwright-mcp/
+.sisyphus/
 .superpowers/
+workspace/
