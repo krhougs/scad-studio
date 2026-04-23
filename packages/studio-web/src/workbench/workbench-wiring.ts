@@ -12,7 +12,6 @@ export type WireOptions = {
   onTransportError: (message: string) => void;
   onTransportLost: (message: string) => void;
   onTransportReconnecting: (message: string) => void;
-  onWatchReset: () => void;
 };
 
 export function buildHandshakeParams() {
@@ -51,7 +50,9 @@ export function createTransport(opts: WireOptions): BrowserWebSocketTransport {
       client.setSender(null);
       client.markTransportClosed(reason);
       client.pump();
-      opts.onWatchReset();
+      // Watch registry is retained by ManagedClient and replayed on the next
+      // handshake; the React layer must not resubscribe after reconnect or
+      // the server accumulates duplicate subscriptions.
       if (reason.was_clean) {
         opts.onTransportReconnecting(
           `transport closed (${reason.code}); reconnecting...`,

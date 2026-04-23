@@ -87,13 +87,26 @@ function toInspectorEntry(entry: ProtocolEntry): InspectorEntry {
   };
 }
 
+function extractWorkspaceListEntries(response: unknown): ProtocolEntry[] {
+  // `dispatchWorkspaceList` resolves with the full `CommandSuccess` value,
+  // serde-serialized as `{ "type": "workspace_list", "payload": { entries } }`.
+  if (!response || typeof response !== "object") return [];
+  const outer = response as Record<string, unknown>;
+  const inner = (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
+  const entries = (inner["entries"] as ProtocolEntry[] | undefined) ?? [];
+  return Array.isArray(entries) ? entries : [];
+}
+
 function extractMeshSummary(
   payload: unknown,
   targetLabel: string,
   wasm: typeof WasmMod,
 ): InspectorMeshSummary | null {
   if (!payload || typeof payload !== "object") return null;
-  const ready = payload as Record<string, unknown>;
+  // `dispatchPreviewRequest` resolves with `CommandSuccess::PreviewReady`,
+  // serde-serialized as `{ "type": "preview_ready", "payload": {...} }`.
+  const outer = payload as Record<string, unknown>;
+  const ready = ((outer["payload"] as Record<string, unknown> | undefined) ?? outer);
   const artifact = ready["artifact"] as Record<string, unknown> | undefined;
   if (!artifact) return null;
   const format = artifact["format"];
@@ -151,10 +164,21 @@ export function WorkbenchLayout() {
   const [expanded, setExpanded] = useState<Map<string, InspectorDirectoryNode>>(
     () => new Map(),
   );
+  // Root entries live in React state, not derived from snapshot.workspace_list,
+  // because ManagedClient overwrites that field with every workspace.list
+  // response (including subdirectory expansions) and the tree root would be
+  // clobbered. Only the dedicated refresh paths below touch rootEntries.
+  const [rootEntries, setRootEntries] = useState<InspectorEntry[]>([]);
+  const [rootLoaded, setRootLoaded] = useState(false);
 
   const wsUrl = useMemo(() => resolveWsUrl(), []);
   const clientRef = useRef<WasmClient | null>(null);
   const expandedRef = useRef<Map<string, InspectorDirectoryNode>>(new Map());
+  // watchActiveRef gates the one-time subscribeDirectoryWatch call on the
+  // very first handshake. ManagedClient retains the watch registry across
+  // transport close and replays the subscribe envelope after reconnect, so
+  // we must not reset this flag in onClose — that would duplicate the
+  // subscription server-side on every reconnect.
   const watchActiveRef = useRef(false);
 
   const setExpandedBoth = useCallback(
@@ -173,9 +197,16 @@ export function WorkbenchLayout() {
   );
 
   const refreshRootListing = useCallback((client: WasmClient) => {
-    client.dispatchWorkspaceList({ directory: null }).catch((err) => {
-      console.warn("workspace.list root refresh failed:", describeError(err));
-    });
+    client
+      .dispatchWorkspaceList({ directory: null })
+      .then((response) => {
+        const entries = extractWorkspaceListEntries(response).map(toInspectorEntry);
+        setRootEntries(entries);
+        setRootLoaded(true);
+      })
+      .catch((err) => {
+        console.warn("workspace.list root refresh failed:", describeError(err));
+      });
   }, []);
 
   const refreshExpandedDirectories = useCallback(
@@ -186,8 +217,7 @@ export function WorkbenchLayout() {
         client
           .dispatchWorkspaceList({ directory: state.path })
           .then((response) => {
-            const entries = ((response as { entries?: ProtocolEntry[] })?.entries ?? [])
-              .map(toInspectorEntry);
+            const entries = extractWorkspaceListEntries(response).map(toInspectorEntry);
             setExpandedBoth((prev) => {
               const next = new Map(prev);
               next.set(key, { ...state, entries, loading: false, error: null });
@@ -227,8 +257,7 @@ export function WorkbenchLayout() {
       client
         .dispatchWorkspaceList({ directory: entry.path })
         .then((response) => {
-          const children = ((response as { entries?: ProtocolEntry[] })?.entries ?? [])
-            .map(toInspectorEntry);
+          const children = extractWorkspaceListEntries(response).map(toInspectorEntry);
           setExpandedBoth((prev) => {
             const next = new Map(prev);
             next.set(key, { ...pending, entries: children, loading: false });
@@ -279,6 +308,7 @@ export function WorkbenchLayout() {
             setMessage,
             watchActiveRef,
             disposedRef: () => disposed,
+            refreshRoot: () => refreshRootListing(client),
           });
         },
         onWatchEvent: () => {
@@ -311,9 +341,6 @@ export function WorkbenchLayout() {
         setPhase("connecting");
         setMessage(msg);
       },
-      onWatchReset: () => {
-        watchActiveRef.current = false;
-      },
     });
     transport.start();
 
@@ -331,10 +358,8 @@ export function WorkbenchLayout() {
     };
   }, [wsUrl, refreshRootListing, refreshExpandedDirectories]);
 
-  const entriesLoaded = snapshot?.workspace_list !== undefined;
-  const entries: InspectorEntry[] = (snapshot?.workspace_list?.entries ?? []).map(
-    toInspectorEntry,
-  );
+  const entriesLoaded = rootLoaded;
+  const entries: InspectorEntry[] = rootEntries;
   const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
 
   const handlePreview = useCallback((entry: InspectorEntry) => {
@@ -399,6 +424,7 @@ type HandshakeCtx = {
   setMessage: (value: string) => void;
   watchActiveRef: React.MutableRefObject<boolean>;
   disposedRef: () => boolean;
+  refreshRoot: () => void;
 };
 
 async function onHandshakeAck(
@@ -407,7 +433,6 @@ async function onHandshakeAck(
 ): Promise<void> {
   try {
     await client.dispatchWorkspaceCurrent();
-    await client.dispatchWorkspaceList({ directory: null });
   } catch (err) {
     if (ctx.disposedRef()) return;
     ctx.setPhase("preview-error");
@@ -415,6 +440,7 @@ async function onHandshakeAck(
     return;
   }
   if (ctx.disposedRef()) return;
+  ctx.refreshRoot();
   ctx.setPhase("ready");
   ctx.setMessage("workspace ready");
   if (!ctx.watchActiveRef.current) {
