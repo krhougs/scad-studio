@@ -8,3 +8,5 @@ target/
 .sisyphus/
 .superpowers/
 workspace/
+pnpm-lock.yaml
+node_modules/

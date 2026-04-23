@@ -26,9 +26,9 @@ async fn browser_smoke_loads_workspace_listing_and_preview() {
             .expect("append smoke root");
     }
 
-    studio_web::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
+    studio_web_wasm::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
 
-    wait_for_text("studio-web wasm shell").await;
+    wait_for_text("studio-web-wasm shell").await;
     wait_for_text("README.md").await;
     wait_for_text("model.stl").await;
     wait_for_text("preview ready").await;
@@ -52,7 +52,7 @@ async fn browser_smoke_mounts_mesh_preview_canvas_when_mesh_arrives() {
 
     assert_webgpu_adapter_available().await;
 
-    studio_web::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
+    studio_web_wasm::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
 
     wait_for_text("preview ready").await;
     wait_for_text("vertices:").await;
@@ -317,7 +317,7 @@ async fn browser_smoke_directory_tree_expand_and_navigate() {
             .expect("append smoke root");
     }
 
-    studio_web::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
+    studio_web_wasm::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
 
     wait_for_text("README.md").await;
     wait_for_text("examples").await;

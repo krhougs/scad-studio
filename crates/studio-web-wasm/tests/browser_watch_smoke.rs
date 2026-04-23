@@ -18,7 +18,7 @@ const WATCH_SMOKE_FILENAME: &str = "watch-smoke-generated.txt";
 async fn browser_smoke_refreshes_listing_after_watch_change() {
     ensure_root();
 
-    studio_web::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
+    studio_web_wasm::boot_studio_web(SMOKE_WS_URL).expect("boot wasm app");
 
     wait_for_text("README.md").await;
     assert!(

@@ -1,0 +1,15 @@
+{
+  "name": "@scad-studio/studio-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "React PWA shell for scad-studio. Owns browser transport, routing, Zustand UI state, and five-zone workbench layout.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@scad-studio/studio-web-wasm": "workspace:*"
+  }
+}

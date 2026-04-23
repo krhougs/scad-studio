@@ -32,7 +32,7 @@ rm -f "$WATCH_SMOKE_FILE"
 
 bun scripts/wait_for_port.ts 127.0.0.1 39180 30000 200
 
-cd "$ROOT/crates/studio-web"
+cd "$ROOT/crates/studio-web-wasm"
 wasm-pack test --headless --chrome --features browser-smoke --test browser_smoke
 
 wasm-pack test --headless --chrome --features browser-smoke --test browser_watch_smoke

@@ -1,4 +1,4 @@
-use studio_web::{FakeChatState, MessageRole};
+use studio_web_wasm::{FakeChatState, MessageRole};
 
 #[test]
 fn send_message_appends_user_and_placeholder_reply() {

@@ -4052,7 +4052,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "studio-web"
+name = "studio-web-wasm"
 version = "0.1.0"
 dependencies = [
  "app-server-protocol",

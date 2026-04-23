@@ -8,7 +8,7 @@ members = [
     "crates/studio-app",
     "crates/studio-common",
     "crates/scad-ui",
-    "crates/studio-web",
+    "crates/studio-web-wasm",
     "crates/scad-viewer",
 ]
 resolver = "2"

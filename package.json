@@ -2,8 +2,12 @@
   "name": "scad-studio-tooling",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "web": "bun scripts/run_studio_web.ts",
-    "web:smoke": "bash tests/studio_web_smoke.sh"
+    "web:smoke": "bash tests/studio_web_smoke.sh",
+    "check:wasm-bindgen": "bun scripts/check_wasm_bindgen_version.ts"
   }
 }

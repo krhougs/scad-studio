@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(all(target_arch = "wasm32", feature = "legacy-shell"))]
 
 use app_server_transport::{ClientTransport, ServerEnvelope, WebSocketClientTransport};
 use studio_common::{AppServerTransportError, AppServerTransportEvent, AppServerTransportPort};

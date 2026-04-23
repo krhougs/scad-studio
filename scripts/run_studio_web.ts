@@ -103,11 +103,20 @@ async function buildShell(outDir: string) {
     "target",
     "wasm32-unknown-unknown",
     "debug",
-    "studio_web.wasm",
+    "studio_web_wasm.wasm",
   );
-  const indexPath = path.join(root, "crates", "studio-web", "web", "index.html");
+  const indexPath = path.join(root, "crates", "studio-web-wasm", "web", "index.html");
 
-  await runCommand(["cargo", "build", "-p", "studio-web", "--target", "wasm32-unknown-unknown"]);
+  await runCommand([
+    "cargo",
+    "build",
+    "-p",
+    "studio-web-wasm",
+    "--features",
+    "legacy-shell",
+    "--target",
+    "wasm32-unknown-unknown",
+  ]);
 
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });

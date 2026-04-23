@@ -1,0 +1,2 @@
+# Placeholder kept in git so the directory exists before Phase 2 wasm-bindgen runs.
+# Phase 2 writes studio_web_wasm.js / studio_web_wasm_bg.wasm / studio_web_wasm.d.ts / etc here.
