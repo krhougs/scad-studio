@@ -1,5 +1,5 @@
 // Phase 3 build entry: cargo → wasm-bindgen → vite build.
-// Does not launch websocket-host; that's handled by run_studio_web.ts / smoke.
+// Does not launch websocket-host; that's handled by run_studio_web_dev.ts / smoke.
 
 import path from "node:path";
 

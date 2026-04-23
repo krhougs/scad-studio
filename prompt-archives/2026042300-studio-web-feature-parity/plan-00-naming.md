@@ -17,7 +17,6 @@
 | wasm js wrapper 文件名 | `studio_web_wasm.js` |
 | wasm 二进制文件名 | `studio_web_wasm_bg.wasm` |
 | wasm TypeScript d.ts 文件名 | `studio_web_wasm.d.ts` |
-| Cargo feature（过渡期默认壳） | `legacy-shell`（默认不启用） |
 
 ## 2. npm / pnpm 包命名
 

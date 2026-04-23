@@ -5,8 +5,6 @@ edition.workspace = true
 
 [features]
 default = []
-legacy-shell = ["dep:app-server-transport"]
-browser-smoke = ["legacy-shell"]
 
 [lib]
 name = "studio_web_wasm"
@@ -15,7 +13,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 app-server-protocol = { path = "../app-server-protocol" }
-app-server-transport = { path = "../app-server-transport", optional = true }
 scad-scene = { path = "../scad-scene" }
 studio-common = { path = "../studio-common" }
 serde = { workspace = true }

@@ -1,6 +1,4 @@
 // Studio web dev 启动器：websocket-host + Vite dev。
-// 默认 feature 不启用 legacy-shell。legacy 路径保留在 `run_studio_web.ts`
-// （仅供兼容 debug 使用）。
 
 import path from "node:path";
 import { launchWebsocketHost, REPO_ROOT, resolveWsUrl } from "./run_websocket_host";
