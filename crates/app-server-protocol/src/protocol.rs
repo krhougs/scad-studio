@@ -407,3 +407,27 @@ pub enum ServerPushEvent {
 pub struct ServerPushEnvelope {
     pub event: ServerPushEvent,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum ClientEnvelope {
+    Handshake(CapabilityHandshakeRequest),
+    Reconnect(CapabilityHandshakeRequest),
+    Request(ClientRequestEnvelope),
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransportErrorFrame {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum ServerEnvelope {
+    HandshakeAck(CapabilityHandshakeResponse),
+    Response(ServerResponseEnvelope),
+    Push(ServerPushEnvelope),
+    TransportError(TransportErrorFrame),
+    Closed,
+}

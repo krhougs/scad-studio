@@ -7,42 +7,18 @@ use app_server_protocol::{
     RequestId, ServerPushEnvelope, ServerResponseEnvelope, SubscriptionId, WatchSubscribeRequest,
     WatchUnsubscribeRequest,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub use app_server_protocol::{ClientEnvelope, ServerEnvelope, TransportErrorFrame};
 #[cfg(target_arch = "wasm32")]
 pub use websocket_client::WebSocketClientTransport;
 pub use websocket_wire::{
     decode_client_envelope_text, decode_server_envelope_text, encode_client_envelope_text,
     encode_server_envelope_text,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
-pub enum ClientEnvelope {
-    Handshake(CapabilityHandshakeRequest),
-    Reconnect(CapabilityHandshakeRequest),
-    Request(ClientRequestEnvelope),
-    Close,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransportErrorFrame {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
-pub enum ServerEnvelope {
-    HandshakeAck(app_server_protocol::CapabilityHandshakeResponse),
-    Response(ServerResponseEnvelope),
-    Push(ServerPushEnvelope),
-    TransportError(TransportErrorFrame),
-    Closed,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {

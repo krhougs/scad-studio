@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequestKind, ProtocolVersionRange,
-    RequestId, ServerCapabilities, ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope,
-    SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest, WatchSubscriptionAck,
-    WorkspaceCurrentResponse, WorkspaceId, web_file_read_capability,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientEnvelope,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequestKind,
+    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
+    web_file_read_capability,
 };
 use serde_json::Value;
 use studio_common::{
@@ -99,15 +100,19 @@ fn handshake_response() -> CapabilityHandshakeResponse {
 }
 
 fn encode_handshake_ack(ack: &CapabilityHandshakeResponse) -> Vec<u8> {
-    serde_json::to_vec(ack).expect("handshake ack encodes")
+    serde_json::to_vec(&ServerEnvelope::HandshakeAck(ack.clone())).expect("handshake ack encodes")
 }
 
 fn encode_response(envelope: &ServerResponseEnvelope) -> Vec<u8> {
-    serde_json::to_vec(envelope).expect("response encodes")
+    serde_json::to_vec(&ServerEnvelope::Response(envelope.clone())).expect("response encodes")
 }
 
 fn encode_push(envelope: &ServerPushEnvelope) -> Vec<u8> {
-    serde_json::to_vec(envelope).expect("push encodes")
+    serde_json::to_vec(&ServerEnvelope::Push(envelope.clone())).expect("push encodes")
+}
+
+fn encode_server_envelope(envelope: &ServerEnvelope) -> Vec<u8> {
+    serde_json::to_vec(envelope).expect("server envelope encodes")
 }
 
 fn workspace_current_success(request_id: RequestId) -> ServerResponseEnvelope {
@@ -172,9 +177,32 @@ fn dispatch_after_handshake_enqueues_envelope() {
     let outbound = drain_outbound(&mut client);
     assert_eq!(outbound.len(), 1);
     let frame: Value = serde_json::from_slice(&outbound[0]).unwrap();
-    assert_eq!(frame["frame"], "request");
+    assert_eq!(frame["kind"], "request");
     assert_eq!(frame["payload"]["request_id"], 1);
     assert_eq!(frame["payload"]["command"]["command"], "workspace.current");
+
+    let envelope: ClientEnvelope =
+        serde_json::from_slice(&outbound[0]).expect("outbound bytes decode as ClientEnvelope");
+    match envelope {
+        ClientEnvelope::Request(request) => {
+            assert_eq!(request.request_id, RequestId(1));
+        }
+        other => panic!("expected ClientEnvelope::Request, got {other:?}"),
+    }
+}
+
+#[test]
+fn handshake_wire_format_matches_protocol_envelope() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    client.begin_handshake(handshake_request()).unwrap();
+    let outbound = drain_outbound(&mut client);
+    assert_eq!(outbound.len(), 1);
+    let frame: Value = serde_json::from_slice(&outbound[0]).unwrap();
+    assert_eq!(frame["kind"], "handshake");
+
+    let envelope: ClientEnvelope =
+        serde_json::from_slice(&outbound[0]).expect("handshake bytes decode as ClientEnvelope");
+    assert!(matches!(envelope, ClientEnvelope::Handshake(_)));
 }
 
 #[test]
@@ -347,15 +375,21 @@ fn reconnect_replays_pending_and_resubscribes_watch() {
 
     client.begin_handshake(handshake_request()).unwrap();
     let queued = drain_outbound(&mut client);
-    assert_eq!(queued.len(), 4, "handshake + two pending + watch");
+    assert_eq!(queued.len(), 4, "reconnect + two pending + watch");
 
     let frame0: Value = serde_json::from_slice(&queued[0]).unwrap();
-    assert_eq!(frame0["frame"], "handshake");
+    assert_eq!(frame0["kind"], "reconnect");
+    let reconnect_envelope: ClientEnvelope =
+        serde_json::from_slice(&queued[0]).expect("reconnect decodes as ClientEnvelope");
+    assert!(matches!(reconnect_envelope, ClientEnvelope::Reconnect(_)));
     let frame1: Value = serde_json::from_slice(&queued[1]).unwrap();
+    assert_eq!(frame1["kind"], "request");
     assert_eq!(frame1["payload"]["request_id"], req1.0);
     let frame2: Value = serde_json::from_slice(&queued[2]).unwrap();
+    assert_eq!(frame2["kind"], "request");
     assert_eq!(frame2["payload"]["request_id"], req2.0);
     let frame3: Value = serde_json::from_slice(&queued[3]).unwrap();
+    assert_eq!(frame3["kind"], "request");
     assert_eq!(frame3["payload"]["request_id"], watch_id.0);
     assert_eq!(frame3["payload"]["command"]["command"], "watch.subscribe");
 
@@ -379,6 +413,60 @@ fn reconnect_replays_pending_and_resubscribes_watch() {
         event,
         ClientEvent::WatchResubscribed { request_id: rid } if *rid == watch_id
     )));
+}
+
+#[test]
+fn inbound_transport_error_marks_reconnecting_and_records_last_error() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let bytes = encode_server_envelope(&ServerEnvelope::TransportError(
+        app_server_protocol::TransportErrorFrame {
+            message: "upstream hangup".into(),
+        },
+    ));
+    client.receive_inbound(&bytes).unwrap();
+
+    let events = client.drain_events();
+    let close_event = events
+        .iter()
+        .find_map(|event| match event {
+            ClientEvent::TransportClosed { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("TransportClosed event emitted");
+    assert!(!close_event.was_clean);
+    assert_eq!(close_event.reason, "upstream hangup");
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.transport_status, TransportStatus::Reconnecting);
+    match snapshot.last_error {
+        Some(ClientError::ProtocolError { code, message }) => {
+            assert_eq!(code, "transport_error");
+            assert_eq!(message, "upstream hangup");
+        }
+        other => panic!("expected ProtocolError last_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn inbound_closed_marks_reconnecting_with_clean_reason() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let bytes = encode_server_envelope(&ServerEnvelope::Closed);
+    client.receive_inbound(&bytes).unwrap();
+
+    let events = client.drain_events();
+    let close_event = events
+        .iter()
+        .find_map(|event| match event {
+            ClientEvent::TransportClosed { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("TransportClosed event emitted");
+    assert!(close_event.was_clean);
+    assert_eq!(client.snapshot().transport_status, TransportStatus::Reconnecting);
 }
 
 #[test]

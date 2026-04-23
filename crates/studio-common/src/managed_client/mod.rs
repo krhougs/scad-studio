@@ -18,7 +18,10 @@ pub use types::{
 use pending::{PendingKind, PendingRequestInfo};
 use watch::WatchRegistryEntry;
 
-use envelopes::{InboundFrame, build_cancel_envelope, decode_inbound, encode_handshake};
+use envelopes::{
+    InboundFrame, build_cancel_envelope, decode_inbound, encode_handshake,
+    encode_reconnect_envelope,
+};
 use watch::WatchAccumulator;
 
 pub struct ManagedClient<T: AppServerTransportPort> {
@@ -82,7 +85,11 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         &mut self,
         params: CapabilityHandshakeRequest,
     ) -> Result<(), ClientError> {
-        let envelope = encode_handshake(&params);
+        let envelope = if self.transport_status == TransportStatus::Reconnecting {
+            encode_reconnect_envelope(&params)
+        } else {
+            encode_handshake(&params)
+        };
         self.pending_handshake = Some(envelope.clone());
         self.outbound.push_back(envelope);
         if self.transport_status == TransportStatus::Reconnecting {
@@ -176,6 +183,8 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             InboundFrame::HandshakeAck(ack) => self.handle_handshake_ack(ack),
             InboundFrame::Response(response) => self.handle_response(response),
             InboundFrame::Push(push) => self.handle_push(push),
+            InboundFrame::TransportError(frame) => self.handle_transport_error(frame),
+            InboundFrame::Closed => self.handle_transport_closed(),
         }
         Ok(())
     }

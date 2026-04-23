@@ -1,14 +1,15 @@
 use app_server_protocol::{
     CapabilityHandshakeResponse, CommandSuccess, ProtocolError, ProtocolErrorCode, RequestId,
-    ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope, WatchChangedEvent, WatchErrorEvent,
-    WatchSubscriptionAck,
+    ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope, TransportErrorFrame,
+    WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck,
 };
 
 use crate::AppServerTransportPort;
 
 use super::pending::{PendingKind, PendingRequestInfo};
 use super::types::{
-    ClientError, ClientEvent, PreviewPhase, TransportStatus, WatchEventPayload,
+    ClientError, ClientEvent, PreviewPhase, TransportCloseReason, TransportStatus,
+    WatchEventPayload,
 };
 use super::ManagedClient;
 
@@ -135,6 +136,28 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             self.events
                 .push_back(ClientEvent::WatchResubscribed { request_id });
         }
+    }
+
+    pub(super) fn handle_transport_error(&mut self, frame: TransportErrorFrame) {
+        let reason = TransportCloseReason {
+            code: 0,
+            reason: frame.message.clone(),
+            was_clean: false,
+        };
+        self.last_error = Some(ClientError::ProtocolError {
+            code: "transport_error".into(),
+            message: frame.message,
+        });
+        self.mark_transport_closed(reason);
+    }
+
+    pub(super) fn handle_transport_closed(&mut self) {
+        let reason = TransportCloseReason {
+            code: 0,
+            reason: "server closed".into(),
+            was_clean: true,
+        };
+        self.mark_transport_closed(reason);
     }
 
     pub(super) fn handle_push(&mut self, push: ServerPushEnvelope) {
