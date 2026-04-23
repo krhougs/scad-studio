@@ -102,14 +102,35 @@ function MarkdownNode({ node }: { node: MdNode }) {
   );
 }
 
+const SAFE_LINK_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
+
+function isSafeLinkUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (trimmed.startsWith("#") || trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed, "http://local/");
+    if (parsed.origin === "http://local" && !trimmed.includes(":")) {
+      return true;
+    }
+    return SAFE_LINK_SCHEMES.has(parsed.protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function InlineRun({ inline }: { inline: MdInline[] }) {
   return (
     <>
       {inline.map((part, i) => {
         if (part.kind === "text") return <span key={i}>{part.text}</span>;
         if (part.kind === "code") return <code key={i}>{part.text}</code>;
+        if (!isSafeLinkUrl(part.url)) {
+          return <span key={i}>{part.text}</span>;
+        }
         return (
-          <a key={i} href={part.url} target="_blank" rel="noreferrer">
+          <a key={i} href={part.url} target="_blank" rel="noreferrer noopener">
             {part.text}
           </a>
         );

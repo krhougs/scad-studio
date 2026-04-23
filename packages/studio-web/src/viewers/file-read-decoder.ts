@@ -42,12 +42,31 @@ export function decodeFileRead(response: unknown): FileReadDecoded | null {
 }
 
 export function describeFileReadError(err: unknown): string {
+  // ClientError serde shape: { "type": "protocol_error", "payload": { code, message } }
+  // for variants that carry data, or { "type": "cancelled" } / "invalid_handle" / etc.
+  // Earlier versions only looked at the outer level and missed the nested message.
   if (err && typeof err === "object") {
-    const any = err as Record<string, unknown>;
-    const message = any["message"];
-    if (typeof message === "string" && message.length > 0) return message;
-    const code = any["code"];
-    if (typeof code === "string") return code;
+    const outer = err as Record<string, unknown>;
+    const nested = outer["payload"];
+    if (nested && typeof nested === "object") {
+      const inner = nested as Record<string, unknown>;
+      const innerMessage = inner["message"];
+      if (typeof innerMessage === "string" && innerMessage.length > 0) {
+        return innerMessage;
+      }
+      const innerCode = inner["code"];
+      if (typeof innerCode === "string" && innerCode.length > 0) {
+        return innerCode;
+      }
+    }
+    const topMessage = outer["message"];
+    if (typeof topMessage === "string" && topMessage.length > 0) {
+      return topMessage;
+    }
+    const topType = outer["type"];
+    if (typeof topType === "string" && topType.length > 0) return topType;
+    const topCode = outer["code"];
+    if (typeof topCode === "string" && topCode.length > 0) return topCode;
   }
   if (typeof err === "string") return err;
   return "unknown error";
