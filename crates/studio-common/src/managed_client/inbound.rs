@@ -1,0 +1,191 @@
+use app_server_protocol::{
+    CapabilityHandshakeResponse, CommandSuccess, ProtocolError, ProtocolErrorCode, RequestId,
+    ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope, WatchChangedEvent, WatchErrorEvent,
+    WatchSubscriptionAck,
+};
+
+use crate::AppServerTransportPort;
+
+use super::pending::{PendingKind, PendingRequestInfo};
+use super::types::{
+    ClientError, ClientEvent, PreviewPhase, TransportStatus, WatchEventPayload,
+};
+use super::ManagedClient;
+
+impl<T: AppServerTransportPort> ManagedClient<T> {
+    pub(super) fn handle_handshake_ack(&mut self, ack: CapabilityHandshakeResponse) {
+        let was_reconnecting = self.transport_status == TransportStatus::Reconnecting;
+        self.transport_status = TransportStatus::Open;
+        self.pending_handshake = None;
+        self.events.push_back(ClientEvent::HandshakeAccepted {
+            session_token: ack.session_token.clone(),
+            server_capabilities: ack.server_capabilities.clone(),
+            negotiated_version: ack.negotiated_version,
+        });
+        if was_reconnecting {
+            self.events.push_back(ClientEvent::TransportOpen);
+        }
+    }
+
+    pub(super) fn handle_response(&mut self, response: ServerResponseEnvelope) {
+        if self.watches.contains_key(&response.request_id) {
+            match response.result {
+                Ok(CommandSuccess::WatchSubscribed(ack)) => {
+                    self.register_watch_ack(response.request_id, ack);
+                }
+                Ok(other) => {
+                    self.last_error = Some(ClientError::UnknownRequest {
+                        request_id: response.request_id,
+                    });
+                    let _ = other;
+                }
+                Err(error) => {
+                    let client_error = ClientError::ProtocolError {
+                        code: protocol_error_code_label(error.code).into(),
+                        message: error.message,
+                    };
+                    self.last_error = Some(client_error.clone());
+                    self.events.push_back(ClientEvent::RequestFailed {
+                        request_id: response.request_id,
+                        error: client_error,
+                    });
+                }
+            }
+            return;
+        }
+        let Some(info) = self.pending.remove(&response.request_id) else {
+            self.last_error = Some(ClientError::UnknownRequest {
+                request_id: response.request_id,
+            });
+            return;
+        };
+        match response.result {
+            Ok(success) => self.handle_success(response.request_id, info, success),
+            Err(error) => self.handle_protocol_error(response.request_id, info, error),
+        }
+    }
+
+    fn handle_success(
+        &mut self,
+        request_id: RequestId,
+        info: PendingRequestInfo,
+        success: CommandSuccess,
+    ) {
+        match &success {
+            CommandSuccess::WorkspaceCurrent(response) => {
+                self.workspace_current = Some(response.clone());
+            }
+            CommandSuccess::WorkspaceList(response) => {
+                self.workspace_list = Some(response.clone());
+            }
+            CommandSuccess::PreviewReady(_) => {
+                if let Some(task) = self.preview_tasks.get_mut(&request_id) {
+                    task.phase = PreviewPhase::Ready;
+                }
+                self.preview_error = None;
+            }
+            _ => {}
+        }
+        let _ = info;
+        self.events.push_back(ClientEvent::RequestSucceeded {
+            request_id,
+            payload: success,
+        });
+    }
+
+    fn handle_protocol_error(
+        &mut self,
+        request_id: RequestId,
+        info: PendingRequestInfo,
+        error: ProtocolError,
+    ) {
+        let code = protocol_error_code_label(error.code);
+        let client_error = ClientError::ProtocolError {
+            code: code.into(),
+            message: error.message,
+        };
+        if let PendingKind::Preview { .. } = info.kind {
+            if let Some(task) = self.preview_tasks.get_mut(&request_id) {
+                task.phase = PreviewPhase::Error;
+            }
+            self.preview_error = Some(match &client_error {
+                ClientError::ProtocolError { message, .. } => message.clone(),
+                _ => String::new(),
+            });
+        }
+        self.last_error = Some(client_error.clone());
+        self.events.push_back(ClientEvent::RequestFailed {
+            request_id,
+            error: client_error,
+        });
+    }
+
+    fn register_watch_ack(&mut self, request_id: RequestId, ack: WatchSubscriptionAck) {
+        let is_resubscribe = self
+            .watches
+            .get(&request_id)
+            .map(|entry| entry.awaiting_resubscribe)
+            .unwrap_or(false);
+        if let Some(entry) = self.watches.get_mut(&request_id) {
+            entry.subscription_id = Some(ack.subscription_id);
+            entry.awaiting_resubscribe = false;
+        }
+        if is_resubscribe {
+            self.watch_resubscribe_count = self.watch_resubscribe_count.saturating_add(1);
+            self.events
+                .push_back(ClientEvent::WatchResubscribed { request_id });
+        }
+    }
+
+    pub(super) fn handle_push(&mut self, push: ServerPushEnvelope) {
+        match push.event {
+            ServerPushEvent::WatchChanged(event) => self.handle_watch_changed(event),
+            ServerPushEvent::WatchError(event) => self.handle_watch_error(event),
+        }
+    }
+
+    fn handle_watch_changed(&mut self, event: WatchChangedEvent) {
+        let now_ms = self.last_tick_ms;
+        let Some((_request_id, entry)) = self
+            .watches
+            .iter_mut()
+            .find(|(_, entry)| entry.subscription_id.as_ref() == Some(&event.subscription_id))
+        else {
+            return;
+        };
+        entry.accumulator.ingest(now_ms, event.changed_paths);
+    }
+
+    fn handle_watch_error(&mut self, event: WatchErrorEvent) {
+        let Some((&request_id, _)) = self
+            .watches
+            .iter()
+            .find(|(_, entry)| entry.subscription_id.as_ref() == Some(&event.subscription_id))
+        else {
+            return;
+        };
+        let payload = WatchEventPayload::Error {
+            subscription_id: event.subscription_id,
+            message: event.message,
+        };
+        self.watch_last_event_at_ms = Some(self.last_tick_ms);
+        self.events.push_back(ClientEvent::WatchEvent {
+            request_id,
+            payload,
+        });
+    }
+}
+
+fn protocol_error_code_label(code: ProtocolErrorCode) -> &'static str {
+    match code {
+        ProtocolErrorCode::InvalidCommand => "invalid_command",
+        ProtocolErrorCode::InvalidPathHandle => "invalid_path_handle",
+        ProtocolErrorCode::UnsupportedFileTypeForClient => "unsupported_file_type_for_client",
+        ProtocolErrorCode::StalePathHandle => "stale_path_handle",
+        ProtocolErrorCode::Cancelled => "cancelled",
+        ProtocolErrorCode::SessionExpired => "session_expired",
+        ProtocolErrorCode::UnsupportedProtocolVersion => "unsupported_protocol_version",
+        ProtocolErrorCode::NotFound => "not_found",
+        ProtocolErrorCode::Internal => "internal",
+    }
+}

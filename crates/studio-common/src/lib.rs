@@ -3,6 +3,7 @@ mod config;
 mod document;
 mod document_session;
 mod document_workspace;
+mod managed_client;
 mod params;
 mod presets;
 mod preview_state;
@@ -12,6 +13,10 @@ mod workspace;
 pub use app_server_client::{
     AppServerClient, AppServerClientEvent, AppServerTransportError, AppServerTransportEvent,
     AppServerTransportPort,
+};
+pub use managed_client::{
+    ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, ManagedClient, TransportCloseReason,
+    TransportStatus, WatchEventPayload, WatchParams,
 };
 pub use config::{AppConfig, ConfigError, SlicerConfig};
 pub use document::DocumentState;
