@@ -1,0 +1,131 @@
+# scad-studio
+
+一个跨端 OpenSCAD 工作台：桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
+
+## 仓库结构
+
+```
+scad-studio/
+├── crates/                        # Rust workspace
+│   ├── app-server-protocol/       # 协议类型与线格式（ClientEnvelope/ServerEnvelope）
+│   ├── app-server-core/           # 文件系统 I/O、OpenSCAD 调用、watch 聚合
+│   ├── app-server-host/           # 可执行入口（websocket-host、in-process host）
+│   ├── app-server-transport/      # transport trait + WebSocket 客户端实现
+│   ├── studio-common/             # 跨端共享 client 状态机（ManagedClient）
+│   ├── studio-web-wasm/           # wasm-bindgen 桥接（client / mesh / renderer）
+│   ├── studio-app/                # 桌面 egui 壳
+│   ├── scad-ui / scad-scene / scad-data / scad-viewer
+├── packages/                      # pnpm workspace（实际由 bun 驱动）
+│   ├── studio-web-wasm/           # wasm 产物 npm 包（只 re-export generated/）
+│   └── studio-web/                # React PWA：Vite 6 + React 18 + Zustand
+├── scripts/                       # 所有 .ts 脚本由 bun 执行
+├── tests/                         # 跨 crate 的 smoke 入口与 fixture workspace
+├── docs/                          # 架构与设计文档
+└── prompt-archives/               # 已归档的计划存档
+```
+
+## 快速开始
+
+### 一次性准备
+
+```bash
+# Rust
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.117 --locked
+cargo install wasm-pack                               # 仅跑 S1b smoke 需要
+
+# JS
+bun install
+bun run --cwd packages/studio-web exec playwright install chromium   # 仅跑浏览器 smoke 需要
+```
+
+### 开发（热重载）
+
+```bash
+bun run web
+```
+
+启动两件事：
+- `websocket-host` 进程，默认监听 `127.0.0.1:38421`
+- Vite dev server，默认 `http://127.0.0.1:5173`
+
+打开 `http://127.0.0.1:5173` 即可看到五区工作台（Topbar / Rail / Chat / Canvas / Inspector）。
+
+环境变量（全部可选）：
+
+| 变量 | 默认 | 作用 |
+|------|------|------|
+| `SCAD_STUDIO_WS_URL` | `ws://127.0.0.1:38421` | websocket-host 绑定地址（完整 URL，端口从中解析） |
+| `STUDIO_WEB_WORKSPACE` | `workspace/studio-web/` | host 的工作目录根；首次启动会自动创建 |
+| `STUDIO_WEB_PORT` | `5173` | Vite dev 端口 |
+
+单独启动：
+
+```bash
+bun run web:host   # 只启 websocket-host
+bun run web:dev    # 只启 Vite dev（前端）
+```
+
+### 生产构建
+
+```bash
+bun run web:build
+```
+
+产物在 `packages/studio-web/dist/`：带 hash 的 wasm + Workbox Service Worker + `index.html`。`bun run --cwd packages/studio-web preview` 起静态服务器预览；Service Worker 仅在生产模式启用。
+
+### 桌面端
+
+```bash
+cargo run -p studio-app
+```
+
+桌面端内嵌 `app-server-host`（`tokio::mpsc` transport），与 web 端共用 `studio-common::ManagedClient` 状态机与 `app-server-protocol` 类型。
+
+### 测试与 smoke
+
+```bash
+# 全量 web smoke（S1a rust unit → S1b wasm_bindgen → S1c wasm package diff
+# → S2 browser → S3 watch → S4 pwa build）
+bun run web:smoke
+
+# 单条 case
+bun run web:smoke -- --case browser_smoke
+bun run web:smoke -- --case browser_watch_smoke
+bun run web:smoke -- --case wasm_package_smoke
+bun run web:smoke -- --case markdown_view        # Phase 6 扩展
+bun run web:smoke -- --case image_view           # Phase 6 扩展
+bun run web:smoke -- --case scad_split_view      # Phase 6 扩展
+bun run web:smoke -- --case canvas_interaction   # Phase 7 扩展
+bun run web:smoke -- --case parameters_presets   # Phase 7 扩展
+bun run web:smoke -- --case export_slicer        # Phase 7 扩展
+bun run web:smoke -- --case config_settings      # Phase 7 扩展
+bun run web:smoke -- --case scad_autorerender    # Phase 7 扩展
+
+# Rust / TS 其它验证
+cargo test --workspace --tests
+bun run --cwd packages/studio-web typecheck
+bun run --cwd packages/studio-web test:unit
+bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版本对齐
+```
+
+## 进一步阅读
+
+- `docs/getting-started.md`：完整安装流程、环境变量、故障排查
+- `docs/architecture.md`：crate / package 能力边界与交互图
+- `docs/design-system/studio-datasheet-workbench.md`：Buddin datasheet 设计规范
+- `docs/web-platform-limits.md`：Web 端相对桌面端的平台限制
+- `docs/known_issues.md`：已确认但当前 phase 不处理的协议 / 能力缺口
+- `docs/feature-roadmap.md`：整体功能路线图
+- `AGENTS.md`：项目协作规范（工具链、plan mode、架构长期约束）
+- `prompt-archives/`：历次计划存档（不可变历史记录）
+
+## 工具链选择
+
+- Rust 构建：`cargo`
+- JS 运行与测试：`bun`（唯一入口；`pnpm-workspace.yaml` 只作为 workspace 元数据，本项目不调用 `pnpm`）
+- lockfile 策略：只提交 `Cargo.lock` 与 `bun.lock`；`pnpm-lock.yaml` 进 `.gitignore`
+- Playwright 浏览器：chromium（`packages/studio-web/playwright.config.ts`）
+- 浏览器端 wasm：`wasm-bindgen` 0.2.117 + Vite `vite-plugin-wasm` + `vite-plugin-top-level-await`
+
+Python 禁止引入；所有脚本以 `bun` 运行 TypeScript。
