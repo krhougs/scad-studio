@@ -53,6 +53,7 @@ Phase 2 实现时，下列 params 直接**复用** `app-server-protocol` 中同�
 
 ```
 client_create() -> ClientHandle
+client_create_with_timeouts(timeouts: ClientTimeouts) -> ClientHandle
 client_begin_handshake(handle: ClientHandle, params: HandshakeParams) -> Result<(), ClientError>
 client_next_outbound(handle: ClientHandle) -> Option<EnvelopeBytes>
 client_receive_inbound(handle: ClientHandle, bytes: EnvelopeBytes) -> Result<(), ClientError>
@@ -61,6 +62,8 @@ client_cancel(handle: ClientHandle, request_id: RequestId) -> Result<RequestId, 
 client_tick(handle: ClientHandle, now_ms: u64)
 client_destroy(handle: ClientHandle)
 ```
+
+`client_create_with_timeouts` 是 `client_create` 的覆写入口：等价于 `ManagedClient::with_timeouts(NullTransport, timeouts)`，让 JS 在首次握手之前注入自定义 `ClientTimeouts`（见 §6）。`client_create()` 走 `ClientTimeouts::default()`，等价于无参路径。
 
 说明：
 - `client_create()` 仅分配 `ClientHandle` 与空 `ManagedClient` 状态；**不入队**任何 envelope。首次握手由 JS 在 WebSocket `onopen` 后显式调用 `client_begin_handshake(handle, params)` 触发；调用后 `client_next_outbound` 将输出第一条 handshake envelope。
@@ -106,7 +109,7 @@ React 侧**只从 snapshot 读业务状态**，不自行累积。
 | `current_directory_entries` | `Vec<DirectoryEntry>` | 派生自最新 workspace + watch 更新 |
 | `preview_tasks` | `Vec<PreviewTaskState>` | 预览任务状态机 |
 | `active_preview_target` | `Option<PreviewTargetId>` | 当前激活的预览目标 |
-| `preview_error` | `Option<PreviewError>` | 最近一次预览错误 |
+| `preview_error` | `Option<PreviewErrorSummary { code, message }>` | 最近一次预览错误；`code` 来源于 `ProtocolErrorCode`（如 `not_found` / `invalid_command` / `timeout` / `unknown`），`message` 透传服务端消息 |
 | `watch_lifecycle` | `WatchLifecycleSummary` | watch 订阅当前状态（订阅数 / 最近事件时间戳 / 重订阅计数） |
 | `last_error` | `Option<ClientError>` | 便于 UI 显示最近一次错误 |
 | `transport_status` | `TransportStatus` | `{ Connecting / Open / Reconnecting / Closed }` |
@@ -118,17 +121,17 @@ React 侧**只从 snapshot 读业务状态**，不自行累积。
 ```
 mesh_decode(bytes: Uint8Array) -> MeshHandle
 mesh_destroy(handle: MeshHandle)
-
-renderer_create(canvas_id: &str) -> RendererHandle
-renderer_resize(handle: RendererHandle, width: u32, height: u32, device_pixel_ratio: f32)
-renderer_render(handle: RendererHandle, mesh: MeshHandle, camera: CameraState)
-renderer_destroy(handle: RendererHandle)
 ```
 
-设计约束：
-- `renderer_*` 必须幂等：同一 handle 的 `renderer_destroy` 可多次调用（第 2 次是 no-op）；`renderer_resize` 允许在未首次 render 前调用。
-- renderer 不持有 protocol 状态，不调用任何 `client_*`。
-- `CameraState = { position: [f32; 3], target: [f32; 3], up: [f32; 3], fov_y_deg: f32, near: f32, far: f32 }`。
+**Renderer 归属变更（2026-04-23）**：原计划让 wasm 通过 wgpu 控制 canvas renderer 的路径（`renderer_create` / `renderer_resize` / `renderer_render` / `renderer_destroy`）被放弃。原因：`wgpu::Instance::request_adapter` / `Adapter::request_device` 在 wasm32 上返回 `Future`，同步实现需要 `wasm_bindgen_futures::JsFuture`，与 §10 硬约束（wasm 内不持有 JS Promise）直接冲突。
+
+替代方案：**真实 3D 渲染走 TypeScript 侧 Three.js WebGL**（见 `packages/studio-web/src/viewers/mesh-three.ts`）。wasm 只负责把 `PreviewMeshPayload` 的 `positions / normals / vertex_colors / indices` 通过 `ClientEvent::RequestSucceeded` 交给 TS；TS 自行管理 GPU 资源、相机、光照、pointer 交互。
+
+`renderer_*` wasm 导出被保留为 **deprecated stubs**（返回 `"renderer not implemented on web yet"`），仅作向后兼容锚点存在；Phase 2b 之后的任何新功能都不应依赖它们。如果未来重新需要 wasm renderer（例如 desktop 端复用），需要另起 plan 扩展 §10 或由 `scad-scene` 暴露一个接受已 ready 的 `wgpu::Device/Queue/Surface` 的同步 constructor，不在本契约范畴内。
+
+`mesh_decode` / `mesh_destroy` 继续作为 wasm 侧能力；TS 目前只对 `ThreeMf` bytes 走这条路径，`Mesh` variant 直接用 payload 里的 typed arrays 塞 Three.js。
+
+`CameraState`（契约形态保留供未来 renderer 协议复用）：`{ position: [f32; 3], target: [f32; 3], up: [f32; 3], fov_y_deg: f32, near: f32, far: f32 }`。
 
 ## 5. 错误模型
 
@@ -153,18 +156,17 @@ pub enum ClientError {
 ## 6. 超时策略
 
 - 每个请求在入队时记录 `issued_at_ms`（由最近一次 `client_tick(now_ms)` 得到的时间戳）。
-- 默认超时：
-  - 交互类命令（`WorkspaceCurrent` / `WorkspaceList` / `FileRead` / `ConfigLoad` / `ConfigSave` / `SlicerList`）：15000 ms。
-  - 长任务命令（`PreviewRequest` / `ExportRun`）：不设超时（由服务端推送进度 / 完成事件收敛）。
-  - `FileWriteText`：15000 ms。
-  - watch 订阅：**无超时**（长连接订阅）。
+- 默认超时（`ClientTimeouts::default()`）：
+  - 交互类命令（`WorkspaceCurrent` / `WorkspaceList` / `FileRead` / `FileWriteText` / `ConfigLoad` / `ConfigSave` / `SlicerList`）：15000 ms。
+  - 长任务命令（`PreviewRequest` / `ExportRun`）：`None`（不设超时，由服务端推送进度 / 完成事件收敛）。
+  - watch 订阅：`None`（长连接订阅；握手 ack 与活跃订阅都不设 deadline。调用方仍可显式 `ClientTimeouts { watch: Some(ms), ... }` 覆写）。
 - 超时检测纯粹由 `client_tick(now_ms)` 推进；wasm 内部不使用 `setTimeout` / `wasm-bindgen-futures`。
 - 超时命中后：
   - 从 pending registry 移除。
   - 发射 `RequestTimedOut { request_id }`。
   - 后续若 server 再返回该 request_id 的响应，按 `UnknownRequest` 忽略（只进 `last_error`，不再重发事件）。
-- 超时常量写入 `studio-common` 内部常量模块，允许后续通过 `ManagedClient::with_timeouts(...)` 注入覆盖。
-- JS 端不维护 per-request 超时表；只需以 ≥ 30 Hz 或 `requestAnimationFrame` 频率调用 `client_tick`。
+- 超时常量写入 `studio-common` 内部常量模块，允许后续通过 `ManagedClient::with_timeouts(...)` 注入覆盖；wasm 侧对应 `client_create_with_timeouts`。
+- JS 端不维护 per-request 超时表；必须以 `requestAnimationFrame` 或 ≥30 Hz 频率调用 `client_tick`。当前 React PWA 在 `packages/studio-web/src/workbench/workbench-layout.tsx` 与 `routes/settings.tsx` 里都用 `requestAnimationFrame` 驱动。
 
 ## 7. Watch 节流策略
 

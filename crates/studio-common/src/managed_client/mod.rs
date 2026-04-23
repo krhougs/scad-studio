@@ -12,8 +12,9 @@ use app_server_protocol::{CapabilityHandshakeRequest, PathHandle, RequestId};
 use crate::AppServerTransportPort;
 
 pub use types::{
-    ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, PreviewPhase, PreviewTaskState,
-    TransportCloseReason, TransportStatus, WatchEventPayload, WatchLifecycleSummary, WatchParams,
+    ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, PreviewErrorSummary, PreviewPhase,
+    PreviewTaskState, TransportCloseReason, TransportStatus, WatchEventPayload,
+    WatchLifecycleSummary, WatchParams,
 };
 use pending::{PendingKind, PendingRequestInfo};
 use watch::WatchRegistryEntry;
@@ -39,7 +40,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) workspace_list: Option<app_server_protocol::WorkspaceListResponse>,
     pub(super) preview_tasks: HashMap<RequestId, PreviewTaskState>,
     pub(super) active_preview_target: Option<PathHandle>,
-    pub(super) preview_error: Option<String>,
+    pub(super) preview_error: Option<PreviewErrorSummary>,
     pub(super) watch_last_event_at_ms: Option<u64>,
     pub(super) watch_resubscribe_count: u32,
     pub(super) pending_handshake: Option<Vec<u8>>,
@@ -249,7 +250,10 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                         if let Some(task) = self.preview_tasks.get_mut(&request_id) {
                             task.phase = PreviewPhase::TimedOut;
                         }
-                        self.preview_error = Some("preview timed out".into());
+                        self.preview_error = Some(PreviewErrorSummary {
+                            code: "timeout".into(),
+                            message: "preview timed out".into(),
+                        });
                     }
                     PendingKind::WatchSubscribe => {
                         self.watches.remove(&request_id);

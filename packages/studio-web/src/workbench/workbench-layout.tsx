@@ -328,13 +328,19 @@ export function WorkbenchLayout() {
     });
     transport.start();
 
-    const tickHandle = window.setInterval(() => {
-      if (!disposed) client.pump();
-    }, 200);
+    // bridge 契约 §6：tick 频率 ≥30Hz 或 requestAnimationFrame。
+    // 用 rAF 跟着浏览器绘制节拍推进；tab 被隐藏时浏览器会自动降频。
+    let rafHandle = 0;
+    const rafTick = () => {
+      if (disposed) return;
+      client.pump();
+      rafHandle = window.requestAnimationFrame(rafTick);
+    };
+    rafHandle = window.requestAnimationFrame(rafTick);
 
     return () => {
       disposed = true;
-      window.clearInterval(tickHandle);
+      window.cancelAnimationFrame(rafHandle);
       transport.stop();
       client.destroy();
       clientRef.current = null;

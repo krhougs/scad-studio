@@ -43,7 +43,7 @@ export const useUiStore = create<UiStore>((set) => ({
   route: "/",
   openTabs: [],
   activeTabId: null,
-  activeRail: "workspace",
+  activeRail: "chat",
   sidePanelOpen: true,
   isSettingsModalOpen: false,
   inputDraft: "",

@@ -4075,7 +4075,6 @@ dependencies = [
  "serde_json",
  "studio-common",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
 ]

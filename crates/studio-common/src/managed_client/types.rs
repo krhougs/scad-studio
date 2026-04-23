@@ -99,7 +99,8 @@ pub struct ClientTimeouts {
     pub config_save: Option<u64>,
     pub slicer_list: Option<u64>,
     pub export_run: Option<u64>,
-    /// watch 订阅握手超时；订阅 ack 返回后不再受此约束，活跃订阅本身不设超时。
+    /// watch 订阅无超时 —— bridge 契约 §6 明文：watch 是长连接订阅，
+    /// 握手 ack 也不设 deadline。调用方可显式 `Some(ms)` 覆写。
     pub watch: Option<u64>,
 }
 
@@ -115,7 +116,7 @@ impl Default for ClientTimeouts {
             config_save: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             slicer_list: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             export_run: None,
-            watch: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
+            watch: None,
         }
     }
 }
@@ -144,6 +145,13 @@ pub struct WatchLifecycleSummary {
     pub resubscribe_count: u32,
 }
 
+/// Structured preview error — bridge 契约 §3.2 `preview_error` 的具象形态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewErrorSummary {
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientSnapshot {
     pub workspace_current: Option<WorkspaceCurrentResponse>,
@@ -151,7 +159,7 @@ pub struct ClientSnapshot {
     pub current_directory_entries: Vec<WorkspaceEntry>,
     pub preview_tasks: Vec<PreviewTaskState>,
     pub active_preview_target: Option<PathHandle>,
-    pub preview_error: Option<String>,
+    pub preview_error: Option<PreviewErrorSummary>,
     pub watch_lifecycle: WatchLifecycleSummary,
     pub last_error: Option<ClientError>,
     pub transport_status: TransportStatus,

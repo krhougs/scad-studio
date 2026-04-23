@@ -30,19 +30,22 @@ The commands above are the sole source of truth for regenerating `generated/`. S
 
 The `wasm-bindgen` crate version (in `crates/studio-web-wasm/Cargo.toml`) and the `wasm-bindgen-cli` binary used locally must match exactly. Current pin: **0.2.117**.
 
-Verify both sides in one step from the repo root:
+### Pinning strategy
 
-```bash
-bun run check:wasm-bindgen
-```
+Phase 0 toolchain 契约 (`plan-00-toolchain.md`) allowed either (a) pinning `wasm-bindgen-cli` as an npm devDependency, or (b) pinning via a local script + README. This project deliberately picks **option (b)** — the npm devDependency route is avoided because no first-party npm publisher for `wasm-bindgen-cli` exists at the required version, and bundling a post-install downloader would add a non-trivial cargo/network dependency to every `bun install`.
 
-That script parses `crates/studio-web-wasm/Cargo.toml`, invokes `wasm-bindgen --version`, and fails with a non-zero exit code on any mismatch. CI invokes the same script. If the CLI is missing or the wrong version, install the pinned one:
+### How pinning is enforced
+
+1. **Crate side**: `crates/studio-web-wasm/Cargo.toml` declares `wasm-bindgen = "=0.2.117"` (the `=` is significant — `Cargo.lock` refuses to upgrade).
+2. **Host binary side**: developers install the CLI once with `cargo install wasm-bindgen-cli --version 0.2.117 --locked`.
+3. **Drift check**: `bun run check:wasm-bindgen` parses `crates/studio-web-wasm/Cargo.toml`, invokes `wasm-bindgen --version`, and exits non-zero on mismatch. Run it locally before commits; CI runs it as part of S1 acceptance.
+4. **Regenerate drift check**: the S1c smoke (`scripts/smoke/wasm_package_smoke.ts`) snapshots `generated/`, regenerates with the current CLI, and byte-diffs every file. Any matching-version toolchain difference (rustc, feature flags, envs) surfaces here.
+
+If the CLI is missing or the wrong version:
 
 ```bash
 cargo install wasm-bindgen-cli --version 0.2.117 --locked
 ```
-
-The S1c smoke additionally diffs regenerated wrapper output against what is committed under `generated/`, catching drift that even a matching version could introduce.
 
 ## Consumers
 

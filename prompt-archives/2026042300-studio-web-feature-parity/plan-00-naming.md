@@ -33,7 +33,9 @@
 
 | 维度 | 取值 |
 |------|------|
-| `websocket-host` 启动归属 | `scripts/run_studio_web.ts`（dev / smoke 共用） |
+| `websocket-host` 启动归属（dev 路径） | `scripts/run_studio_web_dev.ts`（包 host + Vite） |
+| `websocket-host` 启动归属（smoke 路径） | `scripts/run_smoke.ts` 调用 `scripts/run_websocket_host.ts` |
+| 独立启动 host 的入口 | `scripts/run_websocket_host.ts`（通过 `bun run web:host`） |
 | `SCAD_STUDIO_WS_URL` 默认值 | `ws://127.0.0.1:38421`（完整 URL；端口由该 URL 解析而来，不另设 `SCAD_STUDIO_WS_PORT`） |
 | Vite dev server 端口 | `5173`（Vite 默认） |
 | Service Worker dev 模式 | 禁用（`vite-plugin-pwa` `devOptions.enabled = false`） |
@@ -58,7 +60,7 @@ bun run web:build
 bun run web
 ```
 
-上述命令的调用方统一为 `scripts/run_studio_web.ts`；其他脚本禁止复制粘贴这些命令，必须 `import` 或 `exec` 同一入口以避免漂移。
+上述命令的调用方分布：`scripts/build_studio_web.ts`（构建链）、`scripts/run_studio_web_dev.ts`（dev 路径，内部 import `run_websocket_host.ts`）、`scripts/run_smoke.ts`（smoke 统一入口）。其他脚本禁止复制粘贴这些命令，必须通过 `import` 或 `exec` 同一入口以避免漂移。
 
 ## 5. 测试命令（按 smoke 编号）
 

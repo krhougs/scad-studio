@@ -5,6 +5,7 @@
 // keeps its protocol-state-free boundary (see CLAUDE.md / plan-00).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { BrowserWebSocketTransport } from "../transport/websocket-transport";
 import { WasmClient } from "../wasm-bridge";
 import { buildHandshakeParams } from "../workbench/workbench-wiring";
@@ -77,9 +78,18 @@ export function SettingsRoute() {
       },
     });
     transport.start();
-    const tick = window.setInterval(() => wasmClient.pump(), 200);
+    // bridge 契约 §6：pump 跟 rAF 节拍推进，避免 interval 下的 5Hz 粗颗粒。
+    let rafHandle = 0;
+    let disposed = false;
+    const tick = () => {
+      if (disposed) return;
+      wasmClient.pump();
+      rafHandle = window.requestAnimationFrame(tick);
+    };
+    rafHandle = window.requestAnimationFrame(tick);
     return () => {
-      window.clearInterval(tick);
+      disposed = true;
+      window.cancelAnimationFrame(rafHandle);
       transport.stop();
       wasmClient.destroy();
     };
@@ -105,9 +115,14 @@ export function SettingsRoute() {
   return (
     <section
       className="settings"
-      style={{ padding: "16px", fontFamily: "ui-monospace, monospace" }}
+      style={{ padding: "16px", fontFamily: "var(--sans)" }}
       data-testid="settings-route"
     >
+      <p style={{ margin: "0 0 12px" }}>
+        <Link to="/" data-testid="settings-back">
+          ← workbench
+        </Link>
+      </p>
       <h1>settings</h1>
       {state.kind === "loading" ? (
         <p data-testid="settings-loading">loading config…</p>

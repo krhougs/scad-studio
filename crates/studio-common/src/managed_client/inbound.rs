@@ -8,8 +8,8 @@ use crate::AppServerTransportPort;
 
 use super::pending::{PendingKind, PendingRequestInfo};
 use super::types::{
-    ClientError, ClientEvent, PreviewPhase, TransportCloseReason, TransportStatus,
-    WatchEventPayload,
+    ClientError, ClientEvent, PreviewErrorSummary, PreviewPhase, TransportCloseReason,
+    TransportStatus, WatchEventPayload,
 };
 use super::ManagedClient;
 
@@ -121,8 +121,14 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                     task.phase = PreviewPhase::Error;
                 }
                 self.preview_error = Some(match &client_error {
-                    ClientError::ProtocolError { message, .. } => message.clone(),
-                    _ => String::new(),
+                    ClientError::ProtocolError { code, message } => PreviewErrorSummary {
+                        code: code.clone(),
+                        message: message.clone(),
+                    },
+                    _ => PreviewErrorSummary {
+                        code: "unknown".into(),
+                        message: String::new(),
+                    },
                 });
             } else {
                 self.preview_tasks.remove(&request_id);
