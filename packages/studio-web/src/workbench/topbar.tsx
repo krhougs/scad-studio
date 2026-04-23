@@ -39,7 +39,7 @@ export function Topbar({ workspaceName, wsUrl, status, message }: TopbarProps) {
   return (
     <div className="topbar" data-testid="workbench-topbar">
       <a className="logo" href="/" aria-label="scad studio home">
-        scad studio
+        <img src="/logo-text-white.svg" alt="scad studio" />
       </a>
       <div className="sep-v" aria-hidden="true" />
       <div className="crumb" aria-label="workspace breadcrumb">

@@ -31,13 +31,14 @@
 .topbar .logo {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--sans);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  letter-spacing: var(--tr-tight);
+  height: 22px;
   color: var(--t-1);
   text-transform: none;
+}
+.topbar .logo img {
+  height: 22px;
+  width: auto;
+  display: block;
 }
 
 .topbar .sep-v {
