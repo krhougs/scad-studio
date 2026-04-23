@@ -3,7 +3,7 @@
 // paths, so we pass a relative filename; the server's OpenSCAD CLI resolves
 // it against its working directory (see docs/known_issues.md).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 
@@ -28,6 +28,14 @@ export function ExportPanel({
   const [filename, setFilename] = useState(defaultFilename);
   const [state, setState] = useState<LocalState>("idle");
   const [lastMessage, setLastMessage] = useState<string>("");
+
+  // Switch tabs: reset the filename input and status so the previous mesh's
+  // output name does not carry over and overwrite a different file.
+  useEffect(() => {
+    setFilename(defaultFilename);
+    setState("idle");
+    setLastMessage("");
+  }, [source, defaultFilename]);
 
   const disabled = !client || state === "running";
 

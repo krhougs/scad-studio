@@ -19,6 +19,12 @@ export const HOST_WORKSPACE = path.join(
 export type HarnessOptions = {
   bindPort: number;
   vitePort: number;
+  /**
+   * Extra env overrides applied to the `websocket-host` subprocess. Used by
+   * `@config-settings` to point `dirs::config_dir()` at a throwaway `HOME`
+   * so the test never writes to the developer's real scad-studio config.
+   */
+  hostEnv?: Record<string, string>;
 };
 
 export type HarnessHandle = {
@@ -53,7 +59,11 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
           "--bind",
           hostBind,
         ],
-        { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+        {
+          cwd: REPO_ROOT,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, ...(opts.hostEnv ?? {}) },
+        },
       );
       hostProc = host;
       host.stdout?.on("data", () => {});

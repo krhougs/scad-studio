@@ -33,6 +33,15 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
   const [appliedDefines, setAppliedDefines] = useState<string[]>([]);
   const [previewStatus, setPreviewStatus] = useState<string>("preview pending");
 
+  // Reset per-file state when the active .scad path changes so overrides
+  // and preset caches do not leak between tabs.
+  useEffect(() => {
+    setOverrides([]);
+    setAppliedDefines([]);
+    setPresets([]);
+    setPresetError(null);
+  }, [path]);
+
   const presetPath = useMemo(() => derivePresetPath(path), [path]);
   const presetPathLabel = useMemo(() => derivePresetPathLabel(path), [path]);
 
@@ -93,8 +102,11 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
       })
       .catch((err) => {
         const message = describeFileReadError(err);
-        // "file not found" is a normal initial state for a fresh scad file.
-        if (/not found/i.test(message)) {
+        // A missing preset file is the normal initial state for a fresh
+        // .scad. The server may report this as "not found", as a protocol
+        // code (`not_found`), or as the underlying OS text "No such file"
+        // / "cannot find"; accept any of those as the empty case.
+        if (isMissingPresetError(err, message)) {
           setPresets([]);
           setPresetLoading(false);
           setPresetError(null);
@@ -226,4 +238,17 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
       </div>
     </div>
   );
+}
+
+function isMissingPresetError(err: unknown, message: string): boolean {
+  if (/not found|no such file|cannot find/i.test(message)) return true;
+  if (err && typeof err === "object") {
+    const outer = err as Record<string, unknown>;
+    const payload = outer["payload"] as Record<string, unknown> | undefined;
+    const code =
+      (payload && typeof payload["code"] === "string" ? (payload["code"] as string) : undefined) ??
+      (typeof outer["code"] === "string" ? (outer["code"] as string) : undefined);
+    if (typeof code === "string" && /not_?found/i.test(code)) return true;
+  }
+  return false;
 }
