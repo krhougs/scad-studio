@@ -6,6 +6,7 @@ import "./styles/tokens.css";
 import "./styles/workbench.css";
 import "./styles/workbench-zones.css";
 import "./styles/primitives.css";
+import "./styles/viewers.css";
 
 const root = document.getElementById("app");
 if (!root) {

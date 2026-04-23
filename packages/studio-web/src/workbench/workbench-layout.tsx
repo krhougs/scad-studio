@@ -1,26 +1,26 @@
 // Workbench layout: CSS Grid 五区外框 + transport/protocol 生命周期接线。
-// Phase 5 补齐：
-//   - handshake ack 后自动订阅 directory watch
-//   - watch event 到达 → 重拉 root workspace_list + 已展开目录列表
-//   - Inspector 树形递归：directory entry 点击展开/折叠
-//   - preview_request 的 PreviewReadyResponse 如果有 mesh / 3mf bytes，
-//     调用 wasm mesh_decode 验证 bridge 接收能力并展示元数据
+// Phase 5 已接好 handshake / watch / inspector 树 / mesh_decode。
+// Phase 6 补上文档标签系统（Tab Bar + DocumentTab Zustand 状态 + 多 viewer
+// 挂载到 Canvas Zone）。Inspector 点击文件 → 按扩展名路由到对应 viewer tab；
+// 不支持的扩展名仅更新状态条消息，不开 tab。
 //
-// 本文件只做 React 壳层的 wire-up 与 UI 派发；所有协议状态机在 wasm 里。
+// 协议业务状态仍在 wasm 内；Zustand 只存 UI 壳状态（openTabs / activeTabId
+// / sidePanelOpen 等）。viewer 自己发 FileRead / PreviewRequest，tab 只记
+// id / label / path / kind。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as WasmMod from "@scad-studio/studio-web-wasm";
 import { WasmClient } from "../wasm-bridge";
+import { useUiStore } from "../state/ui-store";
 import { CanvasZone } from "./canvas-zone";
 import { ChatZone } from "./chat-zone";
 import {
   Inspector,
   type InspectorDirectoryNode,
   type InspectorEntry,
-  type InspectorMeshSummary,
 } from "./inspector";
 import { pathKey, pathLabel } from "./path-utils";
 import { Rail } from "./rail";
+import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
 import {
   createTransport,
@@ -33,9 +33,6 @@ type Phase =
   | "connecting"
   | "handshaking"
   | "ready"
-  | "preview-pending"
-  | "preview-ready"
-  | "preview-error"
   | "error";
 
 type ProtocolEntry = { path: unknown; kind: "directory" | "file" };
@@ -69,12 +66,8 @@ function phaseToStatus(phase: Phase): TopbarStatus {
     case "handshaking":
       return "connecting";
     case "ready":
-    case "preview-ready":
       return "ready";
-    case "preview-pending":
-      return "busy";
     case "error":
-    case "preview-error":
       return "error";
   }
 }
@@ -88,8 +81,6 @@ function toInspectorEntry(entry: ProtocolEntry): InspectorEntry {
 }
 
 function extractWorkspaceListEntries(response: unknown): ProtocolEntry[] {
-  // `dispatchWorkspaceList` resolves with the full `CommandSuccess` value,
-  // serde-serialized as `{ "type": "workspace_list", "payload": { entries } }`.
   if (!response || typeof response !== "object") return [];
   const outer = response as Record<string, unknown>;
   const inner = (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
@@ -97,88 +88,26 @@ function extractWorkspaceListEntries(response: unknown): ProtocolEntry[] {
   return Array.isArray(entries) ? entries : [];
 }
 
-function extractMeshSummary(
-  payload: unknown,
-  targetLabel: string,
-  wasm: typeof WasmMod,
-): InspectorMeshSummary | null {
-  if (!payload || typeof payload !== "object") return null;
-  // `dispatchPreviewRequest` resolves with `CommandSuccess::PreviewReady`,
-  // serde-serialized as `{ "type": "preview_ready", "payload": {...} }`.
-  const outer = payload as Record<string, unknown>;
-  const ready = ((outer["payload"] as Record<string, unknown> | undefined) ?? outer);
-  const artifact = ready["artifact"] as Record<string, unknown> | undefined;
-  if (!artifact) return null;
-  const format = artifact["format"];
-  const inner = artifact["payload"] as Record<string, unknown> | undefined;
-  if (!inner) return null;
-  if (format === "mesh") {
-    const positions = inner["positions"];
-    const indices = inner["indices"];
-    if (Array.isArray(positions) && Array.isArray(indices)) {
-      return { label: targetLabel, vertices: positions.length, indices: indices.length };
-    }
-    return null;
-  }
-  if (format === "three_mf") {
-    return summarizeThreeMfArtifact(inner, targetLabel, wasm);
-  }
-  return null;
-}
-
-function summarizeThreeMfArtifact(
-  inner: Record<string, unknown>,
-  targetLabel: string,
-  wasm: typeof WasmMod,
-): InspectorMeshSummary | null {
-  const bytes = inner["bytes"];
-  const u8 =
-    bytes instanceof Uint8Array
-      ? bytes
-      : Array.isArray(bytes)
-        ? Uint8Array.from(bytes as number[])
-        : null;
-  if (!u8) return null;
-  try {
-    const handle = wasm.mesh_decode(u8);
-    wasm.mesh_destroy(handle);
-    return {
-      label: targetLabel,
-      vertices: Math.floor(u8.length / 32),
-      indices: u8.length,
-    };
-  } catch (err) {
-    console.warn("mesh_decode failed:", err);
-    return null;
-  }
-}
-
 export function WorkbenchLayout() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
   const [snapshot, setSnapshot] = useState<Snapshot>(null);
-  const [previewTarget, setPreviewTarget] = useState<string>("—");
-  const [meshSummary, setMeshSummary] = useState<InspectorMeshSummary | null>(
-    null,
-  );
   const [expanded, setExpanded] = useState<Map<string, InspectorDirectoryNode>>(
     () => new Map(),
   );
-  // Root entries live in React state, not derived from snapshot.workspace_list,
-  // because ManagedClient overwrites that field with every workspace.list
-  // response (including subdirectory expansions) and the tree root would be
-  // clobbered. Only the dedicated refresh paths below touch rootEntries.
   const [rootEntries, setRootEntries] = useState<InspectorEntry[]>([]);
   const [rootLoaded, setRootLoaded] = useState(false);
+  const [clientReady, setClientReady] = useState(false);
+
+  const openTabs = useUiStore((s) => s.openTabs);
+  const activeTabId = useUiStore((s) => s.activeTabId);
+  const openTab = useUiStore((s) => s.openTab);
+  const closeTab = useUiStore((s) => s.closeTab);
+  const setActiveTab = useUiStore((s) => s.setActiveTab);
 
   const wsUrl = useMemo(() => resolveWsUrl(), []);
   const clientRef = useRef<WasmClient | null>(null);
   const expandedRef = useRef<Map<string, InspectorDirectoryNode>>(new Map());
-  // watchActiveRef gates the one-time subscribeDirectoryWatch call on the
-  // very first handshake. ManagedClient retains the watch registry across
-  // transport close and replays the subscribe envelope after reconnect, so
-  // we must not reset this flag in onClose — that would duplicate the
-  // subscription server-side on every reconnect.
   const watchActiveRef = useRef(false);
 
   const setExpandedBoth = useCallback(
@@ -319,6 +248,7 @@ export function WorkbenchLayout() {
       }),
     );
     clientRef.current = client;
+    setClientReady(true);
 
     const transport = createTransport({
       wsUrl,
@@ -354,6 +284,7 @@ export function WorkbenchLayout() {
       transport.stop();
       client.destroy();
       clientRef.current = null;
+      setClientReady(false);
       watchActiveRef.current = false;
     };
   }, [wsUrl, refreshRootListing, refreshExpandedDirectories]);
@@ -362,31 +293,25 @@ export function WorkbenchLayout() {
   const entries: InspectorEntry[] = rootEntries;
   const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
 
-  const handlePreview = useCallback((entry: InspectorEntry) => {
-    const client = clientRef.current;
-    if (!client) return;
-    setPreviewTarget(entry.label);
-    setMeshSummary(null);
-    setPhase("preview-pending");
-    setMessage("preview pending");
-    client
-      .dispatchPreviewRequest({
-        source: entry.path,
-        defines: [],
-        kind: "geometry_artifact",
-        configured_openscad_path: null,
-      })
-      .then((payload) => {
-        setPhase("preview-ready");
-        setMessage("preview ready");
-        const summary = extractMeshSummary(payload, entry.label, WasmMod);
-        if (summary) setMeshSummary(summary);
-      })
-      .catch((err) => {
-        setPhase("preview-error");
-        setMessage(`preview error: ${describeError(err)}`);
-      });
-  }, []);
+  const handleInspectorOpen = useCallback(
+    (entry: InspectorEntry) => {
+      const kind = resolveTabKind(entry.label);
+      if (!kind) {
+        const ext = extensionOf(entry.label) || "(no extension)";
+        setMessage(`unsupported file type: ${ext}`);
+        return;
+      }
+      const id = pathKey(entry.path);
+      openTab({ id, label: entry.label, path: entry.path, kind });
+      setMessage(`opened ${entry.label}`);
+    },
+    [openTab],
+  );
+
+  const activeTab =
+    openTabs.find((tab) => tab.id === activeTabId) ?? null;
+  const previewTargetLabel = activeTab ? activeTab.label : "—";
+  const client = clientReady ? clientRef.current : null;
 
   return (
     <div className="workbench" data-testid="workbench-layout">
@@ -401,17 +326,23 @@ export function WorkbenchLayout() {
       <CanvasZone
         phase={phase}
         message={message}
-        previewTargetLabel={previewTarget}
+        previewTargetLabel={previewTargetLabel}
+        tabs={openTabs}
+        activeTabId={activeTabId}
+        onActivateTab={setActiveTab}
+        onCloseTab={closeTab}
+        onPreviewStatus={setMessage}
+        client={client}
       />
       <Inspector
         rootName={rootName}
         entries={entries}
         entriesLoaded={entriesLoaded}
-        onRequestPreview={handlePreview}
+        onRequestPreview={handleInspectorOpen}
         onExpandDirectory={handleExpandDirectory}
         onCollapseDirectory={handleCollapseDirectory}
-        previewTargetLabel={previewTarget}
-        meshSummary={meshSummary}
+        previewTargetLabel={previewTargetLabel}
+        meshSummary={null}
         expandedDirectories={expanded}
         directoryKey={pathKey}
       />
@@ -435,7 +366,7 @@ async function onHandshakeAck(
     await client.dispatchWorkspaceCurrent();
   } catch (err) {
     if (ctx.disposedRef()) return;
-    ctx.setPhase("preview-error");
+    ctx.setPhase("error");
     ctx.setMessage(`initial flow: ${describeError(err)}`);
     return;
   }

@@ -1,12 +1,26 @@
 // Zustand store for UI shell state only. No protocol business state is allowed
 // here; those fields live inside the wasm client snapshot.
+//
+// Phase 6: `openTabs` holds DocumentTab descriptors (id/label/path/kind) only.
+// Never store document contents (markdown source, image bytes, scad text) in
+// this store — contents are loaded on demand inside viewer components.
 
 import { create } from "zustand";
 
+export type DocumentTabKind = "markdown" | "image" | "scad" | "mesh";
+
+export type DocumentTab = {
+  id: string;
+  label: string;
+  path: unknown;
+  kind: DocumentTabKind;
+};
+
 export type UiState = {
   route: string;
-  openTabs: string[];
-  activeTab: string | null;
+  openTabs: DocumentTab[];
+  activeTabId: string | null;
+  activeRail: string;
   sidePanelOpen: boolean;
   isSettingsModalOpen: boolean;
   inputDraft: string;
@@ -14,9 +28,10 @@ export type UiState = {
 
 export type UiActions = {
   setRoute: (route: string) => void;
-  openTab: (tabId: string) => void;
-  closeTab: (tabId: string) => void;
-  focusTab: (tabId: string) => void;
+  openTab: (tab: DocumentTab) => void;
+  closeTab: (id: string) => void;
+  setActiveTab: (id: string) => void;
+  setActiveRail: (id: string) => void;
   toggleSidePanel: () => void;
   setSettingsModalOpen: (value: boolean) => void;
   setInputDraft: (value: string) => void;
@@ -27,31 +42,34 @@ export type UiStore = UiState & UiActions;
 export const useUiStore = create<UiStore>((set) => ({
   route: "/",
   openTabs: [],
-  activeTab: null,
+  activeTabId: null,
+  activeRail: "workspace",
   sidePanelOpen: true,
   isSettingsModalOpen: false,
   inputDraft: "",
   setRoute: (route) => set({ route }),
-  openTab: (tabId) =>
+  openTab: (tab) =>
     set((prev) => {
-      if (prev.openTabs.includes(tabId)) {
-        return { activeTab: tabId };
+      const existing = prev.openTabs.find((t) => t.id === tab.id);
+      if (existing) {
+        return { activeTabId: tab.id };
       }
       return {
-        openTabs: [...prev.openTabs, tabId],
-        activeTab: tabId,
+        openTabs: [...prev.openTabs, tab],
+        activeTabId: tab.id,
       };
     }),
-  closeTab: (tabId) =>
+  closeTab: (id) =>
     set((prev) => {
-      const nextTabs = prev.openTabs.filter((id) => id !== tabId);
+      const nextTabs = prev.openTabs.filter((tab) => tab.id !== id);
       const nextActive =
-        prev.activeTab === tabId
-          ? (nextTabs[nextTabs.length - 1] ?? null)
-          : prev.activeTab;
-      return { openTabs: nextTabs, activeTab: nextActive };
+        prev.activeTabId === id
+          ? (nextTabs[nextTabs.length - 1]?.id ?? null)
+          : prev.activeTabId;
+      return { openTabs: nextTabs, activeTabId: nextActive };
     }),
-  focusTab: (tabId) => set({ activeTab: tabId }),
+  setActiveTab: (id) => set({ activeTabId: id }),
+  setActiveRail: (id) => set({ activeRail: id }),
   toggleSidePanel: () => set((prev) => ({ sidePanelOpen: !prev.sidePanelOpen })),
   setSettingsModalOpen: (value) => set({ isSettingsModalOpen: value }),
   setInputDraft: (value) => set({ inputDraft: value }),

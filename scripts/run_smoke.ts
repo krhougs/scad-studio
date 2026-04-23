@@ -4,7 +4,9 @@
 //   bun scripts/run_smoke.ts            # 等价于 --case all
 //
 // 支持 case：wasm_package_smoke / browser_smoke / browser_watch_smoke / all
+//           / markdown_view / image_view / scad_split_view（Phase 6 扩展）
 // S1a / S1b / S4 通过直接命令调度。
+// all 仅覆盖 S1a-S4 基本用例，不跑 Phase 6 扩展用例（需手动触发）。
 
 import path from "node:path";
 import { runWasmPackageSmoke } from "./smoke/wasm_package_smoke";
@@ -14,7 +16,20 @@ type Case =
   | "wasm_package_smoke"
   | "browser_smoke"
   | "browser_watch_smoke"
+  | "markdown_view"
+  | "image_view"
+  | "scad_split_view"
   | "all";
+
+const VALID_CASES: readonly Case[] = [
+  "wasm_package_smoke",
+  "browser_smoke",
+  "browser_watch_smoke",
+  "markdown_view",
+  "image_view",
+  "scad_split_view",
+  "all",
+];
 
 function parseCase(argv: string[]): Case {
   for (let i = 0; i < argv.length; i += 1) {
@@ -22,15 +37,10 @@ function parseCase(argv: string[]): Case {
     if (arg === "--case") {
       const value = argv[i + 1];
       if (!value) fail(`missing value for --case`);
-      if (
-        value !== "wasm_package_smoke" &&
-        value !== "browser_smoke" &&
-        value !== "browser_watch_smoke" &&
-        value !== "all"
-      ) {
+      if (!VALID_CASES.includes(value as Case)) {
         fail(`unknown case: ${value}`);
       }
-      return value;
+      return value as Case;
     }
     if (arg === "--") continue;
     if (arg === "-h" || arg === "--help") {
@@ -47,7 +57,7 @@ function fail(message: string): never {
 
 function printUsage(code: number): never {
   console.log(
-    "usage: bun scripts/run_smoke.ts [--case wasm_package_smoke|browser_smoke|browser_watch_smoke|all]",
+    "usage: bun scripts/run_smoke.ts [--case " + VALID_CASES.join("|") + "]",
   );
   process.exit(code);
 }
@@ -85,11 +95,15 @@ async function runS1bWasmBindgen(): Promise<number> {
   ]);
 }
 
-async function runPlaywrightSpec(spec: string): Promise<number> {
-  return runCommand(
-    ["bun", "x", "playwright", "test", spec],
-    path.join(REPO_ROOT, "packages", "studio-web"),
-  );
+async function runPlaywrightSpec(
+  spec: string,
+  grep?: string,
+): Promise<number> {
+  const cmd = ["bun", "x", "playwright", "test", spec];
+  if (grep) {
+    cmd.push("--grep", grep);
+  }
+  return runCommand(cmd, path.join(REPO_ROOT, "packages", "studio-web"));
 }
 
 async function runS2BrowserSmoke(): Promise<number> {
@@ -106,6 +120,10 @@ async function runS4PwaBuild(): Promise<number> {
 
 async function runS1c(): Promise<number> {
   return runWasmPackageSmoke();
+}
+
+async function runPhase6Case(tag: string): Promise<number> {
+  return runPlaywrightSpec("tests/playwright/browser-smoke.spec.ts", tag);
 }
 
 async function commandExists(command: string): Promise<boolean> {
@@ -147,6 +165,12 @@ async function dispatch(which: Case): Promise<number> {
       return runS2BrowserSmoke();
     case "browser_watch_smoke":
       return runS3BrowserWatchSmoke();
+    case "markdown_view":
+      return runPhase6Case("@markdown");
+    case "image_view":
+      return runPhase6Case("@image");
+    case "scad_split_view":
+      return runPhase6Case("@scad-split");
     case "all":
       return runAll();
   }

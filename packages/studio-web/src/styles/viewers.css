@@ -1,0 +1,238 @@
+/*
+ * Tab Bar + viewer surfaces. Added in Phase 6 alongside the document tab
+ * system. All styles remain dark-only, 1px hairline, zero corner radius per
+ * docs/design-system/studio-datasheet-workbench.md.
+ */
+
+/* Tab Bar ------------------------------------------------------------- */
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-height: 32px;
+  border-bottom: var(--border-hairline);
+  background: rgba(11, 11, 13, 0.78);
+  z-index: 3;
+  padding: 0 var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tabbar--empty {
+  align-items: center;
+}
+
+.tabbar__empty-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.tabbar__tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-right: var(--border-hairline);
+  border-bottom: 1px solid transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-tight);
+}
+
+.tabbar__tab.is-active {
+  color: var(--fg-primary);
+  border-bottom-color: var(--fg-primary);
+}
+
+.tabbar__label {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-1);
+}
+
+.tabbar__close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: 0 var(--space-2);
+  line-height: 1;
+}
+
+.tabbar__close:hover {
+  color: var(--fg-primary);
+}
+
+/* Generic viewer --------------------------------------------------------- */
+.viewer {
+  position: absolute;
+  inset: 32px 0 40px 0; /* tab bar height above, status bar below */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-page);
+}
+
+.viewer__loading,
+.viewer__error,
+.viewer__status {
+  margin: var(--space-4);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-tight);
+}
+
+.viewer__error {
+  color: var(--signal-err);
+}
+
+.viewer__chrome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.viewer__chrome-stats {
+  display: inline-flex;
+  gap: var(--space-3);
+}
+
+.viewer__chrome-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.viewer__stage {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.viewer__stage img {
+  max-width: none;
+  max-height: none;
+  display: block;
+  user-select: none;
+}
+
+/* Markdown body ------------------------------------------------------- */
+.markdown-body {
+  padding: var(--space-5) var(--space-6);
+  overflow: auto;
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  color: var(--fg-body);
+  line-height: 1.55;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+  letter-spacing: var(--tracking-medium);
+}
+
+.markdown-body h1 {
+  font-size: var(--fs-xl);
+}
+.markdown-body h2 {
+  font-size: var(--fs-lg);
+}
+.markdown-body h3 {
+  font-size: var(--fs-base);
+}
+
+.markdown-body p {
+  margin: 0 0 var(--space-3);
+}
+
+.markdown-body ul {
+  padding-left: var(--space-5);
+  margin: 0 0 var(--space-3);
+}
+
+.markdown-body__code {
+  background: var(--bg-surface);
+  border: var(--border-hairline);
+  padding: var(--space-3);
+  overflow-x: auto;
+  margin: 0 0 var(--space-3);
+}
+
+.markdown-body code {
+  background: var(--bg-surface);
+  padding: 0 4px;
+}
+
+/* Scad split viewer --------------------------------------------------- */
+.viewer--scad-split {
+  flex-direction: row;
+  gap: 0;
+}
+
+.scad-split__pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: var(--border-hairline);
+}
+
+.scad-split__pane:last-child {
+  border-right: 0;
+}
+
+.scad-split__title {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.scad-split__code {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.scad-split__status {
+  margin: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+
+.scad-split__status.ready {
+  color: var(--signal-ok);
+}
+.scad-split__status.error {
+  color: var(--signal-err);
+}

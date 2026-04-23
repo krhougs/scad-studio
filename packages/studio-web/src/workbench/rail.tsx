@@ -53,7 +53,7 @@ function Glyph({ shape }: { shape: RailItem["shape"] }) {
 }
 
 function RailButton({ item, active }: { item: RailItem; active: boolean }) {
-  const focusTab = useUiStore((s) => s.focusTab);
+  const setActiveRail = useUiStore((s) => s.setActiveRail);
   return (
     <button
       type="button"
@@ -61,7 +61,7 @@ function RailButton({ item, active }: { item: RailItem; active: boolean }) {
       aria-label={item.label}
       title={item.label}
       aria-current={active ? "page" : undefined}
-      onClick={() => focusTab(item.id)}
+      onClick={() => setActiveRail(item.id)}
       data-testid={`rail-${item.id}`}
     >
       <Glyph shape={item.shape} />
@@ -70,16 +70,16 @@ function RailButton({ item, active }: { item: RailItem; active: boolean }) {
 }
 
 export function Rail() {
-  const activeTab = useUiStore((s) => s.activeTab);
+  const activeRail = useUiStore((s) => s.activeRail);
   return (
     <nav className="workbench__rail" aria-label="primary">
       {ITEMS.map((item) => (
-        <RailButton key={item.id} item={item} active={activeTab === item.id} />
+        <RailButton key={item.id} item={item} active={activeRail === item.id} />
       ))}
       <div className="rail__separator" aria-hidden="true" />
       <div className="rail__grow" />
       {FOOTER_ITEMS.map((item) => (
-        <RailButton key={item.id} item={item} active={activeTab === item.id} />
+        <RailButton key={item.id} item={item} active={activeRail === item.id} />
       ))}
     </nav>
   );

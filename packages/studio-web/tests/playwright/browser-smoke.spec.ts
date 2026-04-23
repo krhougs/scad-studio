@@ -109,11 +109,66 @@ test("workspace info appears after handshake", async ({ page }) => {
 
 test("preview request completes or reports error", async ({ page }) => {
   await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
-  const entries = page.getByTestId("entries").locator("button");
-  await entries.first().waitFor({ state: "visible", timeout: 30_000 });
-  await entries.first().click();
+  // Open the mesh fixture explicitly; first entry is alphabetically README.md
+  // which now routes to the markdown tab and never fires PreviewRequest.
+  await page.getByTestId("entry-model.stl").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-model.stl").click();
   await expect(page.getByTestId("message")).toContainText(
     /preview ready|preview error/,
+    { timeout: 30_000 },
+  );
+});
+
+test("@markdown clicking README.md opens markdown viewer", async ({ page }) => {
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.getByTestId("entry-README.md").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-README.md").click();
+  await expect(page.getByTestId("tabbar")).toBeVisible();
+  await expect(page.getByTestId("tab-README.md")).toBeVisible();
+  const body = page.getByTestId("markdown-body");
+  await expect(body).toBeVisible({ timeout: 15_000 });
+  await expect(body).toContainText("studio-web smoke fixture");
+});
+
+test("@image clicking screenshot.png opens image viewer", async ({ page }) => {
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.getByTestId("entry-screenshot.png").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-screenshot.png").click();
+  await expect(page.getByTestId("image-viewer")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("image-size")).toBeVisible();
+  await expect(page.getByTestId("image-scale")).toContainText("scale");
+});
+
+test("@scad-split clicking cube.scad opens scad split viewer", async ({
+  page,
+}) => {
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  // cube.scad lives under examples/; expand the directory first.
+  await page.getByTestId("entry-examples").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-examples").click();
+  await page.getByTestId("entry-cube.scad").waitFor({
+    state: "visible",
+    timeout: 15_000,
+  });
+  await page.getByTestId("entry-cube.scad").click();
+  await expect(page.getByTestId("scad-split-viewer")).toBeVisible();
+  await expect(page.getByTestId("scad-source")).not.toBeEmpty();
+  await expect(page.getByTestId("scad-preview-status")).toContainText(
+    /preview ready|preview error|preview pending/,
     { timeout: 30_000 },
   );
 });
