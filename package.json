@@ -6,11 +6,14 @@
     "packages/*"
   ],
   "scripts": {
-    "web": "bun scripts/run_studio_web.ts",
-    "web:smoke": "bash tests/studio_web_smoke.sh",
+    "web": "bun scripts/run_studio_web_dev.ts",
     "web:dev": "bun run --cwd packages/studio-web dev",
+    "web:host": "bun scripts/run_websocket_host.ts",
     "web:build": "bun scripts/build_studio_web.ts",
+    "web:smoke": "bun scripts/run_smoke.ts",
     "web:smoke:browser": "bun run --cwd packages/studio-web test:e2e",
+    "web:smoke:legacy": "bash tests/studio_web_smoke.sh",
+    "web:legacy": "bun scripts/run_studio_web.ts",
     "check:wasm-bindgen": "bun scripts/check_wasm_bindgen_version.ts"
   }
 }
