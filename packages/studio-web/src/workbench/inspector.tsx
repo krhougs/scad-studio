@@ -10,6 +10,7 @@ export type InspectorEntry = {
 type InspectorProps = {
   rootName: string;
   entries: InspectorEntry[];
+  entriesLoaded: boolean;
   onRequestPreview: (path: unknown) => void;
   previewTargetLabel: string;
 };
@@ -17,6 +18,7 @@ type InspectorProps = {
 export function Inspector({
   rootName,
   entries,
+  entriesLoaded,
   onRequestPreview,
   previewTargetLabel,
 }: InspectorProps) {
@@ -33,8 +35,10 @@ export function Inspector({
       <div className="inspector__body">
         <section className="inspector__section" data-testid="inspector-entries">
           <h5>entries</h5>
-          {entries.length === 0 ? (
+          {!entriesLoaded ? (
             <p className="chat__placeholder">workspace entries loading…</p>
+          ) : entries.length === 0 ? (
+            <p className="chat__placeholder">workspace is empty.</p>
           ) : (
             <ul className="inspector__list" data-testid="entries">
               {entries.map((entry, idx) => (

@@ -183,10 +183,17 @@ export function WorkbenchLayout() {
         client.setSender(null);
         client.markTransportClosed(reason);
         client.pump();
+        setPhase(reason.was_clean ? "connecting" : "error");
+        setMessage(
+          reason.was_clean
+            ? `transport closed (${reason.code}); reconnecting...`
+            : `transport lost (${reason.code}${reason.reason ? `: ${reason.reason}` : ""})`,
+        );
       },
       onError: (msg) => {
         if (disposed) return;
         setMessage(msg);
+        setPhase("error");
       },
     });
     transportRef.current = transport;
@@ -207,6 +214,7 @@ export function WorkbenchLayout() {
     };
   }, [wsUrl]);
 
+  const entriesLoaded = snapshot?.workspace_list !== undefined;
   const entries: InspectorEntry[] = (snapshot?.workspace_list?.entries ?? []).map(
     (entry) => ({
       label: formatPath(entry.path),
@@ -258,6 +266,7 @@ export function WorkbenchLayout() {
       <Inspector
         rootName={rootName}
         entries={entries}
+        entriesLoaded={entriesLoaded}
         onRequestPreview={handlePreview}
         previewTargetLabel={previewTarget}
       />
