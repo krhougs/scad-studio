@@ -88,7 +88,7 @@ pub enum TransportStatus {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientTimeouts {
     pub workspace_current: Option<u64>,
     pub workspace_list: Option<u64>,

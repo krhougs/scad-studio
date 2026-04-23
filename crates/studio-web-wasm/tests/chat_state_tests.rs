@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-shell")]
+
 use studio_web_wasm::{FakeChatState, MessageRole};
 
 #[test]

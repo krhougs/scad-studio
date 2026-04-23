@@ -18,6 +18,11 @@ app-server-protocol = { path = "../app-server-protocol" }
 app-server-transport = { path = "../app-server-transport", optional = true }
 scad-scene = { path = "../scad-scene" }
 studio-common = { path = "../studio-common" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.serde-wasm-bindgen]
+version = "0.6"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.117"

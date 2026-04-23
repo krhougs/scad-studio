@@ -1,5 +1,7 @@
+#[cfg(feature = "legacy-shell")]
 mod chat;
 
+#[cfg(feature = "legacy-shell")]
 pub use chat::{ChatMessage, FakeChatState, MessageRole};
 
 #[cfg(all(target_arch = "wasm32", feature = "legacy-shell"))]
@@ -8,6 +10,9 @@ mod legacy_dom_shell;
 mod preview_canvas;
 #[cfg(all(target_arch = "wasm32", feature = "legacy-shell"))]
 mod transport_port;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_bridge;
 
 #[cfg(all(target_arch = "wasm32", feature = "legacy-shell"))]
 use wasm_bindgen::prelude::wasm_bindgen;
