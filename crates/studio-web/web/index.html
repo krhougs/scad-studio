@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>studio-web wasm shell</title>
+  </head>
+  <body>
+    <div id="studio-web-root"></div>
+    <script type="module">
+      import init, { boot_studio_web_from_window } from "./studio_web.js";
+
+      async function main() {
+        await init();
+        boot_studio_web_from_window();
+      }
+
+      main().catch((error) => {
+        console.error("failed to boot studio-web", error);
+        document.body.innerHTML = `<pre>${String(error)}</pre>`;
+      });
+    </script>
+  </body>
+  </html>

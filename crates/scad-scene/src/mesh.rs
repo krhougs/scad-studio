@@ -90,6 +90,52 @@ impl MeshData {
         })
     }
 
+    pub fn from_indexed_buffers(
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        vertex_colors: Vec<[f32; 4]>,
+        indices: Vec<u32>,
+    ) -> Result<Self, MeshError> {
+        if positions.is_empty() {
+            return Err(MeshError("网格中没有可渲染的顶点".into()));
+        }
+        if indices.is_empty() {
+            return Err(MeshError("网格中没有可渲染的索引".into()));
+        }
+        if indices.len() % 3 != 0 {
+            return Err(MeshError("网格索引数量不是 3 的倍数".into()));
+        }
+        if indices
+            .iter()
+            .any(|index| *index as usize >= positions.len())
+        {
+            return Err(MeshError("网格索引引用了不存在的顶点".into()));
+        }
+
+        let mut bounds = Bounds::empty();
+        let vertices = positions
+            .into_iter()
+            .enumerate()
+            .map(|(index, position)| {
+                bounds.include(Vec3::from_array(position));
+                Vertex {
+                    position,
+                    normal: normals.get(index).copied().unwrap_or([0.0, 1.0, 0.0]),
+                    color: vertex_colors
+                        .get(index)
+                        .copied()
+                        .unwrap_or([0.0, 0.0, 0.0, -1.0]),
+                }
+            })
+            .collect();
+
+        Ok(Self {
+            vertices,
+            indices,
+            bounds,
+        })
+    }
+
     pub fn triangle_index_partitions(&self) -> (Vec<u32>, Vec<u32>) {
         let mut opaque = Vec::with_capacity(self.indices.len());
         let mut transparent = Vec::new();

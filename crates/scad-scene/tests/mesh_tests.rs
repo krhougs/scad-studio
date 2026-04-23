@@ -25,6 +25,29 @@ fn from_triangles_builds_bounds_and_indices() {
 }
 
 #[test]
+fn from_indexed_buffers_builds_renderable_mesh_from_raw_buffers() {
+    let mesh = MeshData::from_indexed_buffers(
+        vec![
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, 0.0, 4.0],
+        ],
+        vec![[0.0, 0.0, 1.0]; 4],
+        vec![[0.2, 0.4, 0.6, 1.0]; 4],
+        vec![0, 1, 2, 0, 2, 3],
+    )
+    .expect("indexed buffers should build renderable mesh");
+
+    assert_eq!(mesh.vertices.len(), 4);
+    assert_eq!(mesh.indices, vec![0, 1, 2, 0, 2, 3]);
+    assert_eq!(mesh.bounds.min, Vec3::ZERO);
+    assert_eq!(mesh.bounds.max, Vec3::new(2.0, 3.0, 4.0));
+    assert_eq!(mesh.vertices[0].normal, [0.0, 0.0, 1.0]);
+    assert_eq!(mesh.vertices[0].color, [0.2, 0.4, 0.6, 1.0]);
+}
+
+#[test]
 fn from_triangles_smooths_normals_for_shared_vertices_with_small_angle() {
     let triangle_a = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
     let triangle_b = [[1.0, 0.0, 0.0], [1.0, 1.0, 0.4], [0.0, 1.0, 0.0]];

@@ -3,6 +3,8 @@ use std::{fmt, sync::Arc};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3, Vec4};
+#[cfg(target_arch = "wasm32")]
+use web_sys::HtmlCanvasElement;
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
@@ -62,6 +64,16 @@ pub struct EguiPaintData {
     pub pixels_per_point: f32,
 }
 
+impl EguiPaintData {
+    pub fn empty() -> Self {
+        Self {
+            clipped_primitives: Vec::new(),
+            textures_delta: egui::TexturesDelta::default(),
+            pixels_per_point: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RenderViewport {
     x: f32,
@@ -97,6 +109,24 @@ impl Renderer {
         let surface = instance
             .create_surface(window)
             .map_err(|error| RendererError(format!("创建渲染 surface 失败: {error}")))?;
+        Self::new_with_surface(&instance, surface, size).await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_for_canvas(canvas: HtmlCanvasElement) -> Result<Self, RendererError> {
+        let size = PhysicalSize::new(canvas.width().max(1), canvas.height().max(1));
+        let instance = wgpu::Instance::default();
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|error| RendererError(format!("创建 canvas surface 失败: {error}")))?;
+        Self::new_with_surface(&instance, surface, size).await
+    }
+
+    async fn new_with_surface(
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        size: PhysicalSize<u32>,
+    ) -> Result<Self, RendererError> {
         let adapter = request_adapter(&instance, &surface).await?;
         let (device, queue) = request_device(&adapter).await?;
         let config = build_surface_config(&surface, &adapter, size)?;

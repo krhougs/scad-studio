@@ -142,11 +142,7 @@ fn unique_fonts(fonts: Vec<FontSpec>) -> Vec<FontSpec> {
 #[cfg(any(test, target_os = "windows"))]
 fn font_link_entry_file_name(entry: &str) -> Option<&str> {
     let part = entry.split(',').next()?.trim();
-    if part.is_empty() {
-        None
-    } else {
-        Some(part)
-    }
+    if part.is_empty() { None } else { Some(part) }
 }
 
 #[cfg(target_os = "macos")]
@@ -464,32 +460,17 @@ mod windows {
 
     fn chain_keys(prefer_cjk: bool) -> &'static [&'static str] {
         if prefer_cjk {
-            &[
-                "Microsoft YaHei UI",
-                "Microsoft YaHei",
-                "Segoe UI",
-            ]
+            &["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"]
         } else {
-            &[
-                "Segoe UI",
-                "Microsoft YaHei UI",
-                "Microsoft YaHei",
-            ]
+            &["Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"]
         }
     }
 
     fn open_fontlink_key() -> Result<HKEY, SystemFontError> {
         let wide: Vec<u16> = FONTLINK_SUBKEY.encode_utf16().chain(Some(0)).collect();
         let mut hkey: HKEY = std::ptr::null_mut();
-        let status = unsafe {
-            RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                wide.as_ptr(),
-                0,
-                KEY_READ,
-                &mut hkey,
-            )
-        };
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, wide.as_ptr(), 0, KEY_READ, &mut hkey) };
         if status != ERROR_SUCCESS {
             return Err(SystemFontError(format!(
                 "打开 FontLink 注册表项失败（错误码 {status}）"
@@ -568,7 +549,9 @@ mod windows {
 
     fn contains_same_path(paths: &[PathBuf], candidate: &Path) -> bool {
         let cand = candidate.to_string_lossy().to_ascii_lowercase();
-        paths.iter().any(|p| p.to_string_lossy().to_ascii_lowercase() == cand)
+        paths
+            .iter()
+            .any(|p| p.to_string_lossy().to_ascii_lowercase() == cand)
     }
 
     fn push_resolved_unique(paths: &mut Vec<PathBuf>, raw_line: &str, fonts_dir: &Path) {
