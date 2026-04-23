@@ -1,33 +1,69 @@
-// Mesh viewer: sends a PreviewRequest for the path and renders the resulting
-// summary plus a canvas slot. Reuses the Phase 5 pipeline — mesh bytes are
-// handed to wasm `mesh_decode`, and the existing CanvasZone-level canvas is
-// currently the only renderer surface.
+// Mesh viewer: PreviewRequest → PreviewMeshPayload → Three.js WebGL 渲染。
+// 所有 wgpu-style 异步在 TS 侧走 WebGL2（同步初始化），wasm 侧只传字节。
 
-import { useEffect, useState } from "react";
-import * as WasmMod from "@scad-studio/studio-web-wasm";
+import { useEffect, useRef, useState } from "react";
+import { PRESET_STATES, type CameraPreset } from "../canvas/camera-state";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "./file-read-decoder";
+import {
+  createMeshViewer,
+  payloadFromPreview,
+  type MeshViewerHandle,
+} from "./mesh-three";
 
 type MeshViewerProps = {
   path: unknown;
   client: WasmClient;
   label: string;
+  cameraPreset?: CameraPreset | null;
   onPreviewStatus?: (status: string) => void;
+  onStats?: (stats: { vertices: number; indices: number } | null) => void;
 };
 
-type MeshState =
+type LoadState =
   | { kind: "pending" }
   | { kind: "ready"; vertices: number; indices: number }
+  | { kind: "empty" }
   | { kind: "error"; message: string };
 
 export function MeshViewer({
   path,
   client,
   label,
+  cameraPreset,
   onPreviewStatus,
+  onStats,
 }: MeshViewerProps) {
-  const [state, setState] = useState<MeshState>({ kind: "pending" });
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const viewerRef = useRef<MeshViewerHandle | null>(null);
+  const [state, setState] = useState<LoadState>({ kind: "pending" });
 
+  // Viewer lifecycle: create on mount, dispose on unmount.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const viewer = createMeshViewer(canvas);
+    viewerRef.current = viewer;
+
+    const parent = canvas.parentElement;
+    const ro = new ResizeObserver(() => {
+      const rect = parent?.getBoundingClientRect();
+      if (!rect) return;
+      viewer.resize(rect.width, rect.height, window.devicePixelRatio);
+    });
+    if (parent) ro.observe(parent);
+    // initial size
+    const rect = parent?.getBoundingClientRect();
+    if (rect) viewer.resize(rect.width, rect.height, window.devicePixelRatio);
+
+    return () => {
+      ro.disconnect();
+      viewer.dispose();
+      viewerRef.current = null;
+    };
+  }, []);
+
+  // Fetch preview on path change.
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "pending" });
@@ -41,24 +77,44 @@ export function MeshViewer({
       })
       .then((payload) => {
         if (cancelled) return;
-        const summary = extractMeshCounts(payload);
-        setState(
-          summary
-            ? { kind: "ready", ...summary }
-            : { kind: "ready", vertices: 0, indices: 0 },
-        );
-        onPreviewStatus?.("preview ready");
+        const mesh = payloadFromPreview(payload);
+        const viewer = viewerRef.current;
+        if (!mesh || mesh.positions.length === 0) {
+          if (viewer) viewer.setMesh(null);
+          setState({ kind: "empty" });
+          onPreviewStatus?.("preview ready (empty)");
+          onStats?.(null);
+          return;
+        }
+        if (viewer) viewer.setMesh(mesh);
+        const vertices = mesh.positions.length / 3;
+        const indices = mesh.indices ? mesh.indices.length : vertices;
+        setState({ kind: "ready", vertices, indices });
+        onPreviewStatus?.(`preview ready | ${vertices} verts | ${indices} idx`);
+        onStats?.({ vertices, indices });
       })
       .catch((err) => {
         if (cancelled) return;
         const msg = describeFileReadError(err);
         setState({ kind: "error", message: msg });
         onPreviewStatus?.(`preview error: ${msg}`);
+        onStats?.(null);
+        const viewer = viewerRef.current;
+        if (viewer) viewer.setMesh(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, path, onPreviewStatus]);
+  }, [client, path, onPreviewStatus, onStats]);
+
+  // Apply preset camera when user picks a view pill. null/undefined = keep
+  // the auto-framed camera.
+  useEffect(() => {
+    if (!cameraPreset) return;
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    viewer.setCamera(PRESET_STATES[cameraPreset]);
+  }, [cameraPreset]);
 
   return (
     <div
@@ -66,59 +122,20 @@ export function MeshViewer({
       data-testid="mesh-viewer"
       data-label={label}
     >
-      <p className="viewer__status" data-testid="mesh-status">
+      <canvas
+        ref={canvasRef}
+        className="mesh-viewer__canvas"
+        data-testid="mesh-canvas"
+      />
+      <p className="viewer__overlay" data-testid="mesh-status">
         {state.kind === "pending"
           ? "preview pending"
-          : state.kind === "ready"
-            ? `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`
-            : `preview error: ${state.message}`}
+          : state.kind === "empty"
+            ? "preview ready (empty mesh)"
+            : state.kind === "ready"
+              ? `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`
+              : `preview error: ${state.message}`}
       </p>
     </div>
   );
-}
-
-function extractMeshCounts(
-  payload: unknown,
-): { vertices: number; indices: number } | null {
-  if (!payload || typeof payload !== "object") return null;
-  const outer = payload as Record<string, unknown>;
-  const ready =
-    (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
-  const artifact = ready["artifact"] as Record<string, unknown> | undefined;
-  if (!artifact) return null;
-  const format = artifact["format"];
-  const inner = artifact["payload"] as Record<string, unknown> | undefined;
-  if (!inner) return null;
-  if (format === "mesh") {
-    const positions = inner["positions"];
-    const indices = inner["indices"];
-    if (Array.isArray(positions) && Array.isArray(indices)) {
-      return { vertices: positions.length, indices: indices.length };
-    }
-  }
-  if (format === "three_mf") {
-    return summarizeThreeMf(inner);
-  }
-  return null;
-}
-
-function summarizeThreeMf(
-  inner: Record<string, unknown>,
-): { vertices: number; indices: number } | null {
-  const bytes = inner["bytes"];
-  const u8 =
-    bytes instanceof Uint8Array
-      ? bytes
-      : Array.isArray(bytes)
-        ? Uint8Array.from(bytes as number[])
-        : null;
-  if (!u8) return null;
-  try {
-    const handle = WasmMod.mesh_decode(u8);
-    WasmMod.mesh_destroy(handle);
-    return { vertices: Math.floor(u8.length / 32), indices: u8.length };
-  } catch (err) {
-    console.warn("mesh_decode failed:", err);
-    return null;
-  }
 }

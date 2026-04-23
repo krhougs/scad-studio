@@ -1,110 +1,131 @@
 /*
- * Five-zone workbench grid + Topbar + Rail.
- * 五区 chat / canvas / inspector 见 ./workbench-zones.css；
- * 按钮 / chip / nav / 滚动条见 ./primitives.css。
- * 结构参考 /Users/krhougs/LocalCodes/buddin/ui_kits/app/index.html；
- * 规范见 docs/design-system/studio-datasheet-workbench.md §六。
+ * Five-zone workbench layout —— 1:1 对齐 Buddin ui_kits/app/index.html。
+ * Chat / Canvas / Inspector 细节见 ./workbench-zones.css。
+ * 按钮 / chip / 滚动条见 ./primitives.css。
  */
 
-.workbench {
+.app {
   display: grid;
   grid-template-columns: 52px 360px 1fr 320px;
   grid-template-rows: 44px 1fr;
-  grid-template-areas:
-    "topbar topbar   topbar   topbar"
-    "rail   chat     canvas   inspector";
   height: 100vh;
   min-width: 1280px;
-  background: var(--bg-page);
-  color: var(--fg-body);
+  background: var(--ink-9);
 }
 
-/* Topbar ------------------------------------------------------------- */
-.workbench__topbar {
-  grid-area: topbar;
+/* ---------- Topbar ---------- */
+.topbar {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: var(--space-5);
-  padding: 0 var(--space-4);
-  border-bottom: var(--border-hairline);
-  font-family: var(--font-mono);
+  gap: 18px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ink-4s);
+  font-family: var(--mono);
   font-size: var(--fs-xxs);
-  letter-spacing: var(--tracking-wide);
+  letter-spacing: var(--tr-wide);
   text-transform: uppercase;
-  color: var(--fg-subtle);
+  color: var(--t-4);
 }
 
-.topbar__brand {
+.topbar .logo {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-body);
+  gap: 8px;
+  font-family: var(--sans);
   font-size: var(--fs-sm);
   font-weight: 500;
-  letter-spacing: var(--tracking-tight);
-  color: var(--fg-primary);
+  letter-spacing: var(--tr-tight);
+  color: var(--t-1);
   text-transform: none;
 }
 
-.topbar__sep {
+.topbar .sep-v {
   width: 1px;
   align-self: stretch;
-  background: var(--border-hairline-color);
+  background: var(--ink-4s);
+  margin: 0 4px;
 }
 
-.topbar__crumb {
+.topbar .crumb {
   display: flex;
+  gap: 6px;
   align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-body);
+  font-family: var(--sans);
   font-size: var(--fs-sm);
-  letter-spacing: var(--tracking-tight);
-  color: var(--fg-subtle);
   text-transform: none;
+  letter-spacing: var(--tr-tight);
+  color: var(--t-4);
 }
-.topbar__crumb b {
+.topbar .crumb b {
+  color: var(--t-2);
   font-weight: 500;
-  color: var(--fg-body);
 }
-.topbar__crumb .topbar__slash {
-  color: var(--fg-disabled);
+.topbar .crumb .sl {
+  color: var(--t-6);
+  margin: 0 2px;
 }
 
-.topbar__spacer {
+.topbar .spacer {
   flex: 1;
 }
 
-.topbar__meta {
-  display: inline-flex;
+.topbar .meta {
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
-  color: var(--fg-subtle);
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--t-4);
+  padding: 0 10px;
 }
-.topbar__meta .dot {
+.topbar .meta .dot {
   display: inline-block;
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--signal-ok);
+  box-shadow: 0 0 6px rgba(126, 178, 78, 0.5);
 }
-.topbar__meta .dot--live {
-  background: var(--accent-live);
+.topbar .meta .dot--live {
+  background: var(--live);
+  box-shadow: 0 0 6px rgba(182, 90, 46, 0.5);
 }
-.topbar__meta .dot--err {
+.topbar .meta .dot--err {
   background: var(--signal-err);
+  box-shadow: 0 0 6px rgba(210, 82, 68, 0.5);
+}
+.topbar .meta .dot--off {
+  background: var(--t-6);
+  box-shadow: none;
 }
 
-/* Rail --------------------------------------------------------------- */
-.workbench__rail {
-  grid-area: rail;
+.topbar .avatar {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--sans);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--t-1);
+  border: 1px solid var(--ink-4s);
+  text-transform: none;
+}
+
+/* ---------- Rail ---------- */
+.rail {
+  border-right: 1px solid var(--ink-4s);
   display: flex;
   flex-direction: column;
-  border-right: var(--border-hairline);
-  padding: var(--space-2) 0;
+  align-items: stretch;
+  padding: 6px 0;
 }
-.rail__button {
-  appearance: none;
+.rail button {
   width: 100%;
   height: 40px;
   display: flex;
@@ -112,25 +133,24 @@
   justify-content: center;
   background: transparent;
   border: 0;
-  border-left: 2px solid transparent;
-  color: var(--fg-subtle);
+  color: var(--t-4);
   cursor: pointer;
-  transition: color var(--motion-fast) var(--motion-ease),
-    border-color var(--motion-fast) var(--motion-ease);
+  border-left: 2px solid transparent;
+  transition: color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
-.rail__button:hover {
-  color: var(--fg-body);
+.rail button:hover {
+  color: var(--t-2);
 }
-.rail__button[aria-current="page"],
-.rail__button.is-active {
-  color: var(--fg-primary);
-  border-left-color: var(--fg-primary);
+.rail button.active {
+  color: var(--t-1);
+  border-left-color: var(--t-1);
 }
-.rail__separator {
+.rail .sep {
   height: 1px;
-  margin: var(--space-2) var(--space-3);
-  background: var(--border-hairline-color);
+  margin: 8px 10px;
+  background: var(--ink-4s);
 }
-.rail__grow {
+.rail .grow {
   flex: 1;
 }

@@ -1,8 +1,11 @@
-// Inspector: workspace 目录条目树 + 选中文件元数据。Phase 5 补齐：
-//   - 递归展开/折叠 directory entry（点击触发父级传入的 onExpandDirectory，
-//     由 WorkbenchLayout 发起 `dispatch_workspace_list({ directory })`）。
-//   - 点击 file 保留现有 preview 触发入口。
-//   - 预览就绪后展示 mesh 解码元数据（vertices / indices）。
+// Inspector —— Buddin inspector 结构：kicker + title + insp-sec 列。
+// 包含：workspace 树（递归目录展开）、preview target / mesh summary、
+// parameters / presets / slicer / export（只在 mesh 或 scad tab 显示相应子块）。
+
+import { Box, Circle, Folder, Plus, type LucideIcon } from "lucide-react";
+import type { WasmClient } from "../wasm-bridge";
+import { ExportPanel } from "./export-panel";
+import { SlicerPanel } from "./slicer-panel";
 
 export type InspectorEntry = {
   label: string;
@@ -36,50 +39,70 @@ type InspectorProps = {
   meshSummary: InspectorMeshSummary | null;
   expandedDirectories: Map<string, InspectorDirectoryNode>;
   directoryKey: (path: unknown) => string;
+  activeFilePath: unknown | null;
   bottomSlot?: React.ReactNode;
+  client?: WasmClient | null;
+  showMeshPanels?: boolean;
+  meshSource?: unknown;
+  defaultExportFilename?: string;
+  onExportStatus?: (status: string) => void;
 };
 
-export function Inspector({
-  rootName,
-  entries,
-  entriesLoaded,
-  onRequestPreview,
-  onExpandDirectory,
-  onCollapseDirectory,
-  previewTargetLabel,
-  meshSummary,
-  expandedDirectories,
-  directoryKey,
-  bottomSlot,
-}: InspectorProps) {
+export function Inspector(props: InspectorProps) {
+  const {
+    rootName,
+    entries,
+    entriesLoaded,
+    onRequestPreview,
+    onExpandDirectory,
+    onCollapseDirectory,
+    previewTargetLabel,
+    meshSummary,
+    expandedDirectories,
+    directoryKey,
+    activeFilePath,
+    bottomSlot,
+    client,
+    showMeshPanels,
+    meshSource,
+    defaultExportFilename,
+    onExportStatus,
+  } = props;
+
   return (
     <aside
-      className="workbench__inspector"
+      className="inspector"
       aria-label="inspector"
       data-testid="workbench-inspector"
     >
-      <header className="inspector__head">
-        <div className="inspector__kicker">§ inspector</div>
-        <div className="inspector__title">{rootName}</div>
+      <header className="inspector-head">
+        <div className="kicker">§ inspector</div>
+        <div className="title">{rootName}</div>
       </header>
-      <div className="inspector__body">
-        <section className="inspector__section" data-testid="inspector-entries">
-          <h5>entries</h5>
+      <div className="insp-body">
+        <section className="insp-sec" data-testid="inspector-entries">
+          <h5>
+            <span>files</span>
+            <button type="button" aria-label="add entry" title="add" disabled>
+              <Plus size={12} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+          </h5>
           {!entriesLoaded ? (
-            <p className="chat__placeholder">workspace entries loading…</p>
+            <div className="tree">
+              <div className="tree-loading">entries loading…</div>
+            </div>
           ) : entries.length === 0 ? (
-            <p className="chat__placeholder">workspace is empty.</p>
+            <div className="tree">
+              <div className="tree-empty">workspace is empty</div>
+            </div>
           ) : (
-            <ul
-              className="inspector__list"
-              data-testid="entries"
-              role="tree"
-            >
+            <div className="tree" data-testid="entries" role="tree">
               {entries.map((entry) => (
-                <EntryNode
+                <EntryRow
                   key={`${entry.label}-${directoryKey(entry.path)}`}
                   entry={entry}
                   depth={0}
+                  activeFilePath={activeFilePath}
                   onRequestPreview={onRequestPreview}
                   onExpandDirectory={onExpandDirectory}
                   onCollapseDirectory={onCollapseDirectory}
@@ -87,37 +110,64 @@ export function Inspector({
                   directoryKey={directoryKey}
                 />
               ))}
-            </ul>
+            </div>
           )}
         </section>
-        <section className="inspector__section">
-          <h5>preview target</h5>
-          <div className="inspector__field">
-            <span className="inspector__field-label">active</span>
-            <span
-              className={`inspector__field-value${previewTargetLabel === "—" ? " is-muted" : ""}`}
+
+        <section className="insp-sec">
+          <h5>
+            <span>preview</span>
+          </h5>
+          <div className="field">
+            <div className="field-label">
+              <span>active target</span>
+            </div>
+            <div
+              className={`field-status${previewTargetLabel === "—" ? "" : " is-ok"}`}
               data-testid="preview-target"
             >
               {previewTargetLabel}
-            </span>
+            </div>
           </div>
           {meshSummary ? (
-            <div className="inspector__field">
-              <span className="inspector__field-label">mesh</span>
-              <span
-                className="inspector__field-value"
-                data-testid="preview-mesh-summary"
-              >
-                {`${meshSummary.vertices} vertices · ${meshSummary.indices} indices`}
-              </span>
+            <div className="field">
+              <div className="field-label">
+                <span>mesh</span>
+              </div>
+              <div className="field-status is-ok" data-testid="preview-mesh-summary">
+                {meshSummary.vertices} verts · {meshSummary.indices} idx
+              </div>
             </div>
           ) : null}
         </section>
+
+        {showMeshPanels && client && meshSource !== undefined ? (
+          <>
+            <section className="insp-sec">
+              <h5>
+                <span>export</span>
+              </h5>
+              <ExportPanel
+                client={client}
+                source={meshSource}
+                defaultFilename={defaultExportFilename ?? "export.stl"}
+                onStatus={onExportStatus ?? (() => {})}
+              />
+            </section>
+            <section className="insp-sec">
+              <h5>
+                <span>slicers</span>
+              </h5>
+              <SlicerPanel client={client} />
+            </section>
+          </>
+        ) : null}
+
         {bottomSlot ? (
-          <section
-            className="inspector__section inspector__section--bottom"
-            data-testid="inspector-bottom-slot"
-          >
+          <section className="insp-sec" data-testid="inspector-bottom-slot">
+            <h5>
+              <span>log</span>
+            </h5>
             {bottomSlot}
           </section>
         ) : null}
@@ -126,9 +176,10 @@ export function Inspector({
   );
 }
 
-type EntryNodeProps = {
+type EntryRowProps = {
   entry: InspectorEntry;
   depth: number;
+  activeFilePath: unknown | null;
   onRequestPreview: (entry: InspectorEntry) => void;
   onExpandDirectory: (entry: InspectorEntry) => void;
   onCollapseDirectory: (entry: InspectorEntry) => void;
@@ -136,82 +187,75 @@ type EntryNodeProps = {
   directoryKey: (path: unknown) => string;
 };
 
-function EntryNode({
+function EntryRow({
   entry,
   depth,
+  activeFilePath,
   onRequestPreview,
   onExpandDirectory,
   onCollapseDirectory,
   expandedDirectories,
   directoryKey,
-}: EntryNodeProps) {
+}: EntryRowProps) {
   const key = directoryKey(entry.path);
   const isDirectory = entry.kind === "directory";
   const expanded = isDirectory ? expandedDirectories.get(key) : undefined;
   const isExpanded = Boolean(expanded);
+  const isActive =
+    !isDirectory &&
+    activeFilePath !== null &&
+    directoryKey(activeFilePath) === key;
+
+  const Icon = isDirectory ? Folder : iconForFile(entry.label);
+
   const handleClick = () => {
     if (isDirectory) {
-      if (isExpanded) {
-        onCollapseDirectory(entry);
-      } else {
-        onExpandDirectory(entry);
-      }
+      if (isExpanded) onCollapseDirectory(entry);
+      else onExpandDirectory(entry);
     } else {
       onRequestPreview(entry);
     }
   };
-  const indent = depth * 12;
+
   return (
-    <li className="inspector__list-item" role="treeitem" aria-level={depth + 1}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-        <span aria-hidden="true" style={{ width: indent, display: "inline-block" }} />
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={handleClick}
-          data-testid={`entry-${entry.label}`}
-          title={isDirectory ? `toggle ${entry.label}` : `preview ${entry.label}`}
-          aria-expanded={isDirectory ? isExpanded : undefined}
-        >
-          {isDirectory ? (isExpanded ? "▾ " : "▸ ") : ""}
-          {entry.label}
-        </button>
-        <span className="dim">{entry.kind}</span>
-      </div>
+    <>
+      <button
+        type="button"
+        className={`tree-item${isActive ? " active" : ""}`}
+        style={{ paddingLeft: 12 + depth * 12 }}
+        onClick={handleClick}
+        data-testid={`entry-${entry.label}`}
+        aria-expanded={isDirectory ? isExpanded : undefined}
+      >
+        <Icon className="ic" size={14} strokeWidth={1.5} aria-hidden="true" />
+        <span className="label-main">{entry.label}</span>
+        <span className="dim">{isDirectory ? (isExpanded ? "open" : "dir") : "file"}</span>
+      </button>
       {isDirectory && expanded ? (
-        <ul
-          className="inspector__list"
+        <div
+          className="tree-group"
           role="group"
           data-testid={`entries-${key}`}
-          style={{ width: "100%" }}
         >
           {expanded.loading ? (
-            <li
-              className="inspector__list-item"
-              data-testid={`entries-${key}-loading`}
-            >
-              <span className="dim">loading…</span>
-            </li>
+            <div className="tree-loading" data-testid={`entries-${key}-loading`}>
+              loading…
+            </div>
           ) : expanded.error ? (
-            <li
-              className="inspector__list-item"
-              data-testid={`entries-${key}-error`}
-            >
-              <span className="dim">{expanded.error}</span>
-            </li>
+            <div className="tree-error" data-testid={`entries-${key}-error`}>
+              {expanded.error}
+            </div>
           ) : expanded.entries && expanded.entries.length === 0 ? (
-            <li
-              className="inspector__list-item"
-              data-testid={`entries-${key}-empty`}
-            >
-              <span className="dim">empty</span>
-            </li>
+            <div className="tree-empty" data-testid={`entries-${key}-empty`}>
+              empty
+            </div>
           ) : (
             (expanded.entries ?? []).map((child) => (
-              <EntryNode
+              <EntryRow
                 key={`${child.label}-${directoryKey(child.path)}`}
                 entry={child}
                 depth={depth + 1}
+                activeFilePath={activeFilePath}
                 onRequestPreview={onRequestPreview}
                 onExpandDirectory={onExpandDirectory}
                 onCollapseDirectory={onCollapseDirectory}
@@ -220,8 +264,14 @@ function EntryNode({
               />
             ))
           )}
-        </ul>
+        </div>
       ) : null}
-    </li>
+    </>
   );
+}
+
+function iconForFile(label: string): LucideIcon {
+  const lower = label.toLowerCase();
+  if (lower.endsWith(".stl") || lower.endsWith(".3mf")) return Box;
+  return Circle;
 }

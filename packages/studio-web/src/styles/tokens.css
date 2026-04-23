@@ -1,46 +1,52 @@
 /*
- * Studio web design tokens.
- * 设计规范见 docs/design-system/studio-datasheet-workbench.md。
- * 外部参考来源见 docs/design-system/source-notes.md。
+ * Studio web design tokens — 与 Buddin ui_kits/app 1:1 对齐。
+ * 结构见 docs/design-system/studio-datasheet-workbench.md。
+ * 参考来源见 docs/design-system/source-notes.md。
  */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 
 :root {
   color-scheme: dark;
 
-  /* 面与文字 ---------------------------------------------------------- */
-  --bg-page: #0b0b0d;
-  --bg-surface: #101012;
-  --bg-surface-raised: #141417;
-  --bg-canvas-well: #070708;
+  /* Monochrome metal scale —— 无色相 */
+  --ink-10: #070708;
+  --ink-9: #0b0b0d;
+  --ink-8: #101012;
+  --ink-7: #14141720;
+  --ink-7s: #141417;
+  --ink-6: #1a1a1d;
+  --ink-5: #232327;
+  --ink-4: #30303540;
+  --ink-4s: #2c2c31;
+  --ink-3: #3e3e44;
 
-  --fg-primary: #f4f4f6;
-  --fg-body: #d8d8dc;
-  --fg-muted: #a8a8ae;
-  --fg-subtle: #75757b;
-  --fg-dim: #505056;
-  --fg-disabled: #35353b;
+  /* Text —— titanium greys */
+  --t-1: #f4f4f6;
+  --t-2: #d8d8dc;
+  --t-3: #a8a8ae;
+  --t-4: #75757b;
+  --t-5: #505056;
+  --t-6: #35353b;
 
-  /* 边框 -------------------------------------------------------------- */
-  --border-hairline-color: #2c2c31;
-  --border-strong-color: #3e3e44;
-  --border-hairline: 1px solid var(--border-hairline-color);
-  --border-strong: 1px solid var(--border-strong-color);
+  /* CAD annotation only —— 冷青，不是品牌色 */
+  --cad: #7ea3c0;
+  --cad-dim: #4b6a82;
 
-  /* 口音色（极少使用，永远不上 CTA） -------------------------------- */
-  --accent-live: #b65a2e;
-  --accent-cad: #7ea3c0;
+  /* Warm rust —— live / active 唯一口音，克制使用 */
+  --live: #b65a2e;
 
-  /* 信号色 ------------------------------------------------------------ */
+  /* 状态 */
   --signal-ok: #7eb24e;
   --signal-warn: #d9a23a;
   --signal-err: #d25244;
 
-  /* 字体 -------------------------------------------------------------- */
-  --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
+  /* 字体 */
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* 字号 —— datasheet rhythm */
   --fs-xxs: 10px;
   --fs-xs: 11px;
   --fs-sm: 13px;
@@ -50,12 +56,12 @@
   --fs-2xl: 34px;
   --fs-3xl: 48px;
 
-  --tracking-display: -0.03em;
-  --tracking-medium: -0.02em;
-  --tracking-tight: -0.015em;
-  --tracking-wide: 0.08em;
+  --tr-wide: 0.08em;
+  --tr-tight: -0.015em;
+  --tr-medium: -0.02em;
+  --tr-display: -0.03em;
 
-  /* 间距 -------------------------------------------------------------- */
+  /* 间距 */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -65,22 +71,53 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* 圆角：全站零圆角。radius-full 仅用于 live-dot */
+  /* 圆角：全站 0；radius-full 仅 live-dot 用 */
   --radius-0: 0;
   --radius-full: 999px;
 
-  /* 阴影 -------------------------------------------------------------- */
-  --shadow-low: 0 1px 0 rgba(0, 0, 0, 0.5);
-
-  /* 动效 -------------------------------------------------------------- */
-  --motion-ease: cubic-bezier(0.2, 0.6, 0.15, 1);
-  --motion-fast: 120ms;
+  /* 动效 */
+  --dur-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.15, 1);
+  --motion-fast: var(--dur-fast);
+  --motion-ease: var(--ease);
   --motion-base: 200ms;
   --motion-slow: 400ms;
+
+  /* 阴影 */
+  --shadow-low: 0 1px 0 rgba(0, 0, 0, 0.5);
+
+  /* ---------- 兼容别名 ---------- */
+  /* viewers.css / phase7.css 里仍有 fg- / bg- 命名；一律指向 Buddin token */
+  --bg-page: var(--ink-9);
+  --bg-surface: var(--ink-8);
+  --bg-surface-raised: var(--ink-7s);
+  --bg-canvas-well: var(--ink-10);
+
+  --fg-primary: var(--t-1);
+  --fg-body: var(--t-2);
+  --fg-muted: var(--t-3);
+  --fg-subtle: var(--t-4);
+  --fg-dim: var(--t-5);
+  --fg-disabled: var(--t-6);
+
+  --border-hairline-color: var(--ink-4s);
+  --border-strong-color: var(--ink-3);
+  --border-hairline: 1px solid var(--border-hairline-color);
+  --border-strong: 1px solid var(--border-strong-color);
+
+  --accent-live: var(--live);
+  --accent-cad: var(--cad);
+
+  --font-body: var(--sans);
+  --font-mono: var(--mono);
+
+  --tracking-display: var(--tr-display);
+  --tracking-medium: var(--tr-medium);
+  --tracking-tight: var(--tr-tight);
+  --tracking-wide: var(--tr-wide);
 }
 
-/* 全局基线 ------------------------------------------------------------ */
-
+/* 全局基线 */
 *,
 *::before,
 *::after {
@@ -91,9 +128,9 @@ html,
 body {
   margin: 0;
   height: 100%;
-  background: var(--bg-page);
-  color: var(--fg-body);
-  font-family: var(--font-body);
+  background: var(--ink-9);
+  color: var(--t-2);
+  font-family: var(--sans);
   font-size: var(--fs-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -108,6 +145,11 @@ body {
   overflow: hidden;
 }
 
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
 h1,
 h2,
 h3,
@@ -115,78 +157,47 @@ h4,
 h5,
 h6 {
   margin: 0;
-  font-family: var(--font-body);
+  font-family: var(--sans);
   font-weight: 400;
-  color: var(--fg-primary);
-  letter-spacing: var(--tracking-display);
+  color: var(--t-1);
+  letter-spacing: var(--tr-display);
   line-height: 1.15;
-}
-
-h1 {
-  font-size: var(--fs-3xl);
-  line-height: 1;
-}
-h2 {
-  font-size: var(--fs-2xl);
-}
-h3 {
-  font-size: var(--fs-xl);
-  letter-spacing: var(--tracking-medium);
-}
-h4 {
-  font-size: var(--fs-lg);
-  font-weight: 500;
-  letter-spacing: var(--tracking-medium);
 }
 
 p {
   margin: 0;
-  color: var(--fg-body);
-}
-
-a {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong-color);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-  transition: color var(--motion-fast) var(--motion-ease),
-    text-decoration-color var(--motion-fast) var(--motion-ease);
-}
-a:hover {
-  color: var(--fg-primary);
-  text-decoration-color: var(--fg-primary);
+  color: var(--t-2);
 }
 
 code,
 kbd,
 samp,
 pre {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 0.92em;
-  color: var(--fg-primary);
+  color: var(--t-1);
 }
 
 ::selection {
-  background: var(--fg-primary);
-  color: var(--bg-page);
+  background: var(--t-1);
+  color: var(--ink-9);
 }
 
 :focus-visible {
-  outline: 1px solid var(--fg-primary);
+  outline: 1px solid var(--t-1);
   outline-offset: 2px;
   border-radius: 0;
 }
 
-/* mono 大写元数据标签 ------------------------------------------------ */
+/* mono 大写元数据标签 */
 .label,
 [data-label] {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: var(--fs-xxs);
   font-weight: 500;
-  letter-spacing: var(--tracking-wide);
+  letter-spacing: var(--tr-wide);
   text-transform: uppercase;
-  color: var(--fg-dim);
+  color: var(--t-5);
 }
 
 .num,

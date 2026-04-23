@@ -1,6 +1,6 @@
-// Camera state + preset constants. Phase 7 keeps this pure so unit tests can
-// pin the preset transforms without needing a GPU or DOM. The renderer stub
-// consumes these values in canvas-renderer-controller.ts.
+// Camera state + preset constants. Kept pure so unit tests can pin the
+// preset transforms without a GPU or DOM. The Three.js mesh viewer
+// (viewers/mesh-three.ts) consumes these via setCamera(preset).
 
 export type Vec3 = [number, number, number];
 

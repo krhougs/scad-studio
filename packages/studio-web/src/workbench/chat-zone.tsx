@@ -1,6 +1,7 @@
-// Chat zone: Phase 4 只做布局壳层，chat 的业务接入（agent 真实会话）留到
-// 后续 Phase。输入草稿仍走 Zustand ui-store，保持 UI 壳状态归属清晰。
+// Chat zone —— Buddin agent 会话壳层。Phase 4 维持占位文案，不模拟假消息；
+// agent 真实接入留给后续 phase。
 
+import { ArrowUp, Box, Paperclip, Ruler } from "lucide-react";
 import { useUiStore } from "../state/ui-store";
 
 export function ChatZone() {
@@ -8,38 +9,44 @@ export function ChatZone() {
   const setInputDraft = useUiStore((s) => s.setInputDraft);
 
   return (
-    <section
-      className="workbench__chat"
-      data-testid="workbench-chat"
-      aria-label="agent chat"
-    >
-      <header className="chat__head">
+    <section className="chat" data-testid="workbench-chat" aria-label="agent">
+      <header className="chat-head">
         <div>
-          <div className="chat__kicker">§ agent</div>
-          <div className="chat__sub">session placeholder</div>
+          <div className="title">§ agent</div>
+          <div className="sub">session placeholder</div>
         </div>
         <button type="button" className="btn btn--ghost btn--sm" disabled>
           new
         </button>
       </header>
-      <div className="chat__body" data-testid="chat-body">
-        <p className="chat__placeholder">
-          agent 会话尚未接入。后续 phase 将把 agent 回执（具体数值的 mono 卡片）
-          渲染在此区域。
+      <div className="chat-body" data-testid="chat-body">
+        <p className="chat-empty">
+          agent session not connected yet. subsequent phases will render
+          structured agent replies here.
         </p>
       </div>
-      <footer className="chat__input">
-        <div className="chat__wrap">
+      <footer className="chat-input">
+        <div className="wrap">
           <textarea
-            className="chat__textarea"
             placeholder="Describe a change, add a feature, or ask for alternatives..."
             value={inputDraft}
             onChange={(ev) => setInputDraft(ev.target.value)}
             data-testid="chat-input"
           />
-          <div className="chat__tools">
-            <button type="button" className="btn btn--solid btn--sm" disabled>
-              send
+          <div className="tools">
+            <div className="tools-left">
+              <button type="button" title="attach sketch" disabled>
+                <Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+              <button type="button" title="reference part" disabled>
+                <Box size={14} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+              <button type="button" title="dimension pick" disabled>
+                <Ruler size={14} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+            </div>
+            <button type="button" className="send" disabled>
+              send <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />
             </button>
           </div>
         </div>

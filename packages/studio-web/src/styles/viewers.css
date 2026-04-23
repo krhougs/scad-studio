@@ -1,119 +1,72 @@
 /*
- * Tab Bar + viewer surfaces. Added in Phase 6 alongside the document tab
- * system. All styles remain dark-only, 1px hairline, zero corner radius per
- * docs/design-system/studio-datasheet-workbench.md.
+ * Viewer surfaces. Tab Bar 本身的样式在 ./workbench-zones.css；这里只管
+ * 激活 viewer（markdown / image / scad-split / mesh）和空状态占位。
+ * 所有 viewer 都撑满父级 .canvas-stage，保持 dark-only / 1px hairline /
+ * zero radius。
  */
 
-/* Tab Bar ------------------------------------------------------------- */
-.tabbar {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  min-height: 32px;
-  border-bottom: var(--border-hairline);
-  background: rgba(11, 11, 13, 0.78);
-  z-index: 3;
-  padding: 0 var(--space-3);
-  flex-wrap: wrap;
-}
-
-.tabbar--empty {
-  align-items: center;
-}
-
-.tabbar__empty-label {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--fg-dim);
-}
-
-.tabbar__tab {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--space-2) 0 var(--space-3);
-  border-right: var(--border-hairline);
-  border-bottom: 1px solid transparent;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  letter-spacing: var(--tracking-tight);
-}
-
-.tabbar__tab.is-active {
-  color: var(--fg-primary);
-  border-bottom-color: var(--fg-primary);
-}
-
-.tabbar__label {
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  padding: var(--space-2) var(--space-1);
-}
-
-.tabbar__close {
-  background: transparent;
-  border: 0;
-  color: var(--fg-dim);
-  cursor: pointer;
-  font-size: var(--fs-sm);
-  padding: 0 var(--space-2);
-  line-height: 1;
-}
-
-.tabbar__close:hover {
-  color: var(--fg-primary);
-}
-
-/* Generic viewer --------------------------------------------------------- */
+/* 通用 viewer 外壳 ---------------------------------------------------- */
 .viewer {
   position: absolute;
-  inset: 32px 0 40px 0; /* tab bar height above, status bar below */
+  inset: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-page);
+  background: transparent;
 }
 
 .viewer__loading,
 .viewer__error,
-.viewer__status {
-  margin: var(--space-4);
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  letter-spacing: var(--tracking-tight);
+.viewer__status,
+.viewer__overlay {
+  margin: 0;
+  color: var(--t-4);
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+}
+
+.viewer__loading,
+.viewer__error {
+  padding: var(--space-5) var(--space-5) var(--space-4);
 }
 
 .viewer__error {
   color: var(--signal-err);
 }
 
-.viewer__chrome {
+.viewer__overlay {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: rgba(11, 11, 13, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--ink-4s);
+  color: var(--t-3);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.viewer__empty {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-hairline);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--fg-subtle);
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--t-5);
+  padding: 40px 16px;
 }
-
-.viewer__chrome-stats {
-  display: inline-flex;
-  gap: var(--space-3);
-}
-
-.viewer__chrome-actions {
-  display: inline-flex;
-  gap: var(--space-2);
+.viewer__empty p {
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tr-tight);
+  color: var(--t-5);
 }
 
 .viewer__stage {
@@ -132,24 +85,43 @@
   user-select: none;
 }
 
-/* Markdown body ------------------------------------------------------- */
-.markdown-body {
-  padding: var(--space-5) var(--space-6);
-  overflow: auto;
-  font-family: var(--font-body);
-  font-size: var(--fs-sm);
-  color: var(--fg-body);
-  line-height: 1.55;
+/* Mesh viewer (Three.js) --------------------------------------------- */
+.viewer--mesh {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  background: transparent;
+}
+.mesh-viewer__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+.mesh-viewer__canvas:active {
+  cursor: grabbing;
 }
 
+/* Markdown body ------------------------------------------------------- */
+.markdown-body {
+  padding: 20px 24px;
+  overflow: auto;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  color: var(--t-2);
+  line-height: 1.55;
+}
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3 {
-  margin-top: var(--space-5);
-  margin-bottom: var(--space-2);
-  letter-spacing: var(--tracking-medium);
+  margin-top: 20px;
+  margin-bottom: 8px;
+  letter-spacing: var(--tr-medium);
+  color: var(--t-1);
 }
-
 .markdown-body h1 {
   font-size: var(--fs-xl);
 }
@@ -159,26 +131,22 @@
 .markdown-body h3 {
   font-size: var(--fs-base);
 }
-
 .markdown-body p {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 12px;
 }
-
 .markdown-body ul {
-  padding-left: var(--space-5);
-  margin: 0 0 var(--space-3);
+  padding-left: 20px;
+  margin: 0 0 12px;
 }
-
 .markdown-body__code {
-  background: var(--bg-surface);
-  border: var(--border-hairline);
-  padding: var(--space-3);
+  background: var(--ink-8);
+  border: 1px solid var(--ink-4s);
+  padding: 12px;
   overflow-x: auto;
-  margin: 0 0 var(--space-3);
+  margin: 0 0 12px;
 }
-
 .markdown-body code {
-  background: var(--bg-surface);
+  background: var(--ink-8);
   padding: 0 4px;
 }
 
@@ -187,49 +155,43 @@
   flex-direction: row;
   gap: 0;
 }
-
 .scad-split__pane {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-right: var(--border-hairline);
+  border-right: 1px solid var(--ink-4s);
 }
-
 .scad-split__pane:last-child {
   border-right: 0;
 }
-
 .scad-split__title {
   margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-hairline);
-  font-family: var(--font-mono);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ink-4s);
+  font-family: var(--mono);
   font-size: var(--fs-xxs);
-  letter-spacing: var(--tracking-wide);
+  letter-spacing: var(--tr-wide);
   text-transform: uppercase;
-  color: var(--fg-subtle);
+  color: var(--t-5);
 }
-
 .scad-split__code {
   flex: 1;
   overflow: auto;
   margin: 0;
-  padding: var(--space-3);
-  font-family: var(--font-mono);
+  padding: 12px;
+  font-family: var(--mono);
   font-size: var(--fs-xs);
-  color: var(--fg-body);
+  color: var(--t-2);
   white-space: pre-wrap;
   word-break: break-word;
 }
-
 .scad-split__status {
-  margin: var(--space-3);
-  font-family: var(--font-mono);
+  margin: 12px;
+  font-family: var(--mono);
   font-size: var(--fs-xs);
-  color: var(--fg-muted);
+  color: var(--t-4);
 }
-
 .scad-split__status.ready {
   color: var(--signal-ok);
 }

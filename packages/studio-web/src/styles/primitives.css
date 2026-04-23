@@ -1,52 +1,50 @@
-/* 共享基元：按钮 / chip / app-nav / 滚动条。 */
+/* 共享基元：按钮 / chip / 滚动条 —— 对齐 Buddin primitive。 */
 
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  height: 32px;
-  padding: 0 14px;
-  font-family: var(--font-body);
+  gap: 8px;
+  font-family: var(--sans);
   font-size: var(--fs-sm);
   font-weight: 500;
   letter-spacing: -0.005em;
+  height: 32px;
+  padding: 0 14px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--fg-body);
+  color: var(--t-2);
   cursor: pointer;
-  transition: background var(--motion-fast) var(--motion-ease),
-    border-color var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
+  transition: color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 .btn:focus-visible {
-  outline: 1px solid var(--fg-primary);
+  outline: 1px solid var(--t-1);
   outline-offset: 2px;
 }
+.btn--line {
+  border-color: var(--ink-4s);
+  color: var(--t-2);
+}
+.btn--line:hover {
+  border-color: var(--ink-3);
+  color: var(--t-1);
+}
 .btn--solid {
-  background: var(--fg-primary);
-  color: var(--bg-page);
-  border-color: var(--fg-primary);
+  background: var(--t-1);
+  color: var(--ink-9);
 }
 .btn--solid:hover {
   background: #ffffff;
-  border-color: #ffffff;
 }
 .btn--solid:active {
   transform: translateY(0.5px);
 }
-.btn--line {
-  border-color: var(--border-hairline-color);
-  color: var(--fg-body);
-}
-.btn--line:hover {
-  border-color: var(--border-strong-color);
-  color: var(--fg-primary);
-}
 .btn--ghost {
-  color: var(--fg-subtle);
+  color: var(--t-3);
 }
 .btn--ghost:hover {
-  color: var(--fg-primary);
+  color: var(--t-1);
 }
 .btn--sm {
   height: 26px;
@@ -55,29 +53,30 @@
 }
 .btn[disabled],
 .btn[aria-disabled="true"] {
-  color: var(--fg-disabled);
-  border-color: var(--border-hairline-color);
+  color: var(--t-6);
+  border-color: var(--ink-4s);
   cursor: not-allowed;
+  background: transparent;
+}
+.btn--solid[disabled] {
+  background: var(--ink-5);
+  color: var(--t-5);
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 8px;
   height: 22px;
-  padding: 0 var(--space-2);
-  font-family: var(--font-mono);
+  padding: 0 8px;
+  font-family: var(--mono);
   font-size: var(--fs-xxs);
   font-weight: 500;
-  letter-spacing: var(--tracking-wide);
+  letter-spacing: var(--tr-wide);
   text-transform: uppercase;
-  color: var(--fg-subtle);
-  border: var(--border-hairline);
+  color: var(--t-4);
+  border: 1px solid var(--ink-4s);
   background: transparent;
-}
-.chip--live {
-  color: var(--accent-live);
-  border-color: color-mix(in oklab, var(--accent-live) 42%, transparent);
 }
 .chip--ok {
   color: var(--signal-ok);
@@ -91,42 +90,20 @@
   color: var(--signal-err);
   border-color: color-mix(in oklab, var(--signal-err) 42%, transparent);
 }
-
-.app-nav {
-  position: fixed;
-  top: 10px;
-  right: 16px;
-  z-index: 10;
-  display: flex;
-  gap: var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-}
-.app-nav a {
-  color: var(--fg-subtle);
-  text-decoration: none;
-  padding: 4px 8px;
-  border: var(--border-hairline);
-  transition: color var(--motion-fast) var(--motion-ease),
-    border-color var(--motion-fast) var(--motion-ease);
-}
-.app-nav a:hover,
-.app-nav a.is-active {
-  color: var(--fg-primary);
-  border-color: var(--border-strong-color);
+.chip--live {
+  color: var(--live);
+  border-color: color-mix(in oklab, var(--live) 42%, transparent);
 }
 
-.chat__body::-webkit-scrollbar,
-.inspector__body::-webkit-scrollbar {
+.chat-body::-webkit-scrollbar,
+.insp-body::-webkit-scrollbar {
   width: 8px;
 }
-.chat__body::-webkit-scrollbar-thumb,
-.inspector__body::-webkit-scrollbar-thumb {
-  background: var(--bg-surface-raised);
+.chat-body::-webkit-scrollbar-thumb,
+.insp-body::-webkit-scrollbar-thumb {
+  background: var(--ink-6);
 }
-.chat__body::-webkit-scrollbar-track,
-.inspector__body::-webkit-scrollbar-track {
+.chat-body::-webkit-scrollbar-track,
+.insp-body::-webkit-scrollbar-track {
   background: transparent;
 }

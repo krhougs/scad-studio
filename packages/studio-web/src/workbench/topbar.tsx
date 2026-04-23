@@ -1,5 +1,6 @@
-// Topbar: brand + workspace breadcrumb + connection status.
-// 设计规范见 docs/design-system/studio-datasheet-workbench.md §六。
+// Topbar — Buddin titleblock. Logo / 分隔 / 面包屑 / spacer / 连接状态 / ws URL。
+
+import { Users } from "lucide-react";
 
 export type TopbarStatus = "idle" | "connecting" | "ready" | "busy" | "error";
 
@@ -25,35 +26,40 @@ function statusText(status: TopbarStatus): string {
   }
 }
 
-function statusDotClass(status: TopbarStatus): string {
+function dotClass(status: TopbarStatus): string {
   if (status === "ready") return "dot";
   if (status === "busy") return "dot dot--live";
   if (status === "error") return "dot dot--err";
-  return "dot";
+  if (status === "idle") return "dot dot--off";
+  return "dot dot--off";
 }
 
 export function Topbar({ workspaceName, wsUrl, status, message }: TopbarProps) {
+  const host = wsUrl.replace(/^wss?:\/\//, "");
   return (
-    <header className="workbench__topbar" data-testid="workbench-topbar">
-      <span className="topbar__brand">scad studio</span>
-      <span className="topbar__sep" aria-hidden="true" />
-      <nav className="topbar__crumb" aria-label="workspace breadcrumb">
+    <div className="topbar" data-testid="workbench-topbar">
+      <a className="logo" href="/" aria-label="scad studio home">
+        scad studio
+      </a>
+      <div className="sep-v" aria-hidden="true" />
+      <div className="crumb" aria-label="workspace breadcrumb">
         <span>workspace</span>
-        <span className="topbar__slash">/</span>
+        <span className="sl">/</span>
         <b data-testid="workspace-name">{workspaceName}</b>
-      </nav>
-      <span className="topbar__spacer" />
-      <span
-        className="topbar__meta"
+      </div>
+      <div className="spacer" />
+      <div
+        className="meta"
         data-testid="connection-status"
         title={message || undefined}
       >
-        <span className={statusDotClass(status)} aria-hidden="true" />
+        <span className={dotClass(status)} aria-hidden="true" />
         <span>{statusText(status)}</span>
-      </span>
-      <span className="topbar__meta" data-testid="ws-url" title={wsUrl}>
-        <span>{wsUrl}</span>
-      </span>
-    </header>
+      </div>
+      <div className="meta" data-testid="ws-url" title={wsUrl}>
+        <Users size={12} strokeWidth={1.5} aria-hidden="true" />
+        <span>{host}</span>
+      </div>
+    </div>
   );
 }

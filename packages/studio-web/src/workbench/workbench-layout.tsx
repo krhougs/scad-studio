@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
-import { CanvasZone } from "./canvas-zone";
+import { CanvasZone, type ViewPreset } from "./canvas-zone";
 import { ChatZone } from "./chat-zone";
 import {
   Inspector,
@@ -100,6 +100,10 @@ export function WorkbenchLayout() {
   const [rootEntries, setRootEntries] = useState<InspectorEntry[]>([]);
   const [rootLoaded, setRootLoaded] = useState(false);
   const [clientReady, setClientReady] = useState(false);
+  const [activeView, setActiveView] = useState<ViewPreset>("iso");
+  const [meshStats, setMeshStats] = useState<
+    { vertices: number; indices: number } | null
+  >(null);
 
   const openTabs = useUiStore((s) => s.openTabs);
   const activeTabId = useUiStore((s) => s.activeTabId);
@@ -362,9 +366,16 @@ export function WorkbenchLayout() {
     openTabs.find((tab) => tab.id === activeTabId) ?? null;
   const previewTargetLabel = activeTab ? activeTab.label : "—";
   const client = clientReady ? clientRef.current : null;
+  const meshSummary = meshStats
+    ? { label: activeTab?.label ?? "mesh", ...meshStats }
+    : null;
+  const showMeshPanels = activeTab?.kind === "mesh";
+  const defaultExportFilename = activeTab
+    ? deriveExportFilename(activeTab.label)
+    : "export.stl";
 
   return (
-    <div className="workbench" data-testid="workbench-layout">
+    <div className="app" data-testid="workbench-layout">
       <Topbar
         workspaceName={rootName}
         wsUrl={wsUrl}
@@ -385,6 +396,10 @@ export function WorkbenchLayout() {
         client={client}
         refreshSignal={scadRefreshSignal}
         onLog={log.append}
+        meshStats={meshStats}
+        activeView={activeView}
+        onSelectView={setActiveView}
+        onMeshStats={setMeshStats}
       />
       <Inspector
         rootName={rootName}
@@ -394,13 +409,26 @@ export function WorkbenchLayout() {
         onExpandDirectory={handleExpandDirectory}
         onCollapseDirectory={handleCollapseDirectory}
         previewTargetLabel={previewTargetLabel}
-        meshSummary={null}
+        meshSummary={meshSummary}
         expandedDirectories={expanded}
         directoryKey={pathKey}
+        activeFilePath={activeTab ? activeTab.path : null}
+        client={client}
+        showMeshPanels={showMeshPanels}
+        meshSource={activeTab?.path}
+        defaultExportFilename={defaultExportFilename}
+        onExportStatus={setMessage}
         bottomSlot={<LogPanel entries={log.entries} />}
       />
     </div>
   );
+}
+
+function deriveExportFilename(label: string): string {
+  if (!label) return "export.stl";
+  const idx = label.lastIndexOf(".");
+  const stem = idx >= 0 ? label.slice(0, idx) : label;
+  return `${stem || "export"}.stl`;
 }
 
 function extractChangedPaths(payload: unknown): Set<string> {
