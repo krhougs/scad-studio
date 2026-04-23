@@ -14,10 +14,10 @@ use app_server_protocol::{
 use serde::{Deserialize, Serialize};
 use studio_web_wasm::wasm_bridge::{
     client::{
-        client_begin_handshake, client_cancel, client_create, client_dispatch_workspace_current,
-        client_drain_events, client_mark_transport_closed, client_next_outbound,
-        client_receive_inbound, client_snapshot, client_subscribe_directory_watch, client_tick,
-        ClientHandle,
+        client_begin_handshake, client_cancel, client_create, client_create_with_timeouts,
+        client_destroy, client_dispatch_workspace_current, client_drain_events,
+        client_mark_transport_closed, client_next_outbound, client_receive_inbound,
+        client_snapshot, client_subscribe_directory_watch, client_tick, ClientHandle,
     },
     renderer::{renderer_create, renderer_destroy, renderer_resize},
 };
@@ -122,17 +122,32 @@ fn new_client_with_timeouts(workspace_current_ms: Option<u64>) -> ClientHandle {
         export_run: None,
         watch: None,
     };
-    client_create(to_js(&timeouts)).expect("client_create")
+    client_create_with_timeouts(to_js(&timeouts)).expect("client_create_with_timeouts")
 }
 
 fn perform_handshake(handle: &mut ClientHandle) {
     client_begin_handshake(handle, to_js(&handshake_params())).expect("begin_handshake");
-    let outbound = client_next_outbound(handle).expect("handshake outbound");
+    let outbound = client_next_outbound(handle)
+        .expect("handle alive")
+        .expect("handshake outbound");
     match decode_outbound(&outbound) {
         ClientEnvelope::Handshake(_) => {}
         other => panic!("expected handshake envelope, got {:?}", other),
     }
     client_receive_inbound(handle, &handshake_ack_bytes()).expect("inbound ack");
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+enum DrainedError {
+    InvalidHandle,
+    NotReady,
+    DecodeError { context: String },
+    UnknownRequest { request_id: RequestId },
+    TransportClosed,
+    Cancelled,
+    ProtocolError { code: String, message: String },
+    Timeout,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -171,7 +186,7 @@ enum DrainedEvent {
 
 #[wasm_bindgen_test]
 fn handshake_completes_and_emits_event() {
-    let mut handle = client_create(JsValue::UNDEFINED).expect("client_create");
+    let mut handle = client_create();
     perform_handshake(&mut handle);
     let events = drain_events(&mut handle);
     assert!(events
@@ -181,12 +196,14 @@ fn handshake_completes_and_emits_event() {
 
 #[wasm_bindgen_test]
 fn request_success_emits_succeeded_event() {
-    let mut handle = client_create(JsValue::UNDEFINED).expect("client_create");
+    let mut handle = client_create();
     perform_handshake(&mut handle);
     drain_events(&mut handle); // 清空握手事件
 
     let request_id = client_dispatch_workspace_current(&mut handle).expect("dispatch");
-    let outbound = client_next_outbound(&mut handle).expect("request outbound");
+    let outbound = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("request outbound");
     let parsed = decode_outbound(&outbound);
     let observed = expect_request_id(&parsed);
     assert_eq!(observed.0, request_id);
@@ -209,15 +226,17 @@ fn request_success_emits_succeeded_event() {
 
 #[wasm_bindgen_test]
 fn cancel_prevents_success_event() {
-    let mut handle = client_create(JsValue::UNDEFINED).expect("client_create");
+    let mut handle = client_create();
     perform_handshake(&mut handle);
     drain_events(&mut handle);
 
     let request_id = client_dispatch_workspace_current(&mut handle).expect("dispatch");
-    let _ = client_next_outbound(&mut handle).expect("outbound drained");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("outbound drained");
     let cancel_id = client_cancel(&mut handle, request_id).expect("cancel");
     assert_ne!(cancel_id, request_id);
-    let _ = client_next_outbound(&mut handle); // cancel envelope
+    let _ = client_next_outbound(&mut handle).expect("handle alive"); // cancel envelope
 
     let events = drain_events(&mut handle);
     let failed_cancelled = events.iter().any(|event| match event {
@@ -256,12 +275,14 @@ fn cancel_prevents_success_event() {
 
 #[wasm_bindgen_test]
 fn transport_close_replays_pending_on_reconnect() {
-    let mut handle = client_create(JsValue::UNDEFINED).expect("client_create");
+    let mut handle = client_create();
     perform_handshake(&mut handle);
     drain_events(&mut handle);
 
     let request_id = client_dispatch_workspace_current(&mut handle).expect("dispatch");
-    let request_bytes = client_next_outbound(&mut handle).expect("outbound initial");
+    let request_bytes = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("outbound initial");
     let parsed = decode_outbound(&request_bytes);
     assert_eq!(expect_request_id(&parsed).0, request_id);
 
@@ -277,12 +298,16 @@ fn transport_close_replays_pending_on_reconnect() {
     );
 
     client_begin_handshake(&mut handle, to_js(&handshake_params())).expect("reconnect begin");
-    let first = client_next_outbound(&mut handle).expect("reconnect outbound");
+    let first = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("reconnect outbound");
     match decode_outbound(&first) {
         ClientEnvelope::Reconnect(_) => {}
         other => panic!("expected reconnect envelope, got {:?}", other),
     }
-    let second = client_next_outbound(&mut handle).expect("replayed request");
+    let second = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("replayed request");
     let replayed = decode_outbound(&second);
     assert_eq!(expect_request_id(&replayed).0, request_id);
 
@@ -299,7 +324,7 @@ fn transport_close_replays_pending_on_reconnect() {
 
 #[wasm_bindgen_test]
 fn watch_resubscribes_after_reconnect_and_emits_watch_resubscribed() {
-    let mut handle = client_create(JsValue::UNDEFINED).expect("client_create");
+    let mut handle = client_create();
     perform_handshake(&mut handle);
     drain_events(&mut handle);
 
@@ -309,7 +334,9 @@ fn watch_resubscribes_after_reconnect_and_emits_watch_resubscribed() {
     };
     let watch_request_id =
         client_subscribe_directory_watch(&mut handle, to_js(&watch_params)).expect("subscribe");
-    let subscribe_bytes = client_next_outbound(&mut handle).expect("watch outbound");
+    let subscribe_bytes = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("watch outbound");
     match decode_outbound(&subscribe_bytes) {
         ClientEnvelope::Request(ClientRequestEnvelope {
             command: ClientCommand::WatchSubscribe(_),
@@ -326,7 +353,7 @@ fn watch_resubscribes_after_reconnect_and_emits_watch_resubscribed() {
     client_begin_handshake(&mut handle, to_js(&handshake_params())).expect("reconnect begin");
 
     let mut saw_resubscribe = false;
-    while let Some(frame) = client_next_outbound(&mut handle) {
+    while let Ok(Some(frame)) = client_next_outbound(&mut handle) {
         if let ClientEnvelope::Request(ClientRequestEnvelope {
             command: ClientCommand::WatchSubscribe(_),
             request_id,
@@ -358,13 +385,13 @@ fn watch_resubscribes_after_reconnect_and_emits_watch_resubscribed() {
 fn request_timeout_fires_via_tick() {
     let mut handle = new_client_with_timeouts(Some(100));
     // 先 tick 设置时间基准
-    client_tick(&mut handle, 1_000);
+    client_tick(&mut handle, 1_000).expect("handle alive");
     perform_handshake(&mut handle);
     drain_events(&mut handle);
 
     let request_id = client_dispatch_workspace_current(&mut handle).expect("dispatch");
-    let _ = client_next_outbound(&mut handle);
-    client_tick(&mut handle, 1_000 + 1_000); // 远超 100ms 超时窗
+    let _ = client_next_outbound(&mut handle).expect("handle alive");
+    client_tick(&mut handle, 1_000 + 1_000).expect("handle alive"); // 远超 100ms 超时窗
     let events = drain_events(&mut handle);
     let timed_out = events.iter().any(|event| match event {
         DrainedEvent::RequestTimedOut { request_id: id } => id.0 == request_id,
@@ -390,6 +417,26 @@ fn renderer_destroy_is_idempotent_when_handle_unavailable() {
     // 真实 renderer 实现在 Phase 3。
     let _ = renderer_resize;
     let _ = renderer_destroy;
+}
+
+#[wasm_bindgen_test]
+fn client_destroy_is_idempotent_and_guards_subsequent_calls() {
+    let mut handle = client_create();
+    client_destroy(&mut handle);
+    // 第二次 destroy 不 panic。
+    client_destroy(&mut handle);
+    // destroy 后的 dispatch 返回 InvalidHandle。
+    let err = client_dispatch_workspace_current(&mut handle)
+        .expect_err("dispatch after destroy must fail");
+    let parsed: DrainedError =
+        serde_wasm_bindgen::from_value(err).expect("error is serialized ClientError");
+    assert!(
+        matches!(parsed, DrainedError::InvalidHandle),
+        "expected InvalidHandle, got {:?}",
+        parsed
+    );
+    // tick 后续也走 InvalidHandle。
+    assert!(client_tick(&mut handle, 0).is_err());
 }
 
 // ---------- local serde shims ----------
