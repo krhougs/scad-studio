@@ -1,11 +1,15 @@
-// Minimal workbench shell. Phase 3 only proves the end-to-end flow:
-// open WebSocket → handshake → workspace.current → workspace.list → preview.request.
-// Phase 4 will replace this with the five-zone Buddin layout.
+// Workbench layout: CSS Grid 五区外框 + transport/protocol 生命周期接线。
+// Phase 4 把 Phase 3 的 WorkbenchShell 拆成：本文件 + topbar/rail/chat/canvas/
+// inspector 五个哑组件。业务数据来源仍是 WasmClient snapshot + Zustand ui-store。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BrowserWebSocketTransport } from "../transport/websocket-transport";
 import { WasmClient } from "../wasm-bridge";
-import { useCanvasRendererController } from "../canvas/renderer-controller";
+import { CanvasZone } from "./canvas-zone";
+import { ChatZone } from "./chat-zone";
+import { Inspector, type InspectorEntry } from "./inspector";
+import { Rail } from "./rail";
+import { Topbar, type TopbarStatus } from "./topbar";
 
 type Phase =
   | "idle"
@@ -38,13 +42,76 @@ function resolveWsUrl(): string {
   return "ws://127.0.0.1:38421";
 }
 
-export function WorkbenchShell() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const renderer = useCanvasRendererController(canvasRef);
+function formatPath(path: unknown): string {
+  if (typeof path === "string") return path;
+  if (path && typeof path === "object") {
+    const handle = path as Record<string, unknown>;
+    for (const key of ["value", "path", "id"]) {
+      const v = handle[key];
+      if (typeof v === "string") return v;
+    }
+    try {
+      return JSON.stringify(path);
+    } catch {
+      return "[path]";
+    }
+  }
+  return String(path ?? "");
+}
 
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null) {
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
+function phaseToStatus(phase: Phase): TopbarStatus {
+  switch (phase) {
+    case "idle":
+      return "idle";
+    case "connecting":
+    case "handshaking":
+      return "connecting";
+    case "ready":
+    case "preview-ready":
+      return "ready";
+    case "preview-pending":
+      return "busy";
+    case "error":
+    case "preview-error":
+      return "error";
+  }
+}
+
+type InitialResult =
+  | { kind: "ready"; message: string }
+  | { kind: "error"; message: string };
+
+async function runInitialFlow(client: WasmClient): Promise<InitialResult> {
+  try {
+    await client.dispatchWorkspaceCurrent();
+  } catch (err) {
+    return { kind: "error", message: `workspace.current: ${describeError(err)}` };
+  }
+  try {
+    await client.dispatchWorkspaceList({ directory: null });
+  } catch (err) {
+    return { kind: "error", message: `workspace.list: ${describeError(err)}` };
+  }
+  return { kind: "ready", message: "workspace ready" };
+}
+
+export function WorkbenchLayout() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
   const [snapshot, setSnapshot] = useState<Snapshot>(null);
+  const [previewTarget, setPreviewTarget] = useState<string>("—");
 
   const wsUrl = useMemo(() => resolveWsUrl(), []);
   const clientRef = useRef<WasmClient | null>(null);
@@ -140,9 +207,20 @@ export function WorkbenchShell() {
     };
   }, [wsUrl]);
 
+  const entries: InspectorEntry[] = (snapshot?.workspace_list?.entries ?? []).map(
+    (entry) => ({
+      label: formatPath(entry.path),
+      path: entry.path,
+      kind: entry.kind,
+    }),
+  );
+  const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
+
   const handlePreview = (path: unknown) => {
     const client = clientRef.current;
     if (!client) return;
+    const label = formatPath(path);
+    setPreviewTarget(label);
     setPhase("preview-pending");
     setMessage("preview pending");
     client
@@ -162,101 +240,27 @@ export function WorkbenchShell() {
       });
   };
 
-  const entries = snapshot?.workspace_list?.entries ?? [];
-  const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
-
   return (
-    <section style={{ padding: "16px", fontFamily: "ui-monospace, monospace" }}>
-      <header>
-        <h1 style={{ margin: 0 }}>scad-studio web</h1>
-        <p data-testid="phase">phase: {phase}</p>
-        <p data-testid="message">message: {message}</p>
-        <p data-testid="ws-url">ws: {wsUrl}</p>
-      </header>
-      <section>
-        <h2>workspace</h2>
-        <p data-testid="workspace-name">{rootName}</p>
-      </section>
-      <section>
-        <h2>entries</h2>
-        <ul data-testid="entries">
-          {entries.map((entry, idx) => {
-            const label = formatPath(entry.path);
-            return (
-              <li key={`${label}-${idx}`}>
-                <button
-                  type="button"
-                  data-testid={`entry-${label}`}
-                  onClick={() => handlePreview(entry.path)}
-                >
-                  {entry.kind}: {label}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-      <section>
-        <h2>renderer</h2>
-        <p data-testid="renderer-status">
-          {renderer.ready
-            ? "ready"
-            : `stub (${renderer.lastError ?? "not created yet"})`}
-        </p>
-        <canvas
-          ref={canvasRef}
-          width={640}
-          height={360}
-          style={{ border: "1px solid #444" }}
-        />
-      </section>
-    </section>
+    <div className="workbench" data-testid="workbench-layout">
+      <Topbar
+        workspaceName={rootName}
+        wsUrl={wsUrl}
+        status={phaseToStatus(phase)}
+        message={message}
+      />
+      <Rail />
+      <ChatZone />
+      <CanvasZone
+        phase={phase}
+        message={message}
+        previewTargetLabel={previewTarget}
+      />
+      <Inspector
+        rootName={rootName}
+        entries={entries}
+        onRequestPreview={handlePreview}
+        previewTargetLabel={previewTarget}
+      />
+    </div>
   );
-}
-
-type InitialResult =
-  | { kind: "ready"; message: string }
-  | { kind: "error"; message: string };
-
-async function runInitialFlow(client: WasmClient): Promise<InitialResult> {
-  try {
-    await client.dispatchWorkspaceCurrent();
-  } catch (err) {
-    return { kind: "error", message: `workspace.current: ${describeError(err)}` };
-  }
-  try {
-    await client.dispatchWorkspaceList({ directory: null });
-  } catch (err) {
-    return { kind: "error", message: `workspace.list: ${describeError(err)}` };
-  }
-  return { kind: "ready", message: "workspace ready" };
-}
-
-function describeError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null) {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
-}
-
-function formatPath(path: unknown): string {
-  if (typeof path === "string") return path;
-  if (path && typeof path === "object") {
-    const handle = path as Record<string, unknown>;
-    for (const key of ["value", "path", "id"]) {
-      const v = handle[key];
-      if (typeof v === "string") return v;
-    }
-    try {
-      return JSON.stringify(path);
-    } catch {
-      return "[path]";
-    }
-  }
-  return String(path ?? "");
 }

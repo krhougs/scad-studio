@@ -99,6 +99,8 @@ test("workspace info appears after handshake", async ({ page }) => {
   });
   expect(regCount).toBe(0);
 
+  // Topbar workspace-name 与 inspector 标题都会渲染 workspace 名；用 topbar 的
+  // data-testid 做断言（五区布局把两个位置拆开，但 breadcrumb 仍唯一 data-testid）。
   await expect(page.getByTestId("workspace-name")).not.toHaveText("(loading)", {
     timeout: 30_000,
   });

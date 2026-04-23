@@ -1,0 +1,136 @@
+/*
+ * Five-zone workbench grid + Topbar + Rail.
+ * 五区 chat / canvas / inspector 见 ./workbench-zones.css；
+ * 按钮 / chip / nav / 滚动条见 ./primitives.css。
+ * 结构参考 /Users/krhougs/LocalCodes/buddin/ui_kits/app/index.html；
+ * 规范见 docs/design-system/studio-datasheet-workbench.md §六。
+ */
+
+.workbench {
+  display: grid;
+  grid-template-columns: 52px 360px 1fr 320px;
+  grid-template-rows: 44px 1fr;
+  grid-template-areas:
+    "topbar topbar   topbar   topbar"
+    "rail   chat     canvas   inspector";
+  height: 100vh;
+  min-width: 1280px;
+  background: var(--bg-page);
+  color: var(--fg-body);
+}
+
+/* Topbar ------------------------------------------------------------- */
+.workbench__topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+  border-bottom: var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-primary);
+  text-transform: none;
+}
+
+.topbar__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-hairline-color);
+}
+
+.topbar__crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-subtle);
+  text-transform: none;
+}
+.topbar__crumb b {
+  font-weight: 500;
+  color: var(--fg-body);
+}
+.topbar__crumb .topbar__slash {
+  color: var(--fg-disabled);
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.topbar__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  color: var(--fg-subtle);
+}
+.topbar__meta .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--signal-ok);
+}
+.topbar__meta .dot--live {
+  background: var(--accent-live);
+}
+.topbar__meta .dot--err {
+  background: var(--signal-err);
+}
+
+/* Rail --------------------------------------------------------------- */
+.workbench__rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  border-right: var(--border-hairline);
+  padding: var(--space-2) 0;
+}
+.rail__button {
+  appearance: none;
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
+}
+.rail__button:hover {
+  color: var(--fg-body);
+}
+.rail__button[aria-current="page"],
+.rail__button.is-active {
+  color: var(--fg-primary);
+  border-left-color: var(--fg-primary);
+}
+.rail__separator {
+  height: 1px;
+  margin: var(--space-2) var(--space-3);
+  background: var(--border-hairline-color);
+}
+.rail__grow {
+  flex: 1;
+}

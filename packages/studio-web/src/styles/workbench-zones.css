@@ -1,0 +1,312 @@
+/* Chat / Canvas / Inspector 区样式。与 ./workbench.css 同一来源。 */
+
+/* Chat --------------------------------------------------------------- */
+.workbench__chat {
+  grid-area: chat;
+  display: flex;
+  flex-direction: column;
+  border-right: var(--border-hairline);
+  overflow: hidden;
+}
+.chat__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: var(--border-hairline);
+}
+.chat__kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.chat__sub {
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.chat__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.chat__placeholder {
+  color: var(--fg-subtle);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-tight);
+}
+.chat__input {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: var(--border-hairline);
+}
+.chat__wrap {
+  border: var(--border-hairline);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  transition: border-color var(--motion-fast) var(--motion-ease);
+}
+.chat__wrap:focus-within {
+  border-color: var(--fg-primary);
+}
+.chat__textarea {
+  width: 100%;
+  min-height: 40px;
+  background: transparent;
+  border: 0;
+  resize: none;
+  color: var(--fg-primary);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-tight);
+  outline: none;
+  line-height: 1.5;
+}
+.chat__textarea::placeholder {
+  color: var(--fg-dim);
+}
+.chat__tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+/* Canvas ------------------------------------------------------------- */
+.workbench__canvas {
+  grid-area: canvas;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-canvas-well);
+}
+.canvas__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 16px 16px, 16px 16px, 80px 80px, 80px 80px;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
+  mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
+}
+.canvas__chrome-top {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-3);
+  z-index: 2;
+  pointer-events: none;
+}
+.canvas__chrome-top > * {
+  pointer-events: auto;
+}
+.canvas__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-end;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  background: rgba(11, 11, 13, 0.78);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: var(--border-hairline);
+  padding: var(--space-2) var(--space-3);
+  white-space: nowrap;
+}
+.canvas__stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.canvas__surface {
+  width: min(100%, 720px);
+  height: min(100%, 420px);
+  border: var(--border-hairline);
+  background: transparent;
+  display: block;
+}
+.canvas__chrome-bot {
+  position: absolute;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  z-index: 2;
+}
+.canvas__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: rgba(11, 11, 13, 0.78);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: var(--border-hairline);
+  padding: var(--space-2) var(--space-4);
+  min-width: 0;
+  overflow: hidden;
+}
+.canvas__status b {
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-primary);
+  white-space: nowrap;
+}
+.canvas__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.canvas__cell span {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-primary);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.canvas__cell span.is-ok {
+  color: var(--signal-ok);
+}
+.canvas__cell span.is-err {
+  color: var(--signal-err);
+}
+.canvas__divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-hairline-color);
+}
+
+/* Inspector ---------------------------------------------------------- */
+.workbench__inspector {
+  grid-area: inspector;
+  display: flex;
+  flex-direction: column;
+  border-left: var(--border-hairline);
+  overflow: hidden;
+}
+.inspector__head {
+  padding: var(--space-4) var(--space-5);
+  border-bottom: var(--border-hairline);
+}
+.inspector__kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.inspector__title {
+  margin-top: var(--space-1);
+  font-family: var(--font-body);
+  font-size: var(--fs-lg);
+  font-weight: 400;
+  letter-spacing: var(--tracking-medium);
+  color: var(--fg-primary);
+}
+.inspector__body {
+  flex: 1;
+  overflow-y: auto;
+}
+.inspector__section {
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: var(--border-hairline);
+}
+.inspector__section:first-child {
+  border-top: 0;
+}
+.inspector__section h5 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.inspector__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-tight);
+}
+.inspector__field-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.inspector__field-value {
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  word-break: break-all;
+}
+.inspector__field-value.is-muted {
+  color: var(--fg-subtle);
+}
+.inspector__list {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-hairline);
+}
+.inspector__list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-muted);
+  border-bottom: var(--border-hairline);
+}
+.inspector__list-item:last-child {
+  border-bottom: 0;
+}
+.inspector__list-item.is-active {
+  color: var(--fg-primary);
+  background: var(--bg-surface-raised);
+}
+.inspector__list-item .dim {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}

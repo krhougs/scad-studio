@@ -1,5 +1,5 @@
-import { WorkbenchShell } from "../components/workbench-shell";
+import { WorkbenchLayout } from "../workbench/workbench-layout";
 
 export function IndexRoute() {
-  return <WorkbenchShell />;
+  return <WorkbenchLayout />;
 }
