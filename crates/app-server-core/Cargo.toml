@@ -1,0 +1,17 @@
+[package]
+name = "app-server-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "app_server_core"
+path = "src/lib.rs"
+
+[dependencies]
+app-server-protocol = { path = "../app-server-protocol" }
+dirs = "6"
+log.workspace = true
+notify = "8.2"
+scad-scene = { path = "../scad-scene" }
+serde_json.workspace = true
+studio-common = { path = "../studio-common" }

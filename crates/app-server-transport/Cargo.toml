@@ -1,0 +1,20 @@
+[package]
+name = "app-server-transport"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "app_server_transport"
+path = "src/lib.rs"
+
+[dependencies]
+app-server-protocol = { path = "../app-server-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = ["CloseEvent", "ErrorEvent", "Event", "MessageEvent", "WebSocket"]

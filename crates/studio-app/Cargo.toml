@@ -1,0 +1,47 @@
+[package]
+name = "studio-app"
+version.workspace = true
+edition.workspace = true
+
+[package.metadata.bundle]
+name = "SCAD Studio"
+identifier = "studio.scad.scad-studio"
+
+[lib]
+name = "studio_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "studio-app"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+app-server-host = { path = "../app-server-host" }
+app-server-protocol = { path = "../app-server-protocol" }
+app-server-transport = { path = "../app-server-transport" }
+egui = "0.33"
+egui-winit = "0.33"
+egui_commonmark.workspace = true
+env_logger = "0.11"
+glam.workspace = true
+log.workspace = true
+muda = "0.17"
+pollster = "0.4"
+rfd = "0.15"
+scad-scene = { path = "../scad-scene" }
+scad-ui = { path = "../scad-ui" }
+scad-viewer = { path = "../scad-viewer" }
+serde_json.workspace = true
+studio-common = { path = "../studio-common" }
+tempfile = "3.23"
+winit = "0.30"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CATransaction"] }

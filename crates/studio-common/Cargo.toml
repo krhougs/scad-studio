@@ -1,0 +1,14 @@
+[package]
+name = "studio-common"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "studio_common"
+path = "src/lib.rs"
+
+[dependencies]
+app-server-protocol = { path = "../app-server-protocol" }
+regex = "1.12"
+serde.workspace = true
+serde_json.workspace = true
