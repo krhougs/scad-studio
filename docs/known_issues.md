@@ -1,8 +1,21 @@
 # 已知问题记录
 
+## 2026-04-22 15:40:00: CLI 会话无法完成桌面 GUI 的完整交互式回归
+
+- 来源：执行 `prompt-archives/2026042200-studio-app-server-unification/plan-00.md` 的验收过程中，已能通过 workspace 构建/测试和桌面二进制编译确认 `studio-app` 可进入运行路径，但当前会话没有桌面自动化能力，无法在同一条执行链中继续点击菜单、打开工作区、切换文档标签并观察真实窗口渲染。
+- 原因：当前环境具备编译、测试和进程级启动能力，但不具备桌面 GUI 级别的交互自动化工具；已有自动化测试主要覆盖状态机和纯逻辑，不能等价替代完整的人机交互回归。
+- 影响范围：
+  - Phase 1、Phase 5、Phase 8 中要求的桌面 GUI 人工回归目前只能以“启动 smoke + 现有自动化测试 + 代码复用证据”部分替代，无法在本会话里做到逐点击验。
+  - 后续如果出现只在真实桌面交互中暴露的问题（菜单焦点、窗口拖拽、平台快捷键、Open Folder 对话框等），当前自动化覆盖未必能提前发现。
+- 可能的解法：
+  - 为 `studio-app` 增加 repo-local 的桌面 smoke 模式或更细粒度的 UI harness，至少覆盖打开工作区、切换标签、触发 viewer 渲染与 watcher 刷新。
+  - 引入可在本地桌面环境执行的 GUI 自动化工具链，并将关键回归场景沉淀为脚本。
+  - 在有人值守的桌面环境中补一轮人工回归，并把结果补写回对应 `plan-00-result.md`。
+- 当前处理方式：本轮先以 `cargo check --workspace`、`cargo test --workspace`、`cargo check -p studio-app --bin studio-app` 以及共享 UI / 共享状态代码证据作为主要验收依据；交互式桌面回归能力缺口单独记录为已知问题，供后续 Phase 5 / Phase 8 继续处理。
+
 ## 2026-04-07 21:39:25: DocumentWorkspace 迁移后仍保留 `DocumentKey` 与 `TabId` 双身份体系
 
-- 来源：对 `src/app.rs`、`src/main.rs`、`src/studio_document.rs`、`src/viewer_tab.rs`、`src/markdown_tab.rs` 的迁移代码审查。
+- 来源：对 `crates/studio-app/src/app.rs`、`crates/studio-app/src/main.rs`、`crates/studio-app/src/studio_document.rs`、`crates/studio-app/src/viewer_tab/`、`crates/studio-app/src/markdown_tab.rs` 的迁移代码审查。
 - 原因：文档工作区已经以 `DocumentKey` 作为主身份，但运行时消息分发仍依赖 `legacy_tab_id()`，`ViewerTab`/`MarkdownTab` 继续实现 `WorkTab`，`main.rs` 仍通过 `document_by_legacy_tab_id_mut()` 查找会话。
 - 影响范围：
   - Phase 3 若要彻底移除旧 `tab_system`，仍需先清理这条遗留依赖链。
@@ -16,7 +29,7 @@
 
 ## 2026-04-07 21:39:25: DocumentWorkspace 真实运行时分支缺少自动化测试
 
-- 来源：对 `src/app.rs`、`src/main.rs`、`src/work_area.rs` 的 DocumentWorkspace 迁移代码审查。
+- 来源：对 `crates/studio-app/src/app.rs`、`crates/studio-app/src/main.rs`、`crates/studio-app/src/work_area.rs` 的 DocumentWorkspace 迁移代码审查。
 - 原因：当前 `studio_app_tests` 只验证通用状态与欢迎态，未覆盖真实文档会话下的打开文件、watch 回调、Viewer/Markdown 分发与工作区轨道交互；生产代码中的真实会话分支仍主要依赖 `cargo build` 做编译级回归。
 - 影响范围：
   - 后续调整 `DocumentWorkspace` 接线、文件监听或 Viewer/Markdown 路由时，较难通过自动化测试及时发现行为退化。
