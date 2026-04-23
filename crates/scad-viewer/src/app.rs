@@ -1,8 +1,8 @@
-use scad_data::{AppConfig, DocumentState, SlicerInstall};
+pub use app_server_core::{LogEntry, LogLevel, SlicerInstall};
 use scad_scene::{CameraMatrices, OrbitalCamera, RenderSettings};
 use std::path::{Path, PathBuf};
+use studio_common::{AppConfig, DocumentState};
 
-pub use scad_data::{LogEntry, LogLevel};
 pub use scad_scene::{ColorMode, ProjectionMode, RenderMode};
 
 #[derive(Debug, Clone, Default)]

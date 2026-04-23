@@ -7,20 +7,9 @@ edition.workspace = true
 name = "scad_viewer"
 path = "src/lib.rs"
 
-[[bin]]
-name = "scad-viewer"
-path = "src/main.rs"
-
 [dependencies]
+app-server-core = { path = "../app-server-core" }
 egui = "0.33"
-egui-winit = "0.33"
-env_logger = "0.11"
-glam = "0.30"
-log = "0.4"
-muda = "0.17"
-pollster = "0.4"
-rfd = "0.15"
-scad-data = { path = "../scad-data" }
 scad-scene = { path = "../scad-scene" }
+studio-common = { path = "../studio-common" }
 scad-ui = { path = "../scad-ui" }
-winit = "0.30"

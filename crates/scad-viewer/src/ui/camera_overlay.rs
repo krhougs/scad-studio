@@ -1,8 +1,8 @@
 use crate::app::{CameraAction, UiActions};
-use scad_data::AppConfig;
 use scad_scene::OrbitalCamera;
 use scad_ui::theme::{self, palette};
 use scad_ui::widgets::{filled_small_button, icon_button};
+use studio_common::AppConfig;
 
 pub fn show(
     ctx: &egui::Context,

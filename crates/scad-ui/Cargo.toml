@@ -10,10 +10,14 @@ path = "src/lib.rs"
 [dependencies]
 egui = "0.33"
 egui_commonmark = { workspace = true, features = ["better_syntax_highlighting"] }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "tiff",
+    "ico",
+] }
 log.workspace = true
-muda = "0.17"
 scad-scene = { path = "../scad-scene" }
-winit = "0.30"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging"] }

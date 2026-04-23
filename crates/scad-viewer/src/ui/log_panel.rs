@@ -1,7 +1,7 @@
 use crate::app::{LogEntry, LogLevel, ViewerState};
-use scad_data::AppConfig;
 use scad_ui::theme::{self, palette};
 use scad_ui::widgets::small_button;
+use studio_common::AppConfig;
 
 const PANEL_WIDTH: f32 = 400.0;
 

@@ -1,75 +1,50 @@
 use scad_ui::document_tabs::DocumentTabKind;
-use scad_ui::file_tree::{FileTree, FileTreeEntryKind, supported_document_tab_kind};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{stamp}-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
-}
-
-fn write_file(path: &PathBuf, content: &str) {
-    fs::write(path, content).expect("file should be written");
-}
+use scad_ui::file_tree::{FileTree, FileTreeEntry, FileTreeEntryKind, supported_document_tab_kind};
+use std::path::{Path, PathBuf};
 
 #[test]
-fn directory_children_are_sorted_with_directories_first() {
-    let root = unique_temp_dir("scad-ui-tree-sort");
-    fs::create_dir(root.join("zeta")).expect("dir should exist");
-    fs::create_dir(root.join("alpha")).expect("dir should exist");
-    write_file(&root.join("delta.md"), "delta");
-    write_file(&root.join("beta.scad"), "beta");
-
+fn set_children_updates_cache_for_requested_directory() {
+    let root = PathBuf::from("/tmp/workspace");
     let mut tree = FileTree::new(root.clone());
-    let children = tree.ensure_children(&root).expect("children should load");
+    tree.set_children(
+        root.clone(),
+        vec![
+            FileTreeEntry {
+                name: "alpha".into(),
+                path: root.join("alpha"),
+                kind: FileTreeEntryKind::Directory,
+            },
+            FileTreeEntry {
+                name: "beta.scad".into(),
+                path: root.join("beta.scad"),
+                kind: FileTreeEntryKind::File,
+            },
+        ],
+    );
+    let children = tree.cached_children(&root).expect("children should exist");
     let names: Vec<_> = children.iter().map(|entry| entry.name.clone()).collect();
     let kinds: Vec<_> = children.iter().map(|entry| entry.kind).collect();
 
-    assert_eq!(names, vec!["alpha", "zeta", "beta.scad", "delta.md"]);
+    assert_eq!(names, vec!["alpha", "beta.scad"]);
     assert_eq!(
         kinds,
-        vec![
-            FileTreeEntryKind::Directory,
-            FileTreeEntryKind::Directory,
-            FileTreeEntryKind::File,
-            FileTreeEntryKind::File,
-        ]
+        vec![FileTreeEntryKind::Directory, FileTreeEntryKind::File]
     );
-
-    fs::remove_dir_all(root).expect("temp dir should be removed");
 }
 
 #[test]
-fn children_cache_is_reused_until_invalidated() {
-    let root = unique_temp_dir("scad-ui-tree-cache");
-    write_file(&root.join("first.scad"), "first");
-
+fn invalidate_drops_cached_children_for_related_paths() {
+    let root = PathBuf::from("/tmp/workspace");
+    let nested = root.join("nested");
     let mut tree = FileTree::new(root.clone());
-    let initial = tree.ensure_children(&root).expect("children should load");
-    assert_eq!(initial.len(), 1);
-
-    write_file(&root.join("second.scad"), "second");
-    let cached = tree
-        .ensure_children(&root)
-        .expect("cached children should load");
-    assert_eq!(cached.len(), 1);
+    tree.set_children(root.clone(), Vec::new());
+    tree.set_children(nested.clone(), Vec::new());
+    assert!(tree.cached_children(&root).is_some());
+    assert!(tree.cached_children(&nested).is_some());
 
     tree.invalidate(&root);
-    let refreshed = tree
-        .ensure_children(&root)
-        .expect("children should refresh");
-    let names: Vec<_> = refreshed.iter().map(|entry| entry.name.clone()).collect();
-    assert_eq!(names, vec!["first.scad", "second.scad"]);
-
-    fs::remove_dir_all(root).expect("temp dir should be removed");
+    assert!(tree.cached_children(&root).is_none());
+    assert!(tree.cached_children(&nested).is_none());
 }
 
 #[test]

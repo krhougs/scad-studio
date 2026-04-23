@@ -1,7 +1,4 @@
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use egui::{Sense, Stroke, pos2};
 
@@ -32,6 +29,7 @@ pub struct FileTreeEntry {
 pub enum FileTreeAction {
     Select(PathBuf),
     OpenFile(PathBuf),
+    LoadDirectory(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -85,15 +83,12 @@ impl FileTree {
             .retain(|cached, _| !path_relation_matches(path, cached));
     }
 
-    pub fn ensure_children(&mut self, path: &Path) -> io::Result<&[FileTreeEntry]> {
-        if !self.children_cache.contains_key(path) {
-            let entries = read_children(path)?;
-            self.children_cache.insert(path.to_path_buf(), entries);
-        }
-        Ok(self
-            .children_cache
-            .get(path)
-            .expect("cache entry should exist"))
+    pub fn set_children(&mut self, path: PathBuf, entries: Vec<FileTreeEntry>) {
+        self.children_cache.insert(path, entries);
+    }
+
+    pub fn cached_children(&self, path: &Path) -> Option<&[FileTreeEntry]> {
+        self.children_cache.get(path).map(Vec::as_slice)
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<FileTreeAction> {
@@ -135,12 +130,12 @@ impl FileTree {
         }
 
         if is_expanded {
-            let entries: Vec<FileTreeEntry> = match self.ensure_children(&dir) {
-                Ok(slice) => slice.to_vec(),
-                Err(_) => Vec::new(),
-            };
-            if let Some(child_action) = self.show_children(ui, &entries, depth, stack) {
-                action = Some(child_action);
+            if let Some(entries) = self.children_cache.get(&dir).cloned() {
+                if let Some(child_action) = self.show_children(ui, &entries, depth, stack) {
+                    action = Some(child_action);
+                }
+            } else {
+                action = Some(FileTreeAction::LoadDirectory(dir));
             }
         }
 
@@ -281,35 +276,6 @@ pub fn supported_document_tab_kind(path: &Path) -> Option<DocumentTabKind> {
         }
         _ => None,
     }
-}
-
-fn read_children(path: &Path) -> io::Result<Vec<FileTreeEntry>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let kind = if file_type.is_dir() {
-            FileTreeEntryKind::Directory
-        } else {
-            FileTreeEntryKind::File
-        };
-        let name = entry.file_name().to_string_lossy().to_string();
-        entries.push(FileTreeEntry {
-            name,
-            path: entry.path(),
-            kind,
-        });
-    }
-    entries.sort_by_key(sort_key);
-    Ok(entries)
-}
-
-fn sort_key(entry: &FileTreeEntry) -> (u8, String, String) {
-    let kind_rank = match entry.kind {
-        FileTreeEntryKind::Directory => 0,
-        FileTreeEntryKind::File => 1,
-    };
-    (kind_rank, entry.name.to_lowercase(), entry.name.clone())
 }
 
 fn path_relation_matches(base: &Path, candidate: &Path) -> bool {

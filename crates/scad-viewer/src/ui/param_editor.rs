@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use scad_data::{DocumentState, ParameterEntry, ParameterKind, ParameterValue};
 use scad_ui::theme::palette;
+use studio_common::{DocumentState, ParameterEntry, ParameterKind, ParameterValue};
 
 pub fn show(ui: &mut egui::Ui, document: &mut DocumentState) {
     let entries = document

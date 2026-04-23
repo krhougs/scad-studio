@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use scad_data::{AppConfig, SlicerConfig};
 use scad_ui::theme::palette;
 use scad_ui::widgets::section_label;
+use studio_common::{AppConfig, SlicerConfig};
 
 const KNOWN_SLICERS: [&str; 3] = ["PrusaSlicer", "Bambu Studio", "Cura"];
 

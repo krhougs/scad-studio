@@ -1,7 +1,8 @@
 use crate::app::{UiActions, UiCommand, ViewerState};
-use scad_data::{AppConfig, DocumentState, ExportFormat, SlicerInstall};
+use app_server_core::SlicerInstall;
 use scad_ui::theme::{self, palette};
 use scad_ui::widgets::section_header;
+use studio_common::{AppConfig, DocumentState, ExportFormat};
 
 const PANEL_WIDTH: f32 = 280.0;
 
