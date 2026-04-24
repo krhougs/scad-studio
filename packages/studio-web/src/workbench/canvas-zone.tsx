@@ -22,18 +22,30 @@ import {
   type MeshViewerOptions,
 } from "../viewers/viewer-options";
 import { useEffect, useState } from "react";
+import { PRESET_STATES } from "../canvas/camera-state";
+import { projectViewportGizmoAxes } from "./viewport-gizmo-model";
 import { TabBar } from "./tabbar";
 import {
   ScadWorkbench,
   type ScadWorkbenchState,
 } from "./scad-workbench";
 
-type ViewPreset = "iso" | "front" | "top" | "right";
+type ViewPreset =
+  | "iso"
+  | "front"
+  | "back"
+  | "left"
+  | "right"
+  | "top"
+  | "bottom";
 const VIEW_PILLS: { id: ViewPreset; label: string }[] = [
   { id: "iso", label: "iso" },
   { id: "front", label: "front" },
-  { id: "top", label: "top" },
+  { id: "back", label: "back" },
+  { id: "left", label: "left" },
   { id: "right", label: "right" },
+  { id: "top", label: "top" },
+  { id: "bottom", label: "bottom" },
 ];
 
 type CanvasZoneProps = {
@@ -52,6 +64,7 @@ type CanvasZoneProps = {
   activeView: ViewPreset;
   onSelectView: (id: ViewPreset) => void;
   onMeshInfo: (info: MeshInfo | null) => void;
+  cameraState: CameraState | null;
   cameraOverride: CameraState | null;
   onCameraChange: (camera: CameraState) => void;
   onOpenCameraPanel: () => void;
@@ -75,6 +88,7 @@ export function CanvasZone(props: CanvasZoneProps) {
     activeView,
     onSelectView,
     onMeshInfo,
+    cameraState,
     cameraOverride,
     onCameraChange,
     onOpenCameraPanel,
@@ -142,6 +156,13 @@ export function CanvasZone(props: CanvasZoneProps) {
             ) : (
               <EmptyStagePlaceholder />
             )}
+            {isMeshLike ? (
+              <ViewportGizmo
+                activeView={activeView}
+                camera={cameraState}
+                onSelectView={onSelectView}
+              />
+            ) : null}
             {isMeshLike ? (
               <button
                 type="button"
@@ -283,18 +304,86 @@ function ActiveViewer({
 }
 
 function viewPresetToCamera(view: ViewPreset): CameraPreset {
-  // The topbar only surfaces 4 presets; map them onto the 7 camera-state
-  // presets Three.js knows about.
   switch (view) {
     case "iso":
       return "iso";
     case "front":
       return "front";
+    case "back":
+      return "back";
+    case "left":
+      return "left";
     case "top":
       return "top";
     case "right":
       return "right";
+    case "bottom":
+      return "bottom";
   }
+}
+
+function ViewportGizmo({
+  activeView,
+  camera,
+  onSelectView,
+}: {
+  activeView: ViewPreset;
+  camera: CameraState | null;
+  onSelectView: (id: ViewPreset) => void;
+}) {
+  const size = 72;
+  const axes = projectViewportGizmoAxes(
+    camera ?? PRESET_STATES[viewPresetToCamera(activeView)],
+    size,
+  );
+  return (
+    <div
+      className="viewport-gizmo"
+      data-testid="viewport-gizmo"
+      aria-label="viewport gizmo"
+    >
+      <svg
+        className="viewport-gizmo__axes"
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        aria-hidden="true"
+      >
+        {axes.map((axis) => (
+          <g
+            key={axis.id}
+            data-testid={`viewport-gizmo-axis-${axis.id}`}
+            data-end={`${axis.end[0].toFixed(3)},${axis.end[1].toFixed(3)}`}
+          >
+            <line
+              x1={axis.start[0]}
+              y1={axis.start[1]}
+              x2={axis.end[0]}
+              y2={axis.end[1]}
+              stroke={axis.color}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+            <circle cx={axis.end[0]} cy={axis.end[1]} r="2.8" fill={axis.color} />
+          </g>
+        ))}
+      </svg>
+      <div className="viewport-gizmo__views">
+        {VIEW_PILLS.map((view) => (
+          <button
+            key={view.id}
+            type="button"
+            className={view.id === activeView ? "active" : undefined}
+            data-testid={`viewport-gizmo-${view.id}`}
+            aria-pressed={view.id === activeView}
+            onClick={() => onSelectView(view.id)}
+          >
+            {view.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function EmptyStagePlaceholder() {

@@ -151,23 +151,15 @@ export function fitCameraToBounds(
     MAX_DIST,
     Math.max(MIN_DIST, (radius / Math.tan(limitingHalfFov)) * 1.35),
   );
-  const angles = presetAngles(preset);
-  return updateCameraFromSpherical(
-    {
-      position: [center[0], center[1] - distance, center[2]],
-      target: center,
-      up: preset === "top" || preset === "bottom" ? [0, 1, 0] : [0, 0, 1],
-      fovYDeg: DEFAULT_FOV_Y_DEG,
-      near: Math.max(radius / 1000, DEFAULT_NEAR),
-      far: Math.max(radius * 20, DEFAULT_FAR),
-    },
-    {
-      target: center,
-      distance,
-      azimuthDeg: angles.azimuthDeg,
-      elevationDeg: angles.elevationDeg,
-    },
-  );
+  const direction = presetDirection(preset);
+  return {
+    position: add(center, scale(direction, distance)),
+    target: center,
+    up: presetUp(preset),
+    fovYDeg: DEFAULT_FOV_Y_DEG,
+    near: Math.max(radius / 1000, DEFAULT_NEAR),
+    far: Math.max(radius * 20, DEFAULT_FAR),
+  };
 }
 
 export function sphericalFromCamera(state: CameraState): {
@@ -228,24 +220,27 @@ export function updateCameraFromSpherical(
   };
 }
 
-function presetAngles(preset: CameraPreset): {
-  azimuthDeg: number;
-  elevationDeg: number;
-} {
+function presetDirection(preset: CameraPreset): Vec3 {
   switch (preset) {
     case "front":
-      return { azimuthDeg: -90, elevationDeg: 0 };
+      return [0, -1, 0];
     case "back":
-      return { azimuthDeg: 90, elevationDeg: 0 };
+      return [0, 1, 0];
     case "left":
-      return { azimuthDeg: 180, elevationDeg: 0 };
+      return [-1, 0, 0];
     case "right":
-      return { azimuthDeg: 0, elevationDeg: 0 };
+      return [1, 0, 0];
     case "top":
-      return { azimuthDeg: 0, elevationDeg: 86 };
+      return [0, 0, 1];
     case "bottom":
-      return { azimuthDeg: 0, elevationDeg: -86 };
+      return [0, 0, -1];
     case "iso":
-      return { azimuthDeg: -45, elevationDeg: 35 };
+      return normalize([1, -1, 1]);
   }
+}
+
+function presetUp(preset: CameraPreset): Vec3 {
+  if (preset === "top") return [0, 1, 0];
+  if (preset === "bottom") return [0, -1, 0];
+  return [0, 0, 1];
 }

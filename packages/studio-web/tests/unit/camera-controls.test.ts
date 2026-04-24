@@ -105,7 +105,10 @@ describe("camera-controls", () => {
   });
 
   it("fits camera presets without changing project-coordinate view directions", () => {
-    const bounds = { min: [10, -20, -30], max: [30, 20, 30] };
+    const bounds = {
+      min: [10, -20, -30] as [number, number, number],
+      max: [30, 20, 30] as [number, number, number],
+    };
     const center = [20, 0, 0];
     const directions = [
       { preset: "top" as const, sign: [0, 0, 1], up: [0, 1, 0] },

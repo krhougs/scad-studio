@@ -80,16 +80,35 @@
 
 ## Phase 2：ViewportGizmo 当前相机指示
 
-- 状态：未完成，2026-04-24 返工后调整为 Phase 2。
+- 状态：已完成。
 - 前序目标保护：
   - 不改变 Phase 1 的数值控件结构、测试标识和稳定布局。
   - 不通过改写预览区域三轴映射来掩盖前端场景/相机问题。
   - 不修改后端 STL / 3MF / protocol mesh payload。
-- 待执行：
-  - 让 ViewportGizmo 展示 X/Y/Z 三条轴线，并随当前相机状态变化。
-  - 让 ViewportGizmo 点击覆盖 Top / Bottom / Front / Back / Right / Left 六个正交方向；iso 可以保留。
-  - 运行 ViewportGizmo 三条轴线投影、实时变化和六向点击测试。
-  - 独立 subagent review Phase 2 diff 或涉及文件清单。
+- 本轮变更摘要：
+  - 实现 `projectViewportGizmoAxes(camera, size)`，基于当前 camera forward / up 投影项目坐标 X/Y/Z 三轴。
+  - `CanvasZone` 增加 ViewportGizmo SVG 三轴显示，并扩展视角入口到 `iso/front/back/left/right/top/bottom`。
+  - `WorkbenchLayout` 将当前 `cameraState` 传入 `CanvasZone`，让 gizmo 随相机状态更新；无相机状态时使用 active preset fallback。
+  - 修正 bottom preset 的 screen up 为 `-Y`，并让 `fitCameraToBounds` 按六向 project-coordinate direction / up 定位。
+  - 同步旧 view pill top 浏览器断言为 `90.000`，与本计划 Top 从 `+Z` 侧看向原点一致。
+- 本轮验证：
+  - `bun x vitest run tests/unit/viewport-gizmo-model.test.ts`
+    - 结果：1 个测试文件通过，3 个测试通过。
+  - `bun x vitest run tests/unit/camera-controls.test.ts --testNamePattern "defines six project-coordinate orthographic camera presets|fits camera presets without changing project-coordinate view directions"`
+    - 结果：2 个相关测试通过。
+  - `bun x vitest run tests/unit/viewport-gizmo-model.test.ts tests/unit/camera-controls.test.ts --testNamePattern "defines six project-coordinate orthographic camera presets|fits camera presets without changing project-coordinate view directions|viewport-gizmo-model"`
+    - 结果：5 个相关测试通过，10 个跳过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "view pill switches active preset|ViewportGizmo click switches view"`
+    - 结果：2 个浏览器用例通过。
+  - `bun run typecheck`
+    - 结果：通过。
+- 独立 review：
+  - Phase 2 review 无 blocker。
+  - review 确认 gizmo 投影消费当前 `cameraState` 和项目坐标轴，六向按钮覆盖完整，未破坏 Phase 1 数值控件结构。
+  - review 要求提交前隔离 Phase 3 相机交互改动；已通过 staged diff 确认本 Phase 提交不包含 `mesh-three.ts` 交互改动，也不包含 `zoomBy` / middle button hunk。
+- 遗留问题：
+  - `camera-controls.test.ts` 全量仍有 `orbitBy allows crossing over the top of the model` 失败，属于 Phase 3 相机拖拽 / orbit 行为。
+  - `.viewport-gizmo__views button` 固定宽度可能让较长标签视觉偏紧，当前不阻塞 Phase 2；后续可结合浏览器截图确认布局表现。
 
 ## Phase 3：项目坐标系前端适配与相机交互
 

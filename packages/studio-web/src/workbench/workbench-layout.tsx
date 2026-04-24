@@ -596,6 +596,7 @@ export function WorkbenchLayout() {
         activeView={activeView}
         onSelectView={setActiveView}
         onMeshInfo={setMeshInfo}
+        cameraState={cameraState}
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
         onOpenCameraPanel={openCameraPanel}

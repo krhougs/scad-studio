@@ -44,7 +44,7 @@ export const PRESET_STATES: Record<CameraPreset, CameraState> = {
   left: base([-DIST, 0, 0]),
   right: base([DIST, 0, 0]),
   top: base([0, 0, DIST], [0, 1, 0]),
-  bottom: base([0, 0, -DIST], [0, 1, 0]),
+  bottom: base([0, 0, -DIST], [0, -1, 0]),
   iso: base([DIST * 0.7, -DIST * 0.7, DIST * 0.7]),
 };
 

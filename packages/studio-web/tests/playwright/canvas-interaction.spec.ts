@@ -80,7 +80,7 @@ test("@canvas-interaction view pill switches active preset", async ({ page }) =>
 
   await page.getByTestId("view-pill-top").click();
   await expect(page.getByTestId("canvas-info")).toContainText("top");
-  await expect(page.getByTestId("camera-elevation")).toHaveValue("86.000");
+  await expect(page.getByTestId("camera-elevation")).toHaveValue("90.000");
 
   await page.getByTestId("view-pill-iso").click();
   await expect(page.getByTestId("canvas-info")).toContainText("iso");
