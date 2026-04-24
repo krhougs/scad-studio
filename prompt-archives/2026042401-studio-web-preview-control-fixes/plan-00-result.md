@@ -49,7 +49,7 @@
 
 ## Phase 1：参数与相机数值控件回归确认
 
-- 状态：实现已保留，需在 Phase 0 返工后重新回归，不能作为最终完成状态。
+- 状态：已完成。
 - 已保留实现摘要：
   - 引入 `react-knob-headless` 与 `@base-ui/react`，参数和相机数值项统一使用共享 `NumericControl`。
   - `NumericControl` 同时渲染 knob、Base UI NumberField 输入框与增减按钮；输入框和 knob 保留稳定尺寸约束。
@@ -62,10 +62,21 @@
   - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/numeric-control.test.ts` 曾通过。
   - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines|knob number field updates preview|save, load, delete round-trip"` 曾通过。
   - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "preview info and camera controls"` 曾通过。
-- 待重新验证：
-  - Phase 0 重写后，必须重新运行参数范围、数值控件、相机数值编辑和相关浏览器测试。
-  - 必须重新做独立 subagent review。
-  - `bun run typecheck` 的历史失败原因已失效，需按返工后的测试与模块状态重新判断。
+- 本轮验证：
+  - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/numeric-control.test.ts`
+    - 结果：2 个测试文件通过，9 个测试通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines|knob number field updates preview|save, load, delete round-trip"`
+    - 结果：3 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "preview info and camera controls"`
+    - 结果：1 个浏览器用例通过。
+- 独立 review：
+  - Phase 1 review 无 blocker / important。
+  - review 确认 `NumericControl` 仍使用 `react-knob-headless` 与 `@base-ui/react/number-field`，参数面板和相机面板都复用该控件。
+  - review 确认参数范围推导不随 current value 扩大，参数与相机控件的浏览器测试覆盖 knob、number field、stepper、即时 preview 和布局稳定性。
+- 变更摘要：
+  - 本 Phase 没有代码变更，只做 Phase 0 返工后的回归确认。
+- 遗留风险：
+  - 布局稳定性测试主要比较 row / field 的宽高，未额外比较相邻 label / restore button 的 `x/y` 位置；当前不阻塞 Phase 1，后续如继续强化输入过程稳定性可补充位置断言。
 
 ## Phase 2：ViewportGizmo 当前相机指示
 
