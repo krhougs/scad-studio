@@ -15,11 +15,16 @@ const WARN_DIM = 4096;
 type ImageViewerProps = {
   path: unknown;
   client: WasmClient;
+  refreshSignal?: number;
 };
 
 type NaturalSize = { width: number; height: number } | null;
 
-export function ImageViewer({ path, client }: ImageViewerProps) {
+export function ImageViewer({
+  path,
+  client,
+  refreshSignal,
+}: ImageViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [byteSize, setByteSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +79,7 @@ export function ImageViewer({ path, client }: ImageViewerProps) {
       cancelled = true;
       if (currentUrl) URL.revokeObjectURL(currentUrl);
     };
-  }, [client, path]);
+  }, [client, path, refreshSignal]);
 
   const handleLoad = useCallback(
     (event: React.SyntheticEvent<HTMLImageElement>) => {

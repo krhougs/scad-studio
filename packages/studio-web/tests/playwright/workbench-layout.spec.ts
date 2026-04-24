@@ -1,0 +1,194 @@
+import { expect, test } from "@playwright/test";
+import { clearServiceWorkerState, createHarness } from "./_smoke-harness";
+
+const HARNESS = createHarness({ bindPort: 39190, vitePort: 5185 });
+
+test.beforeAll(async () => {
+  await HARNESS.start();
+});
+
+test.afterAll(async () => {
+  await HARNESS.stop();
+});
+
+test.beforeEach(async ({ page }) => {
+  await clearServiceWorkerState(page);
+});
+
+test("@workbench-layout follows the large desktop column design", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+
+  await expect(page.getByTestId("workbench-left-panel")).toBeVisible({
+    timeout: 30_000,
+  });
+  const rail = await page.locator(".rail").boundingBox();
+  const leftPanel = await page.getByTestId("workbench-left-panel").boundingBox();
+  const canvas = await page.getByTestId("workbench-canvas").boundingBox();
+  const inspector = await page.getByTestId("workbench-inspector").boundingBox();
+  if (!rail || !leftPanel || !canvas || !inspector) {
+    throw new Error("workbench columns must all have layout boxes");
+  }
+
+  expect(canvas.width).toBeGreaterThan(leftPanel.width);
+  expect(canvas.width).toBeGreaterThan(inspector.width);
+  expect(leftPanel.x).toBeGreaterThanOrEqual(rail.x + rail.width - 1);
+  expect(canvas.x).toBeGreaterThanOrEqual(leftPanel.x + leftPanel.width - 1);
+  expect(inspector.x).toBeGreaterThanOrEqual(canvas.x + canvas.width - 1);
+});
+
+test("@workbench-layout files live in the left panel with explicit type labels", async ({
+  page,
+}) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+
+  await expect(page.getByTestId("workbench-left-panel")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("left-panel-files")).toBeVisible();
+  await expect(page.getByTestId("entry-kind-model.stl")).toHaveText("STL");
+  await expect(page.getByTestId("entry-kind-README.md")).toHaveText("MD");
+  await expect(page.getByTestId("inspector-entries")).toHaveCount(0);
+});
+
+test("@workbench-layout settings and log are left panel tabs controlled by route search params", async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}`);
+
+  await page.getByTestId("rail-settings").click();
+  await expect(page).toHaveURL(/&left-panel=settings$/);
+  await expect(page.getByTestId("left-panel-settings")).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await page.getByTestId("rail-log").click();
+  await expect(page).toHaveURL(/&left-panel=log$/);
+  await expect(page.getByTestId("left-panel-log")).toBeVisible();
+
+  const logButton = await page.getByTestId("rail-log").boundingBox();
+  const settingsButton = await page.getByTestId("rail-settings").boundingBox();
+  if (!logButton || !settingsButton) {
+    throw new Error("rail footer buttons must have layout boxes");
+  }
+  expect(logButton.y).toBeLessThan(settingsButton.y);
+});
+
+test("@workbench-layout restores left panel tab from search params and browser history", async ({
+  page,
+}) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=log`,
+  );
+  await expect(page.getByTestId("left-panel-log")).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await page.getByTestId("rail-files").click();
+  await expect(page).toHaveURL(/&left-panel=files$/);
+  await expect(page.getByTestId("left-panel-files")).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/&left-panel=log$/);
+  await expect(page.getByTestId("left-panel-log")).toBeVisible();
+});
+
+test("@workbench-layout settings route redirects to side panel and preserves ws query", async ({
+  page,
+}) => {
+  const encodedWs = encodeURIComponent(HARNESS.wsUrl);
+  await page.goto(`${HARNESS.baseUrl}/settings?ws=${encodedWs}`);
+
+  await expect(page).toHaveURL(new RegExp(`/\\?ws=${encodedWs}&left-panel=settings$`));
+  await expect(page.getByTestId("left-panel-settings")).toBeVisible({
+    timeout: 30_000,
+  });
+});
+
+test("@workbench-layout scad parameters and presets render inside the right inspector", async ({
+  page,
+}) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-params-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-params-cube.scad").click();
+
+  await expect(
+    page.getByTestId("workbench-inspector").getByTestId("parameters-panel"),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.getByTestId("workbench-inspector").getByTestId("presets-panel"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("workbench-canvas").getByTestId("parameters-panel"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId("workbench-canvas").getByTestId("presets-panel"),
+  ).toHaveCount(0);
+});
+
+test("@workbench-layout document title follows active file", async ({ page }) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+  await expect(page).toHaveTitle("budn'");
+
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-cube.scad").click();
+  await expect(page).toHaveTitle("cube.scad · budn'");
+
+  await page.getByTestId("entry-README.md").click();
+  await expect(page).toHaveTitle("README.md · budn'");
+});
+
+test("@workbench-layout right inspector sections collapse and expand", async ({
+  page,
+}) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-params-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-params-cube.scad").click();
+
+  for (const section of [
+    "preview",
+    "config",
+    "parameters",
+    "presets",
+    "export",
+    "slicers",
+  ]) {
+    await expect(page.getByTestId(`inspector-section-${section}`)).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByTestId(`inspector-section-${section}-toggle`).click();
+    await expect(page.getByTestId(`inspector-section-${section}-body`)).toBeHidden();
+    await page.getByTestId(`inspector-section-${section}-toggle`).click();
+    await expect(page.getByTestId(`inspector-section-${section}-body`)).toBeVisible();
+  }
+});

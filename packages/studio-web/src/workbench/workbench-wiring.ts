@@ -20,7 +20,9 @@ export function buildHandshakeParams() {
       client_name: "studio-web" as const,
       platform: "web" as const,
       protocol_version: { min: 1, max: 1 },
-      file_read: { denied_extensions: [".scad", ".stl", ".3mf"] },
+      // 核心流：`.scad` → server OpenSCAD → `.3mf` bytes → 前端解码 + 渲染。
+      // 所有扩展默认允许 FileRead；真要限制再显式加。
+      file_read: { denied_extensions: [] },
       supported_preview_kinds: ["geometry_artifact"],
     },
   };

@@ -19,6 +19,7 @@ export const HOST_WORKSPACE = path.join(
 export type HarnessOptions = {
   bindPort: number;
   vitePort: number;
+  workspacePath?: string;
   /**
    * Extra env overrides applied to the `websocket-host` subprocess. Used by
    * `@config-settings` to point `dirs::config_dir()` at a throwaway `HOME`
@@ -38,6 +39,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
   const hostBind = `127.0.0.1:${opts.bindPort}`;
   const baseUrl = `http://127.0.0.1:${opts.vitePort}`;
   const wsUrl = `ws://${hostBind}`;
+  const workspacePath = opts.workspacePath ?? HOST_WORKSPACE;
   let hostProc: ChildProcess | null = null;
   let viteProc: ChildProcess | null = null;
 
@@ -55,7 +57,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
           "websocket-host",
           "--",
           "--workspace",
-          HOST_WORKSPACE,
+          workspacePath,
           "--bind",
           hostBind,
         ],
@@ -124,6 +126,104 @@ export async function clearServiceWorkerState(
         .then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
     }
   });
+}
+
+export async function installProtocolRecorder(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    const win = window as Window & {
+      __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
+      __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+      __scadProtocolRecorderInstalled?: boolean;
+    };
+    win.__scadOutgoingFrames = [];
+    win.__scadDispatchedCommands = [];
+    if (win.__scadProtocolRecorderInstalled) {
+      return;
+    }
+    win.__scadProtocolRecorderInstalled = true;
+    const decoder = new TextDecoder();
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function patchedSend(data: Parameters<WebSocket["send"]>[0]) {
+      try {
+        let text: string | null = null;
+        if (typeof data === "string") {
+          text = data;
+        } else if (data instanceof ArrayBuffer) {
+          text = decoder.decode(new Uint8Array(data));
+        } else if (ArrayBuffer.isView(data)) {
+          text = decoder.decode(
+            new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+          );
+        }
+        if (text) {
+          win.__scadOutgoingFrames?.push({
+            raw: text,
+            parsed: JSON.parse(text),
+          });
+        }
+      } catch {
+        // 忽略非 JSON 帧；当前协议走 text JSON，这里只作为测试观测点。
+      }
+      return originalSend.call(this, data);
+    };
+  });
+}
+
+export async function clearRecordedClientCommands(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
+        __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+      }
+    ).__scadOutgoingFrames = [];
+    (
+      window as Window & {
+        __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
+        __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+      }
+    ).__scadDispatchedCommands = [];
+  });
+}
+
+export async function latestRecordedClientCommand(
+  page: import("@playwright/test").Page,
+  commandType: string,
+): Promise<unknown | null> {
+  return page.evaluate((type) => {
+    const dispatched =
+      (
+        window as Window & {
+          __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+        }
+      ).__scadDispatchedCommands ?? [];
+    const directMatches = dispatched
+      .filter((entry) => entry.type === type)
+      .map((entry) => entry.payload);
+    if (directMatches.length > 0) {
+      return directMatches[directMatches.length - 1] ?? null;
+    }
+    const frames =
+      (
+        window as Window & {
+          __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
+        }
+      ).__scadOutgoingFrames ?? [];
+    const matches = frames
+      .map((frame) => frame.parsed as Record<string, unknown>)
+      .filter((envelope) => envelope["type"] === "request")
+      .map((envelope) => envelope["payload"] as Record<string, unknown> | undefined)
+      .filter((payload): payload is Record<string, unknown> => Boolean(payload))
+      .map((payload) => payload["command"] as Record<string, unknown> | undefined)
+      .filter((command): command is Record<string, unknown> => Boolean(command))
+      .filter((command) => command["type"] === type)
+      .map((command) => command["payload"] ?? null);
+    return matches.length > 0 ? matches[matches.length - 1] : null;
+  }, commandType);
 }
 
 export async function waitForPort(

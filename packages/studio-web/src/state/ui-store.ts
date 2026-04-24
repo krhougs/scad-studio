@@ -3,9 +3,10 @@
 //
 // Phase 6: `openTabs` holds DocumentTab descriptors (id/label/path/kind) only.
 // Never store document contents (markdown source, image bytes, scad text) in
-// this store — contents are loaded on demand inside viewer components.
+// this store — contents are loaded on demand inside viewer or workbench logic.
 
 import { create } from "zustand";
+import type { LeftPanelId } from "../workbench/left-panel-routing";
 
 export type DocumentTabKind = "markdown" | "image" | "scad" | "mesh";
 
@@ -20,7 +21,7 @@ export type UiState = {
   route: string;
   openTabs: DocumentTab[];
   activeTabId: string | null;
-  activeRail: string;
+  activeRail: LeftPanelId;
   sidePanelOpen: boolean;
   isSettingsModalOpen: boolean;
   inputDraft: string;
@@ -31,7 +32,7 @@ export type UiActions = {
   openTab: (tab: DocumentTab) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
-  setActiveRail: (id: string) => void;
+  setActiveRail: (id: LeftPanelId) => void;
   toggleSidePanel: () => void;
   setSettingsModalOpen: (value: boolean) => void;
   setInputDraft: (value: string) => void;

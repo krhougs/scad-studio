@@ -106,6 +106,13 @@ impl ParameterStore {
     }
 }
 
+pub fn parameter_entries_to_cli_defines(entries: &[ParameterEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| format!("{}={}", entry.definition.name, format_value(&entry.value)))
+        .collect()
+}
+
 fn parse_group_header(line: &str) -> Option<String> {
     group_regex()
         .captures(line)

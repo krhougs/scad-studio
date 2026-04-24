@@ -4,10 +4,12 @@ target/
 .claude/
 .codex/
 .context/
+.cursor/
 .playwright-mcp/
 .sisyphus/
 .superpowers/
 workspace/
+/cube.stl
 pnpm-lock.yaml
 node_modules/
 packages/studio-web/dist/

@@ -1,21 +1,40 @@
-// Markdown viewer: dispatches FileRead, renders through the in-repo minimal
-// parser. Contents stay in local state — they are not promoted into the
-// Zustand UI store.
-
-import { useEffect, useState } from "react";
+import MarkdownPreview, {
+  type MarkdownPreviewProps,
+} from "@uiw/react-markdown-preview";
+import rehypeSanitize from "rehype-sanitize";
+import { isValidElement, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { WasmClient } from "../wasm-bridge";
 import {
   decodeFileRead,
   describeFileReadError,
 } from "./file-read-decoder";
-import { parseMarkdown, type MdInline, type MdNode } from "./markdown-parser";
+import {
+  isSafeMarkdownUrl,
+  markdownLinkProps,
+  markdownSanitizeSchema,
+  mermaidSecurityConfig,
+  sanitizeMermaidSvg,
+} from "./markdown-security";
 
 type MarkdownViewerProps = {
   path: unknown;
   client: WasmClient;
+  refreshSignal?: number;
 };
 
-export function MarkdownViewer({ path, client }: MarkdownViewerProps) {
+let mermaidCounter = 0;
+
+const markdownWrapperElement = {
+  "data-color-mode": "dark",
+  "data-testid": "markdown-preview",
+} as MarkdownPreviewProps["wrapperElement"];
+
+export function MarkdownViewer({
+  path,
+  client,
+  refreshSignal,
+}: MarkdownViewerProps) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,7 +64,7 @@ export function MarkdownViewer({ path, client }: MarkdownViewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [client, path]);
+  }, [client, path, refreshSignal]);
 
   return (
     <div className="viewer viewer--markdown" data-testid="markdown-viewer">
@@ -56,85 +75,116 @@ export function MarkdownViewer({ path, client }: MarkdownViewerProps) {
       ) : text == null ? (
         <p className="viewer__loading">reading…</p>
       ) : (
-        <article
-          className="markdown-body"
-          data-testid="markdown-body"
-        >
-          {parseMarkdown(text).map((node, i) => (
-            <MarkdownNode key={i} node={node} />
-          ))}
+        <article className="markdown-body" data-testid="markdown-body">
+          <MarkdownPreview
+            source={text}
+            wrapperElement={markdownWrapperElement}
+            className="markdown-preview"
+            rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
+            components={markdownComponents}
+          />
         </article>
       )}
     </div>
   );
 }
 
-function MarkdownNode({ node }: { node: MdNode }) {
-  if (node.kind === "heading") {
-    if (node.level === 1)
-      return <h1><InlineRun inline={node.children} /></h1>;
-    if (node.level === 2)
-      return <h2><InlineRun inline={node.children} /></h2>;
-    return <h3><InlineRun inline={node.children} /></h3>;
-  }
-  if (node.kind === "paragraph") {
+const markdownComponents: MarkdownPreviewProps["components"] = {
+  a({ href, children, ...props }) {
     return (
-      <p>
-        <InlineRun inline={node.children} />
-      </p>
+      <a {...props} {...markdownLinkProps(href)}>
+        {children}
+      </a>
     );
-  }
-  if (node.kind === "list") {
-    return (
-      <ul>
-        {node.items.map((item, i) => (
-          <li key={i}>
-            <InlineRun inline={item} />
-          </li>
-        ))}
-      </ul>
-    );
-  }
-  return (
-    <pre className="markdown-body__code" data-lang={node.lang}>
-      <code>{node.text}</code>
-    </pre>
-  );
-}
-
-const SAFE_LINK_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
-
-function isSafeLinkUrl(url: string): boolean {
-  const trimmed = url.trim();
-  if (trimmed.startsWith("#") || trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
-    return true;
-  }
-  try {
-    const parsed = new URL(trimmed, "http://local/");
-    if (parsed.origin === "http://local" && !trimmed.includes(":")) {
-      return true;
+  },
+  img({ src, alt, ...props }) {
+    if (!isSafeMarkdownUrl(src, { image: true })) return null;
+    return <img {...props} src={src} alt={alt ?? ""} loading="lazy" />;
+  },
+  code({ className, children, ...props }) {
+    const source = textFromReactNode(children).trim();
+    if (/\blanguage-mermaid\b/.test(className ?? "")) {
+      return <MermaidBlock source={source} />;
     }
-    return SAFE_LINK_SCHEMES.has(parsed.protocol.toLowerCase());
-  } catch {
-    return false;
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+};
+
+function MermaidBlock({ source }: { source: string }) {
+  const idRef = useRef<string | null>(null);
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!idRef.current) {
+    mermaidCounter += 1;
+    idRef.current = `budn-markdown-mermaid-${mermaidCounter}`;
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    setSvg(null);
+    setError(null);
+    import("mermaid")
+      .then((result) => {
+        if (cancelled) return;
+        const mermaid = result.default;
+        mermaid.initialize(mermaidSecurityConfig);
+        return mermaid.render(idRef.current ?? "budn-markdown-mermaid", source);
+      })
+      .then((result) => {
+        if (cancelled || !result) return;
+        const safeSvg = sanitizeMermaidSvg(result.svg);
+        if (!safeSvg) {
+          setError("unsafe Mermaid output");
+          return;
+        }
+        setSvg(safeSvg);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(describeFileReadError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  if (error) {
+    return (
+      <pre
+        className="markdown-mermaid markdown-mermaid--error"
+        data-testid="markdown-mermaid"
+      >
+        <code>{error}</code>
+      </pre>
+    );
+  }
+  if (!svg) {
+    return (
+      <div className="markdown-mermaid" data-testid="markdown-mermaid">
+        rendering diagram…
+      </div>
+    );
+  }
+  return (
+    <div
+      className="markdown-mermaid"
+      data-testid="markdown-mermaid"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
 }
 
-function InlineRun({ inline }: { inline: MdInline[] }) {
-  return (
-    <>
-      {inline.map((part, i) => {
-        if (part.kind === "text") return <span key={i}>{part.text}</span>;
-        if (part.kind === "code") return <code key={i}>{part.text}</code>;
-        if (!isSafeLinkUrl(part.url)) {
-          return <span key={i}>{part.text}</span>;
-        }
-        return (
-          <a key={i} href={part.url} target="_blank" rel="noreferrer noopener">
-            {part.text}
-          </a>
-        );
-      })}
-    </>
-  );
+function textFromReactNode(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textFromReactNode).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return textFromReactNode(node.props.children);
+  }
+  return "";
 }

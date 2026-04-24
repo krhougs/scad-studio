@@ -119,7 +119,7 @@ bun run web:smoke -- --case <name>                      # 单条
 | `wasm_package_smoke` | Phase 5 S1c | `scripts/smoke/wasm_package_smoke.ts`（generated/ diff） |
 | `browser_smoke` | Phase 3 S2 | `packages/studio-web/tests/playwright/browser-smoke.spec.ts` |
 | `browser_watch_smoke` | Phase 5 S3 | `packages/studio-web/tests/playwright/browser-watch-smoke.spec.ts` |
-| `markdown_view` / `image_view` / `scad_split_view` | Phase 6 | browser-smoke.spec.ts 内的标签子集 |
+| `markdown_view` / `image_view` / `scad_viewer` | Phase 6 | browser-smoke.spec.ts 内的标签子集 |
 | `canvas_interaction` | Phase 7 | `tests/playwright/canvas-interaction.spec.ts` |
 | `parameters_presets` | Phase 7 | `tests/playwright/parameters-presets.spec.ts` |
 | `export_slicer` | Phase 7 | `tests/playwright/export-slicer.spec.ts` |
@@ -130,7 +130,7 @@ bun run web:smoke -- --case <name>                      # 单条
 
 ```bash
 bun run --cwd packages/studio-web typecheck      # tsc --noEmit
-bun run --cwd packages/studio-web test:unit      # vitest（markdown parser / preset-io / camera-controls 等纯函数）
+bun run --cwd packages/studio-web test:unit      # vitest（Markdown 安全 / preset-io / camera-controls 等纯函数）
 bun run check:wasm-bindgen                       # 校验 CLI 与 Cargo.toml 版本一致
 ```
 

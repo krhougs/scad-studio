@@ -1,6 +1,24 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const __wbg_rendererhandle_free: (a: number, b: number) => void;
+export const parameters_format_defines: (a: any) => [number, number, number];
+export const parameters_parse_source: (a: number, b: number) => [number, number, number];
+export const presets_parse_shared_file: (a: number, b: number) => [number, number, number];
+export const presets_stringify_shared_file: (a: any) => [number, number, number, number];
+export const renderer_create: (a: number, b: number) => [number, number, number];
+export const renderer_render: (a: number, b: number, c: any) => [number, number];
+export const renderer_resize: (a: number, b: number, c: number, d: number) => void;
+export const renderer_destroy: (a: number) => void;
+export const __wbg_meshhandle_free: (a: number, b: number) => void;
+export const mesh_decode: (a: number, b: number) => [number, number, number];
+export const mesh_destroy: (a: number) => void;
+export const meshhandle_colors: (a: number) => [number, number];
+export const meshhandle_index_count: (a: number) => number;
+export const meshhandle_indices: (a: number) => [number, number];
+export const meshhandle_normals: (a: number) => [number, number];
+export const meshhandle_positions: (a: number) => [number, number];
+export const meshhandle_vertex_count: (a: number) => number;
 export const __wbg_clienthandle_free: (a: number, b: number) => void;
 export const client_begin_handshake: (a: number, b: any) => [number, number];
 export const client_cancel: (a: number, b: bigint) => [bigint, number, number];
@@ -23,14 +41,6 @@ export const client_receive_inbound: (a: number, b: number, c: number) => [numbe
 export const client_snapshot: (a: number) => [number, number, number];
 export const client_subscribe_directory_watch: (a: number, b: any) => [bigint, number, number];
 export const client_tick: (a: number, b: bigint) => [number, number];
-export const __wbg_rendererhandle_free: (a: number, b: number) => void;
-export const renderer_create: (a: number, b: number) => [number, number, number];
-export const renderer_render: (a: number, b: number, c: any) => [number, number];
-export const renderer_resize: (a: number, b: number, c: number, d: number) => void;
-export const renderer_destroy: (a: number) => void;
-export const __wbg_meshhandle_free: (a: number, b: number) => void;
-export const mesh_decode: (a: number, b: number) => [number, number, number];
-export const mesh_destroy: (a: number) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;

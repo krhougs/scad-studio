@@ -96,14 +96,17 @@
 }
 
 .chat-body::-webkit-scrollbar,
+.side-panel__body::-webkit-scrollbar,
 .insp-body::-webkit-scrollbar {
   width: 8px;
 }
 .chat-body::-webkit-scrollbar-thumb,
+.side-panel__body::-webkit-scrollbar-thumb,
 .insp-body::-webkit-scrollbar-thumb {
   background: var(--ink-6);
 }
 .chat-body::-webkit-scrollbar-track,
+.side-panel__body::-webkit-scrollbar-track,
 .insp-body::-webkit-scrollbar-track {
   background: transparent;
 }

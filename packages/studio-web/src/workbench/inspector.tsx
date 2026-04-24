@@ -1,26 +1,13 @@
-// Inspector —— Buddin inspector 结构：kicker + title + insp-sec 列。
-// 包含：workspace 树（递归目录展开）、preview target / mesh summary、
-// parameters / presets / slicer / export（只在 mesh 或 scad tab 显示相应子块）。
-
-import { Box, Circle, Folder, Plus, type LucideIcon } from "lucide-react";
+import {
+  configuredSlicerRecords,
+  describeConfigGaps,
+  type AppConfigState,
+} from "../config/app-config";
+import type React from "react";
 import type { WasmClient } from "../wasm-bridge";
 import { ExportPanel } from "./export-panel";
+import { InspectorSection } from "./inspector-section";
 import { SlicerPanel } from "./slicer-panel";
-
-export type InspectorEntry = {
-  label: string;
-  path: unknown;
-  kind: "file" | "directory";
-};
-
-export type InspectorDirectoryNode = {
-  key: string;
-  label: string;
-  path: unknown;
-  entries: InspectorEntry[] | null;
-  loading: boolean;
-  error: string | null;
-};
 
 export type InspectorMeshSummary = {
   label: string;
@@ -30,44 +17,37 @@ export type InspectorMeshSummary = {
 
 type InspectorProps = {
   rootName: string;
-  entries: InspectorEntry[];
-  entriesLoaded: boolean;
-  onRequestPreview: (entry: InspectorEntry) => void;
-  onExpandDirectory: (entry: InspectorEntry) => void;
-  onCollapseDirectory: (entry: InspectorEntry) => void;
   previewTargetLabel: string;
   meshSummary: InspectorMeshSummary | null;
-  expandedDirectories: Map<string, InspectorDirectoryNode>;
-  directoryKey: (path: unknown) => string;
-  activeFilePath: unknown | null;
-  bottomSlot?: React.ReactNode;
   client?: WasmClient | null;
   showMeshPanels?: boolean;
   meshSource?: unknown;
   defaultExportFilename?: string;
+  exportDefines?: string[];
+  appConfig: AppConfigState;
   onExportStatus?: (status: string) => void;
+  parametersSlot?: React.ReactNode;
+  presetsSlot?: React.ReactNode;
 };
 
 export function Inspector(props: InspectorProps) {
   const {
     rootName,
-    entries,
-    entriesLoaded,
-    onRequestPreview,
-    onExpandDirectory,
-    onCollapseDirectory,
     previewTargetLabel,
     meshSummary,
-    expandedDirectories,
-    directoryKey,
-    activeFilePath,
-    bottomSlot,
     client,
     showMeshPanels,
     meshSource,
     defaultExportFilename,
+    exportDefines,
+    appConfig,
     onExportStatus,
+    parametersSlot,
+    presetsSlot,
   } = props;
+  const readyConfig = appConfig.kind === "ready" ? appConfig.config : null;
+  const configGaps = readyConfig ? describeConfigGaps(readyConfig) : [];
+  const exportSlicers = readyConfig ? configuredSlicerRecords(readyConfig) : [];
 
   return (
     <aside
@@ -80,198 +60,143 @@ export function Inspector(props: InspectorProps) {
         <div className="title">{rootName}</div>
       </header>
       <div className="insp-body">
-        <section className="insp-sec" data-testid="inspector-entries">
-          <h5>
-            <span>files</span>
-            <button type="button" aria-label="add entry" title="add" disabled>
-              <Plus size={12} strokeWidth={1.5} aria-hidden="true" />
-            </button>
-          </h5>
-          {!entriesLoaded ? (
-            <div className="tree">
-              <div className="tree-loading">entries loading…</div>
-            </div>
-          ) : entries.length === 0 ? (
-            <div className="tree">
-              <div className="tree-empty">workspace is empty</div>
-            </div>
-          ) : (
-            <div className="tree" data-testid="entries" role="tree">
-              {entries.map((entry) => (
-                <EntryRow
-                  key={`${entry.label}-${directoryKey(entry.path)}`}
-                  entry={entry}
-                  depth={0}
-                  activeFilePath={activeFilePath}
-                  onRequestPreview={onRequestPreview}
-                  onExpandDirectory={onExpandDirectory}
-                  onCollapseDirectory={onCollapseDirectory}
-                  expandedDirectories={expandedDirectories}
-                  directoryKey={directoryKey}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="insp-sec">
-          <h5>
-            <span>preview</span>
-          </h5>
-          <div className="field">
-            <div className="field-label">
-              <span>active target</span>
-            </div>
-            <div
-              className={`field-status${previewTargetLabel === "—" ? "" : " is-ok"}`}
-              data-testid="preview-target"
-            >
-              {previewTargetLabel}
-            </div>
-          </div>
-          {meshSummary ? (
-            <div className="field">
-              <div className="field-label">
-                <span>mesh</span>
-              </div>
-              <div className="field-status is-ok" data-testid="preview-mesh-summary">
-                {meshSummary.vertices} verts · {meshSummary.indices} idx
-              </div>
-            </div>
-          ) : null}
-        </section>
-
+        <InspectorSection id="preview" title="preview">
+          <PreviewSummary
+            previewTargetLabel={previewTargetLabel}
+            meshSummary={meshSummary}
+          />
+        </InspectorSection>
+        <InspectorSection id="config" title="config">
+          <ConfigSummary
+            appConfig={appConfig}
+            readyConfig={readyConfig}
+            configGaps={configGaps}
+            exportSlicers={exportSlicers}
+          />
+        </InspectorSection>
+        {parametersSlot ? (
+          <InspectorSection id="parameters" title="parameters">
+            {parametersSlot}
+          </InspectorSection>
+        ) : null}
+        {presetsSlot ? (
+          <InspectorSection id="presets" title="presets">
+            {presetsSlot}
+          </InspectorSection>
+        ) : null}
         {showMeshPanels && client && meshSource !== undefined ? (
           <>
-            <section className="insp-sec">
-              <h5>
-                <span>export</span>
-              </h5>
+            <InspectorSection id="export" title="export">
               <ExportPanel
                 client={client}
                 source={meshSource}
                 defaultFilename={defaultExportFilename ?? "export.stl"}
+                defines={exportDefines}
+                configuredOpenscadPath={readyConfig?.openscad_path ?? null}
+                configuredSlicers={exportSlicers}
                 onStatus={onExportStatus ?? (() => {})}
               />
-            </section>
-            <section className="insp-sec">
-              <h5>
-                <span>slicers</span>
-              </h5>
-              <SlicerPanel client={client} />
-            </section>
+            </InspectorSection>
+            <InspectorSection id="slicers" title="slicers">
+              <SlicerPanel
+                client={client}
+                source={meshSource}
+                defaultFilename={defaultExportFilename}
+                defines={exportDefines}
+                config={readyConfig}
+                onStatus={onExportStatus}
+              />
+            </InspectorSection>
           </>
-        ) : null}
-
-        {bottomSlot ? (
-          <section className="insp-sec" data-testid="inspector-bottom-slot">
-            <h5>
-              <span>log</span>
-            </h5>
-            {bottomSlot}
-          </section>
         ) : null}
       </div>
     </aside>
   );
 }
 
-type EntryRowProps = {
-  entry: InspectorEntry;
-  depth: number;
-  activeFilePath: unknown | null;
-  onRequestPreview: (entry: InspectorEntry) => void;
-  onExpandDirectory: (entry: InspectorEntry) => void;
-  onCollapseDirectory: (entry: InspectorEntry) => void;
-  expandedDirectories: Map<string, InspectorDirectoryNode>;
-  directoryKey: (path: unknown) => string;
-};
-
-function EntryRow({
-  entry,
-  depth,
-  activeFilePath,
-  onRequestPreview,
-  onExpandDirectory,
-  onCollapseDirectory,
-  expandedDirectories,
-  directoryKey,
-}: EntryRowProps) {
-  const key = directoryKey(entry.path);
-  const isDirectory = entry.kind === "directory";
-  const expanded = isDirectory ? expandedDirectories.get(key) : undefined;
-  const isExpanded = Boolean(expanded);
-  const isActive =
-    !isDirectory &&
-    activeFilePath !== null &&
-    directoryKey(activeFilePath) === key;
-
-  const Icon = isDirectory ? Folder : iconForFile(entry.label);
-
-  const handleClick = () => {
-    if (isDirectory) {
-      if (isExpanded) onCollapseDirectory(entry);
-      else onExpandDirectory(entry);
-    } else {
-      onRequestPreview(entry);
-    }
-  };
-
+function PreviewSummary({
+  previewTargetLabel,
+  meshSummary,
+}: {
+  previewTargetLabel: string;
+  meshSummary: InspectorMeshSummary | null;
+}) {
   return (
     <>
-      <button
-        type="button"
-        className={`tree-item${isActive ? " active" : ""}`}
-        style={{ paddingLeft: 12 + depth * 12 }}
-        onClick={handleClick}
-        data-testid={`entry-${entry.label}`}
-        aria-expanded={isDirectory ? isExpanded : undefined}
-      >
-        <Icon className="ic" size={14} strokeWidth={1.5} aria-hidden="true" />
-        <span className="label-main">{entry.label}</span>
-        <span className="dim">{isDirectory ? (isExpanded ? "open" : "dir") : "file"}</span>
-      </button>
-      {isDirectory && expanded ? (
+      <div className="field">
+        <div className="field-label">
+          <span>active target</span>
+        </div>
         <div
-          className="tree-group"
-          role="group"
-          data-testid={`entries-${key}`}
+          className={`field-status${previewTargetLabel === "—" ? "" : " is-ok"}`}
+          data-testid="preview-target"
         >
-          {expanded.loading ? (
-            <div className="tree-loading" data-testid={`entries-${key}-loading`}>
-              loading…
-            </div>
-          ) : expanded.error ? (
-            <div className="tree-error" data-testid={`entries-${key}-error`}>
-              {expanded.error}
-            </div>
-          ) : expanded.entries && expanded.entries.length === 0 ? (
-            <div className="tree-empty" data-testid={`entries-${key}-empty`}>
-              empty
-            </div>
-          ) : (
-            (expanded.entries ?? []).map((child) => (
-              <EntryRow
-                key={`${child.label}-${directoryKey(child.path)}`}
-                entry={child}
-                depth={depth + 1}
-                activeFilePath={activeFilePath}
-                onRequestPreview={onRequestPreview}
-                onExpandDirectory={onExpandDirectory}
-                onCollapseDirectory={onCollapseDirectory}
-                expandedDirectories={expandedDirectories}
-                directoryKey={directoryKey}
-              />
-            ))
-          )}
+          {previewTargetLabel}
+        </div>
+      </div>
+      {meshSummary ? (
+        <div className="field">
+          <div className="field-label">
+            <span>mesh</span>
+          </div>
+          <div className="field-status is-ok" data-testid="preview-mesh-summary">
+            {meshSummary.vertices} verts · {meshSummary.indices} idx
+          </div>
         </div>
       ) : null}
     </>
   );
 }
 
-function iconForFile(label: string): LucideIcon {
-  const lower = label.toLowerCase();
-  if (lower.endsWith(".stl") || lower.endsWith(".3mf")) return Box;
-  return Circle;
+function ConfigSummary({
+  appConfig,
+  readyConfig,
+  configGaps,
+  exportSlicers,
+}: {
+  appConfig: AppConfigState;
+  readyConfig: Extract<AppConfigState, { kind: "ready" }>["config"] | null;
+  configGaps: string[];
+  exportSlicers: Array<{ name: string; path: string }>;
+}) {
+  return (
+    <>
+      <div className="field">
+        <div className="field-label">
+          <span>status</span>
+        </div>
+        <div className="field-status" data-testid="config-status">
+          {appConfig.kind === "idle"
+            ? "idle"
+            : appConfig.kind === "loading"
+              ? "loading config…"
+              : appConfig.kind === "error"
+                ? `config error: ${appConfig.message}`
+                : configGaps.length > 0
+                  ? `config incomplete: ${configGaps.join(", ")}`
+                  : "config ready"}
+        </div>
+      </div>
+      {readyConfig ? (
+        <>
+          <div className="field">
+            <div className="field-label">
+              <span>openscad</span>
+            </div>
+            <div className="field-status" data-testid="config-openscad-path">
+              {readyConfig.openscad_path ?? "—"}
+            </div>
+          </div>
+          <div className="field">
+            <div className="field-label">
+              <span>slicers</span>
+            </div>
+            <div className="field-status" data-testid="config-slicer-count">
+              {exportSlicers.length}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </>
+  );
 }

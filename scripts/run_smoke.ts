@@ -4,7 +4,7 @@
 //   bun scripts/run_smoke.ts            # 等价于 --case all
 //
 // 支持 case：wasm_package_smoke / browser_smoke / browser_watch_smoke / all
-//           / markdown_view / image_view / scad_split_view（Phase 6 扩展）
+//           / markdown_view / image_view / scad_viewer（Phase 6 扩展）
 //           / canvas_interaction / parameters_presets / export_slicer /
 //             config_settings / scad_autorerender（Phase 7 扩展）
 // S1a / S1b / S4 通过直接命令调度。
@@ -20,7 +20,7 @@ type Case =
   | "browser_watch_smoke"
   | "markdown_view"
   | "image_view"
-  | "scad_split_view"
+  | "scad_viewer"
   | "canvas_interaction"
   | "parameters_presets"
   | "export_slicer"
@@ -34,7 +34,7 @@ const VALID_CASES: readonly Case[] = [
   "browser_watch_smoke",
   "markdown_view",
   "image_view",
-  "scad_split_view",
+  "scad_viewer",
   "canvas_interaction",
   "parameters_presets",
   "export_slicer",
@@ -185,8 +185,8 @@ async function dispatch(which: Case): Promise<number> {
       return runPhase6Case("@markdown");
     case "image_view":
       return runPhase6Case("@image");
-    case "scad_split_view":
-      return runPhase6Case("@scad-split");
+    case "scad_viewer":
+      return runPhase6Case("@scad-viewer");
     case "canvas_interaction":
       return runPhase7Spec(
         "tests/playwright/canvas-interaction.spec.ts",

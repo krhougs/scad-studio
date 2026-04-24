@@ -1,6 +1,6 @@
-# scad-studio
+# budn' (`budn`)
 
-一个跨端 OpenSCAD 工作台：桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
+`budn'` 是一个跨端 OpenSCAD 工作台；代码与配置标识符中统一使用 `budn`。桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
 
 ## 仓库结构
 
@@ -49,7 +49,7 @@ bun run web
 - `websocket-host` 进程，默认监听 `127.0.0.1:38421`
 - Vite dev server，默认 `http://127.0.0.1:5173`
 
-打开 `http://127.0.0.1:5173` 即可看到五区工作台（Topbar / Rail / Chat / Canvas / Inspector）。
+打开 `http://127.0.0.1:5173` 即可看到 `budn'` 五区工作台（Topbar / Rail / Chat / Canvas / Inspector）。
 
 环境变量（全部可选）：
 
@@ -95,7 +95,7 @@ bun run web:smoke -- --case browser_watch_smoke
 bun run web:smoke -- --case wasm_package_smoke
 bun run web:smoke -- --case markdown_view        # Phase 6 扩展
 bun run web:smoke -- --case image_view           # Phase 6 扩展
-bun run web:smoke -- --case scad_split_view      # Phase 6 扩展
+bun run web:smoke -- --case scad_viewer          # Phase 6 扩展
 bun run web:smoke -- --case canvas_interaction   # Phase 7 扩展
 bun run web:smoke -- --case parameters_presets   # Phase 7 扩展
 bun run web:smoke -- --case export_slicer        # Phase 7 扩展

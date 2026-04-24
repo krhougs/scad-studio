@@ -106,34 +106,42 @@ export class WasmClient {
   }
 
   dispatchWorkspaceList(params: { directory: unknown | null }): Promise<unknown> {
+    recordTestDispatch("workspace_list", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_workspace_list(h, params));
   }
 
   dispatchPreviewRequest(params: unknown): Promise<unknown> {
+    recordTestDispatch("preview_request", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_preview_request(h, params));
   }
 
   dispatchFileRead(params: unknown): Promise<unknown> {
+    recordTestDispatch("file_read", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_file_read(h, params));
   }
 
   dispatchFileWriteText(params: unknown): Promise<unknown> {
+    recordTestDispatch("file_write_text", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_file_write_text(h, params));
   }
 
   dispatchConfigLoad(): Promise<unknown> {
+    recordTestDispatch("config_load", null);
     return this.dispatchWithId((h) => Wasm.client_dispatch_config_load(h));
   }
 
   dispatchConfigSave(params: unknown): Promise<unknown> {
+    recordTestDispatch("config_save", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_config_save(h, params));
   }
 
   dispatchSlicerList(params: unknown): Promise<unknown> {
+    recordTestDispatch("slicer_list", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_slicer_list(h, params));
   }
 
   dispatchExportRun(params: unknown): Promise<unknown> {
+    recordTestDispatch("export_run", params);
     return this.dispatchWithId((h) => Wasm.client_dispatch_export_run(h, params));
   }
 
@@ -175,5 +183,26 @@ export class WasmClient {
     if (this.destroyed || !this.handle) {
       throw new Error("WasmClient already destroyed");
     }
+  }
+}
+
+function recordTestDispatch(commandType: string, payload: unknown): void {
+  if (typeof window === "undefined") return;
+  const globalWindow = window as Window & {
+    __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+  };
+  if (!Array.isArray(globalWindow.__scadDispatchedCommands)) return;
+  globalWindow.__scadDispatchedCommands.push({
+    type: commandType,
+    payload: cloneForRecord(payload),
+  });
+}
+
+function cloneForRecord(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
   }
 }

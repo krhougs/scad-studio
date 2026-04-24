@@ -69,3 +69,72 @@ export function renderer_create(_canvasId: string): RendererHandle {
 export function renderer_destroy(): void {}
 export function renderer_render(): void {}
 export function renderer_resize(): void {}
+
+export function parameters_parse_source(source: string): unknown {
+  const entries = source
+    .split("\n")
+    .map((line) => line.trim())
+    .map(parseParameterLine)
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+  return { entries, warnings: [] };
+}
+
+export function parameters_format_defines(entries: unknown): unknown {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => {
+      const record = entry as Record<string, unknown>;
+      const definition = record["definition"] as Record<string, unknown> | undefined;
+      const name = definition?.["name"];
+      if (typeof name !== "string") return null;
+      return `${name}=${formatParameterValue(record["value"])}`;
+    })
+    .filter((item): item is string => typeof item === "string");
+}
+
+export function presets_parse_shared_file(text: string): unknown {
+  return JSON.parse(text);
+}
+
+export function presets_stringify_shared_file(file: unknown): string {
+  return `${JSON.stringify(file, null, 2)}\n`;
+}
+
+function parseParameterLine(line: string): Record<string, unknown> | null {
+  const choice = line.match(/^(\w+)\s*=\s*"([^"]*)"\s*;\s*\/\/\s*\[([^\]]+)\]/);
+  if (choice) {
+    return parameterEntry(choice[1], choice[2], {
+      Choice: { options: choice[3].split(",").map((item) => item.trim().replaceAll('"', "")) },
+    });
+  }
+  const bool = line.match(/^(\w+)\s*=\s*(true|false)\s*;/);
+  if (bool) return parameterEntry(bool[1], bool[2] === "true", "Bool");
+  const number = line.match(/^(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*;/);
+  if (!number) return null;
+  return parameterEntry(number[1], Number(number[2]), {
+    Number: { min: null, step: null, max: null },
+  });
+}
+
+function parameterEntry(
+  name: string,
+  defaultValue: unknown,
+  kind: unknown,
+): Record<string, unknown> {
+  return {
+    definition: {
+      name,
+      group: null,
+      hidden: false,
+      kind,
+      default_value: defaultValue,
+    },
+    value: defaultValue,
+  };
+}
+
+function formatParameterValue(value: unknown): string {
+  if (typeof value === "number") return String(Number.isInteger(value) ? value : value);
+  if (typeof value === "boolean") return String(value);
+  return JSON.stringify(String(value ?? ""));
+}

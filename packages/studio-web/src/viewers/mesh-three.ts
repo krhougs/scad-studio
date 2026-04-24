@@ -4,19 +4,27 @@
 
 import {
   AmbientLight,
+  AxesHelper,
   BufferAttribute,
   BufferGeometry,
   Box3,
   Color,
   DirectionalLight,
+  DoubleSide,
   GridHelper,
   Mesh,
   MeshStandardMaterial,
+  OrthographicCamera,
   PerspectiveCamera,
+  PlaneGeometry,
   Scene,
   Vector3,
   WebGLRenderer,
 } from "three";
+import {
+  DEFAULT_MESH_VIEWER_OPTIONS,
+  type MeshViewerOptions,
+} from "./viewer-options";
 
 export type MeshPayload = {
   positions: Float32Array;
@@ -37,6 +45,7 @@ export type CameraState = {
 export type MeshViewerHandle = {
   setMesh(payload: MeshPayload | null): void;
   setCamera(camera: CameraState): void;
+  setOptions(options: MeshViewerOptions): void;
   resize(width: number, height: number, dpr: number): void;
   /** 用户通过交互改变了相机；外部 state 需要同步。 */
   onCameraChange(cb: (camera: CameraState) => void): void;
@@ -63,6 +72,12 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   scene.add(ambient);
   const key = new DirectionalLight(0xffffff, 0.75);
   key.position.set(4, 6, 4);
+  key.shadow.camera.left = -240;
+  key.shadow.camera.right = 240;
+  key.shadow.camera.top = 240;
+  key.shadow.camera.bottom = -240;
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 1200;
   scene.add(key);
   const fill = new DirectionalLight(0xffffff, 0.35);
   fill.position.set(-4, -2, -3);
@@ -73,14 +88,40 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   (grid.material as { transparent: boolean; opacity: number }).opacity = 0.5;
   scene.add(grid);
 
-  const camera = new PerspectiveCamera(35, 1, 0.1, 5000);
+  const axes = new AxesHelper(80);
+  scene.add(axes);
+
+  const buildPlate = new Mesh(
+    new PlaneGeometry(200, 200),
+    new MeshStandardMaterial({
+      color: 0x1d2930,
+      transparent: true,
+      opacity: 0.22,
+      side: DoubleSide,
+      roughness: 0.9,
+    }),
+  );
+  buildPlate.rotation.x = -Math.PI / 2;
+  buildPlate.position.y = -0.02;
+  buildPlate.receiveShadow = true;
+  scene.add(buildPlate);
+
+  const perspectiveCamera = new PerspectiveCamera(35, 1, 0.1, 5000);
+  const orthographicCamera = new OrthographicCamera(-100, 100, 100, -100, 0.1, 5000);
+  let camera: PerspectiveCamera | OrthographicCamera = perspectiveCamera;
   camera.position.set(160, 160, 200);
   camera.lookAt(0, 0, 0);
+  orthographicCamera.position.copy(camera.position);
+  orthographicCamera.lookAt(0, 0, 0);
 
   const target = new Vector3(0, 0, 0);
   let upVec = new Vector3(0, 1, 0);
+  let options = { ...DEFAULT_MESH_VIEWER_OPTIONS };
+  let viewportWidth = 1;
+  let viewportHeight = 1;
 
   let meshObj: Mesh | null = null;
+  let meshMaterial: MeshStandardMaterial | null = null;
   let stats: { vertices: number; indices: number } | null = null;
 
   const pointer = {
@@ -97,7 +138,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       position: [camera.position.x, camera.position.y, camera.position.z],
       target: [target.x, target.y, target.z],
       up: [upVec.x, upVec.y, upVec.z],
-      fovYDeg: camera.fov,
+      fovYDeg: perspectiveCamera.fov,
       near: camera.near,
       far: camera.far,
     });
@@ -107,17 +148,74 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     renderer.render(scene, camera);
   }
 
+  function updateProjection(): void {
+    if (options.projectionMode === "perspective") {
+      perspectiveCamera.aspect = viewportWidth / viewportHeight;
+      perspectiveCamera.updateProjectionMatrix();
+      return;
+    }
+    const distance = Math.max(camera.position.distanceTo(target), 20);
+    const halfHeight = distance * 0.38;
+    const halfWidth = halfHeight * (viewportWidth / viewportHeight);
+    orthographicCamera.left = -halfWidth;
+    orthographicCamera.right = halfWidth;
+    orthographicCamera.top = halfHeight;
+    orthographicCamera.bottom = -halfHeight;
+    orthographicCamera.updateProjectionMatrix();
+  }
+
+  function setProjectionMode(mode: MeshViewerOptions["projectionMode"]): void {
+    const previous = camera;
+    camera = mode === "orthographic" ? orthographicCamera : perspectiveCamera;
+    camera.position.copy(previous.position);
+    camera.up.copy(previous.up);
+    camera.near = previous.near;
+    camera.far = previous.far;
+    camera.lookAt(target);
+    updateProjection();
+  }
+
   function applyCamera(state: CameraState): void {
     camera.position.set(state.position[0], state.position[1], state.position[2]);
     target.set(state.target[0], state.target[1], state.target[2]);
     upVec.set(state.up[0], state.up[1], state.up[2]);
     camera.up.copy(upVec);
-    camera.fov = state.fovYDeg;
+    perspectiveCamera.fov = state.fovYDeg;
     camera.near = state.near;
     camera.far = state.far;
     camera.lookAt(target);
-    camera.updateProjectionMatrix();
+    updateProjection();
     render();
+  }
+
+  function applyOptions(): void {
+    setProjectionMode(options.projectionMode);
+    grid.visible = options.showGrid;
+    axes.visible = options.showAxis;
+    buildPlate.visible = options.showBuildPlate;
+    renderer.shadowMap.enabled = options.shadowsEnabled;
+    key.castShadow = options.shadowsEnabled;
+    fill.castShadow = options.shadowsEnabled;
+    if (meshObj && meshMaterial) {
+      meshObj.castShadow = options.shadowsEnabled;
+      meshObj.receiveShadow = options.shadowsEnabled;
+      meshMaterial.wireframe = options.renderMode === "wireframe";
+      meshMaterial.transparent = options.renderMode === "xray";
+      meshMaterial.opacity = options.renderMode === "xray" ? 0.36 : 1;
+      meshMaterial.depthWrite = options.renderMode !== "xray";
+      meshMaterial.needsUpdate = true;
+    }
+    syncCanvasDataset();
+    render();
+  }
+
+  function syncCanvasDataset(): void {
+    canvas.dataset.renderMode = options.renderMode;
+    canvas.dataset.projectionMode = options.projectionMode;
+    canvas.dataset.showGrid = String(options.showGrid);
+    canvas.dataset.showAxis = String(options.showAxis);
+    canvas.dataset.showBuildPlate = String(options.showBuildPlate);
+    canvas.dataset.shadowsEnabled = String(options.shadowsEnabled);
   }
 
   function frameToMesh(mesh: Mesh): void {
@@ -139,7 +237,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     camera.lookAt(target);
     camera.near = Math.max(maxDim / 1000, 0.01);
     camera.far = Math.max(maxDim * 20, 1000);
-    camera.updateProjectionMatrix();
+    updateProjection();
     emitCamera();
   }
 
@@ -166,7 +264,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   function pan(dx: number, dy: number): void {
     const offset = camera.position.clone().sub(target);
     const distance = offset.length();
-    const factor = distance * Math.tan((camera.fov * Math.PI) / 360);
+    const factor =
+      options.projectionMode === "orthographic"
+        ? (orthographicCamera.top - orthographicCamera.bottom) / 2
+        : distance * Math.tan((perspectiveCamera.fov * Math.PI) / 360);
     const rect = canvas.getBoundingClientRect();
     const right = new Vector3()
       .crossVectors(camera.up, offset)
@@ -190,6 +291,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     if (nextDist < 0.1 || nextDist > 20000) return;
     camera.position.copy(target.clone().add(offset));
     camera.lookAt(target);
+    updateProjection();
     emitCamera();
     render();
   }
@@ -235,7 +337,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", onContextMenu);
 
-  render();
+  applyOptions();
 
   return {
     setMesh(payload) {
@@ -244,6 +346,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         meshObj.geometry.dispose();
         (meshObj.material as MeshStandardMaterial).dispose();
         meshObj = null;
+        meshMaterial = null;
         stats = null;
       }
       if (!payload || payload.positions.length === 0) {
@@ -282,24 +385,31 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         roughness: 0.72,
         vertexColors: payload.vertexColors !== null,
       });
+      meshMaterial = material;
       meshObj = new Mesh(geometry, material);
       scene.add(meshObj);
       const vertexCount = payload.positions.length / 3;
       const indexCount = payload.indices ? payload.indices.length : vertexCount;
       stats = { vertices: vertexCount, indices: indexCount };
       frameToMesh(meshObj);
+      applyOptions();
       render();
     },
     setCamera(state) {
       applyCamera(state);
     },
+    setOptions(next) {
+      options = { ...next };
+      applyOptions();
+    },
     resize(width, height, dpr) {
       const w = Math.max(1, Math.floor(width));
       const h = Math.max(1, Math.floor(height));
+      viewportWidth = w;
+      viewportHeight = h;
       renderer.setPixelRatio(Math.min(dpr, 2));
       renderer.setSize(w, h, false);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      updateProjection();
       render();
     },
     onCameraChange(cb) {
@@ -319,6 +429,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       grid.geometry.dispose();
       const gridMat = grid.material as { dispose?: () => void };
       gridMat.dispose?.();
+      axes.dispose();
+      buildPlate.geometry.dispose();
+      (buildPlate.material as MeshStandardMaterial).dispose();
       renderer.dispose();
     },
     getStats() {

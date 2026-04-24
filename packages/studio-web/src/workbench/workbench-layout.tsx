@@ -1,7 +1,7 @@
 // Workbench layout: CSS Grid 五区外框 + transport/protocol 生命周期接线。
-// Phase 5 已接好 handshake / watch / inspector 树 / mesh_decode。
+// Phase 5 已接好 handshake / watch / left files panel / mesh_decode。
 // Phase 6 补上文档标签系统（Tab Bar + DocumentTab Zustand 状态 + 多 viewer
-// 挂载到 Canvas Zone）。Inspector 点击文件 → 按扩展名路由到对应 viewer tab；
+// 挂载到 Canvas Zone）。左栏 Files 点击文件 → 按扩展名路由到对应 viewer tab；
 // 不支持的扩展名仅更新状态条消息，不开 tab。
 //
 // 协议业务状态仍在 wasm 内；Zustand 只存 UI 壳状态（openTabs / activeTabId
@@ -9,26 +9,43 @@
 // id / label / path / kind。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import {
+  decodeConfigLoad,
+  describeConfigGaps,
+} from "../config/app-config";
+import {
+  setAppConfigError,
+  setAppConfigLoading,
+  setAppConfigReady,
+  useAppConfigState,
+} from "../config/app-config-store";
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
-import { ChatZone } from "./chat-zone";
+import { documentTitleForFile } from "./document-title";
+import { Inspector } from "./inspector";
+import { LeftPanel } from "./left-panel";
 import {
-  Inspector,
-  type InspectorDirectoryNode,
-  type InspectorEntry,
-} from "./inspector";
-import { LogPanel } from "./log-panel";
+  LEFT_PANEL_PARAM,
+  normalizeLeftPanelId,
+} from "./left-panel-routing";
 import { useLogBuffer } from "./use-log-buffer";
 import { pathKey, pathLabel } from "./path-utils";
 import { Rail } from "./rail";
+import {
+  scadInspectorPanelsForState,
+  useScadWorkbenchState,
+} from "./scad-workbench";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
+import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 import {
   createTransport,
   describeError,
   buildClientCallbacks,
 } from "./workbench-wiring";
+import { describeFileReadError } from "../viewers/file-read-decoder";
 
 type Phase =
   | "idle"
@@ -51,9 +68,8 @@ type Snapshot = {
   transport_status?: string;
 } | null;
 
-function resolveWsUrl(): string {
-  const search = new URLSearchParams(window.location.search);
-  const fromQuery = search.get("ws");
+function resolveWsUrl(searchParams: URLSearchParams): string {
+  const fromQuery = searchParams.get("ws");
   if (fromQuery) return fromQuery;
   const fromEnv = import.meta.env.VITE_WS_URL;
   if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
@@ -74,7 +90,7 @@ function phaseToStatus(phase: Phase): TopbarStatus {
   }
 }
 
-function toInspectorEntry(entry: ProtocolEntry): InspectorEntry {
+function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
   return {
     label: pathLabel(entry.path) || "(unnamed)",
     path: entry.path,
@@ -91,44 +107,90 @@ function extractWorkspaceListEntries(response: unknown): ProtocolEntry[] {
 }
 
 export function WorkbenchLayout() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
   const [snapshot, setSnapshot] = useState<Snapshot>(null);
-  const [expanded, setExpanded] = useState<Map<string, InspectorDirectoryNode>>(
+  const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
-  const [rootEntries, setRootEntries] = useState<InspectorEntry[]>([]);
+  const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([]);
   const [rootLoaded, setRootLoaded] = useState(false);
   const [clientReady, setClientReady] = useState(false);
   const [activeView, setActiveView] = useState<ViewPreset>("iso");
   const [meshStats, setMeshStats] = useState<
     { vertices: number; indices: number } | null
   >(null);
+  const [activeDefines, setActiveDefines] = useState<string[]>([]);
 
   const openTabs = useUiStore((s) => s.openTabs);
   const activeTabId = useUiStore((s) => s.activeTabId);
   const openTab = useUiStore((s) => s.openTab);
   const closeTab = useUiStore((s) => s.closeTab);
   const setActiveTab = useUiStore((s) => s.setActiveTab);
+  const activeRail = useUiStore((s) => s.activeRail);
+  const setActiveRail = useUiStore((s) => s.setActiveRail);
 
-  const wsUrl = useMemo(() => resolveWsUrl(), []);
+  const wsUrl = useMemo(() => resolveWsUrl(searchParams), [searchParams]);
   const clientRef = useRef<WasmClient | null>(null);
-  const expandedRef = useRef<Map<string, InspectorDirectoryNode>>(new Map());
+  const expandedRef = useRef<Map<string, WorkspaceDirectoryNode>>(new Map());
   const watchActiveRef = useRef(false);
   const log = useLogBuffer();
   const logRef = useRef(log);
   logRef.current = log;
-  const [scadRefreshSignal, setScadRefreshSignal] = useState(0);
+  const [documentRefreshSignal, setDocumentRefreshSignal] = useState(0);
   const openTabsRef = useRef(openTabs);
   openTabsRef.current = openTabs;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const appConfig = useAppConfigState();
+  const routePanelValue = searchParams.get(LEFT_PANEL_PARAM);
+  const routePanel = normalizeLeftPanelId(routePanelValue);
+  const activeTab =
+    openTabs.find((tab) => tab.id === activeTabId) ?? null;
+  const client = clientReady ? clientRef.current : null;
+  const scadWorkbenchState = useScadWorkbenchState({
+    path: activeTab?.kind === "scad" ? activeTab.path : null,
+    client,
+    refreshSignal: documentRefreshSignal,
+    onLog: log.append,
+    onPreviewStatus: setMessage,
+    enabled: activeTab?.kind === "scad" && client !== null,
+  });
+
+  useEffect(() => {
+    if (activeRail !== routePanel) {
+      setActiveRail(routePanel);
+    }
+    if (routePanelValue !== routePanel) {
+      setSearchParams((prev) => {
+        prev.set(LEFT_PANEL_PARAM, routePanel);
+        return prev;
+      }, {
+        replace: true,
+      });
+    }
+  }, [
+    activeRail,
+    routePanel,
+    routePanelValue,
+    setActiveRail,
+    setSearchParams,
+  ]);
+
+  useEffect(() => {
+    if (activeTab?.kind === "scad") {
+      setActiveDefines(scadWorkbenchState.appliedDefines);
+      return;
+    }
+    setActiveDefines([]);
+  }, [activeTab?.kind, scadWorkbenchState.appliedDefines]);
 
   const setExpandedBoth = useCallback(
     (
       updater: (
-        prev: Map<string, InspectorDirectoryNode>,
-      ) => Map<string, InspectorDirectoryNode>,
+        prev: Map<string, WorkspaceDirectoryNode>,
+      ) => Map<string, WorkspaceDirectoryNode>,
     ) => {
       setExpanded((prev) => {
         const next = updater(prev);
@@ -143,7 +205,7 @@ export function WorkbenchLayout() {
     client
       .dispatchWorkspaceList({ directory: null })
       .then((response) => {
-        const entries = extractWorkspaceListEntries(response).map(toInspectorEntry);
+        const entries = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
         setRootEntries(entries);
         setRootLoaded(true);
       })
@@ -160,7 +222,7 @@ export function WorkbenchLayout() {
         client
           .dispatchWorkspaceList({ directory: state.path })
           .then((response) => {
-            const entries = extractWorkspaceListEntries(response).map(toInspectorEntry);
+            const entries = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
             setExpandedBoth((prev) => {
               const next = new Map(prev);
               next.set(key, { ...state, entries, loading: false, error: null });
@@ -180,11 +242,11 @@ export function WorkbenchLayout() {
   );
 
   const handleExpandDirectory = useCallback(
-    (entry: InspectorEntry) => {
+    (entry: WorkspaceEntry) => {
       const client = clientRef.current;
       if (!client) return;
       const key = pathKey(entry.path);
-      const pending: InspectorDirectoryNode = {
+      const pending: WorkspaceDirectoryNode = {
         key,
         label: entry.label,
         path: entry.path,
@@ -200,7 +262,7 @@ export function WorkbenchLayout() {
       client
         .dispatchWorkspaceList({ directory: entry.path })
         .then((response) => {
-          const children = extractWorkspaceListEntries(response).map(toInspectorEntry);
+          const children = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
           setExpandedBoth((prev) => {
             const next = new Map(prev);
             next.set(key, { ...pending, entries: children, loading: false });
@@ -223,7 +285,7 @@ export function WorkbenchLayout() {
   );
 
   const handleCollapseDirectory = useCallback(
-    (entry: InspectorEntry) => {
+    (entry: WorkspaceEntry) => {
       const key = pathKey(entry.path);
       setExpandedBoth((prev) => {
         if (!prev.has(key)) return prev;
@@ -234,6 +296,27 @@ export function WorkbenchLayout() {
     },
     [setExpandedBoth],
   );
+
+  const refreshAppConfig = useCallback((client: WasmClient) => {
+    setAppConfigLoading();
+    client
+      .dispatchConfigLoad()
+      .then((response) => {
+        const decoded = decodeConfigLoad(response);
+        setAppConfigReady(decoded.config, decoded.raw, "load");
+        const gaps = describeConfigGaps(decoded.config);
+        if (gaps.length > 0) {
+          logRef.current.append("warn", `config incomplete: ${gaps.join(", ")}`);
+        } else {
+          logRef.current.append("info", "config loaded");
+        }
+      })
+      .catch((err) => {
+        const message = describeFileReadError(err);
+        setAppConfigError(message);
+        logRef.current.append("warn", `config load failed: ${message}`);
+      });
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -253,6 +336,9 @@ export function WorkbenchLayout() {
             watchActiveRef,
             disposedRef: () => disposed,
             refreshRoot: () => refreshRootListing(client),
+          }).then(() => {
+            if (disposed) return;
+            refreshAppConfig(client);
           });
         },
         onTransportOpen: () => {
@@ -274,21 +360,21 @@ export function WorkbenchLayout() {
           const activeId = activeTabIdRef.current;
           const activeTab =
             openTabsRef.current.find((t) => t.id === activeId) ?? null;
-          // Server-side watch currently reports directory-level changes (the
-          // changed_paths list can be empty or hold the directory handle
-          // only). To keep the auto-rerender behaviour useful we conservatively
-          // bump the refresh signal whenever the active tab is a .scad and any
-          // watch event fires; if a per-file payload arrives in the future the
-          // pathKey match below can still narrow the trigger further.
-          if (activeTab && activeTab.kind === "scad") {
+          if (
+            activeTab &&
+            (activeTab.kind === "scad" ||
+              activeTab.kind === "mesh" ||
+              activeTab.kind === "markdown" ||
+              activeTab.kind === "image")
+          ) {
             const activeKey = pathKey(activeTab.path);
             const matchedSpecific = changed.has(activeKey);
-            setScadRefreshSignal((n) => n + 1);
+            setDocumentRefreshSignal((n) => n + 1);
             logRef.current.append(
               "info",
               matchedSpecific
-                ? `auto rerender triggered by ${activeKey}`
-                : `auto rerender triggered by ${activeKey} (directory change)`,
+                ? `document refresh triggered by ${activeKey}`
+                : `document refresh triggered by ${activeKey} (directory change)`,
             );
           }
           for (const key of changed) {
@@ -347,14 +433,14 @@ export function WorkbenchLayout() {
       setClientReady(false);
       watchActiveRef.current = false;
     };
-  }, [wsUrl, refreshRootListing, refreshExpandedDirectories]);
+  }, [refreshAppConfig, refreshExpandedDirectories, refreshRootListing, wsUrl]);
 
   const entriesLoaded = rootLoaded;
-  const entries: InspectorEntry[] = rootEntries;
+  const entries: WorkspaceEntry[] = rootEntries;
   const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
 
-  const handleInspectorOpen = useCallback(
-    (entry: InspectorEntry) => {
+  const handleOpenEntry = useCallback(
+    (entry: WorkspaceEntry) => {
       const kind = resolveTabKind(entry.label);
       if (!kind) {
         const ext = extensionOf(entry.label) || "(no extension)";
@@ -368,17 +454,23 @@ export function WorkbenchLayout() {
     [openTab],
   );
 
-  const activeTab =
-    openTabs.find((tab) => tab.id === activeTabId) ?? null;
   const previewTargetLabel = activeTab ? activeTab.label : "—";
-  const client = clientReady ? clientRef.current : null;
   const meshSummary = meshStats
     ? { label: activeTab?.label ?? "mesh", ...meshStats }
     : null;
-  const showMeshPanels = activeTab?.kind === "mesh";
+  const showMeshPanels = activeTab?.kind === "mesh" || activeTab?.kind === "scad";
   const defaultExportFilename = activeTab
     ? deriveExportFilename(activeTab.label)
     : "export.stl";
+
+  useEffect(() => {
+    document.title = documentTitleForFile(activeTab?.label ?? null);
+  }, [activeTab?.label]);
+
+  const scadInspectorPanels =
+    activeTab?.kind === "scad"
+      ? scadInspectorPanelsForState(scadWorkbenchState)
+      : null;
 
   return (
     <div className="app" data-testid="workbench-layout">
@@ -389,7 +481,22 @@ export function WorkbenchLayout() {
         message={message}
       />
       <Rail />
-      <ChatZone />
+      <LeftPanel
+        activePanel={routePanel}
+        rootName={rootName}
+        entries={entries}
+        entriesLoaded={entriesLoaded}
+        activeFilePath={activeTab ? activeTab.path : null}
+        expandedDirectories={expanded}
+        directoryKey={pathKey}
+        onRequestPreview={handleOpenEntry}
+        onExpandDirectory={handleExpandDirectory}
+        onCollapseDirectory={handleCollapseDirectory}
+        logEntries={log.entries}
+        client={client}
+        appConfig={appConfig}
+        wsUrl={wsUrl}
+      />
       <CanvasZone
         phase={phase}
         message={message}
@@ -400,31 +507,31 @@ export function WorkbenchLayout() {
         onCloseTab={closeTab}
         onPreviewStatus={setMessage}
         client={client}
-        refreshSignal={scadRefreshSignal}
-        onLog={log.append}
+        refreshSignal={documentRefreshSignal}
+        config={appConfig.kind === "ready" ? appConfig.config : null}
         meshStats={meshStats}
         activeView={activeView}
         onSelectView={setActiveView}
         onMeshStats={setMeshStats}
+        scadWorkbenchState={scadWorkbenchState}
       />
       <Inspector
         rootName={rootName}
-        entries={entries}
-        entriesLoaded={entriesLoaded}
-        onRequestPreview={handleInspectorOpen}
-        onExpandDirectory={handleExpandDirectory}
-        onCollapseDirectory={handleCollapseDirectory}
         previewTargetLabel={previewTargetLabel}
         meshSummary={meshSummary}
-        expandedDirectories={expanded}
-        directoryKey={pathKey}
-        activeFilePath={activeTab ? activeTab.path : null}
         client={client}
         showMeshPanels={showMeshPanels}
         meshSource={activeTab?.path}
         defaultExportFilename={defaultExportFilename}
+        exportDefines={activeTab?.kind === "scad" ? activeDefines : []}
+        appConfig={appConfig}
         onExportStatus={setMessage}
-        bottomSlot={<LogPanel entries={log.entries} />}
+        parametersSlot={
+          activeTab?.kind === "scad" ? scadInspectorPanels?.parameters : null
+        }
+        presetsSlot={
+          activeTab?.kind === "scad" ? scadInspectorPanels?.presets : null
+        }
       />
     </div>
   );

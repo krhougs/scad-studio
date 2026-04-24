@@ -1,16 +1,35 @@
-// Scad workbench: glues ScadSplitViewer with the Phase 7 parameter and preset
-// panels. Overrides (defines) and presets live in React state; the preview
-// pipeline hands overrides straight to PreviewRequest.defines. Source parsing
-// is not possible on web (server deny list on `.scad`), so overrides are
-// authored manually by the user or loaded from a preset file.
-
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import type React from "react";
+import type { CameraPreset } from "../canvas/camera-state";
+import type { AppConfigShape } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
-import { decodeFileRead, describeFileReadError } from "../viewers/file-read-decoder";
-import { ScadSplitViewer } from "../viewers/scad-split-viewer";
-import { ParametersPanel, type ParameterOverride } from "./parameters-panel";
+import {
+  decodeFileRead,
+  describeFileReadError,
+} from "../viewers/file-read-decoder";
+import { ScadPreviewViewer } from "../viewers/scad-preview-viewer";
+import type { MeshViewerOptions } from "../viewers/viewer-options";
+import { ParametersPanel } from "./parameters-panel";
+import {
+  applyPresetValues,
+  currentParameterValues,
+  formatCurrentDefines,
+  mergeParameterEntries,
+  parseParameterSource,
+  restoreAllParameterValues,
+  restoreParameterValue,
+  updateParameterValue,
+  type ParameterEntry,
+  type ParameterValue,
+} from "./parameter-model";
 import { PresetsPanel, type PresetEntry } from "./presets-panel";
 import {
+  deriveLegacyPresetPaths,
   derivePresetPath,
   derivePresetPathLabel,
   parsePresetFile,
@@ -21,36 +40,106 @@ type ScadWorkbenchProps = {
   path: unknown;
   client: WasmClient;
   label: string;
-  onPreviewStatus?: (status: string) => void;
+  state: ScadWorkbenchState;
+  config: AppConfigShape | null;
+  cameraPreset?: CameraPreset | null;
+  viewerOptions?: MeshViewerOptions;
   refreshSignal: number;
-  onLog: (level: "info" | "warn" | "error", message: string) => void;
+  onMeshStats?: (stats: { vertices: number; indices: number } | null) => void;
+};
+
+export type ScadWorkbenchState = {
+  parameterEntries: ParameterEntry[];
+  parameterWarnings: string[];
+  presets: PresetEntry[];
+  presetPathLabel: string;
+  presetLoading: boolean;
+  presetError: string | null;
+  previewStatus: string;
+  appliedDefines: string[];
+  sourceReady: boolean;
+  emitStatus: (status: string) => void;
+  applyOverrides: () => void;
+  restoreDefaults: () => void;
+  updateParameter: (name: string, value: ParameterValue) => void;
+  restoreParameter: (name: string) => void;
+  loadPresets: () => void;
+  loadPreset: (name: string) => void;
+  savePreset: (name: string) => void;
+  deletePreset: (name: string) => void;
 };
 
 export function ScadWorkbench(props: ScadWorkbenchProps) {
-  const { path, client, label, onPreviewStatus, refreshSignal, onLog } = props;
+  const {
+    path,
+    client,
+    label,
+    state,
+    config,
+    cameraPreset,
+    viewerOptions,
+    refreshSignal,
+    onMeshStats,
+  } = props;
 
-  const [overrides, setOverrides] = useState<ParameterOverride[]>([]);
+  return (
+    <div className="scad-workbench" data-testid="scad-workbench">
+      <ScadPreviewViewer
+        path={path}
+        client={client}
+        label={label}
+        defines={state.appliedDefines}
+        configuredOpenscadPath={config?.openscad_path ?? null}
+        cameraPreset={cameraPreset}
+        viewerOptions={viewerOptions}
+        previewEnabled={state.sourceReady}
+        refreshSignal={refreshSignal}
+        onPreviewStatus={state.emitStatus}
+        onStats={onMeshStats}
+      />
+    </div>
+  );
+}
+
+type ScadWorkbenchStateInput = {
+  path: unknown | null;
+  client: WasmClient | null;
+  refreshSignal: number;
+  onLog: (level: "info" | "warn" | "error", message: string) => void;
+  onPreviewStatus?: (status: string) => void;
+  enabled?: boolean;
+};
+
+export function useScadWorkbenchState({
+  path,
+  client,
+  refreshSignal,
+  onLog,
+  onPreviewStatus,
+  enabled = true,
+}: ScadWorkbenchStateInput): ScadWorkbenchState {
+  const active = enabled && client !== null && path !== null;
+  const [parameterEntries, setParameterEntries] = useState<ParameterEntry[]>([]);
+  const [parameterWarnings, setParameterWarnings] = useState<string[]>([]);
   const [appliedDefines, setAppliedDefines] = useState<string[]>([]);
+  const [sourceReady, setSourceReady] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<string>("preview pending");
-
-  // Reset per-file state when the active .scad path changes so overrides
-  // and preset caches do not leak between tabs.
-  useEffect(() => {
-    setOverrides([]);
-    setAppliedDefines([]);
-    setPresets([]);
-    setPresetError(null);
-  }, [path]);
-
-  const presetPath = useMemo(() => derivePresetPath(path), [path]);
-  const presetPathLabel = useMemo(() => derivePresetPathLabel(path), [path]);
-
   const [presets, setPresets] = useState<PresetEntry[]>([]);
   const [presetLoading, setPresetLoading] = useState(false);
   const [presetError, setPresetError] = useState<string | null>(null);
 
-  const bumpPreviewRef = useRef(0);
-  const [bumpedPreview, setBumpedPreview] = useState(0);
+  const presetPath = useMemo(() => derivePresetPath(path), [path]);
+  const presetPathLabel = useMemo(() => derivePresetPathLabel(path), [path]);
+  const legacyPresetPaths = useMemo(() => deriveLegacyPresetPaths(path), [path]);
+
+  useEffect(() => {
+    setParameterEntries([]);
+    setParameterWarnings([]);
+    setAppliedDefines([]);
+    setSourceReady(false);
+    setPresets([]);
+    setPresetError(null);
+  }, [active, path]);
 
   const emitStatus = useCallback(
     (status: string) => {
@@ -61,52 +150,133 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
   );
 
   const applyOverrides = useCallback(() => {
-    const defines = overrides
-      .map((o) => `${o.name.trim()}=${o.value}`)
-      .filter((s) => s.length > 1);
+    const defines = formatCurrentDefines(parameterEntries);
     setAppliedDefines(defines);
-    bumpPreviewRef.current += 1;
-    setBumpedPreview(bumpPreviewRef.current);
     onLog("info", `parameters apply (${defines.length} defines)`);
-  }, [overrides, onLog]);
+  }, [onLog, parameterEntries]);
 
   const restoreDefaults = useCallback(() => {
-    setOverrides([]);
-    setAppliedDefines([]);
-    bumpPreviewRef.current += 1;
-    setBumpedPreview(bumpPreviewRef.current);
+    const next = restoreAllParameterValues(parameterEntries);
+    setParameterEntries(next);
+    setAppliedDefines(formatCurrentDefines(next));
     onLog("info", "parameters restore defaults");
-  }, [onLog]);
+  }, [onLog, parameterEntries]);
+
+  const applySourceText = useCallback(
+    (source: string | null, ready: boolean) => {
+      setSourceReady(ready);
+      if (source === null) {
+        setParameterEntries([]);
+        setParameterWarnings([]);
+        setAppliedDefines([]);
+        return;
+      }
+      const parsed = parseParameterSource(source);
+      setParameterWarnings(parsed.warnings);
+      setParameterEntries((previous) => {
+        const next = mergeParameterEntries(previous, parsed.entries);
+        setAppliedDefines(formatCurrentDefines(next));
+        return next;
+      });
+      for (const warning of parsed.warnings) {
+        onLog("warn", `parameter parse warning: ${warning}`);
+      }
+    },
+    [onLog],
+  );
+
+  useEffect(() => {
+    if (!active || !client || !path) return;
+    let cancelled = false;
+    applySourceText(null, false);
+
+    client
+      .dispatchFileRead({ path })
+      .then((response) => {
+        if (cancelled) return;
+        const decoded = decodeFileRead(response);
+        if (!decoded || decoded.kind !== "utf8") {
+          applySourceText(null, true);
+          return;
+        }
+        applySourceText(decoded.text, true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        onLog("warn", `scad source unavailable: ${describeFileReadError(err)}`);
+        applySourceText(null, true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [active, applySourceText, client, onLog, path, refreshSignal]);
+
+  const handleUpdateParameter = useCallback(
+    (name: string, value: ParameterValue) => {
+      setParameterEntries((prev) => {
+        const next = updateParameterValue(prev, name, value);
+        setAppliedDefines(formatCurrentDefines(next));
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleRestoreParameter = useCallback((name: string) => {
+    setParameterEntries((prev) => {
+      const next = restoreParameterValue(prev, name);
+      setAppliedDefines(formatCurrentDefines(next));
+      return next;
+    });
+  }, []);
+
+  const loadPresetsFrom = useCallback(
+    async (
+      targetPath: unknown,
+    ): Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }> => {
+      if (!client) throw new Error("transport not ready");
+      const response = await client.dispatchFileRead({ path: targetPath });
+      const decoded = response as Record<string, unknown>;
+      const payload =
+        (decoded["payload"] as Record<string, unknown> | undefined) ?? decoded;
+      const contents =
+        payload["contents"] as Record<string, unknown> | undefined;
+      if (!contents || contents["kind"] !== "utf8_text") {
+        throw new Error("preset file is not utf-8");
+      }
+      const text = contents["payload"];
+      if (typeof text !== "string") {
+        throw new Error("preset file payload missing");
+      }
+      return {
+        file: parsePresetFile(text).presets,
+        source: targetPath === presetPath ? "primary" : "legacy",
+      };
+    },
+    [client, presetPath],
+  );
 
   const loadPresets = useCallback(() => {
+    if (!active || !client) return;
     if (!presetPath) {
       setPresetError("no preset path");
       return;
     }
     setPresetLoading(true);
     setPresetError(null);
-    client
-      .dispatchFileRead({ path: presetPath })
-      .then((response) => {
-        const decoded = decodeFileRead(response);
-        if (!decoded) {
-          throw new Error("unexpected FileRead payload");
-        }
-        if (decoded.kind !== "utf8") {
-          throw new Error("preset file is not utf-8");
-        }
-        const file = parsePresetFile(decoded.text);
-        setPresets(file.presets);
+    loadFirstExistingPreset([presetPath, ...legacyPresetPaths], loadPresetsFrom)
+      .then(({ file, source }) => {
+        setPresets(file);
         setPresetLoading(false);
-        onLog("info", `presets loaded (${file.presets.length})`);
+        onLog(
+          "info",
+          `presets loaded (${file.length}) from ${source === "primary" ? "scad.json" : "legacy presets.json"}`,
+        );
       })
       .catch((err) => {
         const message = describeFileReadError(err);
-        // A missing preset file is the normal initial state for a fresh
-        // .scad. The server may report this as "not found", as a protocol
-        // code (`not_found`), or as the underlying OS text "No such file"
-        // / "cannot find"; accept any of those as the empty case.
-        if (isMissingPresetError(err, message)) {
+        if (isMissingPresetError(err)) {
           setPresets([]);
           setPresetLoading(false);
           setPresetError(null);
@@ -117,20 +287,21 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
         setPresetLoading(false);
         onLog("warn", `preset load failed: ${message}`);
       });
-  }, [client, presetPath, onLog]);
+  }, [active, client, legacyPresetPaths, loadPresetsFrom, onLog, presetPath]);
 
   useEffect(() => {
-    loadPresets();
-  }, [loadPresets]);
+    if (active) loadPresets();
+  }, [active, loadPresets, refreshSignal]);
 
   const persistPresets = useCallback(
     (next: PresetEntry[]) => {
-      if (!presetPath) return;
-      const payload = stringifyPresetFile({ version: 1, presets: next });
+      if (!client || !presetPath) return;
+      const payload = stringifyPresetFile({ presets: next });
       client
         .dispatchFileWriteText({ path: presetPath, contents: payload })
         .then(() => {
           setPresets(next);
+          setPresetError(null);
           onLog("info", `presets saved (${next.length})`);
         })
         .catch((err) => {
@@ -139,21 +310,20 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
           onLog("error", `preset save failed: ${message}`);
         });
     },
-    [client, presetPath, onLog],
+    [client, onLog, presetPath],
   );
 
   const savePreset = useCallback(
     (name: string) => {
-      const defines = overrides
-        .map((o) => `${o.name.trim()}=${o.value}`)
-        .filter((s) => s.length > 1);
+      const trimmed = name.trim();
+      if (!trimmed) return;
       const next = [
-        ...presets.filter((item) => item.name !== name),
-        { name, defines },
+        ...presets.filter((item) => item.name !== trimmed),
+        { name: trimmed, values: currentParameterValues(parameterEntries) },
       ];
       persistPresets(next);
     },
-    [overrides, presets, persistPresets],
+    [parameterEntries, persistPresets, presets],
   );
 
   const deletePreset = useCallback(
@@ -161,94 +331,113 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
       const next = presets.filter((item) => item.name !== name);
       persistPresets(next);
     },
-    [presets, persistPresets],
+    [persistPresets, presets],
   );
 
   const loadPreset = useCallback(
     (name: string) => {
       const preset = presets.find((item) => item.name === name);
       if (!preset) return;
-      const next: ParameterOverride[] = preset.defines.map((define, index) => {
-        const eq = define.indexOf("=");
-        const pname = eq >= 0 ? define.slice(0, eq) : define;
-        const pvalue = eq >= 0 ? define.slice(eq + 1) : "";
-        return { id: `${name}-${index}`, name: pname, value: pvalue };
-      });
-      setOverrides(next);
-      setAppliedDefines(preset.defines);
-      bumpPreviewRef.current += 1;
-      setBumpedPreview(bumpPreviewRef.current);
+      const next = applyPresetValues(parameterEntries, preset.values);
+      setParameterEntries(next);
+      setAppliedDefines(formatCurrentDefines(next));
       onLog("info", `preset loaded: ${name}`);
     },
-    [presets, onLog],
+    [onLog, parameterEntries, presets],
   );
 
-  const handleAddOverride = useCallback((name: string, value: string) => {
-    setOverrides((prev) => [
-      ...prev,
-      { id: `${name}-${Date.now()}-${prev.length}`, name, value },
-    ]);
-  }, []);
-
-  const handleUpdateOverride = useCallback(
-    (id: string, patch: Partial<ParameterOverride>) => {
-      setOverrides((prev) =>
-        prev.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
-      );
-    },
-    [],
-  );
-
-  const handleRemoveOverride = useCallback((id: string) => {
-    setOverrides((prev) => prev.filter((entry) => entry.id !== id));
-  }, []);
-
-  const splitKey = `${label}:${appliedDefines.join("|")}:${bumpedPreview}:${refreshSignal}`;
-
-  return (
-    <div className="scad-workbench" data-testid="scad-workbench">
-      <ScadSplitViewer
-        key={splitKey}
-        path={path}
-        client={client}
-        label={label}
-        defines={appliedDefines}
-        onPreviewStatus={emitStatus}
-      />
-      <div className="scad-workbench__panels">
-        <ParametersPanel
-          overrides={overrides}
-          onAddOverride={handleAddOverride}
-          onUpdateOverride={handleUpdateOverride}
-          onRemoveOverride={handleRemoveOverride}
-          onApply={applyOverrides}
-          onRestoreDefaults={restoreDefaults}
-          previewStatus={previewStatus}
-        />
-        <PresetsPanel
-          presetPath={presetPathLabel}
-          presets={presets}
-          loading={presetLoading}
-          error={presetError}
-          onReload={loadPresets}
-          onLoadPreset={loadPreset}
-          onSavePreset={savePreset}
-          onDeletePreset={deletePreset}
-        />
-      </div>
-    </div>
+  return useMemo(
+    () => ({
+      parameterEntries,
+      parameterWarnings,
+      presets,
+      presetPathLabel,
+      presetLoading,
+      presetError,
+      previewStatus,
+      appliedDefines,
+      sourceReady,
+      applyOverrides,
+      restoreDefaults,
+      updateParameter: handleUpdateParameter,
+      restoreParameter: handleRestoreParameter,
+      loadPresets,
+      loadPreset,
+      savePreset,
+      deletePreset,
+      emitStatus,
+    }),
+    [
+      applyOverrides,
+      appliedDefines,
+      handleRestoreParameter,
+      handleUpdateParameter,
+      loadPreset,
+      loadPresets,
+      parameterEntries,
+      parameterWarnings,
+      presetError,
+      presetLoading,
+      presetPathLabel,
+      presets,
+      restoreDefaults,
+      savePreset,
+      deletePreset,
+      previewStatus,
+      sourceReady,
+    ],
   );
 }
 
-function isMissingPresetError(err: unknown, message: string): boolean {
-  if (/not found|no such file|cannot find/i.test(message)) return true;
-  if (err && typeof err === "object") {
-    const outer = err as Record<string, unknown>;
-    const payload = outer["payload"] as Record<string, unknown> | undefined;
-    const code =
-      (payload && typeof payload["code"] === "string" ? (payload["code"] as string) : undefined) ??
-      (typeof outer["code"] === "string" ? (outer["code"] as string) : undefined);
-    if (typeof code === "string" && /not_?found/i.test(code)) return true;
+export function scadInspectorPanelsForState(
+  state: ScadWorkbenchState,
+): { parameters: React.ReactNode; presets: React.ReactNode } {
+  return {
+    parameters: (
+      <ParametersPanel
+        entries={state.parameterEntries}
+        warnings={state.parameterWarnings}
+        onUpdateValue={state.updateParameter}
+        onRestoreValue={state.restoreParameter}
+        onApply={state.applyOverrides}
+        onRestoreDefaults={state.restoreDefaults}
+        previewStatus={state.previewStatus}
+      />
+    ),
+    presets: (
+      <PresetsPanel
+        presetPath={state.presetPathLabel}
+        presets={state.presets}
+        loading={state.presetLoading}
+        error={state.presetError}
+        onReload={state.loadPresets}
+        onLoadPreset={state.loadPreset}
+        onSavePreset={state.savePreset}
+        onDeletePreset={state.deletePreset}
+      />
+    ),
+  };
+}
+
+function isMissingPresetError(err: unknown): boolean {
+  return /not found|no such file|cannot find/i.test(describeFileReadError(err));
+}
+
+async function loadFirstExistingPreset(
+  paths: unknown[],
+  load: (
+    targetPath: unknown,
+  ) => Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }>,
+): Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }> {
+  let missing: unknown = null;
+  for (const targetPath of paths) {
+    if (!targetPath) continue;
+    try {
+      return await load(targetPath);
+    } catch (err) {
+      if (!isMissingPresetError(err)) throw err;
+      missing = err;
+    }
   }
-  return false;
+  throw missing ?? new Error("preset file not found");
 }

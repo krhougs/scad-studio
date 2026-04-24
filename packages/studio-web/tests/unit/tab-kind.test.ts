@@ -14,6 +14,11 @@ describe("resolveTabKind", () => {
     expect(resolveTabKind("photo.jpg")).toBe("image");
     expect(resolveTabKind("photo.jpeg")).toBe("image");
     expect(resolveTabKind("sticker.webp")).toBe("image");
+    expect(resolveTabKind("animation.GIF")).toBe("image");
+    expect(resolveTabKind("scan.bmp")).toBe("image");
+    expect(resolveTabKind("plate.tif")).toBe("image");
+    expect(resolveTabKind("plate.tiff")).toBe("image");
+    expect(resolveTabKind("favicon.ico")).toBe("image");
   });
 
   it("routes scad and meshes", () => {

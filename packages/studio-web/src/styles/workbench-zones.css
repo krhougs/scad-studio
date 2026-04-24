@@ -1,8 +1,74 @@
 /* Chat / Canvas / Inspector 区样式 —— 1:1 对齐 Buddin ui_kits/app。 */
 
+/* ---------- Left panel ---------- */
+.workbench-left-panel {
+  border-right: 1px solid var(--ink-4s);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.workbench-left-panel > .chat {
+  flex: 1;
+  width: 100%;
+  border-right: 0;
+}
+
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.side-panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--ink-4s);
+}
+
+.side-panel__head .title {
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  font-weight: 500;
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--t-4);
+}
+
+.side-panel__head .sub {
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--t-5);
+  margin-top: 4px;
+}
+
+.side-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.side-panel__empty {
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tr-tight);
+  color: var(--t-5);
+}
+
+.side-panel__empty.is-error {
+  color: var(--signal-err);
+}
+
 /* ---------- Chat ---------- */
 .chat {
-  border-right: 1px solid var(--ink-4s);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -218,6 +284,8 @@
   min-height: 0;
   background: var(--ink-10);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .canvas-well::before {
   content: "";
@@ -232,6 +300,13 @@
   background-size: 16px 16px, 16px 16px, 80px 80px, 80px 80px;
   -webkit-mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
   mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
+}
+
+.canvas-frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .tabbar {
@@ -324,6 +399,48 @@
   pointer-events: auto;
 }
 
+.viewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  max-width: min(960px, calc(100% - 140px));
+}
+
+.viewer-toolbar__group {
+  display: flex;
+  border: 1px solid var(--ink-4s);
+  background: rgba(11, 11, 13, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.viewer-toolbar__group button {
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--ink-4s);
+  color: var(--t-4);
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.viewer-toolbar__group button:last-child {
+  border-right: 0;
+}
+
+.viewer-toolbar__group button:hover {
+  color: var(--t-2);
+}
+
+.viewer-toolbar__group button.active {
+  color: var(--t-1);
+  background: var(--ink-6);
+}
+
 .view-pills {
   display: flex;
   border: 1px solid var(--ink-4s);
@@ -388,26 +505,24 @@
   height: 100%;
 }
 
-.canvas-chrome-bot {
-  position: absolute;
-  bottom: 14px;
-  left: 14px;
-  right: 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+.canvas-statusbar {
+  position: relative;
   z-index: 2;
+  flex: 0 0 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--ink-4s);
+  background: var(--ink-9);
+  overflow: hidden;
 }
 .part-meta {
   display: flex;
   gap: 24px;
   align-items: center;
-  background: rgba(11, 11, 13, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--ink-4s);
-  padding: 8px 16px;
+  width: 100%;
+  height: 100%;
+  padding: 0 16px;
   min-width: 0;
   overflow: hidden;
 }
@@ -509,7 +624,8 @@
   justify-content: space-between;
   align-items: center;
 }
-.insp-sec h5 button {
+.insp-sec h5 button,
+.insp-sec__toggle {
   background: transparent;
   border: 0;
   color: var(--t-5);
@@ -517,9 +633,22 @@
   padding: 2px;
   display: flex;
   transition: color var(--dur-fast) var(--ease);
+  gap: 6px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
 }
-.insp-sec h5 button:hover {
+.insp-sec h5 button:hover,
+.insp-sec__toggle:hover {
   color: var(--t-1);
+}
+.insp-sec__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.insp-sec__body[hidden] {
+  display: none;
 }
 
 .tree {

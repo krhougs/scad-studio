@@ -109,53 +109,19 @@
   justify-content: flex-end;
 }
 
-/* Canvas Zone side panels layout (mesh tab) ------------------------- */
-.canvas__side-panels {
-  position: absolute;
-  right: var(--space-4);
-  bottom: calc(var(--space-4) + 44px);
-  width: 280px;
-  max-width: 35%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  z-index: 3;
-}
-
-/* Scad workbench: split viewer above, panels below ------------------ */
+/* Scad workbench: 3D preview fills the central canvas ---------------- */
 .scad-workbench {
   display: flex;
   flex-direction: column;
   width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
 }
-.scad-workbench .viewer--scad-split {
+.scad-workbench .viewer--scad-preview {
   position: relative;
   inset: auto;
-  flex: 0 0 auto;
-  min-height: 200px;
-  height: 220px;
-}
-.scad-workbench__panels {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-3);
-  padding: var(--space-3);
-  position: relative;
-  z-index: 4;
-}
-
-/* Pointer stage wraps viewers so the orbit controller has a target. In the
- * canvas zone the stage is absolutely positioned to cover the space between
- * the tab bar and the status strip, matching the generic .viewer rule.
- */
-.viewer__pointer-stage {
-  position: absolute;
-  inset: 32px 0 40px 0;
-  display: flex;
-  flex-direction: column;
-  touch-action: none;
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Log panel --------------------------------------------------------- */
@@ -189,4 +155,49 @@
 
 .inspector__section--bottom {
   margin-top: auto;
+}
+
+/* Settings side panel ----------------------------------------------- */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.settings-panel__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.settings-panel__field,
+.settings-panel__group,
+.settings-panel__slicer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.settings-panel__field span,
+.settings-panel__group p,
+.settings-panel__meta,
+.settings-panel__status,
+.settings-panel__ws {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.settings-panel input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  background: transparent;
+  border: var(--border-hairline);
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0 var(--space-2);
+}
+.settings-panel__slicer {
+  border: var(--border-hairline);
+  padding: var(--space-2);
 }

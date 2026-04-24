@@ -1,6 +1,6 @@
-# Studio Datasheet Workbench 设计规范
+# budn' Datasheet Workbench 设计规范
 
-本文件是 `packages/studio-web` React PWA 的设计系统总纲，覆盖视觉、排版、交互、五区工作台布局和禁用项。执行 UI 改动前必须通读本文件；token 实际值在 `packages/studio-web/src/styles/tokens.css`，布局在 `packages/studio-web/src/styles/workbench.css`。
+本文件是 `packages/studio-web` React PWA 的设计系统总纲。用户可见产品名固定为 `budn'`，代码和配置标识符使用 `budn`。本文覆盖视觉、排版、交互、五区工作台布局和禁用项。执行 UI 改动前必须通读本文件；token 实际值在 `packages/studio-web/src/styles/tokens.css`，布局在 `packages/studio-web/src/styles/workbench.css`。
 
 外部参考来源与引用规则见 `docs/design-system/source-notes.md`。
 
@@ -140,6 +140,13 @@ grid-template-areas:
 
 ## 七、组件规则
 
+### 7.0 图标
+
+- Web 端统一使用 `@phosphor-icons/react`。
+- Rail 侧边栏图标使用 `weight="bold"`，尺寸保持 18 px。
+- 图标组件必须通过语义化 React 组件导入，不再新增 `lucide-react` 使用点。
+- icon-only 控件必须有 `aria-label`；必要时保留 title 或 tooltip。
+
 ### 7.1 按钮
 
 - 高度阶梯：32 px 默认，26 px `sm`，40 px `lg`。
@@ -193,7 +200,7 @@ grid-template-areas:
 
 本节是 Phase 4 强制交付的书面结论（plan-00.md §Phase 4 步骤 3）。
 
-**结论：不下沉任何 token / 组件到 `scad-ui`。**
+**结论：不把任何 token / 组件放入 `scad-ui`。**
 
 理由：
 

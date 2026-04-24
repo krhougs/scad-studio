@@ -4,10 +4,11 @@
 // All state is component-local; we never cache presets in the Zustand store.
 
 import { useState } from "react";
+import type { PresetValueMap } from "./parameter-model";
 
 export type PresetEntry = {
   name: string;
-  defines: string[];
+  values: PresetValueMap;
 };
 
 type PresetsPanelProps = {
@@ -69,7 +70,8 @@ export function PresetsPanel({
               {preset.name}
             </span>
             <span className="panel__meta">
-              {preset.defines.length} define{preset.defines.length === 1 ? "" : "s"}
+              {Object.keys(preset.values).length} value
+              {Object.keys(preset.values).length === 1 ? "" : "s"}
             </span>
             <button
               type="button"

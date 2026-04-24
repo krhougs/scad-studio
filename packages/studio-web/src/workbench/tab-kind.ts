@@ -11,7 +11,12 @@ export function resolveTabKind(label: string): DocumentTabKind | null {
     lower.endsWith(".png") ||
     lower.endsWith(".jpg") ||
     lower.endsWith(".jpeg") ||
-    lower.endsWith(".webp")
+    lower.endsWith(".webp") ||
+    lower.endsWith(".gif") ||
+    lower.endsWith(".bmp") ||
+    lower.endsWith(".tif") ||
+    lower.endsWith(".tiff") ||
+    lower.endsWith(".ico")
   )
     return "image";
   if (lower.endsWith(".scad")) return "scad";

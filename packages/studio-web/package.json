@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "React PWA shell for scad-studio. Owns browser transport, routing, Zustand UI state, and five-zone workbench layout.",
+  "description": "React PWA shell for budn'. Owns browser transport, routing, Zustand UI state, and five-zone workbench layout.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,11 +13,14 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@scad-studio/studio-web-wasm": "workspace:*",
-    "lucide-react": "^0.469.0",
+    "@uiw/react-markdown-preview": "^5.2.0",
+    "mermaid": "^11.14.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.0.2",
+    "rehype-sanitize": "^6.0.0",
     "three": "^0.170.0",
     "zustand": "^5.0.2"
   },

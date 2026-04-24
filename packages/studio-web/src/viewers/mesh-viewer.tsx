@@ -10,12 +10,19 @@ import {
   payloadFromPreview,
   type MeshViewerHandle,
 } from "./mesh-three";
+import type { MeshViewerOptions } from "./viewer-options";
 
 type MeshViewerProps = {
   path: unknown;
   client: WasmClient;
   label: string;
+  defines?: string[];
+  configuredOpenscadPath?: string | null;
   cameraPreset?: CameraPreset | null;
+  viewerOptions?: MeshViewerOptions;
+  previewEnabled?: boolean;
+  refreshSignal?: number;
+  statusTestId?: string;
   onPreviewStatus?: (status: string) => void;
   onStats?: (stats: { vertices: number; indices: number } | null) => void;
 };
@@ -30,7 +37,13 @@ export function MeshViewer({
   path,
   client,
   label,
+  defines,
+  configuredOpenscadPath,
   cameraPreset,
+  viewerOptions,
+  previewEnabled = true,
+  refreshSignal,
+  statusTestId,
   onPreviewStatus,
   onStats,
 }: MeshViewerProps) {
@@ -65,15 +78,20 @@ export function MeshViewer({
 
   // Fetch preview on path change.
   useEffect(() => {
+    if (!previewEnabled) {
+      setState({ kind: "pending" });
+      onPreviewStatus?.("preview pending");
+      return;
+    }
     let cancelled = false;
     setState({ kind: "pending" });
     onPreviewStatus?.("preview pending");
     client
       .dispatchPreviewRequest({
         source: path,
-        defines: [],
+        defines: defines ?? [],
         kind: "geometry_artifact",
-        configured_openscad_path: null,
+        configured_openscad_path: configuredOpenscadPath ?? null,
       })
       .then((payload) => {
         if (cancelled) return;
@@ -105,7 +123,16 @@ export function MeshViewer({
     return () => {
       cancelled = true;
     };
-  }, [client, path, onPreviewStatus, onStats]);
+  }, [
+    client,
+    configuredOpenscadPath,
+    defines,
+    onPreviewStatus,
+    onStats,
+    path,
+    previewEnabled,
+    refreshSignal,
+  ]);
 
   // Apply preset camera when user picks a view pill. null/undefined = keep
   // the auto-framed camera.
@@ -115,6 +142,11 @@ export function MeshViewer({
     if (!viewer) return;
     viewer.setCamera(PRESET_STATES[cameraPreset]);
   }, [cameraPreset]);
+
+  useEffect(() => {
+    if (!viewerOptions) return;
+    viewerRef.current?.setOptions(viewerOptions);
+  }, [viewerOptions]);
 
   return (
     <div
@@ -127,15 +159,37 @@ export function MeshViewer({
         className="mesh-viewer__canvas"
         data-testid="mesh-canvas"
       />
-      <p className="viewer__overlay" data-testid="mesh-status">
-        {state.kind === "pending"
-          ? "preview pending"
-          : state.kind === "empty"
-            ? "preview ready (empty mesh)"
-            : state.kind === "ready"
-              ? `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`
-              : `preview error: ${state.message}`}
-      </p>
+      {state.kind === "error" ? (
+        <>
+          <p
+            className="viewer__status-reader"
+            data-testid={statusTestId ?? "mesh-status"}
+            hidden
+          >
+            preview error: {state.message}
+          </p>
+          <div
+            className="viewer__error-card"
+            data-testid="preview-error-card"
+            role="status"
+          >
+            <div className="viewer__error-card-title">preview error</div>
+            <p data-testid="preview-error-message">{state.message}</p>
+          </div>
+        </>
+      ) : (
+        <p
+          className="viewer__status-reader"
+          data-testid={statusTestId ?? "mesh-status"}
+          hidden
+        >
+          {state.kind === "pending"
+            ? "preview pending"
+            : state.kind === "empty"
+              ? "preview ready (empty mesh)"
+              : `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`}
+        </p>
+      )}
     </div>
   );
 }

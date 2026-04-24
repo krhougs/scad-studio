@@ -1,5 +1,11 @@
 # PROJECT KNOWLEDGE BASE
 
+## 产品命名
+
+- 对外产品名固定为 `budn'`。
+- 代码、配置键、包内常量和文件名中使用 `budn`，避免在标识符中包含撇号。
+- `scad-studio` 仍作为当前仓库、历史 crate / package 和架构文档中的工程名保留；新增用户可见文案应优先使用 `budn'`。
+
 ## AGENTS HIERARCHY
 
 按目录就近读取（子目录 `AGENTS.md` 覆盖/补充父目录规则）：
@@ -249,7 +255,4 @@
 
 写 GUI/前端代码时，请使用以下 skill：
 
-- `design-taste-frontend`: 视觉设计增强
-- `high-end-visual-design`: 高端视觉设计增强
 - `shadcn-ui-components`: 使用 shadcn/ui 组件
-- `react-router-framework-mode`: 使用 react-router 框架模式

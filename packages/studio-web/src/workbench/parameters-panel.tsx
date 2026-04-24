@@ -1,39 +1,31 @@
-// Parameters panel: lets the user author OpenSCAD `-D name=value` overrides
-// that are sent with the next PreviewRequest. Web clients cannot read .scad
-// source through FileRead (server deny list, see docs/web-platform-limits.md),
-// so there is no automatic source parsing here; overrides are authored
-// manually. The panel is a stateless UI layer; state lives in the parent
-// (ScadSplitViewer) alongside the preview request pipeline.
-
-import { useState } from "react";
-
-export type ParameterOverride = {
-  id: string;
-  name: string;
-  value: string;
-};
+import {
+  choiceOptions,
+  numberBounds,
+  parameterKind,
+  type ParameterEntry,
+  type ParameterValue,
+} from "./parameter-model";
 
 type ParametersPanelProps = {
-  overrides: ParameterOverride[];
-  onAddOverride: (name: string, value: string) => void;
-  onUpdateOverride: (id: string, patch: Partial<ParameterOverride>) => void;
-  onRemoveOverride: (id: string) => void;
+  entries: ParameterEntry[];
+  warnings: string[];
+  onUpdateValue: (name: string, value: ParameterValue) => void;
+  onRestoreValue: (name: string) => void;
   onApply: () => void;
   onRestoreDefaults: () => void;
   previewStatus: string;
 };
 
 export function ParametersPanel({
-  overrides,
-  onAddOverride,
-  onUpdateOverride,
-  onRemoveOverride,
+  entries,
+  warnings,
+  onUpdateValue,
+  onRestoreValue,
   onApply,
   onRestoreDefaults,
   previewStatus,
 }: ParametersPanelProps) {
-  const [draftName, setDraftName] = useState("");
-  const [draftValue, setDraftValue] = useState("");
+  const visibleEntries = entries.filter((entry) => !entry.definition.hidden);
 
   return (
     <section
@@ -48,81 +40,41 @@ export function ParametersPanel({
         </span>
       </header>
       <ul className="panel__list">
-        {overrides.map((entry) => (
+        {visibleEntries.map((entry) => (
           <li
-            key={entry.id}
+            key={entry.definition.name}
             className="panel__row"
-            data-testid={`parameter-row-${entry.name}`}
+            data-testid={`parameter-row-${entry.definition.name}`}
           >
-            <input
-              type="text"
-              className="panel__input"
-              value={entry.name}
-              onChange={(ev) =>
-                onUpdateOverride(entry.id, { name: ev.target.value })
-              }
-              aria-label="parameter name"
-              data-testid={`parameter-name-${entry.id}`}
-            />
-            <input
-              type="text"
-              className="panel__input"
-              value={entry.value}
-              onChange={(ev) =>
-                onUpdateOverride(entry.id, { value: ev.target.value })
-              }
-              aria-label="parameter value"
-              data-testid={`parameter-value-${entry.id}`}
-            />
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => onRemoveOverride(entry.id)}
-              data-testid={`parameter-remove-${entry.id}`}
-              aria-label={`remove ${entry.name}`}
-            >
-              remove
-            </button>
+            <span className="panel__label">{entry.definition.name}</span>
+            <ParameterControl entry={entry} onUpdateValue={onUpdateValue} />
+            {entry.value !== entry.definition.default_value ? (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => onRestoreValue(entry.definition.name)}
+                data-testid={`parameter-restore-${entry.definition.name}`}
+              >
+                restore
+              </button>
+            ) : null}
           </li>
         ))}
-        {overrides.length === 0 ? (
+        {visibleEntries.length === 0 ? (
           <li className="panel__empty" data-testid="parameters-empty">
-            no overrides. click "add" to set a define.
+            no Customizer parameters detected.
           </li>
         ) : null}
       </ul>
-      <div className="panel__row panel__row--compose">
-        <input
-          type="text"
-          className="panel__input"
-          placeholder="name"
-          value={draftName}
-          onChange={(ev) => setDraftName(ev.target.value)}
-          data-testid="parameter-draft-name"
-        />
-        <input
-          type="text"
-          className="panel__input"
-          placeholder="value"
-          value={draftValue}
-          onChange={(ev) => setDraftValue(ev.target.value)}
-          data-testid="parameter-draft-value"
-        />
-        <button
-          type="button"
-          className="btn btn--line btn--sm"
-          onClick={() => {
-            const name = draftName.trim();
-            if (name.length === 0) return;
-            onAddOverride(name, draftValue);
-            setDraftName("");
-            setDraftValue("");
-          }}
-          data-testid="parameter-add"
-        >
-          add
-        </button>
-      </div>
+      {warnings.length > 0 ? (
+        <ul className="panel__list" data-testid="parameters-warnings">
+          {warnings.map((warning) => (
+            <li key={warning} className="panel__empty">
+              {warning}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="panel__actions">
         <button
           type="button"
@@ -142,5 +94,67 @@ export function ParametersPanel({
         </button>
       </div>
     </section>
+  );
+}
+
+function ParameterControl({
+  entry,
+  onUpdateValue,
+}: {
+  entry: ParameterEntry;
+  onUpdateValue: (name: string, value: ParameterValue) => void;
+}) {
+  const name = entry.definition.name;
+  const testId = `parameter-control-${name}`;
+  const kind = parameterKind(entry);
+  if (kind === "number") {
+    const bounds = numberBounds(entry);
+    return (
+      <input
+        type="number"
+        className="panel__input"
+        value={String(entry.value)}
+        min={bounds.min}
+        max={bounds.max}
+        step={bounds.step}
+        onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
+        data-testid={testId}
+      />
+    );
+  }
+  if (kind === "bool") {
+    return (
+      <input
+        type="checkbox"
+        checked={entry.value === true}
+        onChange={(ev) => onUpdateValue(name, ev.target.checked)}
+        data-testid={testId}
+      />
+    );
+  }
+  if (kind === "choice") {
+    return (
+      <select
+        className="panel__input"
+        value={String(entry.value)}
+        onChange={(ev) => onUpdateValue(name, ev.target.value)}
+        data-testid={testId}
+      >
+        {choiceOptions(entry).map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <input
+      type="text"
+      className="panel__input"
+      value={String(entry.value)}
+      onChange={(ev) => onUpdateValue(name, ev.target.value)}
+      data-testid={testId}
+    />
   );
 }

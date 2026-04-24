@@ -37,6 +37,63 @@ export class MeshHandle {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_meshhandle_free(ptr, 0);
     }
+    /**
+     * 扁平 vertex colors: `[r0, g0, b0, a0, ...]`。若所有顶点都是纯白
+     * 默认色（alpha = 1），返回空 `Vec<f32>` 让 TS 侧走无色路径。
+     * @returns {Float32Array}
+     */
+    colors() {
+        const ret = wasm.meshhandle_colors(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * 索引数量。
+     * @returns {number}
+     */
+    get index_count() {
+        const ret = wasm.meshhandle_index_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * 扁平 indices。
+     * @returns {Uint32Array}
+     */
+    indices() {
+        const ret = wasm.meshhandle_indices(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * 扁平 normals: `[nx0, ny0, nz0, ...]`。
+     * @returns {Float32Array}
+     */
+    normals() {
+        const ret = wasm.meshhandle_normals(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * 扁平 positions: `[x0, y0, z0, x1, y1, z1, ...]`。
+     * @returns {Float32Array}
+     */
+    positions() {
+        const ret = wasm.meshhandle_positions(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * 顶点数量（positions.len() / 3 与 vertex count 相等）。
+     * @returns {number}
+     */
+    get vertex_count() {
+        const ret = wasm.meshhandle_vertex_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
 }
 if (Symbol.dispose) MeshHandle.prototype[Symbol.dispose] = MeshHandle.prototype.free;
 
@@ -359,6 +416,69 @@ export function mesh_destroy(_handle) {
 }
 
 /**
+ * @param {any} entries
+ * @returns {any}
+ */
+export function parameters_format_defines(entries) {
+    const ret = wasm.parameters_format_defines(entries);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {string} source
+ * @returns {any}
+ */
+export function parameters_parse_source(source) {
+    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parameters_parse_source(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {string} text
+ * @returns {any}
+ */
+export function presets_parse_shared_file(text) {
+    const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.presets_parse_shared_file(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {any} file
+ * @returns {string}
+ */
+export function presets_stringify_shared_file(file) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.presets_stringify_shared_file(file);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
  * @param {string} _canvas_id
  * @returns {RendererHandle}
  */
@@ -526,6 +646,16 @@ export function __wbg_instanceof_ArrayBuffer_ff7c1337a5e3b33a(arg0) {
     const ret = result;
     return ret;
 }
+export function __wbg_instanceof_Map_a10a2795ef4bfe97(arg0) {
+    let result;
+    try {
+        result = arg0 instanceof Map;
+    } catch (_) {
+        result = false;
+    }
+    const ret = result;
+    return ret;
+}
 export function __wbg_instanceof_Uint8Array_4b8da683deb25d72(arg0) {
     let result;
     try {
@@ -560,6 +690,10 @@ export function __wbg_new_4f9fafbb3909af72() {
     const ret = new Object();
     return ret;
 }
+export function __wbg_new_99cabae501c0a8a0() {
+    const ret = new Map();
+    return ret;
+}
 export function __wbg_new_a560378ea1240b14(arg0) {
     const ret = new Uint8Array(arg0);
     return ret;
@@ -579,6 +713,10 @@ export function __wbg_next_b3713ec761a9dbfd() { return handleError(function (arg
 export function __wbg_prototypesetcall_3e05eb9545565046(arg0, arg1, arg2) {
     Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
 }
+export function __wbg_set_08463b1df38a7e29(arg0, arg1, arg2) {
+    const ret = arg0.set(arg1, arg2);
+    return ret;
+}
 export function __wbg_set_6be42768c690e380(arg0, arg1, arg2) {
     arg0[arg1] = arg2;
 }
@@ -594,12 +732,17 @@ export function __wbindgen_cast_0000000000000001(arg0) {
     const ret = arg0;
     return ret;
 }
-export function __wbindgen_cast_0000000000000002(arg0, arg1) {
+export function __wbindgen_cast_0000000000000002(arg0) {
+    // Cast intrinsic for `I64 -> Externref`.
+    const ret = arg0;
+    return ret;
+}
+export function __wbindgen_cast_0000000000000003(arg0, arg1) {
     // Cast intrinsic for `Ref(String) -> Externref`.
     const ret = getStringFromWasm0(arg0, arg1);
     return ret;
 }
-export function __wbindgen_cast_0000000000000003(arg0) {
+export function __wbindgen_cast_0000000000000004(arg0) {
     // Cast intrinsic for `U64 -> Externref`.
     const ret = BigInt.asUintN(64, arg0);
     return ret;
@@ -700,6 +843,16 @@ function debugString(val) {
     return className;
 }
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -713,9 +866,25 @@ function getDataViewMemory0() {
     return cachedDataViewMemory0;
 }
 
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return decodeText(ptr, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;

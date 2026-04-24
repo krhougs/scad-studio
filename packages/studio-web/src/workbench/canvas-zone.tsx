@@ -1,22 +1,31 @@
-// Canvas zone —— Buddin `.canvas` 结构：
+// Canvas zone —— Buddin `.canvas` 结构接入真实文档标签：
 //   .canvas
 //     TabBar
 //     .canvas-well
-//       .canvas-chrome-top  (.view-pills + .canvas-info)
-//       .canvas-stage       (激活 viewer 或 placeholder)
-//       .canvas-chrome-bot  (.part-meta + .canvas-actions)
+//       .canvas-frame       (预览画布与顶部工具栏)
+//       .canvas-statusbar   (固定状态栏，不覆盖预览内容)
 //
 // 3D 渲染由 viewers/mesh-viewer.tsx 内的 Three.js WebGLRenderer 驱动；
 // 没有 wgpu-in-wasm 路径。相机预设按钮直接映射到 mesh viewer 的 setCamera。
 
 import type { CameraPreset } from "../canvas/camera-state";
+import type { AppConfigShape } from "../config/app-config";
 import type { DocumentTab } from "../state/ui-store";
 import type { WasmClient } from "../wasm-bridge";
 import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
 import { MeshViewer } from "../viewers/mesh-viewer";
+import {
+  DEFAULT_MESH_VIEWER_OPTIONS,
+  type MeshRenderMode,
+  type MeshViewerOptions,
+} from "../viewers/viewer-options";
+import { useEffect, useState } from "react";
 import { TabBar } from "./tabbar";
-import { ScadWorkbench } from "./scad-workbench";
+import {
+  ScadWorkbench,
+  type ScadWorkbenchState,
+} from "./scad-workbench";
 
 type ViewPreset = "iso" | "front" | "top" | "right";
 const VIEW_PILLS: { id: ViewPreset; label: string }[] = [
@@ -37,11 +46,12 @@ type CanvasZoneProps = {
   onPreviewStatus: (status: string) => void;
   client: WasmClient | null;
   refreshSignal: number;
-  onLog: (level: "info" | "warn" | "error", message: string) => void;
+  config: AppConfigShape | null;
   meshStats: { vertices: number; indices: number } | null;
   activeView: ViewPreset;
   onSelectView: (id: ViewPreset) => void;
   onMeshStats: (stats: { vertices: number; indices: number } | null) => void;
+  scadWorkbenchState: ScadWorkbenchState;
 };
 
 export function CanvasZone(props: CanvasZoneProps) {
@@ -56,15 +66,26 @@ export function CanvasZone(props: CanvasZoneProps) {
     onPreviewStatus,
     client,
     refreshSignal,
-    onLog,
+    config,
     meshStats,
     activeView,
     onSelectView,
     onMeshStats,
+    scadWorkbenchState,
   } = props;
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const isMeshLike = activeTab?.kind === "mesh" || activeTab?.kind === "scad";
+  const [viewerOptions, setViewerOptions] = useState<MeshViewerOptions>(
+    DEFAULT_MESH_VIEWER_OPTIONS,
+  );
+
+  const setRenderMode = (renderMode: MeshRenderMode) => {
+    setViewerOptions((prev) => ({ ...prev, renderMode }));
+  };
+  const updateViewerOptions = (patch: Partial<MeshViewerOptions>) => {
+    setViewerOptions((prev) => ({ ...prev, ...patch }));
+  };
 
   return (
     <div className="canvas" aria-label="preview canvas" data-testid="workbench-canvas">
@@ -75,49 +96,47 @@ export function CanvasZone(props: CanvasZoneProps) {
         onClose={onCloseTab}
       />
       <div className="canvas-well">
-        <div className="canvas-chrome-top">
-          {isMeshLike ? (
-            <div className="view-pills" data-testid="canvas-view-pills">
-              {VIEW_PILLS.map((pill) => (
-                <button
-                  key={pill.id}
-                  type="button"
-                  className={pill.id === activeView ? "active" : undefined}
-                  onClick={() => onSelectView(pill.id)}
-                  data-testid={`view-pill-${pill.id}`}
-                >
-                  {pill.label}
-                </button>
-              ))}
+        <div className="canvas-frame">
+          <div className="canvas-chrome-top">
+            {isMeshLike ? (
+              <ViewerToolbar
+                activeView={activeView}
+                onSelectView={onSelectView}
+                options={viewerOptions}
+                onSetRenderMode={setRenderMode}
+                onUpdateOptions={updateViewerOptions}
+              />
+            ) : (
+              <span className="label" data-testid="phase">
+                phase · {phase}
+              </span>
+            )}
+            <div className="canvas-info" data-testid="canvas-info">
+              <div>{isMeshLike ? activeView : "no preview"}</div>
+              <div>units mm</div>
             </div>
-          ) : (
-            <span className="label" data-testid="phase">
-              phase · {phase}
-            </span>
-          )}
-          <div className="canvas-info" data-testid="canvas-info">
-            <div>{isMeshLike ? activeView : "no preview"}</div>
-            <div>units mm</div>
+          </div>
+
+          <div className="canvas-stage">
+            {activeTab ? (
+              <ActiveViewer
+                tab={activeTab}
+                client={client}
+                activeView={activeView}
+                onPreviewStatus={onPreviewStatus}
+                refreshSignal={refreshSignal}
+                config={config}
+                viewerOptions={viewerOptions}
+                onMeshStats={onMeshStats}
+                scadWorkbenchState={scadWorkbenchState}
+              />
+            ) : (
+              <EmptyStagePlaceholder />
+            )}
           </div>
         </div>
 
-        <div className="canvas-stage">
-          {activeTab ? (
-            <ActiveViewer
-              tab={activeTab}
-              client={client}
-              activeView={activeView}
-              onPreviewStatus={onPreviewStatus}
-              refreshSignal={refreshSignal}
-              onLog={onLog}
-              onMeshStats={onMeshStats}
-            />
-          ) : (
-            <EmptyStagePlaceholder />
-          )}
-        </div>
-
-        <div className="canvas-chrome-bot">
+        <div className="canvas-statusbar" data-testid="canvas-statusbar">
           <div className="part-meta" data-testid="canvas-status">
             <div>
               <b>{activeTab ? activeTab.label : previewTargetLabel}</b>
@@ -153,8 +172,10 @@ type ActiveViewerProps = {
   activeView: ViewPreset;
   onPreviewStatus: (status: string) => void;
   refreshSignal: number;
-  onLog: (level: "info" | "warn" | "error", message: string) => void;
+  config: AppConfigShape | null;
+  viewerOptions: MeshViewerOptions;
   onMeshStats: (stats: { vertices: number; indices: number } | null) => void;
+  scadWorkbenchState: ScadWorkbenchState;
 };
 
 function ActiveViewer({
@@ -163,9 +184,17 @@ function ActiveViewer({
   activeView,
   onPreviewStatus,
   refreshSignal,
-  onLog,
+  config,
+  viewerOptions,
   onMeshStats,
+  scadWorkbenchState,
 }: ActiveViewerProps) {
+  useEffect(() => {
+    if (tab.kind !== "mesh" && tab.kind !== "scad") {
+      onMeshStats(null);
+    }
+  }, [onMeshStats, tab.kind]);
+
   if (!client) {
     return (
       <p className="viewer__loading" data-testid="viewer-waiting">
@@ -174,20 +203,36 @@ function ActiveViewer({
     );
   }
   if (tab.kind === "markdown") {
-    return <MarkdownViewer path={tab.path} client={client} />;
+    return (
+      <MarkdownViewer
+        path={tab.path}
+        client={client}
+        refreshSignal={refreshSignal}
+      />
+    );
   }
   if (tab.kind === "image") {
-    return <ImageViewer path={tab.path} client={client} />;
+    return (
+      <ImageViewer
+        path={tab.path}
+        client={client}
+        refreshSignal={refreshSignal}
+      />
+    );
   }
   if (tab.kind === "scad") {
     return (
       <ScadWorkbench
+        key={tab.id}
         path={tab.path}
         client={client}
         label={tab.label}
-        onPreviewStatus={onPreviewStatus}
+        state={scadWorkbenchState}
+        config={config}
+        cameraPreset={viewPresetToCamera(activeView)}
+        viewerOptions={viewerOptions}
         refreshSignal={refreshSignal}
-        onLog={onLog}
+        onMeshStats={onMeshStats}
       />
     );
   }
@@ -196,7 +241,9 @@ function ActiveViewer({
       path={tab.path}
       client={client}
       label={tab.label}
+      refreshSignal={refreshSignal}
       cameraPreset={viewPresetToCamera(activeView)}
+      viewerOptions={viewerOptions}
       onPreviewStatus={onPreviewStatus}
       onStats={onMeshStats}
     />
@@ -222,8 +269,125 @@ function EmptyStagePlaceholder() {
   return (
     <div className="viewer__empty" data-testid="viewer-empty">
       <div className="label">no document open</div>
-      <p>pick a file from the inspector tree to preview.</p>
+      <p>pick a file from the files panel to preview.</p>
     </div>
+  );
+}
+
+function ViewerToolbar({
+  activeView,
+  onSelectView,
+  options,
+  onSetRenderMode,
+  onUpdateOptions,
+}: {
+  activeView: ViewPreset;
+  onSelectView: (id: ViewPreset) => void;
+  options: MeshViewerOptions;
+  onSetRenderMode: (mode: MeshRenderMode) => void;
+  onUpdateOptions: (patch: Partial<MeshViewerOptions>) => void;
+}) {
+  return (
+    <div className="viewer-toolbar" data-testid="viewer-toolbar">
+      <div className="view-pills" data-testid="canvas-view-pills">
+        {VIEW_PILLS.map((pill) => (
+          <button
+            key={pill.id}
+            type="button"
+            className={pill.id === activeView ? "active" : undefined}
+            onClick={() => onSelectView(pill.id)}
+            data-testid={`view-pill-${pill.id}`}
+          >
+            {pill.label}
+          </button>
+        ))}
+      </div>
+      <div className="viewer-toolbar__group" aria-label="render mode">
+        {(["solid", "wireframe", "xray"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={options.renderMode === mode ? "active" : undefined}
+            onClick={() => onSetRenderMode(mode)}
+            data-testid={`viewer-render-${mode}`}
+          >
+            {mode}
+          </button>
+        ))}
+      </div>
+      <div className="viewer-toolbar__group" aria-label="projection">
+        <button
+          type="button"
+          className={options.projectionMode === "perspective" ? "active" : undefined}
+          onClick={() => onUpdateOptions({ projectionMode: "perspective" })}
+          data-testid="viewer-projection-perspective"
+        >
+          persp
+        </button>
+        <button
+          type="button"
+          className={options.projectionMode === "orthographic" ? "active" : undefined}
+          onClick={() => onUpdateOptions({ projectionMode: "orthographic" })}
+          data-testid="viewer-projection-orthographic"
+        >
+          ortho
+        </button>
+      </div>
+      <div className="viewer-toolbar__group" aria-label="visibility">
+        <ViewerToggle
+          active={options.showGrid}
+          label="grid"
+          testId="viewer-toggle-grid"
+          onClick={() => onUpdateOptions({ showGrid: !options.showGrid })}
+        />
+        <ViewerToggle
+          active={options.showAxis}
+          label="axis"
+          testId="viewer-toggle-axis"
+          onClick={() => onUpdateOptions({ showAxis: !options.showAxis })}
+        />
+        <ViewerToggle
+          active={options.showBuildPlate}
+          label="plate"
+          testId="viewer-toggle-build-plate"
+          onClick={() =>
+            onUpdateOptions({ showBuildPlate: !options.showBuildPlate })
+          }
+        />
+        <ViewerToggle
+          active={options.shadowsEnabled}
+          label="shadow"
+          testId="viewer-toggle-shadow"
+          onClick={() =>
+            onUpdateOptions({ shadowsEnabled: !options.shadowsEnabled })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+function ViewerToggle({
+  active,
+  label,
+  testId,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  testId: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={active ? "active" : undefined}
+      onClick={onClick}
+      data-testid={testId}
+      aria-pressed={active}
+    >
+      {label}
+    </button>
   );
 }
 

@@ -17,11 +17,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,wasm}"],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
-        name: "scad-studio",
-        short_name: "scad-studio",
-        description: "scad-studio web PWA",
+        name: "budn'",
+        short_name: "budn",
+        description: "budn' web PWA",
         theme_color: "#000000",
         background_color: "#000000",
         display: "standalone",

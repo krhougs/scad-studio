@@ -1,14 +1,31 @@
-import { Route, Routes } from "react-router-dom";
+import {
+  Navigate,
+  Route,
+  Routes,
+  createSearchParams,
+  useLocation,
+} from "react-router-dom";
 import { IndexRoute } from "./routes";
-import { SettingsRoute } from "./routes/settings";
 
 export function App() {
   return (
     <Routes>
       <Route path="/" element={<IndexRoute />} />
-      <Route path="/settings" element={<SettingsRoute />} />
+      <Route path="/settings" element={<SettingsRedirect />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
+  );
+}
+
+function SettingsRedirect() {
+  const location = useLocation();
+  const params = createSearchParams(location.search);
+  params.set("left-panel", "settings");
+  return (
+    <Navigate
+      to={{ pathname: "/", search: `?${params.toString()}` }}
+      replace
+    />
   );
 }
 

@@ -117,7 +117,7 @@ src/
 ├── App.tsx                         # 顶层路由（/ 工作台，/settings 设置）
 ├── routes/
 │   ├── index.tsx
-│   └── settings.tsx                # 独立 WasmClient 生命周期，ConfigLoad/Save
+│   └── index.tsx                   # Workbench 入口路由
 ├── state/
 │   └── ui-store.ts                 # Zustand：仅 UI 壳状态
 ├── wasm-bridge/
@@ -134,9 +134,9 @@ src/
 │   └── use-camera-controller.ts    # pointer / wheel 事件绑定
 ├── viewers/
 │   ├── file-read-decoder.ts        # 唯一解包 FileReadContents 的位置
-│   ├── markdown-viewer.tsx + markdown-parser.ts
+│   ├── markdown-viewer.tsx + markdown-security.ts
 │   ├── image-viewer.tsx
-│   ├── scad-split-viewer.tsx
+│   ├── scad-preview-viewer.tsx
 │   └── mesh-viewer.tsx
 ├── workbench/
 │   ├── workbench-layout.tsx        # 五区 CSS Grid 外框 + 协议 pump 接线
@@ -146,7 +146,7 @@ src/
 │   ├── parameters-panel.tsx + presets-panel.tsx + preset-io.ts
 │   ├── slicer-panel.tsx + export-panel.tsx
 │   ├── log-panel.tsx + use-log-buffer.ts
-│   ├── scad-workbench.tsx          # 整合 scad-split + params + presets
+│   ├── scad-workbench.tsx          # 管理 scad params / presets 状态并接入预览
 │   └── path-utils.ts
 └── styles/
     ├── tokens.css                  # 色板 / 字体 / 间距变量

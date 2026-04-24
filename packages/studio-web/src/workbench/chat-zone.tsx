@@ -1,7 +1,7 @@
 // Chat zone —— Buddin agent 会话壳层。Phase 4 维持占位文案，不模拟假消息；
 // agent 真实接入留给后续 phase。
 
-import { ArrowUp, Box, Paperclip, Ruler } from "lucide-react";
+import { ArrowUp, Cube, Paperclip, Ruler } from "@phosphor-icons/react";
 import { useUiStore } from "../state/ui-store";
 
 export function ChatZone() {
@@ -36,17 +36,17 @@ export function ChatZone() {
           <div className="tools">
             <div className="tools-left">
               <button type="button" title="attach sketch" disabled>
-                <Paperclip size={14} strokeWidth={1.5} aria-hidden="true" />
+                <Paperclip size={14} weight="bold" aria-hidden="true" />
               </button>
               <button type="button" title="reference part" disabled>
-                <Box size={14} strokeWidth={1.5} aria-hidden="true" />
+                <Cube size={14} weight="bold" aria-hidden="true" />
               </button>
               <button type="button" title="dimension pick" disabled>
-                <Ruler size={14} strokeWidth={1.5} aria-hidden="true" />
+                <Ruler size={14} weight="bold" aria-hidden="true" />
               </button>
             </div>
             <button type="button" className="send" disabled>
-              send <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />
+              send <ArrowUp size={12} weight="bold" aria-hidden="true" />
             </button>
           </div>
         </div>

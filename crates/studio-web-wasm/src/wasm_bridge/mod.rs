@@ -6,5 +6,6 @@
 
 pub mod client;
 pub mod mesh;
+pub mod params;
 pub mod renderer;
 pub(crate) mod transport;

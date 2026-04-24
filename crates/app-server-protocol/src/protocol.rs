@@ -3,7 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const WEB_FILE_READ_DENY_EXTENSIONS: &[&str] = &[".scad", ".stl", ".3mf"];
+// Web 客户端默认无拒绝扩展名。核心产品流是：
+//   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
+// `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
+// artifact bytes（MeshViewer 走 `PreviewRequest` 拿，但工作区里已有的
+// `.stl` / `.3mf` 文件也允许直接被 `FileRead` 消费，例如将来做 "导入
+// 既有模型" 或校验工作区内容）。如果 client 真的要限制某扩展，仍可通过
+// 显式 `denied_extensions` 覆写。
+pub const WEB_FILE_READ_DENY_EXTENSIONS: &[&str] = &[];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RequestId(pub u64);

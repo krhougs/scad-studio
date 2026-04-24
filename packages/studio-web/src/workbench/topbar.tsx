@@ -1,6 +1,6 @@
 // Topbar — Buddin titleblock. Logo / 分隔 / 面包屑 / spacer / 连接状态 / ws URL。
 
-import { Users } from "lucide-react";
+import { Users } from "@phosphor-icons/react";
 
 export type TopbarStatus = "idle" | "connecting" | "ready" | "busy" | "error";
 
@@ -38,8 +38,8 @@ export function Topbar({ workspaceName, wsUrl, status, message }: TopbarProps) {
   const host = wsUrl.replace(/^wss?:\/\//, "");
   return (
     <div className="topbar" data-testid="workbench-topbar">
-      <a className="logo" href="/" aria-label="scad studio home">
-        <img src="/logo-text-white.svg" alt="scad studio" />
+      <a className="logo" href="/" aria-label="budn home">
+        <img src="/logo-text-white.svg" alt="budn" />
       </a>
       <div className="sep-v" aria-hidden="true" />
       <div className="crumb" aria-label="workspace breadcrumb">
@@ -57,7 +57,7 @@ export function Topbar({ workspaceName, wsUrl, status, message }: TopbarProps) {
         <span>{statusText(status)}</span>
       </div>
       <div className="meta" data-testid="ws-url" title={wsUrl}>
-        <Users size={12} strokeWidth={1.5} aria-hidden="true" />
+        <Users size={12} weight="bold" aria-hidden="true" />
         <span>{host}</span>
       </div>
     </div>

@@ -1,38 +1,41 @@
-// Rail — 52px 导航条，lucide 图标。点击切换 Zustand activeRail。
-
 import {
-  Box,
+  ChatTeardropText,
+  ClockCounterClockwise,
+  Cube,
   FolderOpen,
-  History,
-  Layers,
-  MessageSquare,
+  GearSix,
   Printer,
-  Settings2,
-} from "lucide-react";
-import type { ComponentType, SVGProps } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { useUiStore } from "../state/ui-store";
+  Stack,
+  type Icon,
+} from "@phosphor-icons/react";
+import { useSearchParams } from "react-router-dom";
+import {
+  type LeftPanelId,
+  LEFT_PANEL_PARAM,
+  normalizeLeftPanelId,
+} from "./left-panel-routing";
 
 type RailItem = {
-  id: string;
+  id: LeftPanelId;
   label: string;
-  Icon: ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
+  Icon: Icon;
 };
 
 const ITEMS: RailItem[] = [
-  { id: "chat", label: "agent", Icon: MessageSquare },
-  { id: "workspace", label: "library", Icon: FolderOpen },
-  { id: "parts", label: "parts", Icon: Box },
-  { id: "materials", label: "materials", Icon: Layers },
+  { id: "chat", label: "agent", Icon: ChatTeardropText },
+  { id: "files", label: "files", Icon: FolderOpen },
+  { id: "parts", label: "parts", Icon: Cube },
+  { id: "materials", label: "materials", Icon: Stack },
 ];
 
 const FOOTER_TOP: RailItem[] = [
   { id: "queue", label: "print queue", Icon: Printer },
-  { id: "history", label: "history", Icon: History },
+  { id: "history", label: "history", Icon: ClockCounterClockwise },
 ];
 
 const FOOTER_BOTTOM: RailItem[] = [
-  { id: "settings", label: "settings", Icon: Settings2 },
+  { id: "log", label: "log", Icon: ClockCounterClockwise },
+  { id: "settings", label: "settings", Icon: GearSix },
 ];
 
 type RailButtonProps = {
@@ -42,7 +45,7 @@ type RailButtonProps = {
 };
 
 function RailButton({ item, active, onClick }: RailButtonProps) {
-  const { Icon } = item;
+  const { Icon: IconComponent } = item;
   return (
     <button
       type="button"
@@ -53,59 +56,38 @@ function RailButton({ item, active, onClick }: RailButtonProps) {
       onClick={onClick}
       data-testid={`rail-${item.id}`}
     >
-      <Icon size={18} strokeWidth={1.5} aria-hidden="true" />
+      <IconComponent size={18} weight="bold" aria-hidden="true" />
     </button>
   );
 }
 
 export function Rail() {
-  const activeRail = useUiStore((s) => s.activeRail);
-  const setActiveRail = useUiStore((s) => s.setActiveRail);
-  const navigate = useNavigate();
-  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeRail = normalizeLeftPanelId(searchParams.get(LEFT_PANEL_PARAM));
 
-  const handleClick = (id: string) => {
-    setActiveRail(id);
-    if (id === "settings") {
-      navigate("/settings");
-    } else if (location.pathname !== "/") {
-      navigate("/");
-    }
+  const handleClick = (id: LeftPanelId) => {
+    setSearchParams((prev) => {
+      prev.set(LEFT_PANEL_PARAM, id);
+      return prev;
+    });
   };
 
-  const isActive = (id: string): boolean => {
-    if (id === "settings") return location.pathname === "/settings";
-    return activeRail === id && location.pathname === "/";
-  };
+  const renderItem = (item: RailItem) => (
+    <RailButton
+      key={item.id}
+      item={item}
+      active={activeRail === item.id}
+      onClick={() => handleClick(item.id)}
+    />
+  );
 
   return (
     <nav className="rail" aria-label="primary">
-      {ITEMS.map((item) => (
-        <RailButton
-          key={item.id}
-          item={item}
-          active={isActive(item.id)}
-          onClick={() => handleClick(item.id)}
-        />
-      ))}
+      {ITEMS.map(renderItem)}
       <div className="sep" aria-hidden="true" />
-      {FOOTER_TOP.map((item) => (
-        <RailButton
-          key={item.id}
-          item={item}
-          active={isActive(item.id)}
-          onClick={() => handleClick(item.id)}
-        />
-      ))}
+      {FOOTER_TOP.map(renderItem)}
       <div className="grow" />
-      {FOOTER_BOTTOM.map((item) => (
-        <RailButton
-          key={item.id}
-          item={item}
-          active={isActive(item.id)}
-          onClick={() => handleClick(item.id)}
-        />
-      ))}
+      {FOOTER_BOTTOM.map(renderItem)}
     </nav>
   );
 }

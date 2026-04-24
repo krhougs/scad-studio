@@ -11,6 +11,31 @@ export class MeshHandle {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * 扁平 vertex colors: `[r0, g0, b0, a0, ...]`。若所有顶点都是纯白
+     * 默认色（alpha = 1），返回空 `Vec<f32>` 让 TS 侧走无色路径。
+     */
+    colors(): Float32Array;
+    /**
+     * 扁平 indices。
+     */
+    indices(): Uint32Array;
+    /**
+     * 扁平 normals: `[nx0, ny0, nz0, ...]`。
+     */
+    normals(): Float32Array;
+    /**
+     * 扁平 positions: `[x0, y0, z0, x1, y1, z1, ...]`。
+     */
+    positions(): Float32Array;
+    /**
+     * 索引数量。
+     */
+    readonly index_count: number;
+    /**
+     * 顶点数量（positions.len() / 3 与 vertex count 相等）。
+     */
+    readonly vertex_count: number;
 }
 
 export class RendererHandle {
@@ -64,6 +89,14 @@ export function client_tick(handle: ClientHandle, now_ms: bigint): void;
 export function mesh_decode(bytes: Uint8Array): MeshHandle;
 
 export function mesh_destroy(_handle: MeshHandle): void;
+
+export function parameters_format_defines(entries: any): any;
+
+export function parameters_parse_source(source: string): any;
+
+export function presets_parse_shared_file(text: string): any;
+
+export function presets_stringify_shared_file(file: any): string;
 
 export function renderer_create(_canvas_id: string): RendererHandle;
 

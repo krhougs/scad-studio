@@ -1,9 +1,6 @@
-// Slicer panel: dispatches SlicerList once on mount and renders the server's
-// reply. We never attempt to launch a slicer from the browser; the server
-// owns that (see docs/web-platform-limits.md §1). Empty list is a first-class
-// UI state — "no slicer configured" beats a silent empty panel.
-
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { AppConfigShape, SlicerRow } from "../config/app-config";
+import { configuredSlicerRecords } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 
@@ -14,6 +11,11 @@ export type SlicerEntry = {
 
 type SlicerPanelProps = {
   client: WasmClient | null;
+  source?: unknown;
+  defaultFilename?: string;
+  defines?: string[];
+  config: AppConfigShape | null;
+  onStatus?: (status: string) => void;
 };
 
 type LoadState =
@@ -22,15 +24,27 @@ type LoadState =
   | { kind: "ready"; slicers: SlicerEntry[] }
   | { kind: "error"; message: string };
 
-export function SlicerPanel({ client }: SlicerPanelProps) {
+export function SlicerPanel({
+  client,
+  source,
+  defaultFilename,
+  defines,
+  config,
+  onStatus,
+}: SlicerPanelProps) {
   const [state, setState] = useState<LoadState>({ kind: "idle" });
+  const [actionStatus, setActionStatus] = useState<string>("idle");
+  const configured = useMemo(
+    () => configuredSlicerRecords(config ?? {}),
+    [config],
+  );
 
   useEffect(() => {
     if (!client) return;
     let cancelled = false;
     setState({ kind: "loading" });
     client
-      .dispatchSlicerList({ configured: [] })
+      .dispatchSlicerList({ configured })
       .then((response) => {
         if (cancelled) return;
         const slicers = extractSlicers(response);
@@ -43,7 +57,33 @@ export function SlicerPanel({ client }: SlicerPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, configured]);
+
+  const sendToSlicer = async (slicer: SlicerRow) => {
+    if (!client || !source) return;
+    const effective = defaultFilename?.trim() || "export.stl";
+    setActionStatus(`sending to ${slicer.name}`);
+    onStatus?.(`sending to ${slicer.name}`);
+    try {
+      await client.dispatchExportRun({
+        configured_openscad_path: config?.openscad_path ?? null,
+        configured_slicers: configured,
+        source,
+        defines: defines ?? [],
+        output_path: effective,
+        format: "stl",
+        slicer_name: slicer.name,
+      });
+      const status = `sent to ${slicer.name}: ${effective}`;
+      setActionStatus(status);
+      onStatus?.(status);
+    } catch (err) {
+      const message = describeFileReadError(err);
+      const status = `export error: ${message}`;
+      setActionStatus(status);
+      onStatus?.(status);
+    }
+  };
 
   return (
     <section
@@ -53,6 +93,9 @@ export function SlicerPanel({ client }: SlicerPanelProps) {
     >
       <header className="panel__head">
         <h5 className="panel__title">slicers</h5>
+        <span className="panel__sub" data-testid="slicer-status">
+          {actionStatus}
+        </span>
       </header>
       {state.kind === "loading" ? (
         <p className="panel__empty" data-testid="slicer-loading">
@@ -84,6 +127,15 @@ export function SlicerPanel({ client }: SlicerPanelProps) {
                 >
                   {entry.path || "—"}
                 </span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => sendToSlicer(entry)}
+                  disabled={!client || !source}
+                  data-testid={`slicer-send-${entry.name}`}
+                >
+                  send to slicer
+                </button>
               </li>
             ))
           )}

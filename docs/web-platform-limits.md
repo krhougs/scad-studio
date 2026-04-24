@@ -14,18 +14,14 @@
 - 切片器管理（Phase 7）同理：`SlicerList` 列出的是 server 机器上的安装，
   不是浏览器机器上的。
 
-## 2. 源码暴露边界
+## 2. 源码读取边界
 
-- `web_file_read_capability()` 默认把 `.scad`、`.stl`、`.3mf` 列入
-  `denied_extensions`。这是**访问/暴露边界**（保护源码），不是平台能力
-  差异——即便浏览器理论上可以读二进制，server 也拒绝返回 `.scad`
-  字节流。
-- `viewers/scad-split-viewer.tsx` 因此只能通过 `PreviewRequest` 拿到
-  mesh 结果；源码面板显示 `source unavailable: 当前 client 不允许读取
-  .scad 文件`。
-- 如果将来放开某类扩展（例如公司内部工具希望显示源码），在
-  `app-server-protocol::web_file_read_capability` 修改，不是在 client
-  侧加绕过路径。
+- `web_file_read_capability()` 当前默认不拒绝扩展名。Web 端会读取 `.scad`
+  源码，用同一份 `studio-common` 参数解析逻辑生成 Customizer 参数控件。
+- `.stl` / `.3mf` 既可以通过 `PreviewRequest` 获取预览 artifact，也可以在
+  已存在文件查看场景下通过 `FileRead` 消费二进制内容。
+- 如果后续需要恢复源码读取限制，应先在协议与产品层明确用户可见影响：
+  限制 `.scad` 读取会直接影响 Web 参数面板、源码附加视图和预设工作流。
 
 ## 3. 文件路径可见性
 
@@ -57,12 +53,13 @@
 
 ## 6. Markdown 渲染支持范围
 
-- `viewers/markdown-parser.ts` 是项目内极简 parser，覆盖：`#` / `##` /
-  `###` 标题、`*` 与 `-` 无序列表、围栏代码块（```lang）、段落、行内
-  代码 `` ` `` 与链接 `[text](url)`。
-- **不**支持 GFM 扩展（表格、任务列表、删除线、脚注等）、setext 标题、
-  有序列表、块引用、HTML 嵌入、嵌套列表。若后续 Phase 需要这些能力，
-  再评估引入外部库（见 plan-00 §Phase 6 决策）。
+- Web 端 Markdown 预览使用 `@uiw/react-markdown-preview`，并通过按需加载
+  Mermaid 渲染 `mermaid` fenced code block。
+- Markdown 链接默认在新浏览器 tab 打开，使用 `rel="noopener noreferrer"`。
+- HTML、URL、图片 URL 和 Mermaid SVG 都经过安全处理。危险协议、iframe、
+  内联事件属性和 SVG 危险链接会被拒绝或清理。
+- 若后续需要与桌面端完全一致的 CommonMark / GFM 行为，需要继续补充
+  跨端语法用例；不能恢复旧的简化解析方案。
 
 ## 7. 图片查看限制
 
@@ -74,27 +71,25 @@
 - Object URL 在组件卸载或 `path` 变化时 `URL.revokeObjectURL`，避免
   内存泄漏。
 
-## 8. 3D 交互与相机（Phase 7）
+## 8. 3D 交互与相机
 
-- `packages/studio-web/src/canvas/camera-*` 负责相机状态机与工具栏/
-  状态栏输入处理。桩 renderer（`renderer_create` 返回 Err）不会真的
-  把 camera 状态画出像素；本 Phase 只对齐交互与协议接线，不涉及真实
-  GPU 渲染。
-- 具体 renderer 接入要等到未来 Phase（见 plan-00 Phase 8 之后）。
+- Web 端真实显示路径由 `viewers/mesh-three.ts` 的 Three.js WebGL renderer
+  承担；wasm 侧只负责协议桥接与 mesh / 参数解析等纯逻辑。
+- 工具条覆盖相机预设、render mode、projection、grid、axis、build plate
+  与 shadow 开关。新增控件都写入 `MeshViewerOptions`，再由 Three.js 场景
+  消费，不只改变 UI 文案。
+- wasm `renderer_*` 仍是桥接占位 API，不参与当前 Web 端真实渲染路径。
 
-## 9. 参数编辑与预设（Phase 7）
+## 9. 参数编辑与预设
 
-- Web 端不能通过 `FileRead` 读 `.scad` 源码（server `denied_extensions`
-  覆盖了 `.scad`；见 §2）。因此参数编辑**不做源码解析**：用户在参数
-  面板里手动输入 `name=value` 形式的 overrides，这些字符串作为
-  `PreviewRequest.defines` 直接送回 server，由 OpenSCAD CLI 处理。
-- 预设以同级 `<source>.presets.json` 文件持久化，读写走 `FileRead` /
-  `FileWriteText`。格式：`{ "version": 1, "presets": [{ name, defines:
-  string[] }] }`。
-- 协议 `ParsedParameters` / `PresetFile` 类型虽然已经在
-  `app-server-protocol` 中导出，但 `PreviewRequest` 服务端链路目前不会
-  返回解析后的参数定义；这条路径尚未打通，web 端无法接。已记录为
-  `docs/known_issues.md` 中的独立条目，不视为平台限制。
+- Web 参数面板通过 `studio-web-wasm` 调用 `studio_common::parse_parameters`，
+  按共享 `ParameterEntry` / `ParameterValue` 语义渲染数值、布尔与枚举控件。
+- 当前 `defines` 使用 `studio_common::parameter_entries_to_cli_defines` 格式化；
+  初始预览、参数修改、单项恢复默认值、加载预设和导出 / 切片器请求都消费同一份
+  当前参数值。
+- 预设默认写入同级 `*.scad.json`，磁盘结构为共享 `PresetFile`：
+  `{ "presets": { "<name>": { "<param>": <ParameterValue> } } }`。
+- 历史 `<stem>.presets.json` 仍兼容读取，但不会作为默认写入目标。
 
 ## 10. 导出与切片器（Phase 7）
 
@@ -106,19 +101,20 @@
   `params-cube.stl`），由 OpenSCAD CLI 相对 server 进程的 cwd 解析。
   涉及真实多 workspace 的输出路径语义待 Phase 8+ 评估。
 
-## 11. 配置与设置（Phase 7）
+## 11. 配置与设置
 
-- `/settings` 路由加载完整 `AppConfig` JSON 后只显示少数常用字段
-  （OpenSCAD path、recent workspaces 数量、slicers 数量）。`AppConfig`
-  是协议层数据，只放在该路由的本地 `useState`，**不**进入 Zustand
-  store；保证 UI store 的协议纯净边界。
+- `/settings` 路由可编辑 OpenSCAD path、slicer name/path 与
+  `floating_panel_opacity`，保存后更新同会话共享配置快照。
+- workbench 的 `.scad` 预览、导出和切片器请求都消费同一份配置快照；
+  不再存在设置页可保存但工作台不生效的分叉状态。
+- `AppConfig` 不进入 Zustand UI store；设置页和 workbench 只通过配置模块
+  维护快照与状态，避免把协议数据混入 UI 壳层状态。
 
-## 12. 日志面板与 `.scad` 自动重渲染（Phase 7）
+## 12. 日志面板与文档刷新
 
 - 日志面板挂在 Inspector 底部，使用 React 内 ring buffer（默认 50
   条），不写入 store、不做持久化。监听的事件：transport open/close、
-  handshake accepted、watch resubscribed、watch push、自动重渲染触发。
-- 当激活 tab 是 `.scad` 且 watch 推送的 `changed_paths` 命中当前文件
-  时，WorkbenchLayout 递增 `scadRefreshSignal`，ScadWorkbench 将该
-  signal 和 defines 一起作为 key 传给 `ScadSplitViewer`，触发其内部
-  effect 重新发 `PreviewRequest`。
+  handshake accepted、watch resubscribed、watch push、文档刷新触发。
+- watch 事件会刷新打开中的 Markdown、图片、mesh、`.scad` 与预设文件。
+  当协议事件只给目录级路径时，Web 端采用保守刷新策略，并在日志里说明
+  是目录变化触发。

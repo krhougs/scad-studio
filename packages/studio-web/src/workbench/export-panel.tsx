@@ -4,6 +4,7 @@
 // it against its working directory (see docs/known_issues.md).
 
 import { useEffect, useState } from "react";
+import type { SlicerRow } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 
@@ -11,6 +12,9 @@ type ExportPanelProps = {
   client: WasmClient | null;
   source: unknown;
   defaultFilename: string;
+  defines?: string[];
+  configuredOpenscadPath?: string | null;
+  configuredSlicers?: SlicerRow[];
   onStatus: (status: string) => void;
 };
 
@@ -22,6 +26,9 @@ export function ExportPanel({
   client,
   source,
   defaultFilename,
+  defines,
+  configuredOpenscadPath,
+  configuredSlicers,
   onStatus,
 }: ExportPanelProps) {
   const [format, setFormat] = useState<ExportFormat>("stl");
@@ -47,10 +54,10 @@ export function ExportPanel({
     onStatus("export running");
     try {
       await client.dispatchExportRun({
-        configured_openscad_path: null,
-        configured_slicers: [],
+        configured_openscad_path: configuredOpenscadPath ?? null,
+        configured_slicers: configuredSlicers ?? [],
         source,
-        defines: [],
+        defines: defines ?? [],
         output_path: effective,
         format,
         slicer_name: null,

@@ -138,11 +138,7 @@ fn render_scad_preview(
     source_path: &Path,
     defines: &[String],
 ) -> Result<PreviewArtifact, OpenScadError> {
-    let executable = detect_openscad_path(configured_openscad_path).map_err(|_| {
-        OpenScadError::new(
-            "未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH；3MF 彩色预览需要可用的 OpenSCAD CLI",
-        )
-    })?;
+    let executable = detect_openscad_path(configured_openscad_path)?;
     let (preview_path, args) = build_preview_job_args(source_path, defines);
     let output = Command::new(executable)
         .args(args)
@@ -213,11 +209,7 @@ where
 }
 
 fn build_job(request: &RenderRequest) -> Result<RunningJob, OpenScadError> {
-    let executable = detect_openscad_path(None).map_err(|_| {
-        OpenScadError::new(
-            "未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH；3MF 彩色预览需要可用的 OpenSCAD CLI",
-        )
-    })?;
+    let executable = detect_openscad_path(None)?;
     let (preview_path, args) = build_preview_job_args(&request.source_path, &request.defines);
     let child = Command::new(executable)
         .args(args)
@@ -323,7 +315,7 @@ fn extend_logs(entries: &mut Vec<LogEntry>, bytes: &[u8], level: LogLevel) {
 }
 
 pub fn detect_openscad_path(configured_path: Option<PathBuf>) -> Result<PathBuf, OpenScadError> {
-    let env_path = env::var("OPENSCAD_PATH").ok().map(PathBuf::from);
+    let env_path = env::var_os("OPENSCAD_PATH").map(PathBuf::from);
     resolve_openscad_path(
         configured_path,
         env_path,
@@ -332,16 +324,7 @@ pub fn detect_openscad_path(configured_path: Option<PathBuf>) -> Result<PathBuf,
 }
 
 fn find_in_path() -> Option<PathBuf> {
-    let binary = if cfg!(target_os = "windows") {
-        "openscad.exe"
-    } else {
-        "openscad"
-    };
-    env::var_os("PATH").and_then(|value| {
-        env::split_paths(&value)
-            .map(|dir| dir.join(binary))
-            .find(|candidate| candidate.is_file())
-    })
+    find_command_in_path(default_openscad_command_names())
 }
 
 fn find_platform_path() -> Option<PathBuf> {
@@ -405,9 +388,83 @@ pub fn resolve_openscad_path(
     auto_path: Option<PathBuf>,
 ) -> Result<PathBuf, OpenScadError> {
     configured_path
-        .or(env_path)
-        .or(auto_path)
-        .ok_or_else(|| OpenScadError::new("未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH"))
+        .into_iter()
+        .flat_map(expand_configured_openscad_candidate)
+        .chain(
+            env_path
+                .into_iter()
+                .flat_map(expand_configured_openscad_candidate),
+        )
+        .chain(auto_path)
+        .find(|candidate| is_usable_openscad_candidate(candidate))
+        .ok_or_else(|| OpenScadError::new(openscad_not_found_message()))
+}
+
+fn openscad_not_found_message() -> &'static str {
+    "未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH 或在 Settings 中配置 OpenSCAD 路径"
+}
+
+fn expand_configured_openscad_candidate(path: PathBuf) -> Vec<PathBuf> {
+    let mut candidates = if is_bare_command_name(&path) {
+        Vec::new()
+    } else {
+        vec![path.clone()]
+    };
+    if is_macos_app_bundle_path(&path) {
+        candidates.push(path.join("Contents/MacOS/OpenSCAD"));
+    }
+    if is_bare_command_name(&path) {
+        candidates.extend(find_command_in_path(command_names_for_configured_path(
+            &path,
+        )));
+    }
+    candidates
+}
+
+fn is_usable_openscad_candidate(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn is_macos_app_bundle_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+}
+
+fn is_bare_command_name(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+fn find_command_in_path(names: Vec<&'static str>) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|value| {
+        env::split_paths(&value)
+            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+fn default_openscad_command_names() -> Vec<&'static str> {
+    if cfg!(target_os = "windows") {
+        vec!["openscad.exe", "openscad"]
+    } else {
+        vec!["openscad"]
+    }
+}
+
+fn command_names_for_configured_path(path: &Path) -> Vec<&'static str> {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    if name.eq_ignore_ascii_case("openscad.exe") {
+        vec!["openscad.exe"]
+    } else if name.eq_ignore_ascii_case("openscad") {
+        default_openscad_command_names()
+    } else {
+        Vec::new()
+    }
 }
 
 impl CliOutputFormat {

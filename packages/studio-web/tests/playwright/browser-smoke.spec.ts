@@ -91,7 +91,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("workspace info appears after handshake", async ({ page }) => {
-  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);
   const regCount = await page.evaluate(async () => {
     if (!("serviceWorker" in navigator)) return 0;
     const regs = await navigator.serviceWorker.getRegistrations();
@@ -108,7 +108,7 @@ test("workspace info appears after handshake", async ({ page }) => {
 });
 
 test("preview request completes or reports error", async ({ page }) => {
-  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);
   // Open the mesh fixture explicitly; first entry is alphabetically README.md
   // which now routes to the markdown tab and never fires PreviewRequest.
   await page.getByTestId("entry-model.stl").waitFor({
@@ -123,7 +123,7 @@ test("preview request completes or reports error", async ({ page }) => {
 });
 
 test("@markdown clicking README.md opens markdown viewer", async ({ page }) => {
-  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);
   await page.getByTestId("entry-README.md").waitFor({
     state: "visible",
     timeout: 30_000,
@@ -137,7 +137,7 @@ test("@markdown clicking README.md opens markdown viewer", async ({ page }) => {
 });
 
 test("@image clicking screenshot.png opens image viewer", async ({ page }) => {
-  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);
   await page.getByTestId("entry-screenshot.png").waitFor({
     state: "visible",
     timeout: 30_000,
@@ -150,10 +150,10 @@ test("@image clicking screenshot.png opens image viewer", async ({ page }) => {
   await expect(page.getByTestId("image-scale")).toContainText("scale");
 });
 
-test("@scad-split clicking cube.scad opens scad split viewer", async ({
+test("@scad-viewer clicking cube.scad opens a real viewer workflow", async ({
   page,
 }) => {
-  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}`);
+  await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);
   // cube.scad lives under examples/; expand the directory first.
   await page.getByTestId("entry-examples").waitFor({
     state: "visible",
@@ -165,12 +165,17 @@ test("@scad-split clicking cube.scad opens scad split viewer", async ({
     timeout: 15_000,
   });
   await page.getByTestId("entry-cube.scad").click();
-  await expect(page.getByTestId("scad-split-viewer")).toBeVisible();
-  await expect(page.getByTestId("scad-source")).not.toBeEmpty();
+  await expect(page.getByTestId("scad-preview-viewer")).toBeVisible();
+  await expect(page.getByTestId("scad-source")).toHaveCount(0);
+  await expect(page.getByTestId("mesh-canvas")).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(page.getByTestId("scad-preview-status")).toContainText(
     /preview ready|preview error|preview pending/,
     { timeout: 30_000 },
   );
+  await expect(page.getByTestId("export-panel")).toBeVisible();
+  await expect(page.getByTestId("slicer-panel")).toBeVisible();
 });
 
 async function waitForPort(host: string, port: number, timeoutMs: number): Promise<void> {

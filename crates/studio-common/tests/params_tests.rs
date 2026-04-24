@@ -1,4 +1,7 @@
-use studio_common::{ParameterKind, ParameterStore, ParameterValue, parse_parameters};
+use studio_common::{
+    ParameterKind, ParameterStore, ParameterValue, parameter_entries_to_cli_defines,
+    parse_parameters,
+};
 
 #[test]
 fn parses_grouped_visible_and_hidden_parameters() {
@@ -78,4 +81,28 @@ fn parameter_store_builds_cli_defines_and_restore_default() {
 
     store.restore_default("flag").unwrap();
     assert_eq!(store.value("flag"), Some(&ParameterValue::Bool(false)));
+}
+
+#[test]
+fn parameter_entries_format_cli_defines_like_store() {
+    let parsed = parse_parameters(
+        "size = 10; // [5:1:30]\nenabled = false;\nmode = \"draft\"; // [draft, fine]\n",
+    );
+    let mut store = ParameterStore::from_parsed(parsed);
+    store
+        .set_value("size", ParameterValue::Number(12.5))
+        .unwrap();
+    store.set_value("enabled", ParameterValue::Bool(true)).unwrap();
+    store
+        .set_value("mode", ParameterValue::Text("fine".into()))
+        .unwrap();
+
+    assert_eq!(
+        parameter_entries_to_cli_defines(store.entries()),
+        vec![
+            "size=12.5".to_string(),
+            "enabled=true".to_string(),
+            "mode=\"fine\"".to_string(),
+        ]
+    );
 }

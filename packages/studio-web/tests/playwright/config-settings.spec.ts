@@ -1,24 +1,18 @@
-// Phase 7 @config-settings smoke. Loads /settings, writes an openscad path,
-// saves, reloads the page, and verifies the saved value came back via
-// ConfigLoad.
-//
-// The host subprocess is launched with an isolated `HOME` (and Linux
-// `XDG_CONFIG_HOME`) pointing at a throwaway tmp dir so `dirs::config_dir()`
-// never writes to the developer's or CI's real scad-studio config. The
-// directory is cleaned up when the test suite finishes.
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { clearServiceWorkerState, createHarness } from "./_smoke-harness";
+import {
+  clearRecordedClientCommands,
+  clearServiceWorkerState,
+  createHarness,
+  installProtocolRecorder,
+  latestRecordedClientCommand,
+} from "./_smoke-harness";
 
 const TMP_HOME = mkdtempSync(path.join(tmpdir(), "scad-studio-smoke-home-"));
 const TMP_XDG = path.join(TMP_HOME, ".config");
 const REAL_HOME = homedir();
-// Preserve cargo / rustup caches so `cargo run` still works with the
-// overridden HOME. Only `dirs::config_dir()` (which drives scad-studio's
-// AppConfig location) sees the redirected paths.
 const HARNESS = createHarness({
   bindPort: 39185,
   vitePort: 5180,
@@ -29,7 +23,10 @@ const HARNESS = createHarness({
     RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(REAL_HOME, ".rustup"),
   },
 });
-const SENTINEL = "/tmp/smoke-openscad-" + Date.now();
+const OPENSCAD_PATH = "/usr/bin/true";
+const SLICER_NAME = "smoke-slicer";
+const SLICER_PATH = "/usr/bin/true";
+const FLOATING_PANEL_OPACITY = "0.42";
 
 test.beforeAll(async () => {
   await HARNESS.start();
@@ -40,35 +37,123 @@ test.afterAll(async () => {
   try {
     rmSync(TMP_HOME, { recursive: true, force: true });
   } catch {
-    // best-effort cleanup; the dir lives under $TMPDIR anyway.
+    // best-effort cleanup
   }
 });
 
 test.beforeEach(async ({ page }) => {
   await clearServiceWorkerState(page);
+  await installProtocolRecorder(page);
 });
 
-test("@config-settings save then reload preserves openscad_path", async ({
+test("@config-settings save then reload preserves editable config fields", async ({
   page,
 }) => {
-  await page.goto(
-    `${HARNESS.baseUrl}/settings?ws=${encodeURIComponent(HARNESS.wsUrl)}`,
+  await gotoSettingsPanel(page);
+  await saveSettings(page);
+
+  await gotoSettingsPanel(page);
+  await expect(page.getByTestId("settings-openscad-path")).toHaveValue(
+    OPENSCAD_PATH,
+    { timeout: 30_000 },
   );
+  await expect(page.getByTestId("settings-floating-panel-opacity")).toHaveValue(
+    FLOATING_PANEL_OPACITY,
+  );
+  await expect(page.getByTestId(`settings-slicer-row-${SLICER_NAME}`)).toBeVisible();
+  await expect(
+    page.getByTestId(`settings-slicer-path-${SLICER_NAME}`),
+  ).toHaveValue(SLICER_PATH);
+  await expect(page.getByTestId("settings-slicer-count")).toHaveText("1");
+});
+
+test("@config-settings saved config is consumed by preview, slicer list and export requests", async ({
+  page,
+}) => {
+  await gotoSettingsPanel(page);
+  await saveSettings(page);
+
+  await openCubeScad(page);
+  await expect(page.getByTestId("mesh-canvas")).toBeVisible({ timeout: 30_000 });
+
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "preview_request"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      configured_openscad_path: OPENSCAD_PATH,
+    });
+
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "slicer_list"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      configured: [{ name: SLICER_NAME, path: SLICER_PATH }],
+    });
+
+  await clearRecordedClientCommands(page);
+  await page.getByTestId("export-run").click();
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "export_run"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      configured_openscad_path: OPENSCAD_PATH,
+      configured_slicers: [{ name: SLICER_NAME, path: SLICER_PATH }],
+      slicer_name: null,
+    });
+});
+
+async function gotoSettingsPanel(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=settings`,
+  );
+  await expect(page.getByTestId("left-panel-settings")).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+async function saveSettings(
+  page: import("@playwright/test").Page,
+): Promise<void> {
   await expect(page.getByTestId("settings-openscad-path")).toBeVisible({
     timeout: 30_000,
   });
-  await page.getByTestId("settings-openscad-path").fill(SENTINEL);
+  await page.getByTestId("settings-openscad-path").fill(OPENSCAD_PATH);
+  await page.getByTestId("settings-floating-panel-opacity").fill(
+    FLOATING_PANEL_OPACITY,
+  );
+  await page.getByTestId("settings-slicer-name").fill(SLICER_NAME);
+  await page.getByTestId("settings-slicer-path").fill(SLICER_PATH);
+  await page.getByTestId("settings-slicer-add").click();
+  await expect(page.getByTestId(`settings-slicer-row-${SLICER_NAME}`)).toBeVisible({
+    timeout: 15_000,
+  });
   await page.getByTestId("settings-save").click();
   await expect(page.getByTestId("settings-status")).toHaveText("saved", {
     timeout: 15_000,
   });
+}
 
-  // reload the route; ConfigLoad fires again and must echo the sentinel.
-  await page.goto(
-    `${HARNESS.baseUrl}/settings?ws=${encodeURIComponent(HARNESS.wsUrl)}`,
-  );
-  await expect(page.getByTestId("settings-openscad-path")).toHaveValue(
-    SENTINEL,
-    { timeout: 30_000 },
-  );
-});
+async function openCubeScad(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await clearRecordedClientCommands(page);
+  await page.getByTestId("rail-files").click();
+  await page.getByTestId("entry-examples").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-examples").click();
+  await page.getByTestId("entry-cube.scad").waitFor({
+    state: "visible",
+    timeout: 15_000,
+  });
+  await page.getByTestId("entry-cube.scad").click();
+}
