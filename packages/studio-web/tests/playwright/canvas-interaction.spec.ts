@@ -147,13 +147,36 @@ test("@canvas-interaction preview info and camera controls are available", async
   await expect(page.getByTestId("preview-mesh-size")).toContainText("mm");
   await expect(page.getByTestId("camera-panel")).toBeVisible();
   await expect(page.getByTestId("camera-handle")).toBeVisible();
+  await expect(page.getByTestId("camera-knob-azimuth")).toHaveAttribute(
+    "role",
+    "slider",
+  );
+  const azimuthField = page.getByTestId("camera-number-field-azimuth");
+  const azimuth = azimuthField.getByRole("spinbutton");
+  await expect(azimuthField).toBeVisible();
 
-  await page.getByTestId("camera-azimuth").fill("90");
-  await expect(page.getByTestId("camera-azimuth")).toHaveValue("90.000");
+  const cameraRowBefore = await page
+    .getByTestId("camera-control-azimuth")
+    .boundingBox();
+  await azimuth.fill("90");
+  await expect(azimuth).toHaveValue("90.000");
+  const cameraRowAfter = await page
+    .getByTestId("camera-control-azimuth")
+    .boundingBox();
+  expect(cameraRowBefore?.width).toBeCloseTo(cameraRowAfter?.width ?? 0, 0);
+  expect(cameraRowBefore?.height).toBeCloseTo(cameraRowAfter?.height ?? 0, 0);
 
-  await page.getByTestId("camera-target-x").fill("");
-  await page.getByTestId("camera-distance").click();
-  await expect(page.getByTestId("camera-target-x")).not.toHaveValue("NaN");
+  await page
+    .getByTestId("camera-number-field-target-x")
+    .getByRole("spinbutton")
+    .fill("");
+  await page
+    .getByTestId("camera-number-field-distance")
+    .getByRole("spinbutton")
+    .click();
+  await expect(
+    page.getByTestId("camera-number-field-target-x").getByRole("spinbutton"),
+  ).not.toHaveValue("NaN");
   await expect(page.getByTestId("mesh-canvas")).toBeVisible();
 
   const cameraToggle = page.getByTestId("inspector-section-camera-toggle");
@@ -162,6 +185,50 @@ test("@canvas-interaction preview info and camera controls are available", async
   await page.getByTestId("camera-handle").click();
   await expect(page.getByTestId("inspector-section-camera-body")).toBeVisible();
   await expect(cameraToggle).toBeFocused();
+});
+
+test("@canvas-interaction ViewportGizmo click switches view", async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-model.stl")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-model.stl").click();
+
+  await expect(page.getByTestId("viewport-gizmo")).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.getByTestId("viewport-gizmo-top").click();
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("86.000");
+  await page.getByTestId("viewport-gizmo-front").click();
+  await expect(
+    page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
+  ).toHaveValue("-90.000");
+});
+
+test("@canvas-interaction initial mesh preview exposes prominent loading", async ({
+  page,
+}) => {
+  await installPreviewDelay(page, 2_500);
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-cube.scad").click();
+
+  await expect(page.getByTestId("mesh-loading-overlay")).toBeVisible({
+    timeout: 1_000,
+  });
+  await expect(page.getByTestId("mesh-loading-overlay")).toContainText(
+    /loading|updating/,
+  );
 });
 
 for (const viewport of VIEWPORTS) {
@@ -296,4 +363,15 @@ function boxesOverlap(first: Box, second: Box): boolean {
     first.y < second.y + second.height &&
     first.y + first.height > second.y
   );
+}
+
+async function installPreviewDelay(
+  page: import("@playwright/test").Page,
+  delayMs: number,
+): Promise<void> {
+  await page.addInitScript((ms) => {
+    (
+      window as Window & { __studioWebPreviewDelayMs?: number }
+    ).__studioWebPreviewDelayMs = ms;
+  }, delayMs);
 }

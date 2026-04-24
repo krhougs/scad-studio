@@ -105,15 +105,28 @@ test("@parameters-presets typed controls drive current defines", async ({
     });
 
   const rightInspector = inspector(page);
-  const size = rightInspector.getByTestId("parameter-control-size");
-  await expect(size).toHaveAttribute("type", "number", { timeout: 10_000 });
+  const sizeNumberField = rightInspector.getByTestId("parameter-number-field-size");
+  const size = sizeNumberField.getByRole("spinbutton");
+  await expect(sizeNumberField).toBeVisible({ timeout: 10_000 });
   await expect(rightInspector.getByTestId("parameters-apply")).toHaveCount(0);
-  await expect(rightInspector.getByTestId("parameter-slider-size")).toBeVisible();
+  await expect(rightInspector.getByTestId("parameter-knob-size")).toHaveAttribute(
+    "role",
+    "slider",
+  );
   await expect(size).toHaveValue("10");
   await expect(rightInspector.getByTestId("parameter-control-enabled")).toBeChecked();
   await expect(rightInspector.getByTestId("parameter-control-mode")).toHaveValue("draft");
 
+  const rowBefore = await rightInspector
+    .getByTestId("parameter-row-size")
+    .boundingBox();
   await size.fill("24");
+  const rowAfter = await rightInspector
+    .getByTestId("parameter-row-size")
+    .boundingBox();
+  expect(rowBefore?.width).toBeCloseTo(rowAfter?.width ?? 0, 0);
+  expect(rowBefore?.height).toBeCloseTo(rowAfter?.height ?? 0, 0);
+
   await rightInspector.getByTestId("parameter-control-enabled").uncheck();
   await rightInspector.getByTestId("parameter-control-mode").selectOption("fine");
   await expect

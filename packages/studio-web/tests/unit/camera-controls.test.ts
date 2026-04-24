@@ -29,12 +29,12 @@ describe("camera-controls", () => {
     expect(base.position).toEqual(defaultCameraState().position);
   });
 
-  it("zoomBy shrinks and grows the distance", () => {
+  it("zoomBy follows desktop OrbitControls wheel direction", () => {
     const base = applyPreset("iso");
     const before = distanceTo(base);
-    const closer = zoomBy(base, -0.2);
+    const closer = zoomBy(base, 1);
     expect(distanceTo(closer)).toBeLessThan(before);
-    const farther = zoomBy(base, 0.2);
+    const farther = zoomBy(base, -1);
     expect(distanceTo(farther)).toBeGreaterThan(before);
   });
 
@@ -61,7 +61,7 @@ describe("camera-controls", () => {
     expect(classifyPointerMode({ button: 0, altKey: false })).toBe("orbit");
     expect(classifyPointerMode({ button: 0, altKey: true })).toBe("pan");
     expect(classifyPointerMode({ button: 2, altKey: false })).toBe("pan");
-    expect(classifyPointerMode({ button: 1, altKey: false })).toBe("none");
+    expect(classifyPointerMode({ button: 1, altKey: false })).toBe("pan");
   });
 
   it("fits camera distance to model bounds and aspect ratio", () => {

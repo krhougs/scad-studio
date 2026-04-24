@@ -81,8 +81,8 @@ describe("parameter-model", () => {
       -8,
     )[0];
     expect(sliderBounds(inferred)).toEqual({
-      min: -16,
-      max: 16,
+      min: -6,
+      max: 6,
       step: 1,
     });
   });
