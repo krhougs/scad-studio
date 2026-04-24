@@ -530,18 +530,6 @@ export function WorkbenchLayout() {
     document.title = documentTitleForFile(activeTab?.label ?? null);
   }, [activeTab?.label]);
 
-  const openCameraPanel = useCallback(() => {
-    const toggle = document.querySelector<HTMLButtonElement>(
-      '[data-testid="inspector-section-camera-toggle"]',
-    );
-    if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-    const panel =
-      document.querySelector<HTMLElement>('[data-testid="camera-panel"]') ??
-      toggle;
-    panel?.scrollIntoView({ block: "nearest" });
-    toggle?.focus();
-  }, []);
-
   const scadInspectorPanels =
     activeTab?.kind === "scad"
       ? scadInspectorPanelsForState(scadWorkbenchState)
@@ -599,7 +587,6 @@ export function WorkbenchLayout() {
         cameraState={cameraState}
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
-        onOpenCameraPanel={openCameraPanel}
         scadWorkbenchState={scadWorkbenchState}
       />
       <Inspector

@@ -404,11 +404,10 @@ export function scadInspectorPanelsForState(
       <ParametersPanel
         entries={state.parameterEntries}
         warnings={state.parameterWarnings}
-      onUpdateValue={state.updateParameter}
-      onRestoreValue={state.restoreParameter}
-      onRestoreDefaults={state.restoreDefaults}
-      onSavePreset={state.savePreset}
-      previewStatus={state.previewStatus}
+        onUpdateValue={state.updateParameter}
+        onRestoreValue={state.restoreParameter}
+        onRestoreDefaults={state.restoreDefaults}
+        onSavePreset={state.savePreset}
       />
     ),
     presets: (

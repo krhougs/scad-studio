@@ -68,7 +68,6 @@ type CanvasZoneProps = {
   cameraState: CameraState | null;
   cameraOverride: CameraState | null;
   onCameraChange: (camera: CameraState) => void;
-  onOpenCameraPanel: () => void;
   scadWorkbenchState: ScadWorkbenchState;
 };
 
@@ -92,7 +91,6 @@ export function CanvasZone(props: CanvasZoneProps) {
     cameraState,
     cameraOverride,
     onCameraChange,
-    onOpenCameraPanel,
     scadWorkbenchState,
   } = props;
 
@@ -161,10 +159,6 @@ export function CanvasZone(props: CanvasZoneProps) {
                 phase · {phase}
               </span>
             )}
-            <div className="canvas-info" data-testid="canvas-info">
-              <div>{isMeshLike ? activeView : "no preview"}</div>
-              <div>units {unitLabel(config?.display_unit ?? "millimeter")}</div>
-            </div>
           </div>
 
           <div className="canvas-stage" ref={stageRef}>
@@ -190,20 +184,7 @@ export function CanvasZone(props: CanvasZoneProps) {
                 activeView={activeView}
                 camera={cameraState}
                 size={viewportGizmoSize}
-                onSelectView={onSelectView}
               />
-            ) : null}
-            {isMeshLike ? (
-              <button
-                type="button"
-                className="camera-handle"
-                aria-label="camera panel"
-                title="camera"
-                data-testid="camera-handle"
-                onClick={onOpenCameraPanel}
-              >
-                ☰
-              </button>
             ) : null}
           </div>
         </div>
@@ -356,12 +337,10 @@ function ViewportGizmo({
   activeView,
   camera,
   size,
-  onSelectView,
 }: {
   activeView: ViewPreset;
   camera: CameraState | null;
   size: number;
-  onSelectView: (id: ViewPreset) => void;
 }) {
   const axes = projectViewportGizmoAxes(
     camera ?? PRESET_STATES[viewPresetToCamera(activeView)],
@@ -399,20 +378,6 @@ function ViewportGizmo({
           </g>
         ))}
       </svg>
-      <div className="viewport-gizmo__views">
-        {VIEW_PILLS.map((view) => (
-          <button
-            key={view.id}
-            type="button"
-            className={view.id === activeView ? "active" : undefined}
-            data-testid={`viewport-gizmo-${view.id}`}
-            aria-pressed={view.id === activeView}
-            onClick={() => onSelectView(view.id)}
-          >
-            {view.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -574,12 +539,6 @@ function messageClass(phase: string): string | undefined {
   if (phase.includes("error")) return "is-err";
   if (phase === "preview-ready") return "is-ok";
   return undefined;
-}
-
-function unitLabel(unit: AppConfigShape["display_unit"]): string {
-  if (unit === "centimeter") return "cm";
-  if (unit === "inch") return "in";
-  return "mm";
 }
 
 export type { ViewPreset };

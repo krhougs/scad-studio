@@ -27,10 +27,10 @@ export function InspectorSection({
           onClick={() => setOpen((value) => !value)}
           data-testid={`inspector-section-${id}-toggle`}
         >
+          <span>{title}</span>
           <span className="insp-sec__marker" aria-hidden="true">
             {open ? "-" : "+"}
           </span>
-          <span>{title}</span>
         </button>
         {actions}
       </h5>

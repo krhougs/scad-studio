@@ -15,7 +15,6 @@ type ParametersPanelProps = {
   onRestoreValue: (name: string) => void;
   onRestoreDefaults: () => void;
   onSavePreset: (name: string) => void;
-  previewStatus: string;
 };
 
 export function ParametersPanel({
@@ -25,23 +24,16 @@ export function ParametersPanel({
   onRestoreValue,
   onRestoreDefaults,
   onSavePreset,
-  previewStatus,
 }: ParametersPanelProps) {
   const visibleEntries = entries.filter((entry) => !entry.definition.hidden);
   const [draftName, setDraftName] = useState("");
 
   return (
-    <section
-      className="panel panel--parameters"
+    <div
+      className="parameters-panel"
       aria-label="parameters"
       data-testid="parameters-panel"
     >
-      <header className="panel__head">
-        <h5 className="panel__title">parameters</h5>
-        <span className="panel__sub" data-testid="parameters-status">
-          {previewStatus}
-        </span>
-      </header>
       <ul className="panel__list">
         {visibleEntries.map((entry) => (
           <li
@@ -108,7 +100,7 @@ export function ParametersPanel({
           restore defaults
         </button>
       </div>
-    </section>
+    </div>
   );
 }
 

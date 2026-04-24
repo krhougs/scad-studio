@@ -77,27 +77,26 @@ test("@canvas-interaction view pill switches active preset", async ({ page }) =>
   await page.getByTestId("entry-model.stl").click();
 
   await expect(page.getByTestId("canvas-view-pills")).toBeVisible();
-  await expect(page.getByTestId("canvas-info")).toBeVisible();
 
   // iso is the default
-  await expect(page.getByTestId("canvas-info")).toContainText("iso");
+  await expect(page.getByTestId("view-pill-iso")).toHaveClass(/active/);
 
   await page.getByTestId("view-pill-front").click();
-  await expect(page.getByTestId("canvas-info")).toContainText("front");
+  await expect(page.getByTestId("view-pill-front")).toHaveClass(/active/);
   await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000");
 
   await page.getByTestId("entry-shifted.stl").click();
-  await expect(page.getByTestId("canvas-info")).toContainText("front");
+  await expect(page.getByTestId("view-pill-front")).toHaveClass(/active/);
   await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000", {
     timeout: 30_000,
   });
 
   await page.getByTestId("view-pill-top").click();
-  await expect(page.getByTestId("canvas-info")).toContainText("top");
+  await expect(page.getByTestId("view-pill-top")).toHaveClass(/active/);
   await expect(page.getByTestId("camera-elevation")).toHaveValue("90.000");
 
   await page.getByTestId("view-pill-iso").click();
-  await expect(page.getByTestId("canvas-info")).toContainText("iso");
+  await expect(page.getByTestId("view-pill-iso")).toHaveClass(/active/);
 });
 
 test("@canvas-interaction viewer toolbar drives render state", async ({ page }) => {
@@ -211,7 +210,7 @@ test("@canvas-interaction preview info and camera controls are available", async
   });
   await expect(page.getByTestId("preview-mesh-size")).toContainText("mm");
   await expect(page.getByTestId("camera-panel")).toBeVisible();
-  await expect(page.getByTestId("camera-handle")).toBeVisible();
+  await expect(page.getByTestId("camera-handle")).toHaveCount(0);
   await expect(page.getByTestId("camera-knob-azimuth")).toHaveAttribute(
     "role",
     "slider",
@@ -262,12 +261,12 @@ test("@canvas-interaction preview info and camera controls are available", async
   const cameraToggle = page.getByTestId("inspector-section-camera-toggle");
   await cameraToggle.click();
   await expect(page.getByTestId("inspector-section-camera-body")).toBeHidden();
-  await page.getByTestId("camera-handle").click();
+  await cameraToggle.click();
   await expect(page.getByTestId("inspector-section-camera-body")).toBeVisible();
   await expect(cameraToggle).toBeFocused();
 });
 
-test("@canvas-interaction ViewportGizmo click switches view", async ({
+test("@canvas-interaction ViewportGizmo reflects selected view", async ({
   page,
 }) => {
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
@@ -282,10 +281,15 @@ test("@canvas-interaction ViewportGizmo click switches view", async ({
   await expect(page.getByTestId("viewport-gizmo-axis-x")).toBeVisible();
   await expect(page.getByTestId("viewport-gizmo-axis-y")).toBeVisible();
   await expect(page.getByTestId("viewport-gizmo-axis-z")).toBeVisible();
+  await expect(
+    page
+      .locator('[data-testid^="viewport-gizmo-"]')
+      .filter({ hasText: /front|top|left/i }),
+  ).toHaveCount(0);
   const zAxisBefore = await page
     .getByTestId("viewport-gizmo-axis-z")
     .getAttribute("data-end");
-  await page.getByTestId("viewport-gizmo-top").click();
+  await page.getByTestId("view-pill-top").click();
   await expect(page.getByTestId("viewport-gizmo-axis-z")).not.toHaveAttribute(
     "data-end",
     zAxisBefore ?? "",
@@ -293,32 +297,32 @@ test("@canvas-interaction ViewportGizmo click switches view", async ({
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("90.000");
-  await page.getByTestId("viewport-gizmo-front").click();
+  await page.getByTestId("view-pill-front").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("-90.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("viewport-gizmo-bottom").click();
+  await page.getByTestId("view-pill-bottom").click();
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("-90.000");
-  await page.getByTestId("viewport-gizmo-back").click();
+  await page.getByTestId("view-pill-back").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("90.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("viewport-gizmo-right").click();
+  await page.getByTestId("view-pill-right").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("0.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("viewport-gizmo-left").click();
+  await page.getByTestId("view-pill-left").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("180.000");
@@ -440,7 +444,6 @@ for (const viewport of VIEWPORTS) {
     const statusBar = page.getByTestId("canvas-statusbar");
     const workbenchCanvas = page.getByTestId("workbench-canvas");
     const toolbar = page.getByTestId("viewer-toolbar");
-    const canvasInfo = page.getByTestId("canvas-info");
     const meshStatus = page.getByTestId("mesh-status");
     await canvas.waitFor({ state: "visible", timeout: 30_000 });
     await expect(statusBar).toBeVisible();
@@ -458,7 +461,6 @@ for (const viewport of VIEWPORTS) {
     expect(Math.abs(statusBox.width - workbenchCanvasBox.width)).toBeLessThanOrEqual(2);
 
     await expectNoOverlap(toolbar, statusBar, "viewer toolbar must not overlap status bar");
-    await expectNoOverlap(canvasInfo, statusBar, "canvas info must not overlap status bar");
     await expectNoOverlap(canvas, statusBar, "mesh canvas must not overlap status bar");
   });
 
@@ -478,7 +480,6 @@ for (const viewport of VIEWPORTS) {
     const errorCard = page.getByTestId("preview-error-card");
     const previewStatus = page.getByTestId("scad-preview-status");
     const toolbar = page.getByTestId("viewer-toolbar");
-    const canvasInfo = page.getByTestId("canvas-info");
     const statusBar = page.getByTestId("canvas-statusbar");
     await expect(errorCard).toBeVisible({ timeout: 30_000 });
     await expect(previewStatus).toContainText("preview error", {
@@ -488,10 +489,8 @@ for (const viewport of VIEWPORTS) {
     await expect(errorCard).toHaveCSS("overflow-y", /auto|scroll/);
     await expect(errorCard).toHaveCSS("pointer-events", "auto");
     await expect(toolbar).toBeVisible();
-    await expect(canvasInfo).toBeVisible();
     await expect(statusBar).toBeVisible();
     await expectNoOverlap(errorCard, toolbar, "preview error must not overlap toolbar");
-    await expectNoOverlap(errorCard, canvasInfo, "preview error must not overlap canvas info");
     await expectNoOverlap(errorCard, statusBar, "preview error must not overlap status bar");
   });
 }
