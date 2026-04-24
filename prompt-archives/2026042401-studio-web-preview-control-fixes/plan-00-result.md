@@ -180,10 +180,28 @@
 
 ## Phase 5：远距离相机与完整回归
 
-- 状态：未完成。
-- 待执行：
-  - 让相机投影范围跟随当前视图和模型 bounds。
-  - 使用针对性测试验证远距离场景。
-  - 运行 `studio-web` typecheck、unit、e2e 与 build。
-  - 调用独立 subagent 做只读完整 review；修复 review 发现的问题后重新回归。
-  - 完成后记录最终验证结果。
+- 状态：已完成。
+- 前序目标保护：
+  - Phase 1 的 `react-knob-headless` + `@base-ui/react/number-field` 数值控件路径未回退。
+  - Phase 2 的 ViewportGizmo 三轴显示和六向点击入口未回退。
+  - Phase 3 的项目坐标系、camera preset、Z-up scene、orbit / pan / zoom 行为未回退。
+  - Phase 4 的加载状态、真实 mesh / viewport 时机、同一文件刷新保留上一帧与相机状态未回退。
+- 本轮确认摘要：
+  - 远距离 clipping 由 `clippingPlanesForBounds(camera, bounds)` 按当前 camera 和 mesh bounds 推导，并同步应用到 perspective 与 orthographic camera。
+  - Orthographic 范围由当前 camera 的 screen right / screen up 轴投影 mesh bounds 计算，避免远距离或正交侧视图使用固定占位范围。
+  - Phase 5 无新增生产代码改动；完整回归基于 Phase 1-4 已提交实现执行。
+- 本轮验证：
+  - `bun run typecheck`
+    - 结果：通过。
+  - `bun run test:unit`
+    - 结果：15 个测试文件通过，76 个测试通过；其中包含远距离 clipping 用例 `keeps clipping planes valid when the camera is far from the mesh`。
+  - `bun run build`
+    - 结果：通过；Vite 输出既有 chunk size warning。
+  - `bun run test:e2e`
+    - 结果：46 个 Chromium Playwright 用例通过。
+- 独立 review：
+  - Phase 5 完整 review 无 blocker / important。
+  - review 确认远距离 near / far 与 orthographic 范围未见回退，Phase 1-4 保护目标未见明显回退。
+  - review 唯一 minor 为本 Phase 结果尚未写入；已在本节补齐。
+- 遗留问题：
+  - Vite build 仍输出 chunk size warning，本轮未处理代码分包；该 warning 不影响本计划验收。
