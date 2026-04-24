@@ -157,8 +157,6 @@ dependencies = [
  "app-server-protocol",
  "app-server-transport",
  "futures-util",
- "serde",
- "serde_json",
  "stl_io",
  "tokio",
  "tokio-tungstenite",
@@ -192,8 +190,7 @@ name = "app-server-transport"
 version = "0.1.0"
 dependencies = [
  "app-server-protocol",
- "serde",
- "serde_json",
+ "js-sys",
  "wasm-bindgen",
  "web-sys",
 ]

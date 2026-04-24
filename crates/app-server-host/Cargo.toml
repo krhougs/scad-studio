@@ -12,8 +12,6 @@ app-server-core = { path = "../app-server-core" }
 app-server-protocol = { path = "../app-server-protocol" }
 app-server-transport = { path = "../app-server-transport" }
 futures-util = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json.workspace = true
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "net", "macros", "time"] }
 tokio-tungstenite = "0.28"
 

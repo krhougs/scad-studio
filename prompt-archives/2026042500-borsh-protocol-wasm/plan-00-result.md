@@ -202,3 +202,38 @@
 - generated `.d.ts` 的 wasm-bindgen 函数参数仍是 `any`；当前类型约束依赖 `packages/app-server-protocol/src/index.ts` 的手写结构类型和 smoke 覆盖。后续 Phase 4 实际接入 Web transport 时，应增加 typed wrapper 或更强类型测试，避免调用方绕过 request 类型。
 - `protocol_validate_config` 目前通过合成 `ConfigLoaded` server frame 执行 DTO 校验与 decode smoke，不阻塞 Phase 2；后续可按实际使用情况改成更直观的 validate-only API。
 - Phase 2 未切换 WebSocket binary-only；该项进入 Phase 3。
+
+## 2026-04-25 Phase 3 执行结果
+
+### 已完成
+
+- `app-server-transport` WebSocket helper 已从 JSON text helper 切换为 Borsh binary helper，统一调用 `app-server-protocol` 的 frame codec。
+- `app-server-transport` 不再导出可用的 text JSON WebSocket helper。
+- wasm `WebSocketClientTransport` 已切换为：
+  - 发送 `send_with_u8_array`；
+  - 创建 socket 后设置 `binaryType = arraybuffer`；
+  - 接收端只接受 `ArrayBuffer` / `Uint8Array`，不保留 string fallback。
+- `app-server-host` WebSocket host 已切换为：
+  - handshake 与后续消息只接受 `Message::Binary`；
+  - text frame、错误 binary frame、unsupported wire version 在 dispatch 前返回 `TransportError`；
+  - server response / push / error 均使用 `Message::Binary` 发送。
+- `app-server-host` 与 `app-server-transport` 移除了当前不再需要的 `serde` / `serde_json` 依赖。
+- `ClientTransport` trait、`InMemoryTransport`、host mpsc typed transport 保持 typed message 行为，未改成序列化路径。
+
+### Review 与收敛
+
+- Phase 3 初次独立 review 结论为不通过，指出 wasm `WebSocketClientTransport` 未设置 `binaryType = arraybuffer`，浏览器默认 Blob 会导致 binary server frame 无法进入 decode 路径。
+- 已按 review 反馈补充 `BinaryType::Arraybuffer` 设置和 `web-sys` feature，并增加 wasm32-only test helper 锁定 socket binary type。
+- 第二次独立 review 结论为通过。
+
+### 验证
+
+- `cargo test -p app-server-transport --tests`：通过，10 个 test 通过。
+- `cargo test -p app-server-host --tests`：通过；仍有 `app-server-core` 既有 unused warning。
+- `cargo check -p app-server-transport --target wasm32-unknown-unknown`：通过。
+- `cargo check --workspace`：通过；仍有 `app-server-core` 既有 unused warning。
+
+### 遗留问题
+
+- host 端没有单独用 WebSocket end-to-end 测试覆盖“binary frame 但 magic 错误”的场景；当前由 shared binary decode helper 的旧 JSON bytes 测试覆盖同类错误分类，且 host 使用同一 decode path，不阻塞 Phase 3。
+- `studio-common`、`studio-web-wasm`、`packages/studio-web` 仍有 JSON wire 相关残留；按计划进入 Phase 4 / Phase 5。

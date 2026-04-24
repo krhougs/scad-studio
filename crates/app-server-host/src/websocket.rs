@@ -1,7 +1,8 @@
 use crate::HostRequestDispatcher;
 use app_server_protocol::{SessionToken, web_file_read_capability};
 use app_server_transport::{
-    ClientEnvelope, ServerEnvelope, decode_client_envelope_text, encode_server_envelope_text,
+    ClientEnvelope, ServerEnvelope, TransportErrorFrame, decode_client_envelope_binary,
+    encode_server_envelope_binary,
 };
 use futures_util::{Sink, SinkExt, StreamExt};
 use std::path::PathBuf;
@@ -77,13 +78,17 @@ async fn handle_connection(
         Some(Ok(message)) => message,
         _ => return,
     };
-    let text = match handshake.into_text() {
-        Ok(text) => text,
-        Err(_) => return,
-    };
-    let request = match decode_client_envelope_text(&text) {
+    let request = match decode_client_message(handshake) {
         Ok(ClientEnvelope::Handshake(request)) | Ok(ClientEnvelope::Reconnect(request)) => request,
-        _ => return,
+        Ok(_) => {
+            let _ = send_transport_error(&mut sink, "websocket handshake frame was not handshake")
+                .await;
+            return;
+        }
+        Err(error) => {
+            let _ = send_server_message(&mut sink, error).await;
+            return;
+        }
     };
     let response = ServerEnvelope::HandshakeAck(dispatcher.handshake(request));
     if send_server_message(&mut sink, response).await.is_err() {
@@ -111,13 +116,13 @@ async fn handle_connection(
                     dispatcher.disconnect();
                     break;
                 };
-                let Ok(text) = message.into_text() else {
-                    dispatcher.disconnect();
-                    break;
-                };
-                let Ok(request) = decode_client_envelope_text(&text) else {
-                    dispatcher.disconnect();
-                    break;
+                let request = match decode_client_message(message) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        let _ = send_server_message(&mut sink, error).await;
+                        dispatcher.disconnect();
+                        break;
+                    }
                 };
                 match request {
                     ClientEnvelope::Request(envelope) => {
@@ -132,6 +137,7 @@ async fn handle_connection(
                         break;
                     }
                     ClientEnvelope::Handshake(_) | ClientEnvelope::Reconnect(_) => {
+                        let _ = send_transport_error(&mut sink, "unexpected websocket handshake frame").await;
                         dispatcher.disconnect();
                         break;
                     }
@@ -141,6 +147,38 @@ async fn handle_connection(
     }
 }
 
+fn decode_client_message(message: Message) -> Result<ClientEnvelope, ServerEnvelope> {
+    let bytes = match message {
+        Message::Binary(bytes) => bytes,
+        Message::Text(_) => return Err(transport_error("websocket message must be binary")),
+        Message::Close(_) => return Ok(ClientEnvelope::Close),
+        _ => return Err(transport_error("unsupported websocket message kind")),
+    };
+    decode_client_envelope_binary(&bytes).map_err(|error| {
+        transport_error(format!(
+            "invalid websocket binary payload: {:?}: {}",
+            error.code(),
+            error.message
+        ))
+    })
+}
+
+fn transport_error(message: impl Into<String>) -> ServerEnvelope {
+    ServerEnvelope::TransportError(TransportErrorFrame {
+        message: message.into(),
+    })
+}
+
+async fn send_transport_error<S>(
+    sink: &mut S,
+    message: impl Into<String>,
+) -> Result<(), tokio_tungstenite::tungstenite::Error>
+where
+    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    send_server_message(sink, transport_error(message)).await
+}
+
 async fn send_server_message<S>(
     sink: &mut S,
     message: ServerEnvelope,
@@ -148,7 +186,7 @@ async fn send_server_message<S>(
 where
     S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
-    let text =
-        encode_server_envelope_text(&message).expect("server websocket payload should serialize");
-    sink.send(Message::Text(text.into())).await
+    let bytes =
+        encode_server_envelope_binary(&message).expect("server websocket payload should serialize");
+    sink.send(Message::Binary(bytes.into())).await
 }

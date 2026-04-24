@@ -16,8 +16,8 @@ pub use app_server_protocol::{ClientEnvelope, ServerEnvelope, TransportErrorFram
 #[cfg(target_arch = "wasm32")]
 pub use websocket_client::WebSocketClientTransport;
 pub use websocket_wire::{
-    decode_client_envelope_text, decode_server_envelope_text, encode_client_envelope_text,
-    encode_server_envelope_text,
+    decode_client_envelope_binary, decode_server_envelope_binary, encode_client_envelope_binary,
+    encode_server_envelope_binary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

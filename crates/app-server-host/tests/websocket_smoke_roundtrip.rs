@@ -5,7 +5,7 @@ use app_server_protocol::{
     web_file_read_capability,
 };
 use app_server_transport::{
-    ClientEnvelope, ServerEnvelope, decode_server_envelope_text, encode_client_envelope_text,
+    ClientEnvelope, ServerEnvelope, decode_server_envelope_binary, encode_client_envelope_binary,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::runtime::Runtime;
@@ -33,10 +33,9 @@ fn websocket_smoke_roundtrip() {
                 supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             },
         });
+        let handshake_bytes = encode_client_envelope_binary(&handshake).unwrap();
         socket
-            .send(Message::Text(
-                encode_client_envelope_text(&handshake).unwrap().into(),
-            ))
+            .send(Message::Binary(handshake_bytes.into()))
             .await
             .unwrap();
         let _ = recv_server_message(&mut socket).await;
@@ -146,8 +145,8 @@ fn websocket_smoke_roundtrip() {
         }
 
         let _ = socket
-            .send(Message::Text(
-                encode_client_envelope_text(&ClientEnvelope::Close)
+            .send(Message::Binary(
+                encode_client_envelope_binary(&ClientEnvelope::Close)
                     .unwrap()
                     .into(),
             ))
@@ -155,6 +154,59 @@ fn websocket_smoke_roundtrip() {
         let _ = std::fs::remove_file(workspace.join("README.md"));
         let _ = std::fs::remove_file(workspace.join("model.stl"));
         let _ = std::fs::remove_dir(workspace);
+    });
+}
+
+#[test]
+fn websocket_rejects_text_handshake_frame() {
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let workspace = temp_workspace();
+        let url = run_websocket_host_once(WebSocketHostConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            workspace_path: workspace.clone(),
+        })
+        .await
+        .unwrap();
+
+        let (mut socket, _) = connect_async(&url).await.unwrap();
+        socket
+            .send(Message::Text(r#"{"kind":"close"}"#.into()))
+            .await
+            .unwrap();
+        let rejected = recv_server_message(&mut socket).await;
+        let ServerEnvelope::TransportError(error) = rejected else {
+            panic!("expected transport error")
+        };
+        assert!(error.message.contains("binary"));
+
+        cleanup_workspace(workspace);
+    });
+}
+
+#[test]
+fn websocket_rejects_unsupported_wire_version_before_dispatch() {
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let workspace = temp_workspace();
+        let url = run_websocket_host_once(WebSocketHostConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            workspace_path: workspace.clone(),
+        })
+        .await
+        .unwrap();
+
+        let (mut socket, _) = connect_async(&url).await.unwrap();
+        let mut frame = encode_client_envelope_binary(&ClientEnvelope::Close).unwrap();
+        frame[4] = app_server_protocol::WIRE_VERSION.saturating_add(1);
+        socket.send(Message::Binary(frame.into())).await.unwrap();
+        let rejected = recv_server_message(&mut socket).await;
+        let ServerEnvelope::TransportError(error) = rejected else {
+            panic!("expected transport error")
+        };
+        assert!(error.message.contains("wire version"));
+
+        cleanup_workspace(workspace);
     });
 }
 
@@ -169,12 +221,8 @@ async fn send_request(
         request_id,
         command,
     });
-    socket
-        .send(Message::Text(
-            encode_client_envelope_text(&message).unwrap().into(),
-        ))
-        .await
-        .unwrap();
+    let bytes = encode_client_envelope_binary(&message).unwrap();
+    socket.send(Message::Binary(bytes.into())).await.unwrap();
 }
 
 async fn recv_server_message(
@@ -183,12 +231,17 @@ async fn recv_server_message(
     >,
 ) -> ServerEnvelope {
     let message = socket.next().await.unwrap().unwrap();
-    let text = message.into_text().unwrap();
-    decode_server_envelope_text(&text).unwrap()
+    let bytes = message.into_data();
+    decode_server_envelope_binary(&bytes).unwrap()
 }
 
 fn temp_workspace() -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("websocket-smoke-{}", std::process::id()));
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("websocket-smoke-{}-{unique}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("README.md"), "hello websocket").unwrap();
 
@@ -204,4 +257,10 @@ fn temp_workspace() -> std::path::PathBuf {
     stl_io::write_stl(&mut bytes, triangles.iter()).unwrap();
     std::fs::write(root.join("model.stl"), bytes).unwrap();
     root
+}
+
+fn cleanup_workspace(workspace: std::path::PathBuf) {
+    let _ = std::fs::remove_file(workspace.join("README.md"));
+    let _ = std::fs::remove_file(workspace.join("model.stl"));
+    let _ = std::fs::remove_dir(workspace);
 }

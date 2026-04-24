@@ -1,6 +1,6 @@
 use crate::{
     ClientEnvelope, ClientTransport, ServerEnvelope, SubscriptionId, TransportError,
-    TransportErrorFrame, decode_server_envelope_text, encode_client_envelope_text,
+    TransportErrorFrame, decode_server_envelope_binary, encode_client_envelope_binary,
 };
 use app_server_protocol::{
     CancelRequest, CapabilityHandshakeRequest, ClientCommand, ClientRequestEnvelope, RequestId,
@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use wasm_bindgen::{JsCast, closure::Closure};
-use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
+use web_sys::{BinaryType, CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
 #[derive(Default)]
 struct WebSocketSharedState {
@@ -32,6 +32,7 @@ pub struct WebSocketClientTransport {
 impl WebSocketClientTransport {
     pub fn connect(url: &str) -> Result<Self, wasm_bindgen::JsValue> {
         let socket = WebSocket::new(url)?;
+        configure_binary_socket(&socket);
         let state = Rc::new(RefCell::new(WebSocketSharedState::default()));
 
         let on_open = {
@@ -47,14 +48,18 @@ impl WebSocketClientTransport {
         let on_message = {
             let state = Rc::clone(&state);
             Closure::<dyn FnMut(MessageEvent)>::wrap(Box::new(move |event: MessageEvent| {
-                let message = match event.data().as_string() {
-                    Some(text) => decode_server_envelope_text(&text).unwrap_or_else(|error| {
+                let message = match event_data_to_bytes(&event) {
+                    Some(bytes) => decode_server_envelope_binary(&bytes).unwrap_or_else(|error| {
                         ServerEnvelope::TransportError(TransportErrorFrame {
-                            message: format!("invalid websocket payload: {error}"),
+                            message: format!(
+                                "invalid websocket payload: {:?}: {}",
+                                error.code(),
+                                error.message
+                            ),
                         })
                     }),
                     None => ServerEnvelope::TransportError(TransportErrorFrame {
-                        message: "websocket message was not text".into(),
+                        message: "websocket message was not binary".into(),
                     }),
                 };
                 state.borrow_mut().queue.push_back(message);
@@ -112,10 +117,37 @@ impl WebSocketClientTransport {
             return Err(TransportError::NotReady);
         }
         let payload =
-            encode_client_envelope_text(&message).map_err(|_| TransportError::QueuePoisoned)?;
+            encode_client_envelope_binary(&message).map_err(|_| TransportError::QueuePoisoned)?;
         self.socket
-            .send_with_str(&payload)
+            .send_with_u8_array(&payload)
             .map_err(|_| TransportError::Closed)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn configure_binary_socket(socket: &WebSocket) {
+    socket.set_binary_type(BinaryType::Arraybuffer);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn event_data_to_bytes(event: &MessageEvent) -> Option<Vec<u8>> {
+    let data = event.data();
+    if let Some(buffer) = data.dyn_ref::<js_sys::ArrayBuffer>() {
+        return Some(js_sys::Uint8Array::new(buffer).to_vec());
+    }
+    data.dyn_ref::<js_sys::Uint8Array>()
+        .map(js_sys::Uint8Array::to_vec)
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configure_binary_socket_uses_arraybuffer() {
+        let socket = WebSocket::new("ws://127.0.0.1:9").expect("websocket object");
+        configure_binary_socket(&socket);
+        assert_eq!(socket.binary_type(), BinaryType::Arraybuffer);
     }
 }
 
