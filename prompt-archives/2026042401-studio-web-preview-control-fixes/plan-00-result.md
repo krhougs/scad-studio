@@ -1,61 +1,122 @@
 # Plan-00 Result：Studio Web 预览控制与坐标修正
 
-## Phase 1：失败测试与依据核对
+## 返工状态总览
 
-- 状态：已完成。
-- 依据核对：
-  - Base UI NumberField 文档确认受控用法为 `value` 与 `onValueChange`，并由 `Group`、`Input`、`Increment`、`Decrement` 组合输入控件。
-  - `react-knob-headless` 官方文档确认 knob 使用 `valueRaw`、`valueMin`、`valueMax`、`valueRawRoundFn`、`valueRawDisplayFn` 与 `onValueRawChange`，rounding 应放在 `valueRawRoundFn`。
-  - `scad-scene::mesh::openscad_to_viewer` 将 OpenSCAD `[x, y, z]` 映射为 viewer `[x, z, -y]`，所以 UI 坐标轴必须展示 OpenSCAD 语义轴。
-  - `scad-scene::OrbitalCamera` 中左键为 orbit，中键和右键为 pan，wheel 正向缩小距离，平移按当前相机距离缩放。
-  - `window.__studioWebPreviewDelayMs` 只允许作为浏览器测试或开发观测钩子，用于制造可控 preview pending；生产逻辑不得依赖该字段。
-- 已添加失败测试：
-  - 参数范围不再随 current value 扩大。
-  - Web 相机缩放方向与中键平移语义对齐 desktop OrbitControls。
-  - OpenSCAD 语义轴到 viewer 方向的固定映射。
-  - 参数与相机数值控件必须暴露 knob 与 NumberField。
-  - 参数与相机数值输入过程保持行级布局稳定。
-  - ViewportGizmo 点击切换视角。
-  - 初次 mesh 预览必须在可控 preview 延迟下展示显眼 loading。
-  - mesh 渲染必须等 mesh info、真实 viewport 宽高和 device pixel ratio 可用后再 frame。
-  - plate、grid、axis 等辅助元素尺寸必须随真实 mesh dimensions 变化。
-  - 远距离相机的 near/far 必须覆盖真实 mesh bounds。
-- 渲染异步时机检查矩阵：
-  - 远端 preview 异步结果：`MeshViewer` 初次 pending 当前没有显眼 overlay；已由浏览器测试覆盖，纳入 Phase 4 修复。
-  - 真实 mesh bounds：`mesh-three.setMesh` 在 payload 到达后才有 `computeMeshInfo`，但 frame 与 scene helper 需要统一通过真实 `MeshInfo`；已由 `mesh-render-metrics` 失败测试覆盖，纳入 Phase 4。
-  - 真实图片尺寸：`ImageViewer` 在 `img.onload` 后读取 natural size，等待期间已有 overlay；本轮未确认存在永久占位尺寸问题，Phase 4 只做回归保护。
-  - 真实 viewport 与 device pixel ratio：`mesh-three` 初始 `viewportWidth/viewportHeight` 为 `1`，`frameToInfo` 可能先于 `ResizeObserver` 使用占位 aspect；已由 frame readiness 失败测试覆盖，纳入 Phase 4。
-  - projection 状态：orthographic 宽高当前由相机距离和占位 viewport 推导，未绑定真实 bounds 的准备状态；已纳入 Phase 4。
-  - plate、grid、axis、fog 与 clip plane：当前 plate/grid/fog/clip 在 `setMesh` 后使用 `MeshInfo`，但缺少统一 readiness；axis 仍是 Three.js 内部轴且没有 OpenSCAD 语义 gizmo，纳入 Phase 3 与 Phase 4。
-  - 远距离相机裁切：`mesh-three.dolly` 允许距离到 `20000`，但 camera near/far 没有按当前相机距离与 bounds 重新计算；已由远距离 clipping 失败测试覆盖，纳入 Phase 5。
+- 状态：未完成，2026-04-24 坐标目标返工后重新整理。
+- 最新目标：
+  - OpenSCAD 已经符合项目坐标系，本轮不通过修改后端 STL / 3MF / protocol mesh payload 解决视图问题。
+  - Web 前端按本计划规定的摄像机方向展示 mesh、网格、底板、轴线和相机。
+  - 摄像机 preset 方向为：Top `+Z`、Bottom `-Z`、Front `-Y`、Back `+Y`、Right `+X`、Left `-X`。
+  - Top 视图屏幕上方对应 `+Y`，Bottom 视图屏幕上方对应 `-Y`，Front / Back / Left / Right 视图屏幕上方对应 `+Z`。
+- 失效内容：
+  - 旧 Phase 1 将问题判断为“预览区域三轴辅助线需要展示 OpenSCAD 语义轴”，与最新要求冲突。
+  - 旧坐标轴测试、旧失败验证和旧 Phase 1 review 结论已失效，不再作为完成依据。
+  - `scad-scene::mesh::openscad_to_viewer` 只作为历史背景读取；本轮不允许修改 STL / 3MF / protocol mesh payload 或后端 OpenSCAD 输出链路。
+
+## Phase 0：失败测试与依据核对
+
+- 状态：失败测试与依据核对已完成，等待最终 review 通过后提交。
+- 本轮依据核对：
+  - `README.md` 与 `docs/architecture.md` 已固定项目坐标系：右手系，`+X` 向右，`+Y` 向后，`+Z` 向上；前端展示和交互必须遵守同一坐标系。
+  - Three.js 官方文档 / Context7 已确认：`camera.up` 决定屏幕上方，`lookAt` 用相机位置和 target 定向；修改 fov、aspect、near、far 或 orthographic frustum 后必须调用 `updateProjectionMatrix()`；官方 3MF 示例使用 Z-up。
+  - Base UI 官方文档 / Context7 已确认：`NumberField.Root` 支持 controlled `value`、`onValueChange`、`onValueCommitted` 以及 Input / Increment / Decrement 组合。
+  - `crates/scad-scene/src/camera.rs` 已确认 desktop `OrbitalCamera::orbit` 使用 `wrap_angle`，允许越过顶部 / 底部；`PAN_SPEED = 0.002`，`ZOOM_SPEED = 0.12`，滚轮缩放 factor 为 `(1 - delta * 0.12).clamp(0.2, 5.0)`。
+- 测试变更摘要：
+  - 删除旧 `packages/studio-web/tests/unit/openscad-axis.test.ts`，旧测试以额外轴映射补偿为目标，与当前计划冲突。
+  - `packages/studio-web/tests/unit/camera-controls.test.ts` 新增六向 camera preset、非零 center bounds 下的 `fitCameraToBounds` 六向方向、orbit 越过顶部 / 底部测试。
+  - `packages/studio-web/tests/unit/viewport-gizmo-model.test.ts` 新增三轴投影、相机变化后投影变化、六向 preset 下 horizontal / vertical 轴屏幕方向测试。
+  - `packages/studio-web/tests/unit/mesh-render-metrics.test.ts` 新增真实 mesh info、真实 viewport、device pixel ratio、projection mode、helper 尺寸、gizmo 尺寸、fog、远距离 clipping、renderer adapter 保持 project-coordinate mesh payload 的测试。
+  - `packages/studio-web/tests/playwright/canvas-interaction.spec.ts` 新增 ViewportGizmo 三轴可见、六向点击和初次加载 overlay 的浏览器失败测试。
+  - 新增 `packages/studio-web/src/workbench/viewport-gizmo-model.ts` 与 `packages/studio-web/src/viewers/mesh-render-metrics.ts` 的极薄可导入 API，避免 suite 只因 import 缺失失败；当前 API 只返回占位结果，后续 Phase 负责实现。
 - 失败验证：
-  - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/camera-controls.test.ts tests/unit/openscad-axis.test.ts tests/unit/mesh-render-metrics.test.ts` 已失败，失败原因分别为目标模块缺失、参数范围仍随 current value 扩大、wheel 方向与中键 pan 语义未对齐。
-  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines"` 已失败，原因是参数 NumberField/knob 结构尚不存在。
-  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "initial mesh preview exposes prominent loading"` 已失败，原因是在可控 preview 延迟下初次 loading overlay 尚不存在。
-  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "ViewportGizmo|preview info and camera controls"` 已失败，原因是相机 knob/NumberField 和 ViewportGizmo 尚不存在。
-- Review：
-  - 独立 subagent 三轮只读 review 已完成；最终结论为无 blocker、无 important，Phase 1 可以完成。
+  - `bun x vitest run tests/unit/camera-controls.test.ts tests/unit/viewport-gizmo-model.test.ts tests/unit/mesh-render-metrics.test.ts`
+    - 结果：3 个测试文件均可导入并执行；21 个测试中 11 个失败。
+    - 失败原因：bottom preset 的 up 仍为 `+Y`；`orbitBy` 仍夹紧顶部 / 底部；`fitCameraToBounds` 六向方向仍不符合项目坐标系；ViewportGizmo 轴仍为零长度且不随相机变化；render metrics 仍忽略 viewport / dpr / projection；visible plane 恒为 `xz`；远距离 far clipping 不足。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "ViewportGizmo click switches view|initial mesh preview exposes prominent loading"`
+    - 结果：2 个浏览器用例均失败。
+    - 失败原因：`viewport-gizmo-axis-x` 不存在；初次预览期间 `mesh-loading-overlay` 不存在。
+  - `cargo test -p scad-scene load_stl_from_reader_maps_openscad_xy_plane_to_viewer_ground_plane -- --exact`
+    - 结果：通过，用于确认本轮未把修复路径转移到后端 STL 解析。
+  - `cargo test -p app-server-core collect_process_logs_ignores_blank_lines_and_tags_stdout_as_info -- --exact`
+    - 结果：通过，用于确认本轮未引入 app-server-core 坐标 payload 改动。
+- Review 处理：
+  - 第一轮 review 指出 Phase 0 不能用缺失模块 import 失败作为合格红灯；已新增极薄 API，使失败落在行为断言上。
+  - 第二轮 review 指出 ViewportGizmo 三轴、真实 viewport / DPR / projection、renderer mesh payload 语义覆盖不足；已补齐对应测试。
+  - 第三轮 review 指出结果记录缺失、Playwright 红灯未验证、六向和 gizmo 断言不够严格；已补充结果记录、运行浏览器红灯验证，并强化六向 azimuth / elevation 与 gizmo 方向断言。
+- 当前处理方式：
+  - Phase 0 只提交测试、极薄可导入 API、旧测试删除和本结果记录。
+  - 生产实现改动留到后续 Phase；不得把当前失败测试弱化为通过。
 
-## Phase 2：参数与相机数值控件
+## Phase 1：参数与相机数值控件回归确认
 
-- 状态：已完成。
-- 前序目标保护：
-  - 保留 Phase 1 的失败测试，不删除后续 Phase 所需的 OpenSCAD 轴、ViewportGizmo、loading、真实尺寸和远距离裁剪覆盖。
-  - 保护参数自动 preview、preset round-trip、导出 defines、相机状态共享和右侧 inspector 布局。
-- 变更摘要：
+- 状态：实现已保留，需在 Phase 0 返工后重新回归，不能作为最终完成状态。
+- 已保留实现摘要：
   - 引入 `react-knob-headless` 与 `@base-ui/react`，参数和相机数值项统一使用共享 `NumericControl`。
   - `NumericControl` 同时渲染 knob、Base UI NumberField 输入框与增减按钮；输入框和 knob 保留稳定尺寸约束。
-  - knob 写值显式按 step 归一化，避免拖拽产生与输入框、增减按钮不一致的小数值。
-  - 参数 restore 按钮改为固定占位的 disabled 状态，避免首次输入后新增按钮挤压数值控件。
-  - 参数行固定布局收敛到 `.parameter-row`，避免影响 presets、slicer、export 等其他 panel 行。
+  - knob 写值显式按 step 归一化。
+  - 参数 restore 按钮改为固定占位的 disabled 状态。
+  - 参数行固定布局限制在 `.parameter-row`。
   - 参数 `sliderBounds` 的无显式范围推导改为只基于默认值，不再随 current value 扩大。
-  - 相机 target、distance、azimuth、elevation 改用同一数值编辑模式，保留现有 camera state 更新路径，并避免在 `<label>` 内嵌套多个交互控件。
-- 验证：
-  - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/numeric-control.test.ts` 通过。
-  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines|knob number field updates preview|save, load, delete round-trip"` 通过。
-  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "preview info and camera controls"` 通过。
-  - `bun run typecheck` 仍失败，原因是 Phase 1 为后续 Phase 预置的 `openscad-axis` 与 `mesh-render-metrics` 模块尚未实现；未发现 Phase 2 新增类型错误。
-- Review：
-  - 第一轮独立 subagent review 未发现 blocker，指出 knob step 归一化、restore 按钮挤压布局、knob/增减按钮测试覆盖不足三项 important；以上均已修复并重新回归。
-  - 第二轮独立 subagent review 未发现 blocker，指出 `.panel__row` 全局布局回归风险；已将三列布局限定到参数行并重新回归。
-  - 第三轮独立 subagent review 未发现 blocker 或 important，Phase 2 可以完成。
+  - 相机 target、distance、azimuth、elevation 改用同一数值编辑模式。
+- 已有历史验证：
+  - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/numeric-control.test.ts` 曾通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines|knob number field updates preview|save, load, delete round-trip"` 曾通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "preview info and camera controls"` 曾通过。
+- 待重新验证：
+  - Phase 0 重写后，必须重新运行参数范围、数值控件、相机数值编辑和相关浏览器测试。
+  - 必须重新做独立 subagent review。
+  - `bun run typecheck` 的历史失败原因已失效，需按返工后的测试与模块状态重新判断。
+
+## Phase 2：ViewportGizmo 当前相机指示
+
+- 状态：未完成，2026-04-24 返工后调整为 Phase 2。
+- 前序目标保护：
+  - 不改变 Phase 1 的数值控件结构、测试标识和稳定布局。
+  - 不通过改写预览区域三轴映射来掩盖前端场景/相机问题。
+  - 不修改后端 STL / 3MF / protocol mesh payload。
+- 待执行：
+  - 让 ViewportGizmo 展示 X/Y/Z 三条轴线，并随当前相机状态变化。
+  - 让 ViewportGizmo 点击覆盖 Top / Bottom / Front / Back / Right / Left 六个正交方向；iso 可以保留。
+  - 运行 ViewportGizmo 三条轴线投影、实时变化和六向点击测试。
+  - 独立 subagent review Phase 2 diff 或涉及文件清单。
+
+## Phase 3：项目坐标系前端适配与相机交互
+
+- 状态：未完成，2026-04-24 返工退回。
+- 返工原因：
+  - 独立 review 指出 Web orbit 仍不能像 desktop 一样越过模型顶部/底部。
+  - 独立 review 指出 ViewportGizmo 与 camera preset 仍沿用旧坐标理解，front/back/left/top 与项目坐标系不一致。
+  - 用户补充现象：front 显示底部，back 显示顶部，left 显示逆时针旋转 90 度的右视图，top 显示正视图。
+- 新目标：
+  - OpenSCAD 已经符合项目坐标系，本轮不通过修改后端 STL / 3MF / protocol mesh payload 解决视图问题。
+  - Web 前端按本计划规定的摄像机方向展示 mesh、网格、底板、轴线和相机。
+  - front / back / left / right / top / bottom preset 按本计划规定的摄像机方向切换，且不出现滚转 90 度的错误朝向。
+- 已确认保留：
+  - Phase 1 数值控件变更保持有效，但需重新回归。
+  - Phase 2 中 ViewportGizmo 点击入口可以保留，但必须补充三轴实时指示并修正为六向点击。
+- 待执行：
+  - 核对现有 mesh payload 形态，只作为 renderer 输入，不改后端输出。
+  - 让前端 renderer 在现有 mesh payload 输入下呈现项目坐标系的用户可见空间。
+  - 让六个 camera preset 的观察方向和屏幕上方方向符合本计划。
+  - 对齐 Web 相机拖拽、平移、缩放与 desktop OrbitControls 的方向和速度关系。
+  - 独立 subagent review Phase 3 diff 或涉及文件清单。
+
+## Phase 4：预览可读性、加载状态与真实尺寸时机
+
+- 状态：未完成。
+- 待执行：
+  - 调整预览呈现，使背景稍灰且模型主体、辅助线和控件层级更清楚。
+  - 将视图、投影、plate、网格、gizmo、fog 和裁切相关计算与真实数据、真实 viewport 的可用状态绑定。
+  - 让加载状态覆盖初次渲染前、参数重新渲染、同一文件刷新和远端异步等待场景。
+  - 运行加载状态、真实尺寸时机和辅助元素尺寸相关测试。
+  - 独立 subagent review Phase 4 diff 或涉及文件清单。
+
+## Phase 5：远距离相机与完整回归
+
+- 状态：未完成。
+- 待执行：
+  - 让相机投影范围跟随当前视图和模型 bounds。
+  - 使用针对性测试验证远距离场景。
+  - 运行 `studio-web` typecheck、unit、e2e 与 build。
+  - 调用独立 subagent 做只读完整 review；修复 review 发现的问题后重新回归。
+  - 完成后记录最终验证结果。

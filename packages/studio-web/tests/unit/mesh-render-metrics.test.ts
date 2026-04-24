@@ -4,10 +4,13 @@ import {
   fitCameraToBounds,
   updateCameraFromSpherical,
 } from "../../src/canvas/camera-controls";
+import { computeMeshInfo } from "../../src/viewers/mesh-info";
+import { payloadFromPreview } from "../../src/viewers/mesh-three";
 import {
   clippingPlanesForBounds,
   meshRenderInputsReady,
   meshSceneMetrics,
+  visibleProjectPlaneForCamera,
 } from "../../src/viewers/mesh-render-metrics";
 import type { MeshInfo } from "../../src/viewers/mesh-info";
 
@@ -96,6 +99,89 @@ describe("mesh-render-metrics", () => {
     expect(metrics?.plateSize).toBeGreaterThan(smallMetrics?.plateSize ?? 0);
     expect(metrics?.gridSize).toBeGreaterThan(smallMetrics?.gridSize ?? 0);
     expect(metrics?.axisSize).toBeGreaterThan(smallMetrics?.axisSize ?? 0);
+  });
+
+  it("derives projection, gizmo, fog and helper metrics from real viewport state", () => {
+    const ortho = meshSceneMetrics(INFO, {
+      width: 900,
+      height: 600,
+      dpr: 2,
+      projectionMode: "orthographic",
+    });
+    const perspective = meshSceneMetrics(INFO, {
+      width: 900,
+      height: 600,
+      dpr: 2,
+      projectionMode: "perspective",
+    });
+    const highDpr = meshSceneMetrics(INFO, {
+      width: 900,
+      height: 600,
+      dpr: 3,
+      projectionMode: "orthographic",
+    });
+    const wide = meshSceneMetrics(INFO, {
+      width: 1200,
+      height: 600,
+      dpr: 2,
+      projectionMode: "orthographic",
+    });
+
+    expect(ortho).not.toBeNull();
+    expect(perspective).not.toBeNull();
+    expect(highDpr).not.toBeNull();
+    expect(wide).not.toBeNull();
+    expect(ortho?.orthographicHalfHeight).toBeGreaterThan(0);
+    expect(perspective?.orthographicHalfHeight).toBeNull();
+    expect(highDpr?.gizmoSize).toBeGreaterThan(ortho?.gizmoSize ?? 0);
+    expect(wide?.orthographicHalfHeight).toBeLessThan(
+      ortho?.orthographicHalfHeight ?? 0,
+    );
+    expect(ortho?.fogNear).toBeGreaterThan(INFO.radius);
+    expect(ortho?.fogFar).toBeGreaterThan(ortho?.fogNear ?? 0);
+  });
+
+  it("keeps renderer-visible project planes tied to current camera direction", () => {
+    expect(visibleProjectPlaneForCamera(fitCameraToBounds(INFO.bounds, "top", 1))).toBe(
+      "xy",
+    );
+    expect(visibleProjectPlaneForCamera(fitCameraToBounds(INFO.bounds, "front", 1))).toBe(
+      "xz",
+    );
+    expect(visibleProjectPlaneForCamera(fitCameraToBounds(INFO.bounds, "right", 1))).toBe(
+      "yz",
+    );
+  });
+
+  it("preserves project-coordinate mesh payload before renderer metrics consume it", () => {
+    const payload = payloadFromPreview({
+      artifact: {
+        format: "mesh",
+        payload: {
+          positions: [
+            [7, 0, 0],
+            [0, 11, 0],
+            [0, 0, 13],
+          ],
+          normals: [[0, 0, 1]],
+          indices: [0, 1, 2],
+        },
+      },
+    });
+
+    expect(Array.from(payload?.positions ?? [])).toEqual([
+      7, 0, 0,
+      0, 11, 0,
+      0, 0, 13,
+    ]);
+    expect(computeMeshInfo(payload?.positions ?? new Float32Array(), payload?.indices ?? null))
+      .toMatchObject({
+        bounds: {
+          min: [0, 0, 0],
+          max: [7, 11, 13],
+        },
+        dimensions: [7, 11, 13],
+      });
   });
 
   it("keeps clipping planes valid when the camera is far from the mesh", () => {

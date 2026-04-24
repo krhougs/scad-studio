@@ -214,14 +214,52 @@ test("@canvas-interaction ViewportGizmo click switches view", async ({
   await expect(page.getByTestId("viewport-gizmo")).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByTestId("viewport-gizmo-axis-x")).toBeVisible();
+  await expect(page.getByTestId("viewport-gizmo-axis-y")).toBeVisible();
+  await expect(page.getByTestId("viewport-gizmo-axis-z")).toBeVisible();
+  const zAxisBefore = await page
+    .getByTestId("viewport-gizmo-axis-z")
+    .getAttribute("data-end");
   await page.getByTestId("viewport-gizmo-top").click();
+  await expect(page.getByTestId("viewport-gizmo-axis-z")).not.toHaveAttribute(
+    "data-end",
+    zAxisBefore ?? "",
+  );
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
-  ).toHaveValue("86.000");
+  ).toHaveValue("90.000");
   await page.getByTestId("viewport-gizmo-front").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("-90.000");
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("0.000");
+  await page.getByTestId("viewport-gizmo-bottom").click();
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("-90.000");
+  await page.getByTestId("viewport-gizmo-back").click();
+  await expect(
+    page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
+  ).toHaveValue("90.000");
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("0.000");
+  await page.getByTestId("viewport-gizmo-right").click();
+  await expect(
+    page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
+  ).toHaveValue("0.000");
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("0.000");
+  await page.getByTestId("viewport-gizmo-left").click();
+  await expect(
+    page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
+  ).toHaveValue("180.000");
+  await expect(
+    page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
+  ).toHaveValue("0.000");
 });
 
 test("@canvas-interaction initial mesh preview exposes prominent loading", async ({
