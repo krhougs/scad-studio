@@ -4,7 +4,8 @@
 //
 // The math models an orbit camera around the target. `orbitBy` rotates around
 // the target on the world Z axis (yaw) and the current right axis (pitch).
-// Pitch is clamped to keep the view from flipping. `panBy` moves both the
+// Pitch wraps like the desktop viewer, allowing the view to cross over the
+// top and bottom of the model. `panBy` moves both the
 // target and the position along the camera's local right/up axes, preserving
 // the orbit distance. `zoomBy` scales the position-to-target distance.
 
@@ -22,9 +23,9 @@ import type { MeshBounds } from "../viewers/mesh-info";
 
 const MIN_DIST = 1;
 const MAX_DIST = 5_000;
-const MAX_PITCH = Math.PI / 2 - 0.05;
 const DEG = 180 / Math.PI;
 const RAD = Math.PI / 180;
+const TAU = Math.PI * 2;
 
 function sub(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -57,6 +58,9 @@ function cross(a: Vec3, b: Vec3): Vec3 {
     a[0] * b[1] - a[1] * b[0],
   ];
 }
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
 
 export function distanceTo(state: CameraState): number {
   return length(sub(state.position, state.target));
@@ -73,9 +77,18 @@ export function resetCamera(): CameraState {
 export function zoomBy(state: CameraState, delta: number): CameraState {
   const offset = sub(state.position, state.target);
   const dist = length(offset);
-  const next = Math.min(MAX_DIST, Math.max(MIN_DIST, dist * Math.exp(delta)));
+  const factor = Math.min(5, Math.max(0.2, 1 - delta * 0.12));
+  const next = Math.min(MAX_DIST, Math.max(MIN_DIST, dist * factor));
   const dir = dist < 1e-9 ? ([0, -1, 0] as Vec3) : normalize(offset);
   return { ...state, position: add(state.target, scale(dir, next)) };
+}
+
+export function wheelDeltaToZoomAmount(
+  deltaY: number,
+  deltaMode: number,
+): number {
+  const amount = deltaMode === 1 ? deltaY : deltaY / 120;
+  return -amount;
 }
 
 export function orbitBy(
@@ -86,17 +99,22 @@ export function orbitBy(
   const offset = sub(state.position, state.target);
   const dist = length(offset);
   if (dist < 1e-9) return state;
-  let yaw = Math.atan2(offset[1], offset[0]);
-  let pitch = Math.asin(Math.max(-1, Math.min(1, offset[2] / dist)));
-  yaw += yawRad;
-  pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch + pitchRad));
+  const spherical = orbitAngles(offset, state.up);
+  let yaw = spherical.yaw;
+  let pitch = spherical.pitch;
+  yaw = wrapAngle(yaw + yawRad);
+  pitch = wrapAngle(pitch + pitchRad);
   const cp = Math.cos(pitch);
   const next: Vec3 = [
     dist * cp * Math.cos(yaw),
     dist * cp * Math.sin(yaw),
     dist * Math.sin(pitch),
   ];
-  return { ...state, position: add(state.target, next) };
+  return {
+    ...state,
+    position: add(state.target, next),
+    up: orbitUp(yaw, pitch),
+  };
 }
 
 export function panBy(
@@ -121,6 +139,7 @@ export function classifyPointerMode(opts: {
   button: number;
   altKey: boolean;
 }): PointerMode {
+  if (opts.button === 1) return "pan";
   if (opts.button === 2) return "pan";
   if (opts.button === 0 && opts.altKey) return "pan";
   if (opts.button === 0) return "orbit";
@@ -172,10 +191,9 @@ export function sphericalFromCamera(state: CameraState): {
   const position = finiteVec(state.position, [0, -MIN_DIST, 0]);
   const offset = sub(position, target);
   const distance = Math.max(length(offset), MIN_DIST);
-  const azimuthDeg = Math.atan2(offset[1], offset[0]) * DEG;
-  const elevationDeg = Math.asin(
-    Math.max(-1, Math.min(1, offset[2] / distance)),
-  ) * DEG;
+  const spherical = orbitAngles(offset, state.up);
+  const azimuthDeg = spherical.yaw * DEG;
+  const elevationDeg = spherical.pitch * DEG;
   return {
     target,
     distance,
@@ -200,12 +218,8 @@ export function updateCameraFromSpherical(
     Math.max(MIN_DIST, finiteNumber(patch.distance, current.distance)),
   );
   const azimuth = finiteNumber(patch.azimuthDeg, current.azimuthDeg) * RAD;
-  const elevation = Math.max(
-    -MAX_PITCH,
-    Math.min(
-      MAX_PITCH,
-      finiteNumber(patch.elevationDeg, current.elevationDeg) * RAD,
-    ),
+  const elevation = wrapAngle(
+    finiteNumber(patch.elevationDeg, current.elevationDeg) * RAD,
   );
   const cp = Math.cos(elevation);
   const offset: Vec3 = [
@@ -217,7 +231,46 @@ export function updateCameraFromSpherical(
     ...state,
     target,
     position: add(target, offset),
+    up: orbitUp(azimuth, elevation),
   };
+}
+
+function orbitAngles(offset: Vec3, up: Vec3): { yaw: number; pitch: number } {
+  const horizontal = Math.hypot(offset[0], offset[1]);
+  if (horizontal > 1e-9) {
+    const yaw = Math.atan2(offset[1], offset[0]);
+    const basePitch = Math.atan2(offset[2], horizontal);
+    const expectedUp = orbitUp(yaw, basePitch);
+    if (dot(expectedUp, up) >= 0) return { yaw, pitch: basePitch };
+    return {
+      yaw: wrapAngle(yaw + Math.PI),
+      pitch: wrapAngle(Math.PI - basePitch),
+    };
+  }
+  const horizontalUp = Math.hypot(up[0], up[1]);
+  if (horizontalUp > 1e-9) {
+    const yaw =
+      offset[2] >= 0
+        ? Math.atan2(-up[1], -up[0])
+        : Math.atan2(up[1], up[0]);
+    return { yaw, pitch: offset[2] >= 0 ? Math.PI / 2 : -Math.PI / 2 };
+  }
+  return { yaw: 0, pitch: offset[2] >= 0 ? Math.PI / 2 : -Math.PI / 2 };
+}
+
+function wrapAngle(angle: number): number {
+  let wrapped = angle % TAU;
+  if (wrapped <= -Math.PI) wrapped += TAU;
+  else if (wrapped > Math.PI) wrapped -= TAU;
+  return wrapped;
+}
+
+function orbitUp(yaw: number, pitch: number): Vec3 {
+  return normalize([
+    -Math.sin(pitch) * Math.cos(yaw),
+    -Math.sin(pitch) * Math.sin(yaw),
+    Math.cos(pitch),
+  ]);
 }
 
 function presetDirection(preset: CameraPreset): Vec3 {

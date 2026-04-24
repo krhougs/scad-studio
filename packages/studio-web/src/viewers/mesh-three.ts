@@ -22,7 +22,11 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
-import { fitCameraToBounds } from "../canvas/camera-controls";
+import {
+  classifyPointerMode,
+  fitCameraToBounds,
+  wheelDeltaToZoomAmount,
+} from "../canvas/camera-controls";
 import {
   DEFAULT_MESH_VIEWER_OPTIONS,
   type MeshViewerOptions,
@@ -100,6 +104,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   scene.add(rim);
 
   const grid = new GridHelper(200, 40, 0x2c2c31, 0x1a1a1d);
+  grid.rotation.x = Math.PI / 2;
   (grid.material as { transparent: boolean; opacity: number }).transparent = true;
   (grid.material as { transparent: boolean; opacity: number }).opacity = 0.5;
   scene.add(grid);
@@ -117,8 +122,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       roughness: 0.9,
     }),
   );
-  buildPlate.rotation.x = -Math.PI / 2;
-  buildPlate.position.y = -0.02;
+  buildPlate.position.z = -0.02;
   buildPlate.receiveShadow = true;
   scene.add(buildPlate);
 
@@ -126,12 +130,14 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const orthographicCamera = new OrthographicCamera(-100, 100, 100, -100, 0.1, 5000);
   let camera: PerspectiveCamera | OrthographicCamera = perspectiveCamera;
   camera.position.set(160, 160, 200);
+  camera.up.set(0, 0, 1);
   camera.lookAt(0, 0, 0);
   orthographicCamera.position.copy(camera.position);
+  orthographicCamera.up.copy(camera.up);
   orthographicCamera.lookAt(0, 0, 0);
 
   const target = new Vector3(0, 0, 0);
-  let upVec = new Vector3(0, 1, 0);
+  let upVec = new Vector3(0, 0, 1);
   let options = { ...DEFAULT_MESH_VIEWER_OPTIONS };
   let viewportWidth = 1;
   let viewportHeight = 1;
@@ -268,14 +274,14 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     buildPlate.scale.set(plateSize / 200, plateSize / 200, 1);
     if (info) {
       const center = new Vector3(...info.center);
-      const bottom = info.bounds.min[1] - Math.max(info.radius * 0.015, 0.02);
-      grid.position.set(center.x, bottom, center.z);
-      buildPlate.position.set(center.x, bottom - 0.01, center.z);
+      const bottom = info.bounds.min[2] - Math.max(info.radius * 0.015, 0.02);
+      grid.position.set(center.x, center.y, bottom);
+      buildPlate.position.set(center.x, center.y, bottom - 0.01);
       clipPlane.constant = -center.x;
       return;
     }
     grid.position.set(0, 0, 0);
-    buildPlate.position.set(0, -0.02, 0);
+    buildPlate.position.set(0, 0, -0.02);
     clipPlane.constant = 0;
   }
 
@@ -283,15 +289,18 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const offset = camera.position.clone().sub(target);
     const radius = offset.length();
     if (radius === 0) return;
-    const theta = Math.atan2(offset.x, offset.z);
-    const phi = Math.acos(Math.max(-1, Math.min(1, offset.y / radius)));
-    const nextTheta = theta - dx * 0.008;
-    const nextPhi = Math.max(0.1, Math.min(Math.PI - 0.1, phi - dy * 0.008));
+    const spherical = orbitAngles(offset, upVec);
+    const azimuth = spherical.azimuth;
+    const elevation = spherical.elevation;
+    const nextAzimuth = wrapAngle(azimuth - dx * 0.01);
+    const nextElevation = wrapAngle(elevation - dy * 0.01);
+    const cp = Math.cos(nextElevation);
     offset.set(
-      radius * Math.sin(nextPhi) * Math.sin(nextTheta),
-      radius * Math.cos(nextPhi),
-      radius * Math.sin(nextPhi) * Math.cos(nextTheta),
+      radius * cp * Math.cos(nextAzimuth),
+      radius * cp * Math.sin(nextAzimuth),
+      radius * Math.sin(nextElevation),
     );
+    upVec = orbitUp(nextAzimuth, nextElevation);
     camera.position.copy(target.clone().add(offset));
     camera.up.copy(upVec);
     camera.lookAt(target);
@@ -302,17 +311,13 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   function pan(dx: number, dy: number): void {
     const offset = camera.position.clone().sub(target);
     const distance = offset.length();
-    const factor =
-      options.projectionMode === "orthographic"
-        ? (orthographicCamera.top - orthographicCamera.bottom) / 2
-        : distance * Math.tan((perspectiveCamera.fov * Math.PI) / 360);
-    const rect = canvas.getBoundingClientRect();
+    const factor = distance * 0.002;
     const right = new Vector3()
       .crossVectors(camera.up, offset)
       .normalize();
     const trueUp = new Vector3().crossVectors(offset, right).normalize();
-    const shiftX = (-dx / rect.height) * factor * 2;
-    const shiftY = (dy / rect.height) * factor * 2;
+    const shiftX = -dx * factor;
+    const shiftY = dy * factor;
     const delta = right.multiplyScalar(shiftX).add(trueUp.multiplyScalar(shiftY));
     camera.position.add(delta);
     target.add(delta);
@@ -323,7 +328,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
 
   function dolly(delta: number): void {
     const offset = camera.position.clone().sub(target);
-    const factor = Math.exp(delta * 0.0015);
+    const factor = Math.min(5, Math.max(0.2, 1 - delta * 0.12));
     offset.multiplyScalar(factor);
     const nextDist = offset.length();
     if (nextDist < 0.1 || nextDist > 20000) return;
@@ -335,11 +340,15 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function onPointerDown(ev: PointerEvent): void {
+    const mode = classifyPointerMode({
+      button: ev.button,
+      altKey: ev.altKey,
+    });
+    if (mode === "none") return;
     canvas.setPointerCapture(ev.pointerId);
     pointer.lastX = ev.clientX;
     pointer.lastY = ev.clientY;
-    const panMode = ev.button === 2 || ev.altKey || ev.button === 1;
-    pointer.mode = panMode ? "pan" : "orbit";
+    pointer.mode = mode;
     ev.preventDefault();
   }
   function onPointerMove(ev: PointerEvent): void {
@@ -362,10 +371,58 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
   function onWheel(ev: WheelEvent): void {
     ev.preventDefault();
-    dolly(ev.deltaY);
+    dolly(wheelDeltaToZoomAmount(ev.deltaY, ev.deltaMode));
   }
   function onContextMenu(ev: Event): void {
     ev.preventDefault();
+  }
+
+  function wrapAngle(angle: number): number {
+    const tau = Math.PI * 2;
+    let wrapped = angle % tau;
+    if (wrapped <= -Math.PI) wrapped += tau;
+    else if (wrapped > Math.PI) wrapped -= tau;
+    return wrapped;
+  }
+
+  function orbitAngles(
+    offset: Vector3,
+    up: Vector3,
+  ): { azimuth: number; elevation: number } {
+    const horizontal = Math.hypot(offset.x, offset.y);
+    if (horizontal > 1e-9) {
+      const azimuth = Math.atan2(offset.y, offset.x);
+      const baseElevation = Math.atan2(offset.z, horizontal);
+      const expectedUp = orbitUp(azimuth, baseElevation);
+      if (expectedUp.dot(up) >= 0) return { azimuth, elevation: baseElevation };
+      return {
+        azimuth: wrapAngle(azimuth + Math.PI),
+        elevation: wrapAngle(Math.PI - baseElevation),
+      };
+    }
+    const horizontalUp = Math.hypot(up.x, up.y);
+    if (horizontalUp > 1e-9) {
+      const azimuth =
+        offset.z >= 0
+          ? Math.atan2(-up.y, -up.x)
+          : Math.atan2(up.y, up.x);
+      return {
+        azimuth,
+        elevation: offset.z >= 0 ? Math.PI / 2 : -Math.PI / 2,
+      };
+    }
+    return {
+      azimuth: 0,
+      elevation: offset.z >= 0 ? Math.PI / 2 : -Math.PI / 2,
+    };
+  }
+
+  function orbitUp(azimuth: number, elevation: number): Vector3 {
+    return new Vector3(
+      -Math.sin(elevation) * Math.cos(azimuth),
+      -Math.sin(elevation) * Math.sin(azimuth),
+      Math.cos(elevation),
+    ).normalize();
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);

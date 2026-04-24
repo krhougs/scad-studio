@@ -112,24 +112,36 @@
 
 ## Phase 3：项目坐标系前端适配与相机交互
 
-- 状态：未完成，2026-04-24 返工退回。
-- 返工原因：
-  - 独立 review 指出 Web orbit 仍不能像 desktop 一样越过模型顶部/底部。
-  - 独立 review 指出 ViewportGizmo 与 camera preset 仍沿用旧坐标理解，front/back/left/top 与项目坐标系不一致。
-  - 用户补充现象：front 显示底部，back 显示顶部，left 显示逆时针旋转 90 度的右视图，top 显示正视图。
-- 新目标：
-  - OpenSCAD 已经符合项目坐标系，本轮不通过修改后端 STL / 3MF / protocol mesh payload 解决视图问题。
-  - Web 前端按本计划规定的摄像机方向展示 mesh、网格、底板、轴线和相机。
-  - front / back / left / right / top / bottom preset 按本计划规定的摄像机方向切换，且不出现滚转 90 度的错误朝向。
-- 已确认保留：
-  - Phase 1 数值控件变更保持有效，但需重新回归。
-  - Phase 2 中 ViewportGizmo 点击入口可以保留，但必须补充三轴实时指示并修正为六向点击。
-- 待执行：
-  - 核对现有 mesh payload 形态，只作为 renderer 输入，不改后端输出。
-  - 让前端 renderer 在现有 mesh payload 输入下呈现项目坐标系的用户可见空间。
-  - 让六个 camera preset 的观察方向和屏幕上方方向符合本计划。
-  - 对齐 Web 相机拖拽、平移、缩放与 desktop OrbitControls 的方向和速度关系。
-  - 独立 subagent review Phase 3 diff 或涉及文件清单。
+- 状态：已完成。
+- 前序目标保护：
+  - 未修改 STL / 3MF / `.scad` 生成预览 mesh 的 protocol payload。
+  - Phase 1 参数与相机数值控件结构、测试标识和自动预览路径保持不变。
+  - Phase 2 ViewportGizmo 三轴显示和六向点击入口保持可用。
+- 本轮变更摘要：
+  - Three.js 预览改为 Z-up 场景语义：camera `up` 使用 `+Z`，网格和底板落在项目坐标系 XY 平面，并按 mesh bounds 的 Z 下边界定位。
+  - `visibleProjectPlaneForCamera` 改为根据相机观察方向判断 XY / XZ / YZ 可见项目平面。
+  - `orbitBy` 和 Three.js pointer orbit 改为与 desktop 相同的可跨越顶部 / 底部模型行为，不再夹紧 elevation。
+  - `sphericalFromCamera` 使用 position 与 `up` 共同反推 orbit 分支，避免跨越顶部 / 底部后通过相机数值面板更新 target / distance 时发生 180 度滚转。
+  - 平移速度改为 `distance * 0.002`，缩放 factor 改为 `(1 - delta * 0.12).clamp(0.2, 5.0)`，与 desktop `OrbitalCamera` 对齐。
+  - wheel delta 新增 pixel / line mode 归一化，浏览器 pixel delta 按 `/120`，line delta 直接使用，并按浏览器滚轮方向取反。
+  - pointer 分类补齐 middle button pan，并让 Three.js 运行路径复用共享分类逻辑。
+- 本轮验证：
+  - `bun x vitest run tests/unit/camera-controls.test.ts`
+    - 结果：1 个测试文件通过，16 个测试通过。
+  - `bun x vitest run tests/unit/mesh-render-metrics.test.ts --testNamePattern "keeps renderer-visible project planes"`
+    - 结果：1 个相关测试通过，5 个跳过。
+  - `bun run typecheck`
+    - 结果：通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "three.js canvas renders and accepts pointer drag|view pill switches active preset|ViewportGizmo click switches view"`
+    - 结果：3 个浏览器用例通过。
+- 独立 review：
+  - 第一轮 review 指出 top / bottom pole 处 `atan2(0, 0)` 会导致 `up` 丢失，且 `updateCameraFromSpherical` 未同步 `up`；已修复并补充 pole orientation 测试。
+  - 第二轮 review 指出越过 pole 后重复 `orbitBy(state, 0, 0)` 会因为等价角度分支丢失而翻转；已修复 `orbitAngles` 分支恢复并补测试。
+  - 第三轮 review 指出 spherical 往返会丢失越过 pole 后的 `up` 分支，影响相机数值控件路径；已改为通过 `state.up` 反推并补测试。
+  - 第四轮 review 指出 wheel `deltaMode` 未区分 line / pixel；已新增 `wheelDeltaToZoomAmount` 并补测试。
+  - 最终 review 无 blocker / important / minor，确认 Phase 3 可进入记录与提交。
+- 遗留问题：
+  - Playwright 的拖拽用例仍主要验证事件接收和状态可见，尚未精确断言拖拽后的方向和速度数值；最终 review 建议后续补充读取相机状态或 gizmo 投影变化的更强断言。
 
 ## Phase 4：预览可读性、加载状态与真实尺寸时机
 

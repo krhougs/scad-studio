@@ -9,6 +9,7 @@ import {
   resetCamera,
   sphericalFromCamera,
   updateCameraFromSpherical,
+  wheelDeltaToZoomAmount,
   zoomBy,
 } from "../../src/canvas/camera-controls";
 import {
@@ -55,6 +56,13 @@ describe("camera-controls", () => {
     expect(distanceTo(farther)).toBeGreaterThan(before);
   });
 
+  it("normalizes browser wheel deltas to desktop zoom amounts", () => {
+    expect(wheelDeltaToZoomAmount(-120, 0)).toBe(1);
+    expect(wheelDeltaToZoomAmount(120, 0)).toBe(-1);
+    expect(wheelDeltaToZoomAmount(-1, 1)).toBe(1);
+    expect(wheelDeltaToZoomAmount(1, 1)).toBe(-1);
+  });
+
   it("orbitBy preserves distance and rotates position", () => {
     const base = applyPreset("front");
     const baseDist = distanceTo(base);
@@ -68,6 +76,44 @@ describe("camera-controls", () => {
     const base = applyPreset("front");
     const moved = orbitBy(base, 0, Math.PI * 1.25);
     expect(moved.position[2]).toBeLessThan(base.target[2]);
+  });
+
+  it("orbitBy preserves top and bottom screen-up orientation at poles", () => {
+    const top = orbitBy(applyPreset("top"), 0, 0);
+    expect(top.up[0]).toBeCloseTo(0, 5);
+    expect(top.up[1]).toBeCloseTo(1, 5);
+    expect(top.up[2]).toBeCloseTo(0, 5);
+
+    const bottom = orbitBy(applyPreset("bottom"), 0, 0);
+    expect(bottom.up[0]).toBeCloseTo(0, 5);
+    expect(bottom.up[1]).toBeCloseTo(-1, 5);
+    expect(bottom.up[2]).toBeCloseTo(0, 5);
+  });
+
+  it("orbitBy keeps up stable after crossing over a pole", () => {
+    const crossed = orbitBy(applyPreset("front"), 0, Math.PI * 0.75);
+    const repeated = orbitBy(crossed, 0, 0);
+
+    expect(repeated.position[0]).toBeCloseTo(crossed.position[0], 5);
+    expect(repeated.position[1]).toBeCloseTo(crossed.position[1], 5);
+    expect(repeated.position[2]).toBeCloseTo(crossed.position[2], 5);
+    expect(repeated.up[0]).toBeCloseTo(crossed.up[0], 5);
+    expect(repeated.up[1]).toBeCloseTo(crossed.up[1], 5);
+    expect(repeated.up[2]).toBeCloseTo(crossed.up[2], 5);
+  });
+
+  it("preserves pole-crossed up through spherical target updates", () => {
+    const crossed = orbitBy(applyPreset("front"), 0, Math.PI * 0.75);
+    const updated = updateCameraFromSpherical(crossed, {
+      target: crossed.target,
+    });
+
+    expect(updated.position[0]).toBeCloseTo(crossed.position[0], 5);
+    expect(updated.position[1]).toBeCloseTo(crossed.position[1], 5);
+    expect(updated.position[2]).toBeCloseTo(crossed.position[2], 5);
+    expect(updated.up[0]).toBeCloseTo(crossed.up[0], 5);
+    expect(updated.up[1]).toBeCloseTo(crossed.up[1], 5);
+    expect(updated.up[2]).toBeCloseTo(crossed.up[2], 5);
   });
 
   it("panBy shifts position and target together", () => {

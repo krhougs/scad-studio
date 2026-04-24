@@ -41,7 +41,15 @@ export function clippingPlanesForBounds(
 }
 
 export function visibleProjectPlaneForCamera(
-  _camera: CameraState,
+  camera: CameraState,
 ): MeshSceneMetrics["visiblePlane"] {
+  const direction = [
+    camera.position[0] - camera.target[0],
+    camera.position[1] - camera.target[1],
+    camera.position[2] - camera.target[2],
+  ];
+  const abs = direction.map((value) => Math.abs(value));
+  if (abs[2] >= abs[0] && abs[2] >= abs[1]) return "xy";
+  if (abs[0] >= abs[1]) return "yz";
   return "xz";
 }
