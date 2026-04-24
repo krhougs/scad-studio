@@ -1,5 +1,6 @@
 use std::io::{Cursor, Write};
 
+use glam::Vec3;
 use scad_scene::three_mf;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -72,9 +73,9 @@ fn load_3mf_from_reader_supports_colorgroup_vertex_colors() {
     <object id="30" type="model">
       <mesh>
         <vertices>
-          <vertex x="0" y="0" z="0"/>
-          <vertex x="1" y="0" z="0"/>
-          <vertex x="0" y="1" z="0"/>
+          <vertex x="2" y="3" z="5"/>
+          <vertex x="7" y="11" z="13"/>
+          <vertex x="17" y="19" z="29"/>
         </vertices>
         <triangles>
           <triangle v1="0" v2="1" v3="2" pid="2" p1="0" p2="1" p3="2"/>
@@ -93,8 +94,11 @@ fn load_3mf_from_reader_supports_colorgroup_vertex_colors() {
     assert_eq!(mesh.vertices[0].color, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(mesh.vertices[1].color, [0.0, 1.0, 0.0, 1.0]);
     assert_eq!(mesh.vertices[2].color, [0.0, 0.0, 1.0, 1.0]);
-    assert!(mesh.vertices.iter().all(|vertex| vertex.position[1] == 0.0));
-    assert_eq!(mesh.vertices[0].normal, [0.0, 1.0, 0.0]);
+    let positions = [[2.0, 3.0, 5.0], [7.0, 11.0, 13.0], [17.0, 19.0, 29.0]];
+    assert_eq!(mesh.vertices[0].position, [2.0, 3.0, 5.0]);
+    assert_eq!(mesh.vertices[1].position, [7.0, 11.0, 13.0]);
+    assert_eq!(mesh.vertices[2].position, [17.0, 19.0, 29.0]);
+    assert!(approx_eq_normal(mesh.vertices[0].normal, triangle_normal(positions)));
 }
 
 #[test]
@@ -301,7 +305,40 @@ fn load_3mf_from_reader_preserves_front_face_for_mirrored_build_items() {
 
     let mesh = three_mf::load_3mf_from_reader(&mut archive).expect("3mf should parse");
 
-    assert_eq!(mesh.vertices[0].normal, [0.0, 1.0, 0.0]);
+    assert_eq!(mesh.vertices[0].normal, [0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn load_3mf_from_reader_defaults_degenerate_normals_to_project_up() {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="75" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="2" y="3" z="5"/>
+          <vertex x="2" y="3" z="5"/>
+          <vertex x="2" y="3" z="5"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build>
+    <item objectid="75"/>
+  </build>
+</model>"##;
+    let mut archive = fixture_archive(xml);
+
+    let mesh = three_mf::load_3mf_from_reader(&mut archive).expect("3mf should parse");
+
+    assert!(
+        mesh.vertices
+            .iter()
+            .all(|vertex| vertex.normal == [0.0, 0.0, 1.0])
+    );
 }
 
 #[test]
@@ -347,4 +384,15 @@ fn fixture_archive(model_xml: &str) -> Cursor<Vec<u8>> {
         .write_all(model_xml.as_bytes())
         .expect("fixture should write xml");
     writer.finish().expect("fixture should finish archive")
+}
+
+fn triangle_normal(positions: [[f32; 3]; 3]) -> [f32; 3] {
+    let a = Vec3::from_array(positions[0]);
+    let b = Vec3::from_array(positions[1]);
+    let c = Vec3::from_array(positions[2]);
+    (b - a).cross(c - a).normalize().to_array()
+}
+
+fn approx_eq_normal(left: [f32; 3], right: [f32; 3]) -> bool {
+    Vec3::from_array(left).distance(Vec3::from_array(right)) < 0.0001
 }

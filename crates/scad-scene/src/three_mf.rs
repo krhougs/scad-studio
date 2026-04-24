@@ -10,7 +10,7 @@ use glam::Vec3;
 use roxmltree::{Document, Node};
 use zip::ZipArchive;
 
-use crate::mesh::{self, MeshData, MeshTriangle};
+use crate::mesh::{MeshData, MeshTriangle};
 
 const MODEL_ENTRY_PATH: &str = "3D/3dmodel.model";
 
@@ -293,7 +293,6 @@ fn triangle_to_mesh(
         positions.swap(1, 2);
         colors.swap(1, 2);
     }
-    let positions = positions.map(mesh::openscad_to_viewer);
     Ok(MeshTriangle {
         positions,
         normal: triangle_normal(positions),
@@ -435,7 +434,7 @@ fn triangle_normal(positions: [[f32; 3]; 3]) -> [f32; 3] {
     let c = Vec3::from_array(positions[2]);
     let normal = (b - a).cross(c - a).normalize_or_zero();
     if normal == Vec3::ZERO {
-        [0.0, 1.0, 0.0]
+        [0.0, 0.0, 1.0]
     } else {
         normal.to_array()
     }

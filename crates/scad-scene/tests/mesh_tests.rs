@@ -48,6 +48,38 @@ fn from_indexed_buffers_builds_renderable_mesh_from_raw_buffers() {
 }
 
 #[test]
+fn from_indexed_buffers_defaults_missing_normals_to_project_up() {
+    let mesh = MeshData::from_indexed_buffers(
+        vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        Vec::new(),
+        Vec::new(),
+        vec![0, 1, 2],
+    )
+    .expect("indexed buffers should build renderable mesh");
+
+    assert!(mesh.vertices.iter().all(|vertex| {
+        vertex.normal == [0.0, 0.0, 1.0] && vertex.color == [0.0, 0.0, 0.0, -1.0]
+    }));
+}
+
+#[test]
+fn from_triangles_defaults_degenerate_normals_to_project_up() {
+    let triangles = [MeshTriangle {
+        positions: [[2.0, 3.0, 5.0], [2.0, 3.0, 5.0], [2.0, 3.0, 5.0]],
+        normal: [0.0, 0.0, 0.0],
+        colors: [None; 3],
+    }];
+
+    let mesh = MeshData::from_triangles(&triangles).expect("triangle mesh should build");
+
+    assert!(
+        mesh.vertices
+            .iter()
+            .all(|vertex| vertex.normal == [0.0, 0.0, 1.0])
+    );
+}
+
+#[test]
 fn from_triangles_smooths_normals_for_shared_vertices_with_small_angle() {
     let triangle_a = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
     let triangle_b = [[1.0, 0.0, 0.0], [1.0, 1.0, 0.4], [0.0, 1.0, 0.0]];
@@ -209,14 +241,11 @@ fn load_stl_from_reader_parses_binary_stl_bytes() {
 }
 
 #[test]
-fn load_stl_from_reader_maps_openscad_xy_plane_to_viewer_ground_plane() {
+fn load_stl_from_reader_preserves_project_coordinates() {
+    let positions = [[2.0, 3.0, 5.0], [7.0, 11.0, 13.0], [17.0, 19.0, 29.0]];
     let triangles = [Triangle {
-        normal: Normal::new([0.0, 0.0, 1.0]),
-        vertices: [
-            Vertex::new([0.0, 0.0, 0.0]),
-            Vertex::new([1.0, 0.0, 0.0]),
-            Vertex::new([0.0, 1.0, 0.0]),
-        ],
+        normal: Normal::new(triangle_normal(positions)),
+        vertices: positions.map(Vertex::new),
     }];
     let mut bytes = Vec::new();
     stl_io::write_stl(&mut bytes, triangles.iter()).expect("binary stl should be written");
@@ -225,10 +254,12 @@ fn load_stl_from_reader_maps_openscad_xy_plane_to_viewer_ground_plane() {
     let mesh =
         scad_scene::mesh::load_stl_from_reader(&mut reader).expect("binary stl should parse");
 
-    assert!(mesh.vertices.iter().all(|vertex| vertex.position[1] == 0.0));
-    assert_eq!(mesh.vertices[0].normal, [0.0, 1.0, 0.0]);
-    assert_eq!(mesh.bounds.min, Vec3::new(0.0, 0.0, -1.0));
-    assert_eq!(mesh.bounds.max, Vec3::new(1.0, 0.0, 0.0));
+    assert_eq!(mesh.vertices[0].position, [2.0, 3.0, 5.0]);
+    assert_eq!(mesh.vertices[1].position, [7.0, 11.0, 13.0]);
+    assert_eq!(mesh.vertices[2].position, [17.0, 19.0, 29.0]);
+    assert!(approx_eq_normal(mesh.vertices[0].normal, triangle_normal(positions)));
+    assert_eq!(mesh.bounds.min, Vec3::new(2.0, 3.0, 5.0));
+    assert_eq!(mesh.bounds.max, Vec3::new(17.0, 19.0, 29.0));
     assert!(
         mesh.vertices
             .iter()

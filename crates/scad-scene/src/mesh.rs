@@ -42,6 +42,7 @@ pub struct MeshError(String);
 
 const NORMAL_SMOOTHING_DOT_THRESHOLD: f32 = 0.5;
 const SOLID_TRANSPARENCY_ALPHA_THRESHOLD: f32 = 0.9;
+const DEFAULT_NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
 
 #[derive(Clone, Copy)]
 struct VertexNormalSample {
@@ -120,7 +121,7 @@ impl MeshData {
                 bounds.include(Vec3::from_array(position));
                 Vertex {
                     position,
-                    normal: normals.get(index).copied().unwrap_or([0.0, 1.0, 0.0]),
+                    normal: normals.get(index).copied().unwrap_or(DEFAULT_NORMAL),
                     color: vertex_colors
                         .get(index)
                         .copied()
@@ -217,19 +218,15 @@ where
         .iter()
         .map(|face| MeshTriangle {
             positions: [
-                openscad_to_viewer(mesh.vertices[face.vertices[0]].into()),
-                openscad_to_viewer(mesh.vertices[face.vertices[1]].into()),
-                openscad_to_viewer(mesh.vertices[face.vertices[2]].into()),
+                mesh.vertices[face.vertices[0]].into(),
+                mesh.vertices[face.vertices[1]].into(),
+                mesh.vertices[face.vertices[2]].into(),
             ],
-            normal: openscad_to_viewer(face.normal.into()),
+            normal: face.normal.into(),
             colors: [None; 3],
         })
         .collect::<Vec<_>>();
     MeshData::from_triangles(&triangles)
-}
-
-pub(crate) fn openscad_to_viewer(vector: [f32; 3]) -> [f32; 3] {
-    [vector[0], vector[2], -vector[1]]
 }
 
 fn apply_smoothed_normals(
@@ -260,7 +257,7 @@ fn smoothed_normal(sample: VertexNormalSample, samples: &[VertexNormalSample]) -
 fn normalized_normal(normal: [f32; 3]) -> Vec3 {
     let normal = Vec3::from_array(normal).normalize_or_zero();
     if normal == Vec3::ZERO {
-        Vec3::Y
+        Vec3::Z
     } else {
         normal
     }
