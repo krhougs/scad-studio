@@ -13,7 +13,9 @@ import { useSearchParams } from "react-router-dom";
 import {
   decodeConfigLoad,
   describeConfigGaps,
+  encodeConfigRaw,
   normalizeAppConfig,
+  toConfigSaveRequest,
 } from "../config/app-config";
 import {
   setAppConfigError,
@@ -59,7 +61,12 @@ type Phase =
   | "ready"
   | "error";
 
-type ProtocolEntry = { path: unknown; kind: "directory" | "file" };
+type ProtocolEntry = {
+  name?: unknown;
+  path: unknown;
+  kind: "directory" | "file";
+  path_error?: unknown;
+};
 
 type Snapshot = {
   workspace_current?: {
@@ -88,10 +95,17 @@ function phaseToStatus(phase: Phase): TopbarStatus {
 }
 
 function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
+  const pathError = typeof entry.path_error === "string" ? entry.path_error : null;
+  const hasPath = entry.path !== null && entry.path !== undefined;
   return {
-    label: pathLabel(entry.path) || "(unnamed)",
+    label:
+      typeof entry.name === "string" && entry.name.length > 0
+        ? entry.name
+        : pathLabel(entry.path) || "(unnamed)",
     path: entry.path,
     kind: entry.kind,
+    pathError,
+    isOperable: hasPath && !pathError,
   };
 }
 
@@ -181,9 +195,9 @@ export function WorkbenchLayout() {
         left_panel_width: next.left,
         right_panel_width: next.right,
       });
-      const raw = JSON.stringify(config);
+      const raw = encodeConfigRaw(config);
       client
-        .dispatchConfigSave({ json: raw })
+        .dispatchConfigSave(toConfigSaveRequest(config))
         .then(() => setAppConfigReady(config, raw, "save"))
         .catch((err) => {
           logRef.current.append(
@@ -306,6 +320,7 @@ export function WorkbenchLayout() {
 
   const handleExpandDirectory = useCallback(
     (entry: WorkspaceEntry) => {
+      if (entry.isOperable === false || entry.pathError) return;
       const client = clientRef.current;
       if (!client) return;
       const key = pathKey(entry.path);
@@ -504,6 +519,10 @@ export function WorkbenchLayout() {
 
   const handleOpenEntry = useCallback(
     (entry: WorkspaceEntry) => {
+      if (entry.isOperable === false || entry.pathError) {
+        setMessage(`invalid workspace entry: ${entry.label}`);
+        return;
+      }
       const kind = resolveTabKind(entry.label);
       if (!kind) {
         const ext = extensionOf(entry.label) || "(no extension)";

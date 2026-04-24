@@ -237,3 +237,51 @@
 
 - host 端没有单独用 WebSocket end-to-end 测试覆盖“binary frame 但 magic 错误”的场景；当前由 shared binary decode helper 的旧 JSON bytes 测试覆盖同类错误分类，且 host 使用同一 decode path，不阻塞 Phase 3。
 - `studio-common`、`studio-web-wasm`、`packages/studio-web` 仍有 JSON wire 相关残留；按计划进入 Phase 4 / Phase 5。
+
+## 2026-04-25 Phase 4 执行结果
+
+### 已完成
+
+- `studio-common::ManagedClient` 的 outbound / inbound bytes 已切换为 `app-server-protocol` Borsh frame codec，出站使用 `encode_client_frame`，入站使用 `decode_server_frame`。
+- `studio-web-wasm` smoke 已改为用 `encode_server_frame` 构造 server inbound frame，并用 `decode_client_frame` 断言 browser client outbound frame。
+- `packages/studio-web` browser WebSocket transport 已移除 string frame fallback，只接受 `ArrayBuffer` / `Uint8Array`。
+- Playwright harness 已改为捕获真实 `WebSocket.send` binary bytes，并通过 `@budn/app-server-protocol` 的 wasm decode helper 解析 outgoing client frame；旧的应用层 direct payload 记录路径已删除。
+- 配置页已改用 typed config DTO：`ConfigLoad` 读取 `config` 字段，`ConfigSave` 发送 `ConfigSaveRequest { config }`；配置 JSON 只保留为用户可见 snapshot 和磁盘文件格式相关处理，不再作为 wire payload。
+- 导出与 slicer 面板已通过 protocol wasm path helper 把默认输出文件名解析为当前源文件同目录的 portable `PathHandle`，outgoing frame 中 `output_path` 是 portable path，不是裸字符串或 host path。
+- Web workspace tree 已接入 invalid workspace entry：保留 `name` / `path_error` 展示，设置不可操作状态，禁止把 `path: null` 当成 root 或合法 path 打开 / 展开。
+- 已新增 invalid workspace entry Playwright smoke，覆盖“可展示但不可打开”行为。
+- 已更新 `studio-web-wasm` generated wasm 快照，避免浏览器端继续加载旧 JSON frame 版本。
+
+### Review 与收敛
+
+- Phase 4 初次独立 review 结论为不通过，指出三项阻塞问题：
+  - Playwright recorder 仍可能使用应用层 direct payload，无法证明真实 outgoing binary frame 可解码；
+  - invalid workspace entry 的 `path: null` 可能被 Web 侧当成 root；
+  - export helper 使用相对链接解析时会剥离 `#fragment`，导致非法文件名被静默改写。
+- 已按 review 反馈完成收敛：harness 只 decode WebSocket binary frame，invalid entry 保留 `name` / `path_error` 且不可操作，export 输出路径改用 protocol path handle 构造。
+- 第二次独立 review 结论为通过。
+- 收敛后又删除了 `_smoke-harness.ts` 和 `wasm-bridge/client.ts` 中旧的 `__scadDispatchedCommands` direct payload 记录路径；轻量独立复核结论为通过。
+
+### 验证
+
+- `cargo test -p studio-common --tests`：通过。
+- `cargo test -p studio-web-wasm --tests`：通过。
+- `bun run --cwd packages/studio-web test:unit`：通过，19 个 test file、84 个 test 通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run protocol:smoke`：通过。
+- `bun run check:wasm-bindgen`：通过。
+- `cargo check --workspace`：通过；仍有 `app-server-core` 既有 dead code warning。
+- `bun run --cwd packages/studio-web test:e2e -- config-settings.spec.ts export-slicer.spec.ts invalid-workspace-entry.spec.ts`：通过，4 个 Playwright 测试通过。
+- `bun run web:smoke -- --case browser_smoke`：通过，5 个 Playwright 测试通过。
+- `bun run web:smoke -- --case browser_watch_smoke`：通过，6 个 Playwright 测试通过。
+- `bun run web:smoke -- --case export_slicer`：通过，1 个 Playwright 测试通过。
+- `bun run web:smoke -- --case config_settings`：通过，2 个 Playwright 测试通过。
+- `bun run web:smoke -- --case parameters_presets`：通过，7 个 Playwright 测试通过。
+- `bun run web:build`：通过；仍有 Vite 既有 large chunk warning。
+- `wasm-pack test --headless --chrome crates/studio-web-wasm --test wasm_bridge_smoke`：未通过，原因为本机 Chrome `147.0.7727.103` 与 wasm-pack 下载的 ChromeDriver `148.0.7778.56` 不匹配，`wasm-bindgen-test-runner` 报 `http status: 404` 且 driver 以 `signal: 9 (SIGKILL)` 退出；已记录到 [docs/known_issues.md](/Users/krhougs/LocalCodes/scad-studio/docs/known_issues.md:3)。
+
+### 遗留问题
+
+- Phase 4 仍未能在当前机器完成 `wasm-pack --headless --chrome` browser wasm smoke 的通过验收；该问题被确认是本机 ChromeDriver 版本匹配问题，不是本阶段代码路径失败。
+- `packages/studio-web/tests/unit/protocol-paths.test.ts` 使用 mock 验证调用边界；真实 protocol wasm path helper 通过 export / config / invalid entry 相关 e2e 与 smoke 间接覆盖。若后续新增用户输入导出文件名校验 UI，应补真实 wasm path helper 的浏览器错误路径测试。
+- npm scope 迁移、旧 JSON wire 残留全仓库 grep 白名单和最终全量回归进入 Phase 5。

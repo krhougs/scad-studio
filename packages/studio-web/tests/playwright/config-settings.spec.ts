@@ -105,7 +105,7 @@ test("@config-settings saved config is consumed by preview, slicer list and expo
     .toMatchObject({
       configured_openscad_path: OPENSCAD_PATH,
       configured_slicers: [{ name: SLICER_NAME, path: SLICER_PATH }],
-      slicer_name: null,
+      output_path: { path_segments: ["examples", "cube.stl"] },
     });
 
   await openModelStl(page);

@@ -3,6 +3,7 @@ import type { AppConfigShape, SlicerRow } from "../config/app-config";
 import { configuredSlicerRecords } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
+import { resolveSiblingOutputPath } from "./protocol-paths";
 
 export type SlicerEntry = {
   name: string;
@@ -65,12 +66,13 @@ export function SlicerPanel({
     setActionStatus(`sending to ${slicer.name}`);
     onStatus?.(`sending to ${slicer.name}`);
     try {
+      const outputPath = await resolveSiblingOutputPath(source, effective);
       await client.dispatchExportRun({
         configured_openscad_path: config?.openscad_path ?? null,
         configured_slicers: configured,
         source,
         defines: defines ?? [],
-        output_path: effective,
+        output_path: outputPath,
         format: "stl",
         slicer_name: slicer.name,
       });

@@ -4,9 +4,14 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  initSync as initProtocolWasmSync,
+  protocol_decode_client_frame,
+} from "@budn/app-server-protocol";
 
 const SPEC_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(SPEC_DIR, "..", "..", "..", "..");
@@ -34,6 +39,8 @@ export type HarnessHandle = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
 };
+
+let protocolWasmReady = false;
 
 export function createHarness(opts: HarnessOptions): HarnessHandle {
   const hostBind = `127.0.0.1:${opts.bindPort}`;
@@ -133,38 +140,24 @@ export async function installProtocolRecorder(
 ): Promise<void> {
   await page.addInitScript(() => {
     const win = window as Window & {
-      __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
-      __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+      __scadOutgoingFrames?: Array<{ bytes: number[] }>;
       __scadProtocolRecorderInstalled?: boolean;
     };
     win.__scadOutgoingFrames = [];
-    win.__scadDispatchedCommands = [];
     if (win.__scadProtocolRecorderInstalled) {
       return;
     }
     win.__scadProtocolRecorderInstalled = true;
-    const decoder = new TextDecoder();
     const originalSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function patchedSend(data: Parameters<WebSocket["send"]>[0]) {
-      try {
-        let text: string | null = null;
-        if (typeof data === "string") {
-          text = data;
-        } else if (data instanceof ArrayBuffer) {
-          text = decoder.decode(new Uint8Array(data));
-        } else if (ArrayBuffer.isView(data)) {
-          text = decoder.decode(
-            new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-          );
-        }
-        if (text) {
-          win.__scadOutgoingFrames?.push({
-            raw: text,
-            parsed: JSON.parse(text),
-          });
-        }
-      } catch {
-        // 忽略非 JSON 帧；当前协议走 text JSON，这里只作为测试观测点。
+      let bytes: Uint8Array | null = null;
+      if (data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(data);
+      } else if (ArrayBuffer.isView(data)) {
+        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      }
+      if (bytes) {
+        win.__scadOutgoingFrames?.push({ bytes: Array.from(bytes) });
       }
       return originalSend.call(this, data);
     };
@@ -177,16 +170,9 @@ export async function clearRecordedClientCommands(
   await page.evaluate(() => {
     (
       window as Window & {
-        __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
-        __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
+        __scadOutgoingFrames?: Array<{ bytes: number[] }>;
       }
     ).__scadOutgoingFrames = [];
-    (
-      window as Window & {
-        __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
-        __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
-      }
-    ).__scadDispatchedCommands = [];
   });
 }
 
@@ -194,36 +180,21 @@ export async function latestRecordedClientCommand(
   page: import("@playwright/test").Page,
   commandType: string,
 ): Promise<unknown | null> {
-  return page.evaluate((type) => {
-    const dispatched =
-      (
-        window as Window & {
-          __scadDispatchedCommands?: Array<{ type: string; payload: unknown }>;
-        }
-      ).__scadDispatchedCommands ?? [];
-    const directMatches = dispatched
-      .filter((entry) => entry.type === type)
-      .map((entry) => entry.payload);
-    if (directMatches.length > 0) {
-      return directMatches[directMatches.length - 1] ?? null;
-    }
+  const frames = await page.evaluate(() => {
     const frames =
       (
         window as Window & {
-          __scadOutgoingFrames?: Array<{ raw: string; parsed: unknown }>;
+          __scadOutgoingFrames?: Array<{ bytes: number[] }>;
         }
       ).__scadOutgoingFrames ?? [];
-    const matches = frames
-      .map((frame) => frame.parsed as Record<string, unknown>)
-      .filter((envelope) => envelope["type"] === "request")
-      .map((envelope) => envelope["payload"] as Record<string, unknown> | undefined)
-      .filter((payload): payload is Record<string, unknown> => Boolean(payload))
-      .map((payload) => payload["command"] as Record<string, unknown> | undefined)
-      .filter((command): command is Record<string, unknown> => Boolean(command))
-      .filter((command) => command["type"] === type)
-      .map((command) => command["payload"] ?? null);
-    return matches.length > 0 ? matches[matches.length - 1] : null;
-  }, commandType);
+    return frames;
+  });
+  ensureProtocolWasm();
+  const matches = frames
+    .map((frame) => protocol_decode_client_frame(new Uint8Array(frame.bytes)))
+    .map((envelope) => commandPayloadFromClientEnvelope(envelope, commandType))
+    .filter((payload): payload is unknown => payload !== undefined);
+  return matches.length > 0 ? matches[matches.length - 1] : null;
 }
 
 export async function waitForPort(
@@ -249,4 +220,39 @@ export async function waitForPort(
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function ensureProtocolWasm(): void {
+  if (protocolWasmReady) return;
+  const wasmPath = path.join(
+    REPO_ROOT,
+    "packages",
+    "app-server-protocol",
+    "generated",
+    "app_server_protocol_wasm_bg.wasm",
+  );
+  initProtocolWasmSync({ module: readFileSync(wasmPath) });
+  protocolWasmReady = true;
+}
+
+function commandPayloadFromClientEnvelope(
+  envelope: unknown,
+  commandType: string,
+): unknown | undefined {
+  const root = asRecord(envelope);
+  if (root?.["kind"] !== "request" && root?.["type"] !== "request") return undefined;
+  const payload = asRecord(root["payload"]);
+  const command = asRecord(payload?.["command"]);
+  if (!command) return undefined;
+  const observed = command?.["command"] ?? command?.["type"];
+  if (observed !== commandType && observed !== commandType.replaceAll("_", ".")) {
+    return undefined;
+  }
+  return command["payload"] ?? null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }

@@ -9,7 +9,8 @@ use app_server_protocol::{
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     PathHandle, PreviewRequestKind, ProtocolVersionRange, RequestId, ServerCapabilities,
     ServerEnvelope, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, web_file_read_capability,
+    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
+    encode_server_frame, web_file_read_capability,
 };
 use serde::{Deserialize, Serialize};
 use studio_web_wasm::wasm_bridge::{
@@ -52,15 +53,15 @@ fn handshake_ack_bytes() -> Vec<u8> {
             supports_session_reclaim: true,
         },
     };
-    serde_json::to_vec(&ServerEnvelope::HandshakeAck(ack)).unwrap()
+    encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")
 }
 
 fn response_bytes(request_id: RequestId, success: CommandSuccess) -> Vec<u8> {
-    serde_json::to_vec(&ServerEnvelope::Response(ServerResponseEnvelope {
+    encode_server_frame(&ServerEnvelope::Response(ServerResponseEnvelope {
         request_id,
         result: Ok(success),
     }))
-    .unwrap()
+    .expect("response encodes")
 }
 
 fn workspace_current_success() -> CommandSuccess {
@@ -77,7 +78,7 @@ fn watch_ack(subscription_id: &str) -> CommandSuccess {
 }
 
 fn decode_outbound(bytes: &[u8]) -> ClientEnvelope {
-    serde_json::from_slice::<ClientEnvelope>(bytes).expect("outbound decode")
+    decode_client_frame(bytes).expect("outbound decode")
 }
 
 fn expect_request_id(envelope: &ClientEnvelope) -> RequestId {

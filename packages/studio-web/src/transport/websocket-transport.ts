@@ -117,6 +117,5 @@ export class BrowserWebSocketTransport {
 function coerceToBytes(data: unknown): Uint8Array | null {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   if (data instanceof Uint8Array) return data;
-  if (typeof data === "string") return new TextEncoder().encode(data);
   return null;
 }

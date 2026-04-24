@@ -6,9 +6,9 @@ use app_server_protocol::{
     PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
     RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
     ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, web_file_read_capability,
+    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
+    encode_server_frame, web_file_read_capability,
 };
-use serde_json::Value;
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
     ClientEvent, ClientTimeouts, ManagedClient, TransportCloseReason, TransportStatus, WatchParams,
@@ -100,19 +100,19 @@ fn handshake_response() -> CapabilityHandshakeResponse {
 }
 
 fn encode_handshake_ack(ack: &CapabilityHandshakeResponse) -> Vec<u8> {
-    serde_json::to_vec(&ServerEnvelope::HandshakeAck(ack.clone())).expect("handshake ack encodes")
+    encode_server_frame(&ServerEnvelope::HandshakeAck(ack.clone())).expect("handshake ack encodes")
 }
 
 fn encode_response(envelope: &ServerResponseEnvelope) -> Vec<u8> {
-    serde_json::to_vec(&ServerEnvelope::Response(envelope.clone())).expect("response encodes")
+    encode_server_frame(&ServerEnvelope::Response(envelope.clone())).expect("response encodes")
 }
 
 fn encode_push(envelope: &ServerPushEnvelope) -> Vec<u8> {
-    serde_json::to_vec(&ServerEnvelope::Push(envelope.clone())).expect("push encodes")
+    encode_server_frame(&ServerEnvelope::Push(envelope.clone())).expect("push encodes")
 }
 
 fn encode_server_envelope(envelope: &ServerEnvelope) -> Vec<u8> {
-    serde_json::to_vec(envelope).expect("server envelope encodes")
+    encode_server_frame(envelope).expect("server envelope encodes")
 }
 
 fn workspace_current_success(request_id: RequestId) -> ServerResponseEnvelope {
@@ -161,7 +161,10 @@ fn dispatch_before_handshake_returns_not_ready() {
         .dispatch_workspace_current()
         .expect_err("should be not ready");
     assert!(matches!(err, ClientError::NotReady));
-    assert_eq!(client.snapshot().transport_status, TransportStatus::Connecting);
+    assert_eq!(
+        client.snapshot().transport_status,
+        TransportStatus::Connecting
+    );
 }
 
 #[test]
@@ -176,16 +179,10 @@ fn dispatch_after_handshake_enqueues_envelope() {
 
     let outbound = drain_outbound(&mut client);
     assert_eq!(outbound.len(), 1);
-    let frame: Value = serde_json::from_slice(&outbound[0]).unwrap();
-    assert_eq!(frame["kind"], "request");
-    assert_eq!(frame["payload"]["request_id"], 1);
-    assert_eq!(frame["payload"]["command"]["command"], "workspace.current");
-
-    let envelope: ClientEnvelope =
-        serde_json::from_slice(&outbound[0]).expect("outbound bytes decode as ClientEnvelope");
-    match envelope {
+    match decode_client_frame(&outbound[0]).expect("outbound bytes decode as ClientEnvelope") {
         ClientEnvelope::Request(request) => {
             assert_eq!(request.request_id, RequestId(1));
+            assert!(matches!(request.command, ClientCommand::WorkspaceCurrent));
         }
         other => panic!("expected ClientEnvelope::Request, got {other:?}"),
     }
@@ -197,11 +194,8 @@ fn handshake_wire_format_matches_protocol_envelope() {
     client.begin_handshake(handshake_request()).unwrap();
     let outbound = drain_outbound(&mut client);
     assert_eq!(outbound.len(), 1);
-    let frame: Value = serde_json::from_slice(&outbound[0]).unwrap();
-    assert_eq!(frame["kind"], "handshake");
-
-    let envelope: ClientEnvelope =
-        serde_json::from_slice(&outbound[0]).expect("handshake bytes decode as ClientEnvelope");
+    let envelope =
+        decode_client_frame(&outbound[0]).expect("handshake bytes decode as ClientEnvelope");
     assert!(matches!(envelope, ClientEnvelope::Handshake(_)));
 }
 
@@ -369,29 +363,28 @@ fn reconnect_replays_pending_and_resubscribes_watch() {
         was_clean: false,
     });
     let events_after_close = client.drain_events();
-    assert!(events_after_close
-        .iter()
-        .any(|event| matches!(event, ClientEvent::TransportClosed { .. })));
+    assert!(
+        events_after_close
+            .iter()
+            .any(|event| matches!(event, ClientEvent::TransportClosed { .. }))
+    );
 
     client.begin_handshake(handshake_request()).unwrap();
     let queued = drain_outbound(&mut client);
     assert_eq!(queued.len(), 4, "reconnect + two pending + watch");
 
-    let frame0: Value = serde_json::from_slice(&queued[0]).unwrap();
-    assert_eq!(frame0["kind"], "reconnect");
-    let reconnect_envelope: ClientEnvelope =
-        serde_json::from_slice(&queued[0]).expect("reconnect decodes as ClientEnvelope");
+    let reconnect_envelope =
+        decode_client_frame(&queued[0]).expect("reconnect decodes as ClientEnvelope");
     assert!(matches!(reconnect_envelope, ClientEnvelope::Reconnect(_)));
-    let frame1: Value = serde_json::from_slice(&queued[1]).unwrap();
-    assert_eq!(frame1["kind"], "request");
-    assert_eq!(frame1["payload"]["request_id"], req1.0);
-    let frame2: Value = serde_json::from_slice(&queued[2]).unwrap();
-    assert_eq!(frame2["kind"], "request");
-    assert_eq!(frame2["payload"]["request_id"], req2.0);
-    let frame3: Value = serde_json::from_slice(&queued[3]).unwrap();
-    assert_eq!(frame3["kind"], "request");
-    assert_eq!(frame3["payload"]["request_id"], watch_id.0);
-    assert_eq!(frame3["payload"]["command"]["command"], "watch.subscribe");
+    assert_request_id(&queued[1], req1);
+    assert_request_id(&queued[2], req2);
+    match decode_client_frame(&queued[3]).expect("watch subscribe decodes") {
+        ClientEnvelope::Request(ClientRequestEnvelope {
+            request_id,
+            command: ClientCommand::WatchSubscribe(_),
+        }) => assert_eq!(request_id, watch_id),
+        other => panic!("expected watch subscribe request, got {other:?}"),
+    }
 
     client
         .receive_inbound(&encode_handshake_ack(&handshake_response()))
@@ -406,9 +399,11 @@ fn reconnect_replays_pending_and_resubscribes_watch() {
         .unwrap();
 
     let events = client.drain_events();
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, ClientEvent::TransportOpen)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::TransportOpen))
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         ClientEvent::WatchResubscribed { request_id: rid } if *rid == watch_id
@@ -466,7 +461,10 @@ fn inbound_closed_marks_reconnecting_with_clean_reason() {
         })
         .expect("TransportClosed event emitted");
     assert!(close_event.was_clean);
-    assert_eq!(client.snapshot().transport_status, TransportStatus::Reconnecting);
+    assert_eq!(
+        client.snapshot().transport_status,
+        TransportStatus::Reconnecting
+    );
 }
 
 #[test]
@@ -479,7 +477,10 @@ fn client_error_serde_format_matches_contract() {
         request_id: RequestId(42),
     };
     let json = serde_json::to_string(&unknown).unwrap();
-    assert_eq!(json, "{\"type\":\"unknown_request\",\"payload\":{\"request_id\":42}}");
+    assert_eq!(
+        json,
+        "{\"type\":\"unknown_request\",\"payload\":{\"request_id\":42}}"
+    );
 
     let protocol = ClientError::ProtocolError {
         code: "internal".into(),
@@ -611,7 +612,10 @@ fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
     );
     let _ = client.drain_events();
 
-    assert_eq!(client.snapshot().transport_status, TransportStatus::Reconnecting);
+    assert_eq!(
+        client.snapshot().transport_status,
+        TransportStatus::Reconnecting
+    );
     let cancel_id = client.cancel(req_a).expect("cancel during reconnect");
     assert_ne!(cancel_id, req_a);
 
@@ -628,21 +632,30 @@ fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
 
     client.begin_handshake(handshake_request()).unwrap();
     let queued = drain_outbound(&mut client);
-    assert_eq!(queued.len(), 3, "expected reconnect + A replay + cancel replay");
+    assert_eq!(
+        queued.len(),
+        3,
+        "expected reconnect + A replay + cancel replay"
+    );
 
-    let first: ClientEnvelope =
-        serde_json::from_slice(&queued[0]).expect("reconnect decodes");
+    let first: ClientEnvelope = decode_client_frame(&queued[0]).expect("reconnect decodes");
     assert!(matches!(first, ClientEnvelope::Reconnect(_)));
 
-    match serde_json::from_slice::<ClientEnvelope>(&queued[1]).expect("A replay decodes") {
-        ClientEnvelope::Request(ClientRequestEnvelope { request_id, command }) => {
+    match decode_client_frame(&queued[1]).expect("A replay decodes") {
+        ClientEnvelope::Request(ClientRequestEnvelope {
+            request_id,
+            command,
+        }) => {
             assert_eq!(request_id, req_a);
             assert!(matches!(command, ClientCommand::WorkspaceCurrent));
         }
         other => panic!("expected request envelope for A, got {other:?}"),
     }
-    match serde_json::from_slice::<ClientEnvelope>(&queued[2]).expect("cancel replay decodes") {
-        ClientEnvelope::Request(ClientRequestEnvelope { request_id, command }) => {
+    match decode_client_frame(&queued[2]).expect("cancel replay decodes") {
+        ClientEnvelope::Request(ClientRequestEnvelope {
+            request_id,
+            command,
+        }) => {
             assert_eq!(request_id, cancel_id);
             match command {
                 ClientCommand::Cancel(cancel) => assert_eq!(cancel.request_id, req_a),
@@ -650,6 +663,13 @@ fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
             }
         }
         other => panic!("expected request envelope for cancel, got {other:?}"),
+    }
+}
+
+fn assert_request_id(bytes: &[u8], expected: RequestId) {
+    match decode_client_frame(bytes).expect("request decodes") {
+        ClientEnvelope::Request(request) => assert_eq!(request.request_id, expected),
+        other => panic!("expected request envelope, got {other:?}"),
     }
 }
 

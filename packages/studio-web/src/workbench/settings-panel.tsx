@@ -3,8 +3,10 @@ import {
   type AppConfigShape,
   type AppConfigState,
   type DisplayUnit,
+  encodeConfigRaw,
   normalizeAppConfig,
   type SlicerRow,
+  toConfigSaveRequest,
 } from "../config/app-config";
 import { setAppConfigReady } from "../config/app-config-store";
 import type { WasmClient } from "../wasm-bridge";
@@ -52,9 +54,9 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
       ),
       display_unit: displayUnit,
     });
-    const raw = JSON.stringify(next);
+    const raw = encodeConfigRaw(next);
     try {
-      await client.dispatchConfigSave({ json: raw });
+      await client.dispatchConfigSave(toConfigSaveRequest(next));
       setSaveStatus("saved");
       setAppConfigReady(next, raw, "save");
     } catch (err) {

@@ -68,6 +68,7 @@ test("@export-slicer scad tab exposes slicer actions instead of a read-only list
     .toMatchObject({
       configured_openscad_path: TOOL_PATH,
       configured_slicers: [{ name: SLICER_NAME, path: TOOL_PATH }],
+      output_path: { path_segments: ["examples", "params-cube.stl"] },
       slicer_name: SLICER_NAME,
     });
   await expect(rightInspector.getByTestId("slicer-status")).toContainText(

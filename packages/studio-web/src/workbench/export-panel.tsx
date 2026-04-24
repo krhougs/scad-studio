@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { SlicerRow } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
+import { resolveSiblingOutputPath } from "./protocol-paths";
 
 type ExportPanelProps = {
   client: WasmClient | null;
@@ -53,12 +54,13 @@ export function ExportPanel({
     setLastMessage("export running");
     onStatus("export running");
     try {
+      const outputPath = await resolveSiblingOutputPath(source, effective);
       await client.dispatchExportRun({
         configured_openscad_path: configuredOpenscadPath ?? null,
         configured_slicers: configuredSlicers ?? [],
         source,
         defines: defines ?? [],
-        output_path: effective,
+        output_path: outputPath,
         format,
         slicer_name: null,
       });

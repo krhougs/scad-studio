@@ -13,6 +13,8 @@ export type WorkspaceEntry = {
   label: string;
   path: unknown;
   kind: "file" | "directory";
+  pathError?: string | null;
+  isOperable?: boolean;
 };
 
 export type WorkspaceDirectoryNode = {
@@ -88,8 +90,10 @@ function EntryRow({
     directoryKey(activeFilePath) === key;
   const IconComponent = isDirectory ? Folder : iconForEntry(entry);
   const kindLabel = fileKindLabel(entry);
+  const isOperable = entry.isOperable !== false && !entry.pathError;
 
   const handleClick = () => {
+    if (!isOperable) return;
     if (isDirectory) {
       if (isExpanded) onCollapseDirectory(entry);
       else onExpandDirectory(entry);
@@ -102,16 +106,18 @@ function EntryRow({
     <>
       <button
         type="button"
-        className={`tree-item${isActive ? " active" : ""}`}
+        className={`tree-item${isActive ? " active" : ""}${!isOperable ? " is-invalid" : ""}`}
         style={{ paddingLeft: 12 + depth * 12 }}
         onClick={handleClick}
+        disabled={!isOperable}
+        title={entry.pathError ?? undefined}
         data-testid={`entry-${entry.label}`}
         aria-expanded={isDirectory ? isExpanded : undefined}
       >
         <IconComponent className="ic" size={14} weight="regular" aria-hidden="true" />
         <span className="label-main">{entry.label}</span>
         <span className="dim" data-testid={`entry-kind-${entry.label}`}>
-          {kindLabel}
+          {entry.pathError ? "invalid" : kindLabel}
         </span>
       </button>
       {isDirectory && expanded ? (
