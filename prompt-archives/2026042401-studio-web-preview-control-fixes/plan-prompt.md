@@ -26,6 +26,13 @@
 7. 初次渲染前、参数改变需要重新渲染时，以及任何等待远端异步加载的情况下，需要在 UI 的显眼处展示加载状态。
 8. 渲染部分需要严格检查类似的异步加载导致提前执行的问题，包括摄像机距离判断、plate 和网格大小等依赖真实渲染数据的计算；找到后必须纳入本 plan 的修复范围。
 
+2026-04-24 用户再次澄清坐标目标：
+
+1. 项目坐标系固定为右手系：`+X` 向右，`+Y` 向后 / 板面内第二方向，`+Z` 向上 / 层叠方向；`Top plane = XY`，`Front plane = XZ`，`Right plane = YZ`。
+2. OpenSCAD 已经符合这套坐标系，不需要在后端为了 Web 预览改写 OpenSCAD 输出轴向。
+3. 本轮坐标修正重点是前端预览架构适配这套项目坐标系，包含相机 preset、相机交互、ViewportGizmo、网格、底板和坐标轴。
+4. 摄像机 preset 必须按项目坐标系的平面定义解释：Top 从 `+Z` 侧看向原点，Front 从 `-Y` 侧看向原点，Right 从 `+X` 侧看向原点；对应反向视图 Bottom / Back / Left 分别从 `-Z` / `+Y` / `-X` 侧看向原点。Top 视图屏幕上方对应 `+Y`，Bottom 视图屏幕上方对应 `-Y`，Front / Back / Left / Right 视图屏幕上方对应 `+Z`。
+
 ## 上下文
 
 - 本任务基于 `prompt-archives/2026042400-studio-web-parity-audit-plan/plan-02.md` 的未提交实现继续修改。
@@ -36,7 +43,7 @@
 
 - Base UI NumberField 文档：`NumberField.Root` 支持受控 `value` 与 `onValueChange`，并包含 `Group`、`Input`、`Increment`、`Decrement` 等 parts。
 - `react-knob-headless` 文档：`KnobHeadless` 使用 `valueRaw`、`valueMin`、`valueMax`、`valueRawRoundFn`、`valueRawDisplayFn`、`onValueRawChange`；键盘控制通过 `useKnobKeyboardControls`。
-- OpenSCAD 文档：旋转和坐标遵循右手规则；源码 `scad-scene::mesh::openscad_to_viewer` 将 OpenSCAD `[x, y, z]` 映射为 viewer `[x, z, -y]`，即 viewer 内部使用 Y-up，但坐标展示必须标注 OpenSCAD 的 X/Y/Z。
+- OpenSCAD 文档：旋转和坐标遵循右手规则；OpenSCAD 坐标已经符合项目约定。本轮不得把 `scad-scene::mesh::openscad_to_viewer` 这类 viewer 私有映射当作后端 mesh 输出契约，前端预览架构需要适配项目坐标系。
 - 仍需核对 `studio-app` 的 OrbitControls 行为，并将网页相机拖拽、平移、缩放语义与其保持一致。
 
 ## 执行要求

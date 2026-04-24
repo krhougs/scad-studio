@@ -2,6 +2,20 @@
 
 `budn'` 是一个跨端 OpenSCAD 工作台；代码与配置标识符中统一使用 `budn`。桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
 
+## 坐标系约定
+
+前端预览中用户看见和交互的空间，以及后端输出的所有 mesh 数据（包括 STL、3MF 和 protocol mesh payload），统一使用同一套项目坐标系：
+
+- 右手系，满足 `+X × +Y = +Z`。
+- `+X`：向右。
+- `+Y`：向后，即板面内第二方向。
+- `+Z`：向上，即层叠方向。
+- `Top plane`：`XY`。
+- `Front plane`：`XZ`。
+- `Right plane`：`YZ`。
+
+OpenSCAD 已经符合这套坐标系，不需要为了 Web 预览额外改写其输出轴向。前端相机、gizmo、网格、底板和坐标轴必须适配这套坐标系；未来其它 CAD 后端如果使用不同轴约定，才需要在对应 adapter / loader 边界转换到这套项目坐标系。
+
 ## 仓库结构
 
 ```

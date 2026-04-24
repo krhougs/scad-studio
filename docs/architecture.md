@@ -41,6 +41,20 @@
 
 ## 2. Rust crate 能力边界
 
+### 2.0 预览与 mesh 坐标系契约
+
+预览链路有一条跨前后端的固定坐标系契约：前端展示空间和后端输出 mesh 空间必须一致，不能各自维护一套私有轴映射。
+
+- 坐标系为右手系，满足 `+X × +Y = +Z`。
+- `+X` 表示向右。
+- `+Y` 表示向后，即板面内第二方向。
+- `+Z` 表示向上，即层叠方向。
+- `Top plane` 是 `XY`。
+- `Front plane` 是 `XZ`。
+- `Right plane` 是 `YZ`。
+
+这个契约适用于 `app-server-core` 生成或解析后通过 protocol 输出的 mesh，也适用于 `scad-scene` 的 `MeshData`、STL / 3MF 输出、桌面预览和 Web Three.js 预览。OpenSCAD 已经符合这套坐标系，不需要为了 Web 预览额外改写其输出轴向；未来其它 CAD 后端如果使用不同轴约定，才需要在对应 adapter / loader 边界转换到这套项目坐标系。前端相机 preset、ViewportGizmo、坐标轴、网格和底板只能消费这套坐标系，不能用额外展示映射补偿后端 mesh 数据。
+
 ### 2.1 `app-server-protocol`
 
 - 纯类型 crate：`ClientEnvelope` / `ServerEnvelope`（`#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]`）、`ClientCommand` / `CommandSuccess`、`ClientRequestEnvelope` / `ServerResponseEnvelope`、`ServerPushEnvelope` / `ServerPushEvent`、`CapabilityHandshakeRequest` / `CapabilityHandshakeResponse`、`WatchSubscribeRequest` / `WatchChangedEvent` / `WatchErrorEvent`、`PreviewRequest` / `PreviewReadyResponse`、`FileReadRequest` / `FileReadResponse` / `FileReadContents`（`utf8_text | binary`）、`ConfigLoad*` / `ConfigSave*`、`SlicerListRequest` / `SlicerListResponse`、`ExportRunRequest` / `ExportRunResponse`、`ParameterDefinition` / `ParsedParameters` / `PresetFile`、`ClientCapabilities` / `ServerCapabilities` / `ProtocolVersionRange` / `ClientPlatform`、`PathHandle` / `WorkspaceId` / `SubscriptionId` / `RequestId(u64)` / `SessionToken`。
