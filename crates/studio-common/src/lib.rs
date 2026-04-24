@@ -14,14 +14,14 @@ pub use app_server_client::{
     AppServerClient, AppServerClientEvent, AppServerTransportError, AppServerTransportEvent,
     AppServerTransportPort,
 };
+pub use config::{AppConfig, ConfigError, DisplayUnit, SlicerConfig};
+pub use document::DocumentState;
+pub use document_session::{DocumentDescriptor, DocumentKey, DocumentKind};
+pub use document_workspace::{DocumentOpenOutcome, DocumentSlot, DocumentTab, DocumentWorkspace};
 pub use managed_client::{
     ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, ManagedClient, TransportCloseReason,
     TransportStatus, WatchEventPayload, WatchParams,
 };
-pub use config::{AppConfig, ConfigError, SlicerConfig};
-pub use document::DocumentState;
-pub use document_session::{DocumentDescriptor, DocumentKey, DocumentKind};
-pub use document_workspace::{DocumentOpenOutcome, DocumentSlot, DocumentTab, DocumentWorkspace};
 pub use params::{ParameterStore, parameter_entries_to_cli_defines, parse_parameters};
 pub use presets::preset_path_for_source;
 pub use preview_state::PreviewState;

@@ -12,6 +12,9 @@
     "web:build": "bun scripts/build_studio_web.ts",
     "web:smoke": "bun scripts/run_smoke.ts",
     "web:smoke:browser": "bun run --cwd packages/studio-web test:e2e",
+    "protocol:build": "bun scripts/build_protocol_wasm.ts",
+    "protocol:smoke": "bun scripts/smoke/protocol_package_smoke.ts",
+    "protocol:check-generated": "bun scripts/check_protocol_wasm_generated.ts",
     "check:wasm-bindgen": "bun scripts/check_wasm_bindgen_version.ts"
   },
   "module": "index.ts",

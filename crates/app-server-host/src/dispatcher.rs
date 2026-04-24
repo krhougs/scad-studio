@@ -1,12 +1,12 @@
 use app_server_core::{
     FileWatcher, SlicerInstall, current_workspace, detect_slicer_paths, export_model,
-    list_workspace_entries, load_config_json, preview_ready_response, read_file_response,
-    resolve_workspace_path, save_config_json, send_to_slicer,
+    list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
+    resolve_workspace_path, resolve_workspace_write_path, save_config_dto, send_to_slicer,
 };
 use app_server_protocol::{
     CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCommand, ClientRequestEnvelope,
     CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse,
-    FileWriteTextResponse, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
+    FileWriteTextResponse, HostLocalPath, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
     ProtocolVersionRange, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
     ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
     WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
@@ -127,10 +127,7 @@ impl HostRequestDispatcher {
             }
             ClientCommand::FileWriteText(request) => {
                 let workspace_path = self.workspace_root()?;
-                let resolved = resolve_workspace_path(workspace_path, &request.path)?;
-                if let Some(parent) = resolved.parent() {
-                    fs::create_dir_all(parent).map_err(internal_error)?;
-                }
+                let resolved = resolve_workspace_write_path(workspace_path, &request.path)?;
                 fs::write(&resolved, request.contents).map_err(internal_error)?;
                 self.session.issue_handle(request.path.clone());
                 Ok(CommandSuccess::FileWritten(FileWriteTextResponse {
@@ -138,11 +135,11 @@ impl HostRequestDispatcher {
                 }))
             }
             ClientCommand::ConfigLoad => {
-                let json = load_config_json().map_err(internal_error)?;
-                Ok(CommandSuccess::ConfigLoaded(ConfigLoadResponse { json }))
+                let config = load_config_dto().map_err(internal_error)?;
+                Ok(CommandSuccess::ConfigLoaded(ConfigLoadResponse { config }))
             }
             ClientCommand::ConfigSave(request) => {
-                save_config_json(&request.json).map_err(internal_error)?;
+                save_config_dto(&request.config).map_err(internal_error)?;
                 Ok(CommandSuccess::ConfigSaved)
             }
             ClientCommand::PreviewRequest(request) => {
@@ -150,7 +147,9 @@ impl HostRequestDispatcher {
                 let source_path = resolve_workspace_path(workspace_path, &request.source)?;
                 self.session.issue_handle(request.source.clone());
                 preview_ready_response(
-                    request.configured_openscad_path,
+                    request
+                        .configured_openscad_path
+                        .map(|path| path.to_path_buf()),
                     &source_path,
                     &request.defines,
                 )
@@ -163,16 +162,18 @@ impl HostRequestDispatcher {
                     .into_iter()
                     .map(|item| SlicerInstall {
                         name: item.name,
-                        path: item.path,
+                        path: item.path.to_path_buf(),
                     })
                     .collect::<Vec<_>>();
                 let slicers = detect_slicer_paths(&configured)
                     .into_iter()
-                    .map(|item| app_server_protocol::SlicerInstallRecord {
-                        name: item.name,
-                        path: item.path,
+                    .map(|item| {
+                        Ok(app_server_protocol::SlicerInstallRecord {
+                            name: item.name,
+                            path: path_buf_to_host_path(item.path)?,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ProtocolError>>()?;
                 Ok(CommandSuccess::SlicerListed(
                     app_server_protocol::SlicerListResponse { slicers },
                 ))
@@ -180,19 +181,23 @@ impl HostRequestDispatcher {
             ClientCommand::ExportRun(request) => {
                 let workspace_path = self.workspace_root()?;
                 let source_path = resolve_workspace_path(workspace_path, &request.source)?;
+                let output_handle = request.output_path.clone();
+                let output_path = resolve_workspace_write_path(workspace_path, &output_handle)?;
                 let configured_slicers = request
                     .configured_slicers
                     .iter()
                     .map(|item| SlicerInstall {
                         name: item.name.clone(),
-                        path: item.path.clone(),
+                        path: item.path.to_path_buf(),
                     })
                     .collect::<Vec<_>>();
                 export_model(
-                    request.configured_openscad_path,
+                    request
+                        .configured_openscad_path
+                        .map(|path| path.to_path_buf()),
                     &source_path,
                     &request.defines,
-                    &request.output_path,
+                    &output_path,
                     request.format,
                 )
                 .map_err(internal_error)?;
@@ -206,10 +211,10 @@ impl HostRequestDispatcher {
                                 format!("未找到切片软件 {name}"),
                             )
                         })?;
-                    send_to_slicer(&slicer.path, &request.output_path).map_err(internal_error)?;
+                    send_to_slicer(&slicer.path, &output_path).map_err(internal_error)?;
                 }
                 Ok(CommandSuccess::ExportRun(ExportRunResponse {
-                    output_path: request.output_path,
+                    output_path: output_handle,
                 }))
             }
             ClientCommand::WatchSubscribe(request) => {
@@ -278,7 +283,9 @@ impl HostRequestDispatcher {
 
     fn record_workspace_entries(&mut self, response: &WorkspaceListResponse) {
         for entry in &response.entries {
-            self.session.issue_handle(entry.path.clone());
+            if let Some(path) = &entry.path {
+                self.session.issue_handle(path.clone());
+            }
         }
     }
 }
@@ -313,6 +320,16 @@ fn build_watcher(
 
 fn internal_error(error: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::new(ProtocolErrorCode::Internal, error.to_string())
+}
+
+fn path_buf_to_host_path(path: PathBuf) -> Result<HostLocalPath, ProtocolError> {
+    let value = path.to_str().ok_or_else(|| {
+        ProtocolError::new(
+            ProtocolErrorCode::InvalidHostLocalPath,
+            "host-local path 必须是 UTF-8",
+        )
+    })?;
+    HostLocalPath::new(value)
 }
 
 fn server_capabilities() -> ServerCapabilities {

@@ -1,0 +1,17 @@
+[package]
+name = "app-server-protocol-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "app_server_protocol_wasm"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+app-server-protocol = { path = "../app-server-protocol" }
+serde = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "=0.2.117"

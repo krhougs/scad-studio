@@ -1,6 +1,6 @@
 use crate::{PathHandle, WorkspaceId};
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
@@ -12,16 +12,33 @@ pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
 // 显式 `denied_extensions` 覆写。
 pub const WEB_FILE_READ_DENY_EXTENSIONS: &[&str] = &[];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
 pub struct RequestId(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct SubscriptionId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct SessionToken(pub String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct ProtocolVersionRange {
     pub min: u16,
     pub max: u16,
@@ -47,15 +64,16 @@ pub fn negotiate_protocol_version(
     Ok(negotiated)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum ClientPlatform {
-    Desktop,
-    Web,
-    Other,
+    Desktop = 0,
+    Web = 1,
+    Other = 2,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct FileReadCapability {
     pub denied_extensions: Vec<String>,
 }
@@ -69,14 +87,17 @@ pub fn web_file_read_capability() -> FileReadCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum PreviewRequestKind {
-    GeometryArtifact,
-    RenderedImage,
+    GeometryArtifact = 0,
+    RenderedImage = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ClientCapabilities {
     pub client_name: String,
     pub platform: ClientPlatform,
@@ -85,7 +106,7 @@ pub struct ClientCapabilities {
     pub supported_preview_kinds: Vec<PreviewRequestKind>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ServerCapabilities {
     pub protocol_version: ProtocolVersionRange,
     pub reconnect_window_ms: u64,
@@ -94,144 +115,225 @@ pub struct ServerCapabilities {
     pub supports_session_reclaim: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CapabilityHandshakeRequest {
     pub capabilities: ClientCapabilities,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CapabilityHandshakeResponse {
     pub negotiated_version: u16,
     pub session_token: SessionToken,
     pub server_capabilities: ServerCapabilities,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WorkspaceCurrentResponse {
     pub workspace_id: WorkspaceId,
     pub root_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WorkspaceListRequest {
     pub directory: Option<PathHandle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum WorkspaceEntryKind {
-    Directory,
-    File,
+    Directory = 0,
+    File = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WorkspaceEntry {
-    pub path: PathHandle,
+    pub name: String,
+    pub path: Option<PathHandle>,
     pub kind: WorkspaceEntryKind,
+    pub path_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WorkspaceListResponse {
     pub directory: Option<PathHandle>,
     pub entries: Vec<WorkspaceEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct FileReadRequest {
     pub path: PathHandle,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum FileReadContents {
-    Utf8Text(String),
-    Binary(Vec<u8>),
+    Utf8Text(String) = 0,
+    Binary(Vec<u8>) = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct FileReadResponse {
     pub path: PathHandle,
     pub media_type: String,
     pub contents: FileReadContents,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct FileWriteTextRequest {
     pub path: PathHandle,
     pub contents: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct FileWriteTextResponse {
     pub path: PathHandle,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct HostLocalPath(pub String);
+
+impl HostLocalPath {
+    pub fn new(value: impl Into<String>) -> Result<Self, ProtocolError> {
+        let value = value.into();
+        if value.is_empty() || value.contains('\0') {
+            return Err(ProtocolError::new(
+                ProtocolErrorCode::InvalidHostLocalPath,
+                "host-local path 不能为空或包含 NUL",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_path_buf(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(&self.0)
+    }
+}
+
+pub type WorkspacePortablePath = PathHandle;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum DisplayUnitDto {
+    #[default]
+    Millimeter = 0,
+    Centimeter = 1,
+    Inch = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct SlicerConfigDto {
+    pub name: String,
+    pub path: HostLocalPath,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AppConfigDto {
+    pub openscad_path: Option<HostLocalPath>,
+    pub slicers: Vec<SlicerConfigDto>,
+    pub recent_workspaces: Vec<HostLocalPath>,
+    pub floating_panel_opacity: f32,
+    pub left_panel_width: f32,
+    pub right_panel_width: f32,
+    pub display_unit: DisplayUnitDto,
+    pub camera_overlay_pos: Option<[f32; 2]>,
+    pub camera_overlay_size: Option<[f32; 2]>,
+    pub param_panel_pos: Option<[f32; 2]>,
+    pub param_panel_size: Option<[f32; 2]>,
+    pub log_panel_pos: Option<[f32; 2]>,
+    pub log_panel_size: Option<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ConfigLoadResponse {
-    pub json: String,
+    pub config: AppConfigDto,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ConfigSaveRequest {
-    pub json: String,
+    pub config: AppConfigDto,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SlicerInstallRecord {
     pub name: String,
-    pub path: PathBuf,
+    pub path: HostLocalPath,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SlicerListRequest {
     pub configured: Vec<SlicerInstallRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SlicerListResponse {
     pub slicers: Vec<SlicerInstallRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ExportRunRequest {
-    pub configured_openscad_path: Option<PathBuf>,
+    pub configured_openscad_path: Option<HostLocalPath>,
     pub configured_slicers: Vec<SlicerInstallRecord>,
     pub source: PathHandle,
     pub defines: Vec<String>,
-    pub output_path: PathBuf,
+    pub output_path: WorkspacePortablePath,
     pub format: crate::ExportFormat,
     pub slicer_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ExportRunResponse {
-    pub output_path: PathBuf,
+    pub output_path: WorkspacePortablePath,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewRequest {
     pub source: PathHandle,
     pub defines: Vec<String>,
     pub kind: PreviewRequestKind,
     #[serde(default)]
-    pub configured_openscad_path: Option<PathBuf>,
+    pub configured_openscad_path: Option<HostLocalPath>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum PreviewResponseFormat {
-    Mesh,
-    ThreeMf,
-    RenderedImage,
+    Mesh = 0,
+    ThreeMf = 1,
+    RenderedImage = 2,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum PreviewUnit {
-    Millimeter,
+    Millimeter = 0,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewMeshPayload {
     pub unit: PreviewUnit,
     pub positions: Vec<[f32; 3]>,
@@ -240,13 +342,13 @@ pub struct PreviewMeshPayload {
     pub indices: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewArtifact3mf {
     pub bytes: Vec<u8>,
     pub media_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewRenderedImagePayload {
     pub bytes: Vec<u8>,
     pub media_type: String,
@@ -254,133 +356,146 @@ pub struct PreviewRenderedImagePayload {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "format", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PreviewArtifact {
-    Mesh(PreviewMeshPayload),
-    ThreeMf(PreviewArtifact3mf),
-    RenderedImage(PreviewRenderedImagePayload),
+    Mesh(PreviewMeshPayload) = 0,
+    ThreeMf(PreviewArtifact3mf) = 1,
+    RenderedImage(PreviewRenderedImagePayload) = 2,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewReadyResponse {
     pub requested_kind: PreviewRequestKind,
     pub artifact: PreviewArtifact,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchSubscribeRequest {
     pub directory: Option<PathHandle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchUnsubscribeRequest {
     pub subscription_id: SubscriptionId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchSubscriptionAck {
     pub subscription_id: SubscriptionId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchChangedEvent {
     pub subscription_id: SubscriptionId,
     pub changed_paths: Vec<PathHandle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchErrorEvent {
     pub subscription_id: SubscriptionId,
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CancelRequest {
     pub request_id: RequestId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SessionReclaimRequest {
     pub session_token: SessionToken,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SessionReclaimedResponse {
     pub workspace: Option<WorkspaceCurrentResponse>,
     pub reclaimed_capabilities: ServerCapabilities,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "command", content = "payload")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ClientCommand {
     #[serde(rename = "workspace.current")]
-    WorkspaceCurrent,
+    WorkspaceCurrent = 0,
     #[serde(rename = "workspace.list")]
-    WorkspaceList(WorkspaceListRequest),
+    WorkspaceList(WorkspaceListRequest) = 1,
     #[serde(rename = "config.load")]
-    ConfigLoad,
+    ConfigLoad = 2,
     #[serde(rename = "config.save")]
-    ConfigSave(ConfigSaveRequest),
+    ConfigSave(ConfigSaveRequest) = 3,
     #[serde(rename = "file.read")]
-    FileRead(FileReadRequest),
+    FileRead(FileReadRequest) = 4,
     #[serde(rename = "file.write_text")]
-    FileWriteText(FileWriteTextRequest),
+    FileWriteText(FileWriteTextRequest) = 5,
     #[serde(rename = "preview.request")]
-    PreviewRequest(PreviewRequest),
+    PreviewRequest(PreviewRequest) = 6,
     #[serde(rename = "slicer.list")]
-    SlicerList(SlicerListRequest),
+    SlicerList(SlicerListRequest) = 7,
     #[serde(rename = "export.run")]
-    ExportRun(ExportRunRequest),
+    ExportRun(ExportRunRequest) = 8,
     #[serde(rename = "watch.subscribe")]
-    WatchSubscribe(WatchSubscribeRequest),
+    WatchSubscribe(WatchSubscribeRequest) = 9,
     #[serde(rename = "watch.unsubscribe")]
-    WatchUnsubscribe(WatchUnsubscribeRequest),
+    WatchUnsubscribe(WatchUnsubscribeRequest) = 10,
     #[serde(rename = "cancel")]
-    Cancel(CancelRequest),
+    Cancel(CancelRequest) = 11,
     #[serde(rename = "session.reclaim")]
-    SessionReclaim(SessionReclaimRequest),
+    SessionReclaim(SessionReclaimRequest) = 12,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ClientRequestEnvelope {
     pub request_id: RequestId,
     pub command: ClientCommand,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum CommandSuccess {
-    WorkspaceCurrent(WorkspaceCurrentResponse),
-    WorkspaceList(WorkspaceListResponse),
-    ConfigLoaded(ConfigLoadResponse),
-    ConfigSaved,
-    FileRead(FileReadResponse),
-    FileWritten(FileWriteTextResponse),
-    PreviewReady(PreviewReadyResponse),
-    SlicerListed(SlicerListResponse),
-    ExportRun(ExportRunResponse),
-    WatchSubscribed(WatchSubscriptionAck),
-    WatchUnsubscribed(WatchSubscriptionAck),
-    CancelAccepted(CancelRequest),
-    SessionReclaimed(SessionReclaimedResponse),
+    WorkspaceCurrent(WorkspaceCurrentResponse) = 0,
+    WorkspaceList(WorkspaceListResponse) = 1,
+    ConfigLoaded(ConfigLoadResponse) = 2,
+    ConfigSaved = 3,
+    FileRead(FileReadResponse) = 4,
+    FileWritten(FileWriteTextResponse) = 5,
+    PreviewReady(PreviewReadyResponse) = 6,
+    SlicerListed(SlicerListResponse) = 7,
+    ExportRun(ExportRunResponse) = 8,
+    WatchSubscribed(WatchSubscriptionAck) = 9,
+    WatchUnsubscribed(WatchSubscriptionAck) = 10,
+    CancelAccepted(CancelRequest) = 11,
+    SessionReclaimed(SessionReclaimedResponse) = 12,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 #[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
 pub enum ProtocolErrorCode {
-    InvalidCommand,
-    InvalidPathHandle,
-    UnsupportedFileTypeForClient,
-    StalePathHandle,
-    Cancelled,
-    SessionExpired,
-    UnsupportedProtocolVersion,
-    NotFound,
-    Internal,
+    InvalidCommand = 0,
+    InvalidPathHandle = 1,
+    UnsupportedFileTypeForClient = 2,
+    StalePathHandle = 3,
+    Cancelled = 4,
+    SessionExpired = 5,
+    UnsupportedProtocolVersion = 6,
+    NotFound = 7,
+    Internal = 8,
+    InvalidWireFrame = 9,
+    UnsupportedWireVersion = 10,
+    InvalidNumericValue = 11,
+    InvalidHostLocalPath = 12,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ProtocolError {
     pub code: ProtocolErrorCode,
     pub message: String,
@@ -393,48 +508,58 @@ impl ProtocolError {
             message: message.into(),
         }
     }
+
+    pub fn code(&self) -> ProtocolErrorCode {
+        self.code
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ServerResponseEnvelope {
     pub request_id: RequestId,
     pub result: Result<CommandSuccess, ProtocolError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "event", content = "payload")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ServerPushEvent {
     #[serde(rename = "watch.changed")]
-    WatchChanged(WatchChangedEvent),
+    WatchChanged(WatchChangedEvent) = 0,
     #[serde(rename = "watch.error")]
-    WatchError(WatchErrorEvent),
+    WatchError(WatchErrorEvent) = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ServerPushEnvelope {
     pub event: ServerPushEvent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ClientEnvelope {
-    Handshake(CapabilityHandshakeRequest),
-    Reconnect(CapabilityHandshakeRequest),
-    Request(ClientRequestEnvelope),
-    Close,
+    Handshake(CapabilityHandshakeRequest) = 0,
+    Reconnect(CapabilityHandshakeRequest) = 1,
+    Request(ClientRequestEnvelope) = 2,
+    Close = 3,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct TransportErrorFrame {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ServerEnvelope {
-    HandshakeAck(CapabilityHandshakeResponse),
-    Response(ServerResponseEnvelope),
-    Push(ServerPushEnvelope),
-    TransportError(TransportErrorFrame),
-    Closed,
+    HandshakeAck(CapabilityHandshakeResponse) = 0,
+    Response(ServerResponseEnvelope) = 1,
+    Push(ServerPushEnvelope) = 2,
+    TransportError(TransportErrorFrame) = 3,
+    Closed = 4,
 }

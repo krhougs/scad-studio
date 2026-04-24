@@ -6,12 +6,12 @@ use app_server_protocol::{
 
 use crate::AppServerTransportPort;
 
+use super::ManagedClient;
 use super::pending::{PendingKind, PendingRequestInfo};
 use super::types::{
     ClientError, ClientEvent, PreviewErrorSummary, PreviewPhase, TransportCloseReason,
     TransportStatus, WatchEventPayload,
 };
-use super::ManagedClient;
 
 impl<T: AppServerTransportPort> ManagedClient<T> {
     pub(super) fn handle_handshake_ack(&mut self, ack: CapabilityHandshakeResponse) {
@@ -245,5 +245,9 @@ fn protocol_error_code_label(code: ProtocolErrorCode) -> &'static str {
         ProtocolErrorCode::UnsupportedProtocolVersion => "unsupported_protocol_version",
         ProtocolErrorCode::NotFound => "not_found",
         ProtocolErrorCode::Internal => "internal",
+        ProtocolErrorCode::InvalidWireFrame => "invalid_wire_frame",
+        ProtocolErrorCode::UnsupportedWireVersion => "unsupported_wire_version",
+        ProtocolErrorCode::InvalidNumericValue => "invalid_numeric_value",
+        ProtocolErrorCode::InvalidHostLocalPath => "invalid_host_local_path",
     }
 }

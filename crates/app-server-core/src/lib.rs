@@ -11,7 +11,8 @@ pub use child_terminator::{
     ChildTerminator, DefaultChildTerminator, terminate_child, terminate_child_with,
 };
 pub use config::{
-    ConfigError, config_file_path, load_config, load_config_json, save_config, save_config_json,
+    ConfigError, app_config_from_dto, app_config_to_dto, config_file_path, load_config,
+    load_config_dto, load_config_json, save_config, save_config_dto, save_config_json,
 };
 pub use export::{
     SlicerInstall, build_export_filename, detect_slicer_paths, export_model, send_to_slicer,
@@ -25,4 +26,6 @@ pub use preview::{
     preview_ready_response, resolve_openscad_path,
 };
 pub use watch::{FileWatcher, WatchError, WatchMessage, matches_any_path, matches_path};
-pub use workspace::{current_workspace, list_workspace_entries, resolve_workspace_path};
+pub use workspace::{
+    current_workspace, list_workspace_entries, resolve_workspace_path, resolve_workspace_write_path,
+};

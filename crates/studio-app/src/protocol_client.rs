@@ -8,17 +8,18 @@ use std::time::Duration;
 use app_server_host::{ClientTransport, InProcessHost, spawn_in_process_mpsc_host};
 use app_server_protocol::{
     CapabilityHandshakeRequest, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, ConfigSaveRequest, ExportRunRequest,
-    ExportRunResponse, FileReadContents, FileReadRequest, FileWriteTextRequest, PathHandle,
-    PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolVersionRange,
-    RequestId, SlicerInstallRecord, SlicerListRequest, SubscriptionId, WatchChangedEvent,
-    WatchErrorEvent, WatchSubscribeRequest, WatchSubscriptionAck, WatchUnsubscribeRequest,
+    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, ConfigSaveRequest, DisplayUnitDto,
+    ExportRunRequest, ExportRunResponse, FileReadContents, FileReadRequest, FileWriteTextRequest,
+    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolError,
+    ProtocolVersionRange, RequestId, SlicerConfigDto, SlicerInstallRecord, SlicerListRequest,
+    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscribeRequest,
+    WatchSubscriptionAck, WatchUnsubscribeRequest,
 };
 use app_server_transport::ServerEnvelope;
 use scad_scene::MeshData;
 use scad_ui::file_tree::{FileTreeEntry, FileTreeEntryKind};
 use scad_viewer::app::SlicerInstall;
-use studio_common::{AppConfig, ExportFormat, PresetFile, SlicerConfig};
+use studio_common::{AppConfig, DisplayUnit, ExportFormat, PresetFile, SlicerConfig};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -79,15 +80,16 @@ impl DesktopProtocolClient {
 
     pub fn load_config(&self) -> Result<AppConfig, String> {
         let response = self.send_command(ClientCommand::ConfigLoad)?;
-        let CommandSuccess::ConfigLoaded(ConfigLoadResponse { json }) = response else {
+        let CommandSuccess::ConfigLoaded(ConfigLoadResponse { config }) = response else {
             return Err("config.load 返回了意外响应".into());
         };
-        AppConfig::from_json(&json).map_err(|error| error.to_string())
+        app_config_from_dto(config)
     }
 
     pub fn save_config(&self, config: &AppConfig) -> Result<(), String> {
-        let json = config.to_json().map_err(|error| error.to_string())?;
-        let response = self.send_command(ClientCommand::ConfigSave(ConfigSaveRequest { json }))?;
+        let response = self.send_command(ClientCommand::ConfigSave(ConfigSaveRequest {
+            config: app_config_to_dto(config)?,
+        }))?;
         match response {
             CommandSuccess::ConfigSaved => Ok(()),
             other => Err(format!("config.save 返回了意外响应: {other:?}")),
@@ -138,13 +140,16 @@ impl DesktopProtocolClient {
             .entries
             .into_iter()
             .map(|entry| FileTreeEntry {
-                name: entry
+                name: entry.name.clone(),
+                path: entry
                     .path
-                    .path_segments()
-                    .last()
-                    .cloned()
-                    .unwrap_or_default(),
-                path: self.path_from_handle(&entry.path),
+                    .as_ref()
+                    .map(|path| self.path_from_handle(path))
+                    .unwrap_or_else(|| {
+                        let mut path = self.workspace_root().unwrap_or_default();
+                        path.push(&entry.name);
+                        path
+                    }),
                 kind: match entry.kind {
                     app_server_protocol::WorkspaceEntryKind::Directory => {
                         FileTreeEntryKind::Directory
@@ -208,15 +213,17 @@ impl DesktopProtocolClient {
     }
 
     pub fn list_slicers(&self, configured: &[SlicerConfig]) -> Result<Vec<SlicerInstall>, String> {
-        let response = self.send_command(ClientCommand::SlicerList(SlicerListRequest {
-            configured: configured
-                .iter()
-                .map(|item| SlicerInstallRecord {
+        let configured = configured
+            .iter()
+            .map(|item| {
+                Ok(SlicerInstallRecord {
                     name: item.name.clone(),
-                    path: item.path.clone(),
+                    path: path_to_host_local(&item.path)?,
                 })
-                .collect(),
-        }))?;
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let response =
+            self.send_command(ClientCommand::SlicerList(SlicerListRequest { configured }))?;
         let CommandSuccess::SlicerListed(list) = response else {
             return Err("slicer.list 返回了意外响应".into());
         };
@@ -225,7 +232,7 @@ impl DesktopProtocolClient {
             .into_iter()
             .map(|item| SlicerInstall {
                 name: item.name,
-                path: item.path,
+                path: item.path.to_path_buf(),
             })
             .collect())
     }
@@ -239,26 +246,29 @@ impl DesktopProtocolClient {
         format: ExportFormat,
         slicer_name: Option<String>,
     ) -> Result<PathBuf, String> {
-        let response = self.send_command(ClientCommand::ExportRun(ExportRunRequest {
-            configured_openscad_path: config.openscad_path.clone(),
-            configured_slicers: config
-                .slicers
-                .iter()
-                .map(|item| SlicerInstallRecord {
+        let configured_slicers = config
+            .slicers
+            .iter()
+            .map(|item| {
+                Ok(SlicerInstallRecord {
                     name: item.name.clone(),
-                    path: item.path.clone(),
+                    path: path_to_host_local(&item.path)?,
                 })
-                .collect(),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let response = self.send_command(ClientCommand::ExportRun(ExportRunRequest {
+            configured_openscad_path: optional_path_to_host_local(config.openscad_path.as_ref())?,
+            configured_slicers,
             source: self.path_handle(source_path)?,
             defines: defines.to_vec(),
-            output_path,
+            output_path: self.path_handle(&output_path)?,
             format,
             slicer_name,
         }))?;
         let CommandSuccess::ExportRun(ExportRunResponse { output_path }) = response else {
             return Err("export.run 返回了意外响应".into());
         };
-        Ok(output_path)
+        Ok(self.path_from_handle(&output_path))
     }
 
     pub fn subscribe_path<F, E>(
@@ -328,7 +338,9 @@ impl DesktopProtocolClient {
             source: self.path_handle(path)?,
             defines: defines.to_vec(),
             kind: PreviewRequestKind::GeometryArtifact,
-            configured_openscad_path,
+            configured_openscad_path: optional_path_to_host_local(
+                configured_openscad_path.as_ref(),
+            )?,
         }))?;
         let CommandSuccess::PreviewReady(ready) = response else {
             return Err("preview.request 返回了意外响应".into());
@@ -529,6 +541,93 @@ fn path_to_pathbuf(inner: &DesktopProtocolClientInner, handle: &PathHandle) -> P
         path.push(segment);
     }
     path
+}
+
+fn app_config_to_dto(config: &AppConfig) -> Result<app_server_protocol::AppConfigDto, String> {
+    Ok(app_server_protocol::AppConfigDto {
+        openscad_path: optional_path_to_host_local(config.openscad_path.as_ref())?,
+        slicers: config
+            .slicers
+            .iter()
+            .map(|item| {
+                Ok(SlicerConfigDto {
+                    name: item.name.clone(),
+                    path: path_to_host_local(&item.path)?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        recent_workspaces: config
+            .recent_workspaces
+            .iter()
+            .map(path_to_host_local)
+            .collect::<Result<Vec<_>, String>>()?,
+        floating_panel_opacity: config.floating_panel_opacity,
+        left_panel_width: config.left_panel_width,
+        right_panel_width: config.right_panel_width,
+        display_unit: display_unit_to_dto(config.display_unit),
+        camera_overlay_pos: config.camera_overlay_pos,
+        camera_overlay_size: config.camera_overlay_size,
+        param_panel_pos: config.param_panel_pos,
+        param_panel_size: config.param_panel_size,
+        log_panel_pos: config.log_panel_pos,
+        log_panel_size: config.log_panel_size,
+    })
+}
+
+fn app_config_from_dto(config: app_server_protocol::AppConfigDto) -> Result<AppConfig, String> {
+    Ok(AppConfig {
+        openscad_path: config.openscad_path.map(|path| path.to_path_buf()),
+        slicers: config
+            .slicers
+            .into_iter()
+            .map(|item| SlicerConfig {
+                name: item.name,
+                path: item.path.to_path_buf(),
+            })
+            .collect(),
+        recent_workspaces: config
+            .recent_workspaces
+            .into_iter()
+            .map(|path| path.to_path_buf())
+            .collect(),
+        floating_panel_opacity: config.floating_panel_opacity,
+        left_panel_width: config.left_panel_width,
+        right_panel_width: config.right_panel_width,
+        display_unit: display_unit_from_dto(config.display_unit),
+        camera_overlay_pos: config.camera_overlay_pos,
+        camera_overlay_size: config.camera_overlay_size,
+        param_panel_pos: config.param_panel_pos,
+        param_panel_size: config.param_panel_size,
+        log_panel_pos: config.log_panel_pos,
+        log_panel_size: config.log_panel_size,
+    })
+}
+
+fn optional_path_to_host_local(path: Option<&PathBuf>) -> Result<Option<HostLocalPath>, String> {
+    path.map(path_to_host_local).transpose()
+}
+
+fn path_to_host_local(path: &PathBuf) -> Result<HostLocalPath, String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| "host-local path 必须是 UTF-8".to_string())?;
+    HostLocalPath::new(value).map_err(|error| error.message)
+}
+
+fn display_unit_to_dto(unit: DisplayUnit) -> DisplayUnitDto {
+    match unit {
+        DisplayUnit::Millimeter => DisplayUnitDto::Millimeter,
+        DisplayUnit::Centimeter => DisplayUnitDto::Centimeter,
+        DisplayUnit::Inch => DisplayUnitDto::Inch,
+    }
+}
+
+fn display_unit_from_dto(unit: DisplayUnitDto) -> DisplayUnit {
+    match unit {
+        DisplayUnitDto::Millimeter => DisplayUnit::Millimeter,
+        DisplayUnitDto::Centimeter => DisplayUnit::Centimeter,
+        DisplayUnitDto::Inch => DisplayUnit::Inch,
+    }
 }
 
 fn mesh_from_preview_payload(payload: app_server_protocol::PreviewMeshPayload) -> MeshData {

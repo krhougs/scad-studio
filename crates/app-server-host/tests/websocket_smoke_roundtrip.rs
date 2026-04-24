@@ -72,15 +72,29 @@ fn websocket_smoke_roundtrip() {
 
         let readme = entries
             .iter()
-            .find(|entry| entry.path.display_path() == "README.md")
+            .find(|entry| {
+                entry
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.display_path() == "README.md")
+            })
             .unwrap()
             .path
+            .as_ref()
+            .expect("README entry should be operable")
             .clone();
         let model = entries
             .iter()
-            .find(|entry| entry.path.display_path() == "model.stl")
+            .find(|entry| {
+                entry
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.display_path() == "model.stl")
+            })
             .unwrap()
             .path
+            .as_ref()
+            .expect("model entry should be operable")
             .clone();
         assert_eq!(readme.workspace_id().0, workspace_id.0);
 

@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     CapabilityHandshakeRequest, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, PreviewArtifact, PreviewRequest, PreviewRequestKind,
-    ProtocolVersionRange, RequestId, ServerPushEnvelope, SessionToken, WorkspaceListRequest,
-    web_file_read_capability,
+    ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest, HostLocalPath,
+    PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange,
+    RequestId, ServerPushEnvelope, SessionToken, WorkspaceListRequest, web_file_read_capability,
 };
 
 #[test]
@@ -53,15 +53,29 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     };
     let readme = entries
         .iter()
-        .find(|entry| entry.path.display_path() == "README.md")
+        .find(|entry| {
+            entry
+                .path
+                .as_ref()
+                .is_some_and(|path| path.display_path() == "README.md")
+        })
         .expect("README entry should exist")
         .path
+        .as_ref()
+        .expect("README entry should be operable")
         .clone();
     let model = entries
         .iter()
-        .find(|entry| entry.path.display_path() == "model.stl")
+        .find(|entry| {
+            entry
+                .path
+                .as_ref()
+                .is_some_and(|path| path.display_path() == "model.stl")
+        })
         .expect("model entry should exist")
         .path
+        .as_ref()
+        .expect("model entry should be operable")
         .clone();
     assert_eq!(readme.workspace_id().0, workspace_id.0);
 
@@ -97,6 +111,62 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     }
 
     assert!(pushes.lock().expect("push buffer lock").is_empty());
+    cleanup_workspace(&workspace);
+}
+
+#[cfg(unix)]
+#[test]
+fn export_run_rejects_symlink_escape_output_target() {
+    let workspace = temp_workspace("dispatcher-export-symlink");
+    let outside =
+        std::env::temp_dir().join(format!("dispatcher-export-outside-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, workspace.join("linked")).unwrap();
+
+    let pushes = Arc::new(Mutex::new(Vec::<ServerPushEnvelope>::new()));
+    let push_sink = {
+        let pushes = Arc::clone(&pushes);
+        Arc::new(move |push: ServerPushEnvelope| {
+            pushes.lock().expect("push buffer lock").push(push);
+        })
+    };
+    let mut dispatcher = HostRequestDispatcher::with_session_token(
+        Some(workspace.clone()),
+        SessionToken("session-1".into()),
+        Vec::new(),
+        push_sink,
+    );
+    let source = app_server_protocol::PathHandle::new(
+        app_server_protocol::WorkspaceId::new("workspace"),
+        ["model.stl"],
+    )
+    .unwrap();
+    let output_path = app_server_protocol::PathHandle::new(
+        app_server_protocol::WorkspaceId::new("workspace"),
+        ["linked", "out.3mf"],
+    )
+    .unwrap();
+
+    let response = dispatcher.dispatch_envelope(ClientRequestEnvelope {
+        request_id: RequestId(10),
+        command: ClientCommand::ExportRun(ExportRunRequest {
+            configured_openscad_path: Some(HostLocalPath::new("/bin/false").unwrap()),
+            configured_slicers: Vec::new(),
+            source,
+            defines: Vec::new(),
+            output_path,
+            format: ExportFormat::ThreeMf,
+            slicer_name: None,
+        }),
+    });
+
+    let error = response
+        .result
+        .expect_err("symlink escape should be rejected");
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+
+    let _ = std::fs::remove_file(workspace.join("linked"));
+    let _ = std::fs::remove_dir(outside);
     cleanup_workspace(&workspace);
 }
 

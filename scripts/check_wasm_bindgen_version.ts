@@ -3,9 +3,12 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "..");
 const EXPECTED = "0.2.117";
+const CARGO_MANIFESTS = [
+  path.join(root, "crates", "studio-web-wasm", "Cargo.toml"),
+  path.join(root, "crates", "app-server-protocol-wasm", "Cargo.toml"),
+];
 
-function extractCargoVersion(): string | null {
-  const cargoPath = path.join(root, "crates", "studio-web-wasm", "Cargo.toml");
+function extractCargoVersion(cargoPath: string): string | null {
   const cargoText = readFileSync(cargoPath, "utf8");
   const match = cargoText.match(/wasm-bindgen\s*=\s*"=?([0-9]+\.[0-9]+\.[0-9]+)"/);
   return match ? match[1] : null;
@@ -27,11 +30,13 @@ async function extractCliVersion(): Promise<string | null> {
 }
 
 async function main() {
-  const cargoVersion = extractCargoVersion();
-  if (!cargoVersion) {
-    console.error(
-      "could not parse wasm-bindgen version from crates/studio-web-wasm/Cargo.toml",
-    );
+  const cargoVersions = CARGO_MANIFESTS.map((cargoPath) => ({
+    cargoPath,
+    version: extractCargoVersion(cargoPath),
+  }));
+  const missing = cargoVersions.find((item) => !item.version);
+  if (missing) {
+    console.error(`could not parse wasm-bindgen version from ${missing.cargoPath}`);
     process.exit(1);
   }
 
@@ -46,11 +51,12 @@ async function main() {
     process.exit(1);
   }
 
-  if (cargoVersion !== EXPECTED || cliVersion !== EXPECTED) {
+  const mismatchedCargoVersions = cargoVersions.filter((item) => item.version !== EXPECTED);
+  if (mismatchedCargoVersions.length > 0 || cliVersion !== EXPECTED) {
     console.error(
       [
         `wasm-bindgen version drift detected. Expected: ${EXPECTED}`,
-        `  Cargo.toml: ${cargoVersion}`,
+        ...cargoVersions.map((item) => `  ${path.relative(root, item.cargoPath)}: ${item.version}`),
         `  CLI:        ${cliVersion}`,
         "Fix by installing the pinned CLI and updating Cargo.toml in lockstep.",
       ].join("\n"),

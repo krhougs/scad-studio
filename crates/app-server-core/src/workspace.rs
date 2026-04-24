@@ -3,6 +3,7 @@ use app_server_protocol::{
     PathHandle, ProtocolError, ProtocolErrorCode, WorkspaceCurrentResponse, WorkspaceEntry,
     WorkspaceEntryKind, WorkspaceId, WorkspaceListResponse,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,39 +41,96 @@ pub fn list_workspace_entries(
             )
         })?
         .filter_map(Result::ok)
-        .map(|entry| {
-            let path = canonicalize_or_original(entry.path());
-            let relative = path.strip_prefix(&workspace_root).map_err(|_| {
-                ProtocolError::new(
-                    ProtocolErrorCode::InvalidPathHandle,
-                    "路径不在当前 workspace 内",
-                )
-            })?;
-            let segments = relative
-                .components()
-                .filter_map(|component| {
-                    component
-                        .as_os_str()
-                        .to_str()
-                        .map(|value| value.to_string())
-                })
-                .collect::<Vec<_>>();
-            let handle = PathHandle::new(workspace_id.clone(), segments).map_err(|error| {
-                ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.to_string())
-            })?;
-            let kind = if path.is_dir() {
-                WorkspaceEntryKind::Directory
-            } else {
-                WorkspaceEntryKind::File
-            };
-            Ok(WorkspaceEntry { path: handle, kind })
-        })
+        .map(|entry| build_workspace_entry(&workspace_root, &workspace_id, entry))
         .collect::<Result<Vec<_>, ProtocolError>>()?;
-    entries.sort_by(|left, right| left.path.display_path().cmp(&right.path.display_path()));
+    mark_case_conflicts(&mut entries);
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(WorkspaceListResponse {
         directory: directory.cloned(),
         entries,
     })
+}
+
+fn build_workspace_entry(
+    workspace_root: &Path,
+    workspace_id: &WorkspaceId,
+    entry: fs::DirEntry,
+) -> Result<WorkspaceEntry, ProtocolError> {
+    let name = entry.file_name().to_string_lossy().to_string();
+    let raw_path = entry.path();
+    let path = canonicalize_or_original(raw_path.clone());
+    let kind = if path.is_dir() {
+        WorkspaceEntryKind::Directory
+    } else {
+        WorkspaceEntryKind::File
+    };
+    let relative = match path.strip_prefix(workspace_root) {
+        Ok(relative) => relative,
+        Err(_) => {
+            return Ok(WorkspaceEntry {
+                name,
+                path: None,
+                kind,
+                path_error: Some("路径不在当前 workspace 内".into()),
+            });
+        }
+    };
+    let segments = match portable_segments(relative) {
+        Ok(segments) => segments,
+        Err(error) => {
+            return Ok(WorkspaceEntry {
+                name,
+                path: None,
+                kind,
+                path_error: Some(error),
+            });
+        }
+    };
+    match PathHandle::new(workspace_id.clone(), segments) {
+        Ok(handle) => Ok(WorkspaceEntry {
+            name,
+            path: Some(handle),
+            kind,
+            path_error: None,
+        }),
+        Err(error) => Ok(WorkspaceEntry {
+            name,
+            path: None,
+            kind,
+            path_error: Some(error.to_string()),
+        }),
+    }
+}
+
+fn portable_segments(relative: &Path) -> Result<Vec<String>, String> {
+    let mut segments = Vec::new();
+    for component in relative.components() {
+        let value = component
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| "path component must be UTF-8".to_string())?;
+        if value.contains('\u{fffd}') {
+            return Err("path component must be UTF-8".into());
+        }
+        segments.push(value.to_string());
+    }
+    Ok(segments)
+}
+
+fn mark_case_conflicts(entries: &mut [WorkspaceEntry]) {
+    let mut counts = HashMap::<String, usize>::new();
+    for entry in entries.iter().filter_map(|entry| entry.path.as_ref()) {
+        *counts.entry(entry.case_fold_key()).or_default() += 1;
+    }
+    for entry in entries {
+        let Some(path) = &entry.path else {
+            continue;
+        };
+        if counts.get(&path.case_fold_key()).copied().unwrap_or(0) > 1 {
+            entry.path = None;
+            entry.path_error = Some("case-insensitive path conflict".into());
+        }
+    }
 }
 
 pub fn resolve_workspace_path(
@@ -92,4 +150,34 @@ pub fn resolve_workspace_path(
         ));
     }
     Ok(resolved)
+}
+
+pub fn resolve_workspace_write_path(
+    workspace_root: &Path,
+    handle: &PathHandle,
+) -> Result<PathBuf, ProtocolError> {
+    let workspace_root = canonicalize_or_original(workspace_root.to_path_buf());
+    let mut path = workspace_root.clone();
+    for segment in handle.path_segments() {
+        path.push(segment);
+    }
+    let parent = path.parent().ok_or_else(|| {
+        ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, "写入路径缺少父目录")
+    })?;
+    let parent = parent.canonicalize().map_err(|error| {
+        ProtocolError::new(
+            ProtocolErrorCode::InvalidPathHandle,
+            format!("写入路径父目录不存在或不可访问: {error}"),
+        )
+    })?;
+    if !parent.starts_with(&workspace_root) {
+        return Err(ProtocolError::new(
+            ProtocolErrorCode::InvalidPathHandle,
+            "写入路径父目录不在当前 workspace 内",
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, "写入路径缺少文件名")
+    })?;
+    Ok(parent.join(file_name))
 }

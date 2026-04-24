@@ -48,15 +48,29 @@ fn spawned_in_process_host_roundtrips_workspace_file_and_preview() {
     };
     let readme = entries
         .iter()
-        .find(|entry| entry.path.display_path() == "README.md")
+        .find(|entry| {
+            entry
+                .path
+                .as_ref()
+                .is_some_and(|path| path.display_path() == "README.md")
+        })
         .expect("README entry should exist")
         .path
+        .as_ref()
+        .expect("README entry should be operable")
         .clone();
     let model = entries
         .iter()
-        .find(|entry| entry.path.display_path() == "model.stl")
+        .find(|entry| {
+            entry
+                .path
+                .as_ref()
+                .is_some_and(|path| path.display_path() == "model.stl")
+        })
         .expect("model entry should exist")
         .path
+        .as_ref()
+        .expect("model entry should be operable")
         .clone();
     assert_eq!(readme.workspace_id().0, workspace_id.0);
 

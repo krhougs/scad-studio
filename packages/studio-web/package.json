@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@budn/app-server-protocol": "workspace:*",
     "@phosphor-icons/react": "^2.1.10",
     "@scad-studio/studio-web-wasm": "workspace:*",
     "@uiw/react-markdown-preview": "^5.2.0",

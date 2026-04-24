@@ -1,0 +1,35 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const protocol_decode_client_frame: (a: number, b: number) => [number, number, number];
+export const protocol_decode_server_frame: (a: number, b: number) => [number, number, number];
+export const protocol_encode_cancel_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_close_frame: () => [number, number, number, number];
+export const protocol_encode_config_load_request: (a: bigint) => [number, number, number, number];
+export const protocol_encode_config_save_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_export_run_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_file_read_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_file_write_text_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_handshake_frame: (a: any) => [number, number, number, number];
+export const protocol_encode_preview_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_reconnect_frame: (a: any) => [number, number, number, number];
+export const protocol_encode_session_reclaim_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_slicer_list_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_watch_subscribe_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_watch_unsubscribe_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_workspace_current_request: (a: bigint) => [number, number, number, number];
+export const protocol_encode_workspace_list_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_path_handle: (a: number, b: number, c: any) => [number, number, number];
+export const protocol_resolve_relative_link: (a: any, b: number, c: number) => [number, number, number];
+export const protocol_validate_config: (a: any) => [number, number, number, number];
+export const protocol_validate_finite_number: (a: number, b: number, c: number) => [number, number, number];
+export const protocol_validate_host_local_path: (a: number, b: number) => [number, number, number];
+export const protocol_wasm_start: () => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_start: () => void;

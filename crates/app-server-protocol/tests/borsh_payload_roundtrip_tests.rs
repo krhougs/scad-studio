@@ -1,41 +1,42 @@
 use app_server_protocol::{
     CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities,
-    ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess, FileReadCapability,
-    FileReadContents, FileReadResponse, PathHandle, PreviewArtifact, PreviewArtifact3mf,
-    PreviewMeshPayload, PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest,
-    PreviewRequestKind, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
-    RequestId, ServerCapabilities, ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope,
-    SessionToken, SubscriptionId, WatchChangedEvent, WorkspaceCurrentResponse, WorkspaceEntry,
-    WorkspaceEntryKind, WorkspaceId, negotiate_protocol_version, web_file_read_capability,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    FileReadCapability, FileReadContents, FileReadResponse, PathHandle, PreviewArtifact,
+    PreviewArtifact3mf, PreviewMeshPayload, PreviewReadyResponse, PreviewRenderedImagePayload,
+    PreviewRequest, PreviewRequestKind, PreviewUnit, ProtocolError, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceEntryKind, WorkspaceId, decode_client_frame,
+    decode_server_frame, encode_client_frame, encode_server_frame, negotiate_protocol_version,
+    web_file_read_capability,
 };
 
 #[test]
-fn path_handle_serde_roundtrip() {
+fn path_handle_borsh_roundtrip() {
     let handle = PathHandle::new(WorkspaceId::new("ws"), ["src", "main.scad"]).unwrap();
-    let json = serde_json::to_string(&handle).unwrap();
-    let decoded: PathHandle = serde_json::from_str(&json).unwrap();
+    let bytes = borsh::to_vec(&handle).unwrap();
+    let decoded: PathHandle = borsh::from_slice(&bytes).unwrap();
     assert_eq!(decoded, handle);
     assert_eq!(decoded.display_path(), "src/main.scad");
 }
 
 #[test]
-fn handshake_and_command_roundtrip() {
-    let capabilities = ClientCapabilities {
-        client_name: "studio-web".into(),
-        platform: ClientPlatform::Web,
-        protocol_version: ProtocolVersionRange::new(1, 3),
-        file_read: web_file_read_capability(),
-        supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
-    };
+fn handshake_and_command_frame_roundtrip() {
     let request = CapabilityHandshakeRequest {
-        capabilities: capabilities.clone(),
+        capabilities: ClientCapabilities {
+            client_name: "studio-web".into(),
+            platform: ClientPlatform::Web,
+            protocol_version: ProtocolVersionRange::new(1, 3),
+            file_read: web_file_read_capability(),
+            supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
+        },
     };
-    let json = serde_json::to_string(&request).unwrap();
-    let decoded: CapabilityHandshakeRequest = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, request);
+    let envelope = ClientEnvelope::Handshake(request.clone());
+    let decoded = decode_client_frame(&encode_client_frame(&envelope).unwrap()).unwrap();
+    assert_eq!(decoded, envelope);
 
     let path = PathHandle::new(WorkspaceId::new("ws"), ["docs", "readme.md"]).unwrap();
-    let request = ClientRequestEnvelope {
+    let envelope = ClientEnvelope::Request(ClientRequestEnvelope {
         request_id: RequestId(7),
         command: ClientCommand::PreviewRequest(PreviewRequest {
             source: path,
@@ -43,40 +44,42 @@ fn handshake_and_command_roundtrip() {
             kind: PreviewRequestKind::GeometryArtifact,
             configured_openscad_path: None,
         }),
-    };
-    let json = serde_json::to_string(&request).unwrap();
-    let decoded: ClientRequestEnvelope = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, request);
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&envelope).unwrap()).unwrap();
+    assert_eq!(decoded, envelope);
 }
 
 #[test]
-fn event_error_and_response_roundtrip() {
+fn event_error_and_response_frame_roundtrip() {
     let path = PathHandle::new(WorkspaceId::new("ws"), ["docs", "guide.md"]).unwrap();
-    let success = ServerResponseEnvelope {
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
         request_id: RequestId(2),
         result: Ok(CommandSuccess::FileRead(FileReadResponse {
             path: path.clone(),
             media_type: "text/markdown".into(),
             contents: FileReadContents::Utf8Text("# hi".into()),
         })),
-    };
-    let json = serde_json::to_string(&success).unwrap();
-    let decoded: ServerResponseEnvelope = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, success);
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
 
-    let push = ServerPushEnvelope {
+    let push = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::WatchChanged(WatchChangedEvent {
             subscription_id: SubscriptionId("sub-1".into()),
             changed_paths: vec![path],
         }),
-    };
-    let json = serde_json::to_string(&push).unwrap();
-    let decoded: ServerPushEnvelope = serde_json::from_str(&json).unwrap();
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&push).unwrap()).unwrap();
     assert_eq!(decoded, push);
 
-    let error = ProtocolError::new(ProtocolErrorCode::UnsupportedFileTypeForClient, "blocked");
-    let json = serde_json::to_string(&error).unwrap();
-    let decoded: ProtocolError = serde_json::from_str(&json).unwrap();
+    let error = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(3),
+        result: Err(ProtocolError::new(
+            ProtocolErrorCode::UnsupportedFileTypeForClient,
+            "blocked",
+        )),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&error).unwrap()).unwrap();
     assert_eq!(decoded, error);
 }
 
@@ -98,16 +101,15 @@ fn protocol_version_negotiates_min_and_max_overlap() {
 }
 
 #[test]
-fn preview_payload_roundtrip_for_small_and_large_cases() {
-    let small = preview_response(1);
-    let json = serde_json::to_string(&small).unwrap();
-    let decoded: PreviewReadyResponse = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, small);
-
-    let large = preview_response(128);
-    let json = serde_json::to_string(&large).unwrap();
-    let decoded: PreviewReadyResponse = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, large);
+fn preview_payload_roundtrips_for_small_and_large_cases() {
+    for vertex_count in [1, 128] {
+        let response = ServerEnvelope::Response(ServerResponseEnvelope {
+            request_id: RequestId(vertex_count as u64),
+            result: Ok(CommandSuccess::PreviewReady(preview_response(vertex_count))),
+        });
+        let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+        assert_eq!(decoded, response);
+    }
 }
 
 fn preview_response(vertex_count: usize) -> PreviewReadyResponse {
@@ -145,16 +147,15 @@ fn reclaim_and_artifact_variants_roundtrip() {
             supports_session_reclaim: true,
         },
     };
-    let json = serde_json::to_string(&response).unwrap();
-    let decoded: CapabilityHandshakeResponse = serde_json::from_str(&json).unwrap();
+    let bytes = borsh::to_vec(&response).unwrap();
+    let decoded: CapabilityHandshakeResponse = borsh::from_slice(&bytes).unwrap();
     assert_eq!(decoded, response);
 
     let artifact = PreviewArtifact::ThreeMf(PreviewArtifact3mf {
         bytes: vec![1, 2, 3],
         media_type: "model/3mf".into(),
     });
-    let json = serde_json::to_string(&artifact).unwrap();
-    let decoded: PreviewArtifact = serde_json::from_str(&json).unwrap();
+    let decoded: PreviewArtifact = borsh::from_slice(&borsh::to_vec(&artifact).unwrap()).unwrap();
     assert_eq!(decoded, artifact);
 
     let artifact = PreviewArtifact::RenderedImage(PreviewRenderedImagePayload {
@@ -163,8 +164,7 @@ fn reclaim_and_artifact_variants_roundtrip() {
         width: 64,
         height: 64,
     });
-    let json = serde_json::to_string(&artifact).unwrap();
-    let decoded: PreviewArtifact = serde_json::from_str(&json).unwrap();
+    let decoded: PreviewArtifact = borsh::from_slice(&borsh::to_vec(&artifact).unwrap()).unwrap();
     assert_eq!(decoded, artifact);
 
     let response = WorkspaceCurrentResponse {
@@ -172,8 +172,10 @@ fn reclaim_and_artifact_variants_roundtrip() {
         root_name: "workspace".into(),
     };
     let entry = WorkspaceEntry {
-        path: PathHandle::new(WorkspaceId::new("ws"), ["src", "main.rs"]).unwrap(),
+        name: "main.rs".into(),
+        path: Some(PathHandle::new(WorkspaceId::new("ws"), ["src", "main.rs"]).unwrap()),
         kind: WorkspaceEntryKind::File,
+        path_error: None,
     };
     assert_eq!(response.workspace_id.0, "ws");
     assert_eq!(entry.kind, WorkspaceEntryKind::File);
@@ -181,8 +183,7 @@ fn reclaim_and_artifact_variants_roundtrip() {
     let cancel = CancelRequest {
         request_id: RequestId(99),
     };
-    let json = serde_json::to_string(&cancel).unwrap();
-    let decoded: CancelRequest = serde_json::from_str(&json).unwrap();
+    let decoded: CancelRequest = borsh::from_slice(&borsh::to_vec(&cancel).unwrap()).unwrap();
     assert_eq!(decoded, cancel);
 
     let capability = FileReadCapability {
