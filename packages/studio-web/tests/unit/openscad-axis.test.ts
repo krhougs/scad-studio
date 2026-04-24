@@ -12,7 +12,7 @@ describe("openscad-axis", () => {
   });
 
   it("keeps the public axis table ordered as X, Y, Z", () => {
-    expect(OPENSCAD_AXIS_DIRECTIONS.map((axis) => axis.id)).toEqual([
+    expect(OPENSCAD_AXIS_DIRECTIONS.map((axis: { id: string }) => axis.id)).toEqual([
       "x",
       "y",
       "z",

@@ -140,13 +140,13 @@ export function sliderBounds(entry: ParameterEntry): {
     typeof entry.definition.default_value === "number"
       ? entry.definition.default_value
       : current;
-  const base = Math.max(Math.abs(current), Math.abs(fallback), 1);
+  const base = Math.max(Math.abs(fallback), 1);
   const inferredMin = -2 * base;
   const inferredMax = 2 * base;
   return {
     min: bounds.min ?? inferredMin,
     max: bounds.max ?? inferredMax,
-    step: bounds.step ?? inferStep(current, fallback),
+    step: bounds.step ?? inferStep(fallback, fallback),
   };
 }
 

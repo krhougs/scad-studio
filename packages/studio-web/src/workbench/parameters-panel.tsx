@@ -1,12 +1,12 @@
 import {
   choiceOptions,
-  numberBounds,
   parameterKind,
   sliderBounds,
   type ParameterEntry,
   type ParameterValue,
 } from "./parameter-model";
 import { useState } from "react";
+import { NumericControl } from "./numeric-control";
 
 type ParametersPanelProps = {
   entries: ParameterEntry[];
@@ -46,21 +46,20 @@ export function ParametersPanel({
         {visibleEntries.map((entry) => (
           <li
             key={entry.definition.name}
-            className="panel__row"
+            className="panel__row parameter-row"
             data-testid={`parameter-row-${entry.definition.name}`}
           >
             <span className="panel__label">{entry.definition.name}</span>
             <ParameterControl entry={entry} onUpdateValue={onUpdateValue} />
-            {entry.value !== entry.definition.default_value ? (
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm"
-                onClick={() => onRestoreValue(entry.definition.name)}
-                data-testid={`parameter-restore-${entry.definition.name}`}
-              >
-                restore
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm parameter-restore"
+              onClick={() => onRestoreValue(entry.definition.name)}
+              data-testid={`parameter-restore-${entry.definition.name}`}
+              disabled={entry.value === entry.definition.default_value}
+            >
+              restore
+            </button>
           </li>
         ))}
         {visibleEntries.length === 0 ? (
@@ -124,32 +123,20 @@ function ParameterControl({
   const testId = `parameter-control-${name}`;
   const kind = parameterKind(entry);
   if (kind === "number") {
-    const bounds = numberBounds(entry);
     const range = sliderBounds(entry);
     const value = typeof entry.value === "number" ? entry.value : 0;
     return (
-      <span className="parameter-number-control">
-        <input
-          type="number"
-          className="panel__input"
-          value={String(entry.value)}
-          min={bounds.min}
-          max={bounds.max}
-          step={bounds.step}
-          onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
-          data-testid={testId}
-        />
-        <input
-          type="range"
-          className="parameter-slider"
-          value={value}
-          min={range.min}
-          max={range.max}
-          step={range.step}
-          onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
-          data-testid={`parameter-slider-${name}`}
-        />
-      </span>
+      <NumericControl
+        label={name}
+        value={value}
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        inputTestId={testId}
+        knobTestId={`parameter-knob-${name}`}
+        numberFieldTestId={`parameter-number-field-${name}`}
+        onChange={(next) => onUpdateValue(name, next)}
+      />
     );
   }
   if (kind === "bool") {

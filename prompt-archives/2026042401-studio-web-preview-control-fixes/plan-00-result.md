@@ -35,3 +35,27 @@
   - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "ViewportGizmo|preview info and camera controls"` 已失败，原因是相机 knob/NumberField 和 ViewportGizmo 尚不存在。
 - Review：
   - 独立 subagent 三轮只读 review 已完成；最终结论为无 blocker、无 important，Phase 1 可以完成。
+
+## Phase 2：参数与相机数值控件
+
+- 状态：已完成。
+- 前序目标保护：
+  - 保留 Phase 1 的失败测试，不删除后续 Phase 所需的 OpenSCAD 轴、ViewportGizmo、loading、真实尺寸和远距离裁剪覆盖。
+  - 保护参数自动 preview、preset round-trip、导出 defines、相机状态共享和右侧 inspector 布局。
+- 变更摘要：
+  - 引入 `react-knob-headless` 与 `@base-ui/react`，参数和相机数值项统一使用共享 `NumericControl`。
+  - `NumericControl` 同时渲染 knob、Base UI NumberField 输入框与增减按钮；输入框和 knob 保留稳定尺寸约束。
+  - knob 写值显式按 step 归一化，避免拖拽产生与输入框、增减按钮不一致的小数值。
+  - 参数 restore 按钮改为固定占位的 disabled 状态，避免首次输入后新增按钮挤压数值控件。
+  - 参数行固定布局收敛到 `.parameter-row`，避免影响 presets、slicer、export 等其他 panel 行。
+  - 参数 `sliderBounds` 的无显式范围推导改为只基于默认值，不再随 current value 扩大。
+  - 相机 target、distance、azimuth、elevation 改用同一数值编辑模式，保留现有 camera state 更新路径，并避免在 `<label>` 内嵌套多个交互控件。
+- 验证：
+  - `bun x vitest run tests/unit/parameter-model.test.ts tests/unit/numeric-control.test.ts` 通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "typed controls drive current defines|knob number field updates preview|save, load, delete round-trip"` 通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "preview info and camera controls"` 通过。
+  - `bun run typecheck` 仍失败，原因是 Phase 1 为后续 Phase 预置的 `openscad-axis` 与 `mesh-render-metrics` 模块尚未实现；未发现 Phase 2 新增类型错误。
+- Review：
+  - 第一轮独立 subagent review 未发现 blocker，指出 knob step 归一化、restore 按钮挤压布局、knob/增减按钮测试覆盖不足三项 important；以上均已修复并重新回归。
+  - 第二轮独立 subagent review 未发现 blocker，指出 `.panel__row` 全局布局回归风险；已将三列布局限定到参数行并重新回归。
+  - 第三轮独立 subagent review 未发现 blocker 或 important，Phase 2 可以完成。

@@ -120,12 +120,28 @@ test("@parameters-presets typed controls drive current defines", async ({
   const rowBefore = await rightInspector
     .getByTestId("parameter-row-size")
     .boundingBox();
+  const fieldBefore = await sizeNumberField.boundingBox();
   await size.fill("24");
   const rowAfter = await rightInspector
     .getByTestId("parameter-row-size")
     .boundingBox();
+  const fieldAfter = await sizeNumberField.boundingBox();
   expect(rowBefore?.width).toBeCloseTo(rowAfter?.width ?? 0, 0);
   expect(rowBefore?.height).toBeCloseTo(rowAfter?.height ?? 0, 0);
+  expect(fieldBefore?.width).toBeCloseTo(fieldAfter?.width ?? 0, 0);
+  expect(fieldBefore?.height).toBeCloseTo(fieldAfter?.height ?? 0, 0);
+
+  await size.press("ArrowUp");
+  await expect(size).toHaveValue("25");
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "preview_request"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      defines: ["size=25", "wall=2", "enabled=true", 'mode="draft"'],
+    });
+  await size.fill("24");
 
   await rightInspector.getByTestId("parameter-control-enabled").uncheck();
   await rightInspector.getByTestId("parameter-control-mode").selectOption("fine");
@@ -301,13 +317,16 @@ test("@parameters-presets switching scad tabs clears previous applied defines", 
     });
 });
 
-test("@parameters-presets slider updates preview without apply", async ({ page }) => {
+test("@parameters-presets knob number field updates preview without apply", async ({ page }) => {
   await openParamsCube(page);
   const rightInspector = inspector(page);
   await expect(rightInspector.getByTestId("parameters-apply")).toHaveCount(0);
 
   await clearRecordedClientCommands(page);
-  await rightInspector.getByTestId("parameter-slider-size").fill("18");
+  await rightInspector
+    .getByTestId("parameter-number-field-size")
+    .getByRole("spinbutton")
+    .fill("18");
   await expect
     .poll(
       async () => latestRecordedClientCommand(page, "preview_request"),
@@ -315,5 +334,16 @@ test("@parameters-presets slider updates preview without apply", async ({ page }
     )
     .toMatchObject({
       defines: ["size=18", "wall=2", "enabled=true", 'mode="draft"'],
+    });
+
+  await rightInspector.getByTestId("parameter-knob-size").focus();
+  await rightInspector.getByTestId("parameter-knob-size").press("ArrowUp");
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "preview_request"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      defines: ["size=19", "wall=2", "enabled=true", 'mode="draft"'],
     });
 });

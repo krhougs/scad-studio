@@ -13,12 +13,14 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@base-ui/react": "^1.4.1",
     "@phosphor-icons/react": "^2.1.10",
     "@scad-studio/studio-web-wasm": "workspace:*",
     "@uiw/react-markdown-preview": "^5.2.0",
     "mermaid": "^11.14.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-knob-headless": "^0.4.0",
     "react-router-dom": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
     "three": "^0.170.0",

@@ -158,13 +158,28 @@ test("@canvas-interaction preview info and camera controls are available", async
   const cameraRowBefore = await page
     .getByTestId("camera-control-azimuth")
     .boundingBox();
+  const cameraFieldBefore = await azimuthField.boundingBox();
   await azimuth.fill("90");
-  await expect(azimuth).toHaveValue("90.000");
+  await expect(azimuth).toHaveValue("90");
   const cameraRowAfter = await page
     .getByTestId("camera-control-azimuth")
     .boundingBox();
+  const cameraFieldAfter = await azimuthField.boundingBox();
   expect(cameraRowBefore?.width).toBeCloseTo(cameraRowAfter?.width ?? 0, 0);
   expect(cameraRowBefore?.height).toBeCloseTo(cameraRowAfter?.height ?? 0, 0);
+  expect(cameraFieldBefore?.width).toBeCloseTo(cameraFieldAfter?.width ?? 0, 0);
+  expect(cameraFieldBefore?.height).toBeCloseTo(cameraFieldAfter?.height ?? 0, 0);
+
+  await page.getByTestId("camera-knob-azimuth").focus();
+  await page.getByTestId("camera-knob-azimuth").press("ArrowRight");
+  await expect(azimuth).toHaveValue("91.000");
+
+  await page
+    .getByTestId("camera-number-field-azimuth")
+    .locator(".numeric-control__stepper")
+    .last()
+    .click();
+  await expect(azimuth).toHaveValue("92.000");
 
   await page
     .getByTestId("camera-number-field-target-x")

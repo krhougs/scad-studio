@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import {
   fitCameraToBounds,
   sphericalFromCamera,
@@ -6,6 +5,7 @@ import {
 } from "../canvas/camera-controls";
 import type { CameraPreset, CameraState } from "../canvas/camera-state";
 import type { MeshInfo, Vec3 } from "../viewers/mesh-info";
+import { NumericControl } from "./numeric-control";
 
 type CameraInspectorProps = {
   camera: CameraState | null;
@@ -50,36 +50,54 @@ export function CameraInspector({
         label="target x"
         value={camera.target[0]}
         testId="camera-target-x"
+        min={-500}
+        max={500}
+        step={0.1}
         onChange={(value) => setTarget(0, value)}
       />
       <NumberField
         label="target y"
         value={camera.target[1]}
         testId="camera-target-y"
+        min={-500}
+        max={500}
+        step={0.1}
         onChange={(value) => setTarget(1, value)}
       />
       <NumberField
         label="target z"
         value={camera.target[2]}
         testId="camera-target-z"
+        min={-500}
+        max={500}
+        step={0.1}
         onChange={(value) => setTarget(2, value)}
       />
       <NumberField
         label="distance"
         value={spherical.distance}
         testId="camera-distance"
+        min={1}
+        max={5000}
+        step={1}
         onChange={(distance) => updateSpherical({ distance })}
       />
       <NumberField
         label="azimuth"
         value={spherical.azimuthDeg}
         testId="camera-azimuth"
+        min={-180}
+        max={180}
+        step={1}
         onChange={(azimuthDeg) => updateSpherical({ azimuthDeg })}
       />
       <NumberField
         label="elevation"
         value={spherical.elevationDeg}
         testId="camera-elevation"
+        min={-89.9}
+        max={89.9}
+        step={1}
         onChange={(elevationDeg) => updateSpherical({ elevationDeg })}
       />
       <div className="camera-panel__presets">
@@ -111,41 +129,35 @@ function NumberField({
   label,
   value,
   testId,
+  min,
+  max,
+  step,
   onChange,
 }: {
   label: string;
   value: number;
   testId: string;
+  min: number;
+  max: number;
+  step: number;
   onChange: (value: number) => void;
 }) {
-  const formatted = Number.isFinite(value) ? value.toFixed(3) : "0";
-  const [draft, setDraft] = useState(formatted);
-
-  useEffect(() => {
-    setDraft(formatted);
-  }, [formatted]);
-
+  const id = testId.replace(/^camera-/, "");
   return (
-    <label className="camera-panel__field">
-      <span>{label}</span>
-      <input
-        type="number"
-        value={draft}
-        step="0.01"
-        onBlur={() => {
-          if (draft.trim() === "" || !Number.isFinite(Number(draft))) {
-            setDraft(formatted);
-          }
-        }}
-        onChange={(event) => {
-          const next = event.target.value;
-          setDraft(next);
-          if (next.trim() === "") return;
-          const parsed = Number(next);
-          if (Number.isFinite(parsed)) onChange(parsed);
-        }}
-        data-testid={testId}
+    <div className="camera-panel__field" data-testid={`camera-control-${id}`}>
+      <span className="camera-panel__field-label">{label}</span>
+      <NumericControl
+        label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        inputTestId={testId}
+        knobTestId={`camera-knob-${id}`}
+        numberFieldTestId={`camera-number-field-${id}`}
+        fractionDigits={3}
+        onChange={onChange}
       />
-    </label>
+    </div>
   );
 }
