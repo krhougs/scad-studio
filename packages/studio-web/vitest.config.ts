@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@scad-studio/studio-web-wasm": path.resolve(
+      "@budn/studio-web-wasm": path.resolve(
         __dirname,
         "./tests/unit/wasm-stub.ts",
       ),

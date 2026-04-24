@@ -1,4 +1,4 @@
-// This file is the sole entry point of @scad-studio/studio-web-wasm.
+// This file is the sole entry point of @budn/studio-web-wasm.
 // It re-exports whatever wasm-bindgen has emitted into ../generated/.
 // Phase 1 ships with an empty generated/ directory; Phase 2 populates it.
 

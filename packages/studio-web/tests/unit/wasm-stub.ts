@@ -1,4 +1,4 @@
-// Test-time stub standing in for `@scad-studio/studio-web-wasm`.
+// Test-time stub standing in for `@budn/studio-web-wasm`.
 // The real module pulls in a .wasm file that vitest cannot load; the unit test
 // only exercises the React hook wiring around renderer_create's error path.
 

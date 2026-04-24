@@ -1,4 +1,4 @@
-# @scad-studio/studio-web-wasm
+# @budn/studio-web-wasm
 
 Internal npm workspace package that distributes the `studio-web-wasm` Rust crate's wasm-bindgen output to the `packages/studio-web` React PWA. This package contains **no business logic**; it is only a transport for generated wasm bindings.
 
@@ -49,7 +49,7 @@ cargo install wasm-bindgen-cli --version 0.2.117 --locked
 
 ## Consumers
 
-- `packages/studio-web` (React PWA) imports `@scad-studio/studio-web-wasm`.
+- `packages/studio-web` (React PWA) imports `@budn/studio-web-wasm`.
 - Nothing else imports this package.
 
 ## What must NOT live here

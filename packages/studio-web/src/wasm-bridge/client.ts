@@ -3,7 +3,7 @@
 // RequestResolverMap, snapshot data lives inside wasm, and this class owns no
 // business state of its own.
 
-import * as Wasm from "@scad-studio/studio-web-wasm";
+import * as Wasm from "@budn/studio-web-wasm";
 import type { ClientEventShape } from "./event-stream";
 import { dispatchClientEvents } from "./event-stream";
 import { RequestResolverMap } from "./request-resolvers";

@@ -285,3 +285,59 @@
 - Phase 4 仍未能在当前机器完成 `wasm-pack --headless --chrome` browser wasm smoke 的通过验收；该问题被确认是本机 ChromeDriver 版本匹配问题，不是本阶段代码路径失败。
 - `packages/studio-web/tests/unit/protocol-paths.test.ts` 使用 mock 验证调用边界；真实 protocol wasm path helper 通过 export / config / invalid entry 相关 e2e 与 smoke 间接覆盖。若后续新增用户输入导出文件名校验 UI，应补真实 wasm path helper 的浏览器错误路径测试。
 - npm scope 迁移、旧 JSON wire 残留全仓库 grep 白名单和最终全量回归进入 Phase 5。
+
+## 2026-04-25 Phase 5 执行结果
+
+### 已完成
+
+- `packages/studio-web` 的 npm package name 已从 `@scad-studio/studio-web` 迁移为 `@budn/studio-web`。
+- `packages/studio-web-wasm` 的 npm package name 已从 `@scad-studio/studio-web-wasm` 迁移为 `@budn/studio-web-wasm`。
+- 已同步 workspace dependency、`bun.lock`、TypeScript path alias、Vitest alias、源码 import、wasm package smoke 校验、README 与 getting-started 文档中的 package scope。
+- 已用 grep 验证 packages / docs / scripts / lockfile 中不再保留旧 `@scad-studio` package name 或 import。
+- 已对白名单外 wire 关键路径做 grep 验收，确认：
+  - WebSocket / transport / host / managed client / wasm bridge smoke 的 wire 路径没有 `serde_json::to_vec` / `serde_json::from_slice` / `serde_json::to_string` / `serde_json::from_str`。
+  - browser transport 与 Playwright wire recorder 没有 `TextEncoder` / `TextDecoder` / `JSON.parse` / `JSON.stringify` / `__scadDispatchedCommands`。
+  - `app-server-protocol` 的 wire payload 源码没有 `pub json: String`、`ConfigLoadResponse` / `ConfigSaveRequest` 的 JSON payload、`output_path: PathBuf` 或 protocol 层 `PathBuf` import。
+- 已同步 `docs/web-platform-limits.md` 的导出说明：`ExportRun.output_path` 当前是 workspace 内 portable path，web 默认导出到当前源文件同目录。
+- 已更新 `docs/known_issues.md` 中旧 `ExportRun.output_path: PathBuf` 问题的当前处理方式，明确该项已经由本计划 Phase 1 / Phase 4 解决，保留为历史记录。
+
+### Review 与收敛
+
+- Phase 5 独立 review 结论为通过。
+- Review 核对到的关键证据包括：`@budn` scope 已迁移、旧 `@scad-studio` scope 在非 `prompt-archives` 范围无命中、WebSocket host 与 browser transport 仍保持 binary-only、Playwright recorder 只 decode 真实 binary frame、typed config DTO 与 portable export path 未回退。
+- Review 识别的残余风险为本机 `wasm-pack --headless --chrome` 环境缺口，以及 `studio-web-wasm` smoke 中用于检查 wasm `JsValue` 的 `serde_json::Value`；后者不是 wire envelope encode / decode。
+
+### 验证
+
+- `rg -n '@scad-studio' packages`：无命中。
+- `rg -n 'serde_json::(to_vec|from_slice|to_string|from_str)' crates/app-server-protocol crates/app-server-transport crates/app-server-host/src/websocket.rs crates/studio-common/src/managed_client crates/studio-web-wasm/tests/wasm_bridge_smoke.rs packages/studio-web/src/transport packages/studio-web/tests/playwright/_smoke-harness.ts`：无命中。
+- `rg -n 'TextEncoder|TextDecoder|JSON\.parse|JSON\.stringify|__scadDispatchedCommands' packages/studio-web/src/transport packages/studio-web/tests/playwright/_smoke-harness.ts`：无命中。
+- `rg -n 'pub json: String|ConfigLoadResponse[^\n]*json|ConfigSaveRequest[^\n]*json|output_path: PathBuf|use std::path::PathBuf' crates/app-server-protocol/src`：无命中。
+- `cargo check --workspace`：通过；仍有 `app-server-core` 既有 dead code warning。
+- `cargo test --workspace --tests`：通过；仍有 `app-server-core` 既有 dead code warning。
+- `bun run protocol:smoke && bun run protocol:check-generated && bun run check:wasm-bindgen`：通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：通过，19 个 test file、84 个 test 通过。
+- `bun run web:smoke -- --case wasm_package_smoke`：通过，generated tree byte-identical。
+- `bun run web:build`：通过；仍有 Vite 既有 large chunk warning。
+- `bun run web:smoke`：S1a 通过，S1b 失败；失败原因与已记录 known issue 一致：本机 Chrome `147.0.7727.103` 与 wasm-pack 下载的 ChromeDriver `148.0.7778.56` 不匹配，runner 报 `http status: 404` 且 driver 以 `signal: 9 (SIGKILL)` 退出。
+- `bun run web:smoke -- --case browser_smoke`：通过，5 个 Playwright 测试通过。
+- `bun run web:smoke -- --case browser_watch_smoke`：通过，6 个 Playwright 测试通过。
+- `bun run web:smoke -- --case export_slicer`：通过，1 个 Playwright 测试通过。
+- `bun run web:smoke -- --case config_settings`：通过，2 个 Playwright 测试通过。
+- `bun run web:smoke -- --case parameters_presets`：通过，7 个 Playwright 测试通过。
+- `git diff --check HEAD`：通过。
+
+### 遗留问题
+
+- 当前机器仍无法完成默认 `bun run web:smoke` 的 S1b browser wasm smoke，通过条件是修复本机 Chrome / ChromeDriver 版本匹配；该问题已记录到 [docs/known_issues.md](/Users/krhougs/LocalCodes/scad-studio/docs/known_issues.md:3)。
+- `wasm-bindgen` generated 产物中的 `TextEncoder` / `TextDecoder` / `JSON.stringify` 属于 wasm-bindgen glue 或调试显示代码；不属于本计划禁止的 WebSocket wire JSON fallback。
+- 配置文件、预设文件、用户内容解析和错误展示中的 JSON 处理仍按计划允许保留。
+
+## 2026-04-25 计划完成状态
+
+- Phase 0 到 Phase 5 已连续执行完成，每个 Phase 均完成独立 subagent review 和收敛。
+- WebSocket / protocol envelope wire 已迁移为 Borsh binary frame。
+- `app-server-protocol` 仍作为唯一 schema 与 codec 来源；TypeScript 侧没有复制完整 Borsh schema 或完整 envelope 构造权。
+- `studio-app` 的 in-memory typed transport 语义未被改为序列化路径。
+- 剩余阻塞项仅为本机 `wasm-pack --headless --chrome` 环境问题，已作为 known issue 记录。

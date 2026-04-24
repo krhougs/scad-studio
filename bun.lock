@@ -16,13 +16,13 @@
       "version": "0.1.0",
     },
     "packages/studio-web": {
-      "name": "@scad-studio/studio-web",
+      "name": "@budn/studio-web",
       "version": "0.1.0",
       "dependencies": {
         "@base-ui/react": "^1.4.1",
         "@budn/app-server-protocol": "workspace:*",
+        "@budn/studio-web-wasm": "workspace:*",
         "@phosphor-icons/react": "^2.1.10",
-        "@scad-studio/studio-web-wasm": "workspace:*",
         "@uiw/react-markdown-preview": "^5.2.0",
         "mermaid": "^11.14.0",
         "react": "^18.3.1",
@@ -51,7 +51,7 @@
       },
     },
     "packages/studio-web-wasm": {
-      "name": "@scad-studio/studio-web-wasm",
+      "name": "@budn/studio-web-wasm",
       "version": "0.1.0",
     },
   },
@@ -254,6 +254,10 @@
 
     "@budn/app-server-protocol": ["@budn/app-server-protocol@workspace:packages/app-server-protocol"],
 
+    "@budn/studio-web": ["@budn/studio-web@workspace:packages/studio-web"],
+
+    "@budn/studio-web-wasm": ["@budn/studio-web-wasm@workspace:packages/studio-web-wasm"],
+
     "@chevrotain/cst-dts-gen": ["@chevrotain/cst-dts-gen@12.0.0", "", { "dependencies": { "@chevrotain/gast": "12.0.0", "@chevrotain/types": "12.0.0" } }, "sha512-fSL4KXjTl7cDgf0B5Rip9Q05BOrYvkJV/RrBTE/bKDN096E4hN/ySpcBK5B24T76dlQ2i32Zc3PAE27jFnFrKg=="],
 
     "@chevrotain/gast": ["@chevrotain/gast@12.0.0", "", { "dependencies": { "@chevrotain/types": "12.0.0" } }, "sha512-1ne/m3XsIT8aEdrvT33so0GUC+wkctpUPK6zU9IlOyJLUbR0rg4G7ZiApiJbggpgPir9ERy3FRjT6T7lpgetnQ=="],
@@ -423,10 +427,6 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.60.2", "", { "os": "win32", "cpu": "x64" }, "sha512-qdAzEULD+/hzObedtmV6iBpdL5TIbKVztGiK7O3/KYSf+HIzU257+MX1EXJcyIiDbMAqmbwaufcYPvyRryeZtA=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.60.2", "", { "os": "win32", "cpu": "x64" }, "sha512-Nd/SgG27WoA9e+/TdK74KnHz852TLa94ovOYySo/yMPuTmpckK/jIF2jSwS3g7ELSKXK13/cVdmg1Z/DaCWKxA=="],
-
-    "@scad-studio/studio-web": ["@scad-studio/studio-web@workspace:packages/studio-web"],
-
-    "@scad-studio/studio-web-wasm": ["@scad-studio/studio-web-wasm@workspace:packages/studio-web-wasm"],
 
     "@surma/rollup-plugin-off-main-thread": ["@surma/rollup-plugin-off-main-thread@2.2.3", "", { "dependencies": { "ejs": "^3.1.6", "json5": "^2.2.0", "magic-string": "^0.25.0", "string.prototype.matchall": "^4.0.6" } }, "sha512-lR8q/9W7hZpMWweNiAKU7NQerBnzQQLvi8qnTDU/fxItPhtZVMbPV3lbCwjhIlNBe9Bbr5V+KHshvWmVSG9cxQ=="],
 

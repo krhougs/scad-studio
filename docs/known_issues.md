@@ -201,7 +201,7 @@
 - 可能的解法：
   - 扩展协议：`ExportRunRequest.output` 改为 `PathHandleWritable`（新增路径类型），由 server 解析为 workspace 根下的相对路径；或复用现有 `PathHandle` 作为目录 + 文件名两字段。
   - 需求上若只要求"导出到 workspace 某目录"，可先约定 server 端默认写到 `workspace_root/exports/<filename>`。
-- 当前处理方式：Phase 7 web 端记录在 `docs/web-platform-limits.md §10`；协议不改，以相对文件名透传为准。
+- 当前处理方式：已在 `prompt-archives/2026042500-borsh-protocol-wasm/plan-00.md` Phase 1 和 Phase 4 中解决。`ExportRun.output_path` 已改为 workspace 内 portable path，web 端默认把导出文件名解析为当前源文件同目录下的 portable `PathHandle`；`docs/web-platform-limits.md §10` 已同步为当前行为。本条保留为历史问题记录，不再阻塞后续开发判断。
 
 - 来源：执行 `prompt-archives/2026042200-studio-app-server-unification/plan-00.md` 的验收过程中，已能通过 workspace 构建/测试和桌面二进制编译确认 `studio-app` 可进入运行路径，但当前会话没有桌面自动化能力，无法在同一条执行链中继续点击菜单、打开工作区、切换文档标签并观察真实窗口渲染。
 - 原因：当前环境具备编译、测试和进程级启动能力，但不具备桌面 GUI 级别的交互自动化工具；已有自动化测试主要覆盖状态机和纯逻辑，不能等价替代完整的人机交互回归。

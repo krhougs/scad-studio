@@ -17,7 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client", "vite-plugin-pwa/client"],
     "paths": {
-      "@scad-studio/studio-web-wasm": ["../studio-web-wasm/src/index.ts"]
+      "@budn/studio-web-wasm": ["../studio-web-wasm/src/index.ts"]
     }
   },
   "include": ["src", "tests"],

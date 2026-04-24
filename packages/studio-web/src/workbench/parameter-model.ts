@@ -1,7 +1,7 @@
 import {
   parameters_format_defines,
   parameters_parse_source,
-} from "@scad-studio/studio-web-wasm";
+} from "@budn/studio-web-wasm";
 
 export type ParameterValue = number | boolean | string;
 

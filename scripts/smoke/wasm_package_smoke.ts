@@ -211,7 +211,7 @@ function printDiffSummary(results: DiffResult[]) {
 }
 
 async function verifyPackageImport() {
-  // Minimal static check: @scad-studio/studio-web-wasm 应指向 src/index.ts
+  // Minimal static check: @budn/studio-web-wasm 应指向 src/index.ts
   // 再确认 src/index.ts 能 re-export generated/。
   const pkgJson = JSON.parse(
     await readFile(
@@ -219,9 +219,9 @@ async function verifyPackageImport() {
       "utf8",
     ),
   );
-  if (pkgJson.name !== "@scad-studio/studio-web-wasm") {
+  if (pkgJson.name !== "@budn/studio-web-wasm") {
     throw new Error(
-      `unexpected package name: ${pkgJson.name}; expected @scad-studio/studio-web-wasm`,
+      `unexpected package name: ${pkgJson.name}; expected @budn/studio-web-wasm`,
     );
   }
   const indexText = await readFile(

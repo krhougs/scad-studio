@@ -158,7 +158,7 @@ bun run web:smoke
 
 ## 5. 故障排查
 
-### 5.1 `bun install` 失败 / 解析不到 `@scad-studio/studio-web-wasm`
+### 5.1 `bun install` 失败 / 解析不到 `@budn/studio-web-wasm`
 
 - 确认在仓库根目录执行，不是在 `packages/studio-web`。
 - `.gitignore` 会忽略 `pnpm-lock.yaml` 与 `node_modules/`，仓库提交的是 `bun.lock`。

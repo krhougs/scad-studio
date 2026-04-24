@@ -5,7 +5,7 @@
 import {
   presets_parse_shared_file,
   presets_stringify_shared_file,
-} from "@scad-studio/studio-web-wasm";
+} from "@budn/studio-web-wasm";
 import type { ParameterValue, PresetValueMap } from "./parameter-model";
 import type { PresetEntry } from "./presets-panel";
 

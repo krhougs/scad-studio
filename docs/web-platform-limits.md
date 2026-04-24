@@ -96,10 +96,11 @@
 - `SlicerList` 面板列出的是 **server 机器**上的安装，不是浏览器机器。
   面板空列表显示 "no slicer configured"，web 端绝不尝试调起本地切片器
   进程（参见 §1）。
-- `ExportRun` 的 `output_path` 在协议上是 server 侧 `PathBuf`；浏览器
-  无法知道 server 的绝对路径。web 端目前发相对文件名（如
-  `params-cube.stl`），由 OpenSCAD CLI 相对 server 进程的 cwd 解析。
-  涉及真实多 workspace 的输出路径语义待 Phase 8+ 评估。
+- `ExportRun` 的 `output_path` 已改为 workspace 内 portable path。
+  web 端默认把导出文件名解析到当前源文件同目录，例如
+  `examples/params-cube.scad` 默认导出到 `examples/params-cube.stl`。
+  浏览器仍不能选择 server 机器的任意绝对路径；OpenSCAD path 与 slicer path
+  继续使用 host-local path 配置，由 server 所在平台校验。
 
 ## 11. 配置与设置
 
