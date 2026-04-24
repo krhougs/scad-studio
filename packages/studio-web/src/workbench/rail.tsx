@@ -6,6 +6,7 @@ import {
   GearSix,
   Printer,
   Stack,
+  TerminalWindow,
   type Icon,
 } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
@@ -34,7 +35,7 @@ const FOOTER_TOP: RailItem[] = [
 ];
 
 const FOOTER_BOTTOM: RailItem[] = [
-  { id: "log", label: "log", Icon: ClockCounterClockwise },
+  { id: "log", label: "log", Icon: TerminalWindow },
   { id: "settings", label: "settings", Icon: GearSix },
 ];
 

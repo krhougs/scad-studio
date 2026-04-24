@@ -3,6 +3,7 @@
 // bottom border to match §九 (buttons & tabs) of the design system.
 
 import type { DocumentTab } from "../state/ui-store";
+import type React from "react";
 
 type TabBarProps = {
   tabs: DocumentTab[];
@@ -12,6 +13,13 @@ type TabBarProps = {
 };
 
 export function TabBar({ tabs, activeTabId, onActivate, onClose }: TabBarProps) {
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    if (el.scrollWidth <= el.clientWidth) return;
+    event.preventDefault();
+    el.scrollLeft += event.deltaY + event.deltaX;
+  };
+
   if (tabs.length === 0) {
     return (
       <div className="tabbar tabbar--empty" data-testid="tabbar">
@@ -20,7 +28,12 @@ export function TabBar({ tabs, activeTabId, onActivate, onClose }: TabBarProps) 
     );
   }
   return (
-    <div className="tabbar" role="tablist" data-testid="tabbar">
+    <div
+      className="tabbar"
+      role="tablist"
+      data-testid="tabbar"
+      onWheel={handleWheel}
+    >
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;
         return (

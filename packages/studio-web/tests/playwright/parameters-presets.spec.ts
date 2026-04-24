@@ -1,5 +1,5 @@
-// @parameters-presets smoke. Opens examples/params-cube.scad, adds / applies /
-// removes a parameter override, and exercises preset save + load + delete
+// @parameters-presets smoke. Opens examples/params-cube.scad, edits parameter
+// overrides, and exercises preset save + load + delete
 // against the desktop-compatible sibling .scad.json file.
 
 import { expect, test } from "@playwright/test";
@@ -107,6 +107,8 @@ test("@parameters-presets typed controls drive current defines", async ({
   const rightInspector = inspector(page);
   const size = rightInspector.getByTestId("parameter-control-size");
   await expect(size).toHaveAttribute("type", "number", { timeout: 10_000 });
+  await expect(rightInspector.getByTestId("parameters-apply")).toHaveCount(0);
+  await expect(rightInspector.getByTestId("parameter-slider-size")).toBeVisible();
   await expect(size).toHaveValue("10");
   await expect(rightInspector.getByTestId("parameter-control-enabled")).toBeChecked();
   await expect(rightInspector.getByTestId("parameter-control-mode")).toHaveValue("draft");
@@ -250,7 +252,14 @@ test("@parameters-presets switching scad tabs clears previous applied defines", 
   await openParamsCube(page);
   const rightInspector = inspector(page);
   await rightInspector.getByTestId("parameter-control-wall").fill("5");
-  await rightInspector.getByTestId("parameters-apply").click();
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "preview_request"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      defines: ["size=10", "wall=5", "enabled=true", 'mode="draft"'],
+    });
 
   await clearRecordedClientCommands(page);
   await page.getByTestId("entry-cube.scad").click();
@@ -276,5 +285,22 @@ test("@parameters-presets switching scad tabs clears previous applied defines", 
     )
     .toMatchObject({
       defines: [],
+    });
+});
+
+test("@parameters-presets slider updates preview without apply", async ({ page }) => {
+  await openParamsCube(page);
+  const rightInspector = inspector(page);
+  await expect(rightInspector.getByTestId("parameters-apply")).toHaveCount(0);
+
+  await clearRecordedClientCommands(page);
+  await rightInspector.getByTestId("parameter-slider-size").fill("18");
+  await expect
+    .poll(
+      async () => latestRecordedClientCommand(page, "preview_request"),
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      defines: ["size=18", "wall=2", "enabled=true", 'mode="draft"'],
     });
 });

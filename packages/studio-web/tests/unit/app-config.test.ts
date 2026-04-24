@@ -27,6 +27,9 @@ describe("app-config", () => {
       ],
       recent_workspaces: [],
       floating_panel_opacity: 0.85,
+      left_panel_width: 360,
+      right_panel_width: 320,
+      display_unit: "millimeter",
     });
   });
 
@@ -46,5 +49,22 @@ describe("app-config", () => {
       "openscad path missing",
       "no slicer configured",
     ]);
+  });
+
+  it("normalizes persisted panel widths and display units", () => {
+    expect(
+      normalizeAppConfig({
+        left_panel_width: 120,
+        right_panel_width: 900,
+        display_unit: "inch",
+      }),
+    ).toMatchObject({
+      left_panel_width: 280,
+      right_panel_width: 640,
+      display_unit: "inch",
+    });
+    expect(normalizeAppConfig({ display_unit: "feet" as never })).toMatchObject({
+      display_unit: "millimeter",
+    });
   });
 });

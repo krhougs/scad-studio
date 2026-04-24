@@ -60,6 +60,7 @@ test("@config-settings save then reload preserves editable config fields", async
   await expect(page.getByTestId("settings-floating-panel-opacity")).toHaveValue(
     FLOATING_PANEL_OPACITY,
   );
+  await expect(page.getByTestId("settings-display-unit")).toHaveValue("inch");
   await expect(page.getByTestId(`settings-slicer-row-${SLICER_NAME}`)).toBeVisible();
   await expect(
     page.getByTestId(`settings-slicer-path-${SLICER_NAME}`),
@@ -106,6 +107,11 @@ test("@config-settings saved config is consumed by preview, slicer list and expo
       configured_slicers: [{ name: SLICER_NAME, path: SLICER_PATH }],
       slicer_name: null,
     });
+
+  await openModelStl(page);
+  await expect(page.getByTestId("preview-mesh-size")).toContainText("in", {
+    timeout: 30_000,
+  });
 });
 
 async function gotoSettingsPanel(
@@ -129,6 +135,7 @@ async function saveSettings(
   await page.getByTestId("settings-floating-panel-opacity").fill(
     FLOATING_PANEL_OPACITY,
   );
+  await page.getByTestId("settings-display-unit").selectOption("inch");
   await page.getByTestId("settings-slicer-name").fill(SLICER_NAME);
   await page.getByTestId("settings-slicer-path").fill(SLICER_PATH);
   await page.getByTestId("settings-slicer-add").click();
@@ -156,4 +163,15 @@ async function openCubeScad(
     timeout: 15_000,
   });
   await page.getByTestId("entry-cube.scad").click();
+}
+
+async function openModelStl(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.getByTestId("rail-files").click();
+  await page.getByTestId("entry-model.stl").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-model.stl").click();
 }

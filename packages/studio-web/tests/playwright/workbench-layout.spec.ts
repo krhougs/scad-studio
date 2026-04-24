@@ -78,6 +78,8 @@ test("@workbench-layout settings and log are left panel tabs controlled by route
     throw new Error("rail footer buttons must have layout boxes");
   }
   expect(logButton.y).toBeLessThan(settingsButton.y);
+  await expect(page.getByText(/§ log/i)).toBeVisible();
+  await expect(page.locator('[data-testid="left-panel-log"] .side-panel__head .sub')).toContainText("entries");
 });
 
 test("@workbench-layout restores left panel tab from search params and browser history", async ({
@@ -186,9 +188,61 @@ test("@workbench-layout right inspector sections collapse and expand", async ({
     await expect(page.getByTestId(`inspector-section-${section}`)).toBeVisible({
       timeout: 30_000,
     });
+    await expect(page.getByTestId(`inspector-section-${section}-toggle`)).toContainText("-");
     await page.getByTestId(`inspector-section-${section}-toggle`).click();
     await expect(page.getByTestId(`inspector-section-${section}-body`)).toBeHidden();
+    await expect(page.getByTestId(`inspector-section-${section}-toggle`)).toContainText("+");
     await page.getByTestId(`inspector-section-${section}-toggle`).click();
     await expect(page.getByTestId(`inspector-section-${section}-body`)).toBeVisible();
   }
+});
+
+test("@workbench-layout opening the same file twice reuses the existing tab", async ({
+  page,
+}) => {
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-README.md")
+    .waitFor({ state: "visible", timeout: 15_000 });
+
+  await page.getByTestId("entry-README.md").click();
+  await page.getByTestId("entry-cube.scad").click();
+  await page.getByTestId("entry-README.md").click();
+
+  await expect(page.getByTestId("tab-README.md")).toHaveCount(1);
+  await expect(page.getByTestId("tab-README.md")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("@workbench-layout panel resize handles update column widths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(
+    `${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`,
+  );
+  await expect(page.getByTestId("workbench-left-panel")).toBeVisible({
+    timeout: 30_000,
+  });
+
+  const before = await page.getByTestId("workbench-left-panel").boundingBox();
+  const handle = await page.getByTestId("resize-left-panel").boundingBox();
+  if (!before || !handle) throw new Error("left panel and handle must render");
+
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 96, handle.y + handle.height / 2);
+  await page.mouse.up();
+
+  const after = await page.getByTestId("workbench-left-panel").boundingBox();
+  if (!after) throw new Error("left panel must render after resize");
+  expect(after.width).toBeGreaterThan(before.width + 40);
 });

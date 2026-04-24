@@ -2,17 +2,19 @@ import {
   choiceOptions,
   numberBounds,
   parameterKind,
+  sliderBounds,
   type ParameterEntry,
   type ParameterValue,
 } from "./parameter-model";
+import { useState } from "react";
 
 type ParametersPanelProps = {
   entries: ParameterEntry[];
   warnings: string[];
   onUpdateValue: (name: string, value: ParameterValue) => void;
   onRestoreValue: (name: string) => void;
-  onApply: () => void;
   onRestoreDefaults: () => void;
+  onSavePreset: (name: string) => void;
   previewStatus: string;
 };
 
@@ -21,11 +23,12 @@ export function ParametersPanel({
   warnings,
   onUpdateValue,
   onRestoreValue,
-  onApply,
   onRestoreDefaults,
+  onSavePreset,
   previewStatus,
 }: ParametersPanelProps) {
   const visibleEntries = entries.filter((entry) => !entry.definition.hidden);
+  const [draftName, setDraftName] = useState("");
 
   return (
     <section
@@ -76,6 +79,27 @@ export function ParametersPanel({
         </ul>
       ) : null}
       <div className="panel__actions">
+        <input
+          type="text"
+          className="panel__input"
+          placeholder="preset name"
+          value={draftName}
+          onChange={(ev) => setDraftName(ev.target.value)}
+          data-testid="preset-save-name"
+        />
+        <button
+          type="button"
+          className="btn btn--solid btn--sm"
+          onClick={() => {
+            const name = draftName.trim();
+            if (name.length === 0) return;
+            onSavePreset(name);
+            setDraftName("");
+          }}
+          data-testid="preset-save"
+        >
+          save preset
+        </button>
         <button
           type="button"
           className="btn btn--ghost btn--sm"
@@ -83,14 +107,6 @@ export function ParametersPanel({
           data-testid="parameters-restore"
         >
           restore defaults
-        </button>
-        <button
-          type="button"
-          className="btn btn--solid btn--sm"
-          onClick={onApply}
-          data-testid="parameters-apply"
-        >
-          apply
         </button>
       </div>
     </section>
@@ -109,17 +125,31 @@ function ParameterControl({
   const kind = parameterKind(entry);
   if (kind === "number") {
     const bounds = numberBounds(entry);
+    const range = sliderBounds(entry);
+    const value = typeof entry.value === "number" ? entry.value : 0;
     return (
-      <input
-        type="number"
-        className="panel__input"
-        value={String(entry.value)}
-        min={bounds.min}
-        max={bounds.max}
-        step={bounds.step}
-        onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
-        data-testid={testId}
-      />
+      <span className="parameter-number-control">
+        <input
+          type="number"
+          className="panel__input"
+          value={String(entry.value)}
+          min={bounds.min}
+          max={bounds.max}
+          step={bounds.step}
+          onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
+          data-testid={testId}
+        />
+        <input
+          type="range"
+          className="parameter-slider"
+          value={value}
+          min={range.min}
+          max={range.max}
+          step={range.step}
+          onChange={(ev) => onUpdateValue(name, Number(ev.target.value))}
+          data-testid={`parameter-slider-${name}`}
+        />
+      </span>
     );
   }
   if (kind === "bool") {

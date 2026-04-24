@@ -5,6 +5,7 @@ import { FilesPanel } from "./files-panel";
 import type { LeftPanelId } from "./left-panel-routing";
 import { LogPanel, type LogEntry } from "./log-panel";
 import { SettingsPanel } from "./settings-panel";
+import { SidePanelHeader } from "./side-panel-header";
 import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 
 type LeftPanelProps = {
@@ -67,17 +68,12 @@ export function LeftPanel(props: LeftPanelProps) {
       ) : null}
       {activePanel === "log" ? (
         <section
-          className="side-panel side-panel--log"
+          className="side-panel side-panel--log side-panel--flush"
           data-testid="left-panel-log"
           aria-label="log"
         >
-          <header className="side-panel__head">
-            <div>
-              <div className="title">§ log</div>
-              <div className="sub">runtime events</div>
-            </div>
-          </header>
-          <div className="side-panel__body">
+          <SidePanelHeader title="log" meta={`${logEntries.length} entries`} />
+          <div className="side-panel__body" data-testid="log-panel">
             <LogPanel entries={logEntries} />
           </div>
         </section>
@@ -92,12 +88,7 @@ export function LeftPanel(props: LeftPanelProps) {
 function PlaceholderPanel({ id }: { id: string }) {
   return (
     <section className="side-panel" data-testid={`left-panel-${id}`}>
-      <header className="side-panel__head">
-        <div>
-          <div className="title">§ {id}</div>
-          <div className="sub">not connected</div>
-        </div>
-      </header>
+      <SidePanelHeader title={id} meta="not connected" />
       <div className="side-panel__body">
         <p className="side-panel__empty">panel placeholder</p>
       </div>

@@ -111,8 +111,15 @@ function parseParameterLine(line: string): Record<string, unknown> | null {
   if (bool) return parameterEntry(bool[1], bool[2] === "true", "Bool");
   const number = line.match(/^(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*;/);
   if (!number) return null;
+  const range = line.match(/\/\/\s*\[(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?)\]/);
   return parameterEntry(number[1], Number(number[2]), {
-    Number: { min: null, step: null, max: null },
+    Number: range
+      ? {
+          min: Number(range[1]),
+          step: Number(range[2]),
+          max: Number(range[3]),
+        }
+      : { min: null, step: null, max: null },
   });
 }
 

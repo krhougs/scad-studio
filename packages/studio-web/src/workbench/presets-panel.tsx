@@ -3,7 +3,6 @@
 // (<source>.presets.json) and round-trip through FileRead / FileWriteText.
 // All state is component-local; we never cache presets in the Zustand store.
 
-import { useState } from "react";
 import type { PresetValueMap } from "./parameter-model";
 
 export type PresetEntry = {
@@ -18,7 +17,6 @@ type PresetsPanelProps = {
   error: string | null;
   onReload: () => void;
   onLoadPreset: (name: string) => void;
-  onSavePreset: (name: string) => void;
   onDeletePreset: (name: string) => void;
 };
 
@@ -29,10 +27,8 @@ export function PresetsPanel({
   error,
   onReload,
   onLoadPreset,
-  onSavePreset,
   onDeletePreset,
 }: PresetsPanelProps) {
-  const [draftName, setDraftName] = useState("");
   return (
     <section
       className="panel panel--presets"
@@ -99,27 +95,6 @@ export function PresetsPanel({
         ) : null}
       </ul>
       <div className="panel__row panel__row--compose">
-        <input
-          type="text"
-          className="panel__input"
-          placeholder="preset name"
-          value={draftName}
-          onChange={(ev) => setDraftName(ev.target.value)}
-          data-testid="preset-save-name"
-        />
-        <button
-          type="button"
-          className="btn btn--solid btn--sm"
-          onClick={() => {
-            const name = draftName.trim();
-            if (name.length === 0) return;
-            onSavePreset(name);
-            setDraftName("");
-          }}
-          data-testid="preset-save"
-        >
-          save
-        </button>
         <button
           type="button"
           className="btn btn--ghost btn--sm"

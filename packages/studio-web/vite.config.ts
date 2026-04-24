@@ -4,6 +4,11 @@ import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 import { VitePWA } from "vite-plugin-pwa";
 
+const wsProxyTarget =
+  process.env.VITE_WS_PROXY_TARGET ??
+  process.env.SCAD_STUDIO_WS_URL ??
+  "ws://127.0.0.1:38421";
+
 export default defineConfig({
   plugins: [
     wasm(),
@@ -33,7 +38,15 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
-    host: "127.0.0.1",
+    host: "0.0.0.0",
+    proxy: {
+      "/app-server/ws": {
+        target: wsProxyTarget,
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+    allowedHosts: true
   },
   build: {
     target: "es2022",

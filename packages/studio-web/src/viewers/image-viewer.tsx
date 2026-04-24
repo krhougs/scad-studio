@@ -31,6 +31,9 @@ export function ImageViewer({
   const [natural, setNatural] = useState<NaturalSize>(null);
   const [scale, setScale] = useState<number>(1);
   const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [loading, setLoading] = useState(true);
+  const urlRef = useRef<string | null>(null);
+  const pathKeyRef = useRef<string | null>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -39,14 +42,27 @@ export function ImageViewer({
   } | null>(null);
 
   useEffect(() => {
+    return () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
-    let currentUrl: string | null = null;
-    setUrl(null);
+    const key = stablePathKey(path);
+    const samePath = pathKeyRef.current === key;
+    pathKeyRef.current = key;
+    setLoading(true);
     setError(null);
-    setByteSize(null);
-    setNatural(null);
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
+    if (!samePath) {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+      setUrl(null);
+      setByteSize(null);
+      setNatural(null);
+      setScale(1);
+      setOffset({ x: 0, y: 0 });
+    }
     client
       .dispatchFileRead({ path })
       .then((response) => {
@@ -54,10 +70,12 @@ export function ImageViewer({
         const decoded = decodeFileRead(response);
         if (!decoded || decoded.kind !== "binary") {
           setError("unexpected image payload");
+          setLoading(false);
           return;
         }
         if (decoded.bytes.length > MAX_BYTES) {
           setError(`image too large: ${decoded.bytes.length} bytes`);
+          setLoading(false);
           return;
         }
         // Copy into a fresh ArrayBuffer so Blob typing (BlobPart expects an
@@ -67,17 +85,20 @@ export function ImageViewer({
         const blob = new Blob([buffer.buffer], {
           type: decoded.mediaType || "application/octet-stream",
         });
-        currentUrl = URL.createObjectURL(blob);
-        setUrl(currentUrl);
+        const nextUrl = URL.createObjectURL(blob);
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = nextUrl;
+        setUrl(nextUrl);
         setByteSize(decoded.bytes.length);
+        setLoading(false);
       })
       .catch((err) => {
         if (cancelled) return;
         setError(`failed to read: ${describeFileReadError(err)}`);
+        setLoading(false);
       });
     return () => {
       cancelled = true;
-      if (currentUrl) URL.revokeObjectURL(currentUrl);
     };
   }, [client, path, refreshSignal]);
 
@@ -181,21 +202,36 @@ export function ImageViewer({
             {error}
           </p>
         ) : url ? (
-          <img
-            src={url}
-            alt=""
-            onLoad={handleLoad}
-            draggable={false}
-            style={{
-              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-              transformOrigin: "center center",
-            }}
-            data-testid="image-element"
-          />
+          <>
+            <img
+              src={url}
+              alt=""
+              onLoad={handleLoad}
+              draggable={false}
+              style={{
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transformOrigin: "center center",
+              }}
+              data-testid="image-element"
+            />
+            {loading ? (
+              <div className="viewer__loading-overlay" data-testid="image-loading-overlay">
+                image updating…
+              </div>
+            ) : null}
+          </>
         ) : (
           <p className="viewer__loading">reading…</p>
         )}
       </div>
     </div>
   );
+}
+
+function stablePathKey(path: unknown): string {
+  try {
+    return JSON.stringify(path);
+  } catch {
+    return String(path);
+  }
 }

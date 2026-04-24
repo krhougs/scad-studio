@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
   type AppConfigShape,
   type AppConfigState,
+  type DisplayUnit,
   normalizeAppConfig,
   type SlicerRow,
 } from "../config/app-config";
 import { setAppConfigReady } from "../config/app-config-store";
 import type { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "../viewers/file-read-decoder";
+import { SidePanelHeader } from "./side-panel-header";
 
 type SettingsPanelProps = {
   client: WasmClient | null;
@@ -18,6 +20,7 @@ type SettingsPanelProps = {
 export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) {
   const [openscadPath, setOpenscadPath] = useState("");
   const [floatingPanelOpacity, setFloatingPanelOpacity] = useState("0.85");
+  const [displayUnit, setDisplayUnit] = useState<DisplayUnit>("millimeter");
   const [slicers, setSlicers] = useState<SlicerRow[]>([]);
   const [draftSlicerName, setDraftSlicerName] = useState("");
   const [draftSlicerPath, setDraftSlicerPath] = useState("");
@@ -29,6 +32,7 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
     setFloatingPanelOpacity(
       String(appConfig.config.floating_panel_opacity ?? 0.85),
     );
+    setDisplayUnit(appConfig.config.display_unit ?? "millimeter");
     setSlicers(appConfig.config.slicers ?? []);
     setSaveStatus(appConfig.source === "save" ? "saved" : "idle");
   }, [appConfig]);
@@ -46,6 +50,7 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
         floatingPanelOpacity,
         readyConfig.floating_panel_opacity,
       ),
+      display_unit: displayUnit,
     });
     const raw = JSON.stringify(next);
     try {
@@ -55,7 +60,7 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
     } catch (err) {
       setSaveStatus(`save error: ${describeFileReadError(err)}`);
     }
-  }, [client, floatingPanelOpacity, openscadPath, readyConfig, slicers]);
+  }, [client, displayUnit, floatingPanelOpacity, openscadPath, readyConfig, slicers]);
 
   const addSlicer = useCallback(() => {
     const name = draftSlicerName.trim();
@@ -83,16 +88,11 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
 
   return (
     <section
-      className="side-panel side-panel--settings"
+      className="side-panel side-panel--settings side-panel--flush"
       data-testid="left-panel-settings"
       aria-label="settings"
     >
-      <header className="side-panel__head">
-        <div>
-          <div className="title">§ settings</div>
-          <div className="sub">app server config</div>
-        </div>
-      </header>
+      <SidePanelHeader title="settings" meta={saveStatus === "saved" ? "saved" : "app server config"} />
       <div className="side-panel__body settings-panel">
         {appConfig.kind === "idle" || appConfig.kind === "loading" ? (
           <p className="side-panel__empty" data-testid="settings-loading">
@@ -110,6 +110,8 @@ export function SettingsPanel({ client, appConfig, wsUrl }: SettingsPanelProps) 
             setOpenscadPath={setOpenscadPath}
             floatingPanelOpacity={floatingPanelOpacity}
             setFloatingPanelOpacity={setFloatingPanelOpacity}
+            displayUnit={displayUnit}
+            setDisplayUnit={setDisplayUnit}
             slicers={slicers}
             draftSlicerName={draftSlicerName}
             setDraftSlicerName={setDraftSlicerName}
@@ -137,6 +139,8 @@ type SettingsFormProps = {
   setOpenscadPath: (value: string) => void;
   floatingPanelOpacity: string;
   setFloatingPanelOpacity: (value: string) => void;
+  displayUnit: DisplayUnit;
+  setDisplayUnit: (value: DisplayUnit) => void;
   slicers: SlicerRow[];
   draftSlicerName: string;
   setDraftSlicerName: (value: string) => void;
@@ -157,6 +161,8 @@ function SettingsForm(props: SettingsFormProps) {
     setOpenscadPath,
     floatingPanelOpacity,
     setFloatingPanelOpacity,
+    displayUnit,
+    setDisplayUnit,
     slicers,
     draftSlicerName,
     setDraftSlicerName,
@@ -192,6 +198,18 @@ function SettingsForm(props: SettingsFormProps) {
           onChange={(ev) => setFloatingPanelOpacity(ev.target.value)}
           data-testid="settings-floating-panel-opacity"
         />
+      </label>
+      <label className="settings-panel__field">
+        <span>display unit</span>
+        <select
+          value={displayUnit}
+          onChange={(ev) => setDisplayUnit(ev.target.value as DisplayUnit)}
+          data-testid="settings-display-unit"
+        >
+          <option value="millimeter">mm</option>
+          <option value="centimeter">cm</option>
+          <option value="inch">in</option>
+        </select>
       </label>
       <div className="settings-panel__group">
         <p>

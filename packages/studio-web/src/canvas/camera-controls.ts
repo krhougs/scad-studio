@@ -11,14 +11,20 @@
 import {
   CameraPreset,
   CameraState,
+  DEFAULT_FAR,
+  DEFAULT_FOV_Y_DEG,
+  DEFAULT_NEAR,
   PRESET_STATES,
   defaultCameraState,
   type Vec3,
 } from "./camera-state";
+import type { MeshBounds } from "../viewers/mesh-info";
 
 const MIN_DIST = 1;
 const MAX_DIST = 5_000;
 const MAX_PITCH = Math.PI / 2 - 0.05;
+const DEG = 180 / Math.PI;
+const RAD = Math.PI / 180;
 
 function sub(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -31,6 +37,13 @@ function scale(a: Vec3, s: number): Vec3 {
 }
 function length(a: Vec3): number {
   return Math.hypot(a[0], a[1], a[2]);
+}
+function finiteNumber(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function finiteVec(value: Vec3 | undefined, fallback: Vec3): Vec3 {
+  if (value && value.every((item) => Number.isFinite(item))) return value;
+  return fallback;
 }
 function normalize(a: Vec3): Vec3 {
   const len = length(a);
@@ -112,4 +125,127 @@ export function classifyPointerMode(opts: {
   if (opts.button === 0 && opts.altKey) return "pan";
   if (opts.button === 0) return "orbit";
   return "none";
+}
+
+export function fitCameraToBounds(
+  bounds: MeshBounds | null,
+  preset: CameraPreset,
+  aspectRatio: number,
+): CameraState {
+  if (!bounds) return applyPreset(preset);
+  const center: Vec3 = [
+    (bounds.min[0] + bounds.max[0]) / 2,
+    (bounds.min[1] + bounds.max[1]) / 2,
+    (bounds.min[2] + bounds.max[2]) / 2,
+  ];
+  const size: Vec3 = [
+    Math.max(0, bounds.max[0] - bounds.min[0]),
+    Math.max(0, bounds.max[1] - bounds.min[1]),
+    Math.max(0, bounds.max[2] - bounds.min[2]),
+  ];
+  const radius = Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 0.25);
+  const halfFov = (DEFAULT_FOV_Y_DEG * RAD) / 2;
+  const horizontalHalfFov = Math.atan(Math.tan(halfFov) * Math.max(aspectRatio, 0.1));
+  const limitingHalfFov = Math.min(halfFov, horizontalHalfFov);
+  const distance = Math.min(
+    MAX_DIST,
+    Math.max(MIN_DIST, (radius / Math.tan(limitingHalfFov)) * 1.35),
+  );
+  const angles = presetAngles(preset);
+  return updateCameraFromSpherical(
+    {
+      position: [center[0], center[1] - distance, center[2]],
+      target: center,
+      up: preset === "top" || preset === "bottom" ? [0, 1, 0] : [0, 0, 1],
+      fovYDeg: DEFAULT_FOV_Y_DEG,
+      near: Math.max(radius / 1000, DEFAULT_NEAR),
+      far: Math.max(radius * 20, DEFAULT_FAR),
+    },
+    {
+      target: center,
+      distance,
+      azimuthDeg: angles.azimuthDeg,
+      elevationDeg: angles.elevationDeg,
+    },
+  );
+}
+
+export function sphericalFromCamera(state: CameraState): {
+  target: Vec3;
+  distance: number;
+  azimuthDeg: number;
+  elevationDeg: number;
+} {
+  const target = finiteVec(state.target, [0, 0, 0]);
+  const position = finiteVec(state.position, [0, -MIN_DIST, 0]);
+  const offset = sub(position, target);
+  const distance = Math.max(length(offset), MIN_DIST);
+  const azimuthDeg = Math.atan2(offset[1], offset[0]) * DEG;
+  const elevationDeg = Math.asin(
+    Math.max(-1, Math.min(1, offset[2] / distance)),
+  ) * DEG;
+  return {
+    target,
+    distance,
+    azimuthDeg,
+    elevationDeg,
+  };
+}
+
+export function updateCameraFromSpherical(
+  state: CameraState,
+  patch: Partial<{
+    target: Vec3;
+    distance: number;
+    azimuthDeg: number;
+    elevationDeg: number;
+  }>,
+): CameraState {
+  const current = sphericalFromCamera(state);
+  const target = finiteVec(patch.target, current.target);
+  const distance = Math.min(
+    MAX_DIST,
+    Math.max(MIN_DIST, finiteNumber(patch.distance, current.distance)),
+  );
+  const azimuth = finiteNumber(patch.azimuthDeg, current.azimuthDeg) * RAD;
+  const elevation = Math.max(
+    -MAX_PITCH,
+    Math.min(
+      MAX_PITCH,
+      finiteNumber(patch.elevationDeg, current.elevationDeg) * RAD,
+    ),
+  );
+  const cp = Math.cos(elevation);
+  const offset: Vec3 = [
+    distance * cp * Math.cos(azimuth),
+    distance * cp * Math.sin(azimuth),
+    distance * Math.sin(elevation),
+  ];
+  return {
+    ...state,
+    target,
+    position: add(target, offset),
+  };
+}
+
+function presetAngles(preset: CameraPreset): {
+  azimuthDeg: number;
+  elevationDeg: number;
+} {
+  switch (preset) {
+    case "front":
+      return { azimuthDeg: -90, elevationDeg: 0 };
+    case "back":
+      return { azimuthDeg: 90, elevationDeg: 0 };
+    case "left":
+      return { azimuthDeg: 180, elevationDeg: 0 };
+    case "right":
+      return { azimuthDeg: 0, elevationDeg: 0 };
+    case "top":
+      return { azimuthDeg: 0, elevationDeg: 86 };
+    case "bottom":
+      return { azimuthDeg: 0, elevationDeg: -86 };
+    case "iso":
+      return { azimuthDeg: -45, elevationDeg: 35 };
+  }
 }

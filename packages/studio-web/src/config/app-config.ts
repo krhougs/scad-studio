@@ -1,10 +1,14 @@
 export type SlicerRow = { name: string; path: string };
+export type DisplayUnit = "millimeter" | "centimeter" | "inch";
 
 export type AppConfigShape = {
   openscad_path?: string | null;
   slicers?: SlicerRow[];
   recent_workspaces?: string[];
   floating_panel_opacity?: number;
+  left_panel_width?: number;
+  right_panel_width?: number;
+  display_unit?: DisplayUnit;
   camera_overlay_pos?: [number, number] | null;
   camera_overlay_size?: [number, number] | null;
   param_panel_pos?: [number, number] | null;
@@ -53,6 +57,9 @@ export function normalizeAppConfig(config: AppConfigShape): AppConfigShape {
       typeof config.floating_panel_opacity === "number"
         ? config.floating_panel_opacity
         : 0.85,
+    left_panel_width: clampNumber(config.left_panel_width, 280, 640, 360),
+    right_panel_width: clampNumber(config.right_panel_width, 280, 640, 320),
+    display_unit: normalizeDisplayUnit(config.display_unit),
   };
 }
 
@@ -87,4 +94,20 @@ function normalizePath(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeDisplayUnit(value: unknown): DisplayUnit {
+  return value === "centimeter" || value === "inch" || value === "millimeter"
+    ? value
+    : "millimeter";
+}
+
+function clampNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
 }

@@ -8,12 +8,13 @@
 // 3D 渲染由 viewers/mesh-viewer.tsx 内的 Three.js WebGLRenderer 驱动；
 // 没有 wgpu-in-wasm 路径。相机预设按钮直接映射到 mesh viewer 的 setCamera。
 
-import type { CameraPreset } from "../canvas/camera-state";
+import type { CameraPreset, CameraState } from "../canvas/camera-state";
 import type { AppConfigShape } from "../config/app-config";
 import type { DocumentTab } from "../state/ui-store";
 import type { WasmClient } from "../wasm-bridge";
 import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
+import type { MeshInfo } from "../viewers/mesh-info";
 import { MeshViewer } from "../viewers/mesh-viewer";
 import {
   DEFAULT_MESH_VIEWER_OPTIONS,
@@ -47,10 +48,13 @@ type CanvasZoneProps = {
   client: WasmClient | null;
   refreshSignal: number;
   config: AppConfigShape | null;
-  meshStats: { vertices: number; indices: number } | null;
+  meshInfo: MeshInfo | null;
   activeView: ViewPreset;
   onSelectView: (id: ViewPreset) => void;
-  onMeshStats: (stats: { vertices: number; indices: number } | null) => void;
+  onMeshInfo: (info: MeshInfo | null) => void;
+  cameraOverride: CameraState | null;
+  onCameraChange: (camera: CameraState) => void;
+  onOpenCameraPanel: () => void;
   scadWorkbenchState: ScadWorkbenchState;
 };
 
@@ -67,10 +71,13 @@ export function CanvasZone(props: CanvasZoneProps) {
     client,
     refreshSignal,
     config,
-    meshStats,
+    meshInfo,
     activeView,
     onSelectView,
-    onMeshStats,
+    onMeshInfo,
+    cameraOverride,
+    onCameraChange,
+    onOpenCameraPanel,
     scadWorkbenchState,
   } = props;
 
@@ -113,7 +120,7 @@ export function CanvasZone(props: CanvasZoneProps) {
             )}
             <div className="canvas-info" data-testid="canvas-info">
               <div>{isMeshLike ? activeView : "no preview"}</div>
-              <div>units mm</div>
+              <div>units {unitLabel(config?.display_unit ?? "millimeter")}</div>
             </div>
           </div>
 
@@ -127,12 +134,26 @@ export function CanvasZone(props: CanvasZoneProps) {
                 refreshSignal={refreshSignal}
                 config={config}
                 viewerOptions={viewerOptions}
-                onMeshStats={onMeshStats}
+                onMeshInfo={onMeshInfo}
+                cameraOverride={cameraOverride}
+                onCameraChange={onCameraChange}
                 scadWorkbenchState={scadWorkbenchState}
               />
             ) : (
               <EmptyStagePlaceholder />
             )}
+            {isMeshLike ? (
+              <button
+                type="button"
+                className="camera-handle"
+                aria-label="camera panel"
+                title="camera"
+                data-testid="camera-handle"
+                onClick={onOpenCameraPanel}
+              >
+                ☰
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -148,14 +169,14 @@ export function CanvasZone(props: CanvasZoneProps) {
                 {message || "—"}
               </span>
             </div>
-            {meshStats ? (
+            {meshInfo ? (
               <>
                 <div className="div" aria-hidden="true" />
                 <div className="cell">
-                  verts<span>{meshStats.vertices}</span>
+                  verts<span>{meshInfo.vertices}</span>
                 </div>
                 <div className="cell">
-                  idx<span>{meshStats.indices}</span>
+                  idx<span>{meshInfo.indices}</span>
                 </div>
               </>
             ) : null}
@@ -174,7 +195,9 @@ type ActiveViewerProps = {
   refreshSignal: number;
   config: AppConfigShape | null;
   viewerOptions: MeshViewerOptions;
-  onMeshStats: (stats: { vertices: number; indices: number } | null) => void;
+  onMeshInfo: (info: MeshInfo | null) => void;
+  cameraOverride: CameraState | null;
+  onCameraChange: (camera: CameraState) => void;
   scadWorkbenchState: ScadWorkbenchState;
 };
 
@@ -186,14 +209,16 @@ function ActiveViewer({
   refreshSignal,
   config,
   viewerOptions,
-  onMeshStats,
+  onMeshInfo,
+  cameraOverride,
+  onCameraChange,
   scadWorkbenchState,
 }: ActiveViewerProps) {
   useEffect(() => {
     if (tab.kind !== "mesh" && tab.kind !== "scad") {
-      onMeshStats(null);
+      onMeshInfo(null);
     }
-  }, [onMeshStats, tab.kind]);
+  }, [onMeshInfo, tab.kind]);
 
   if (!client) {
     return (
@@ -230,9 +255,11 @@ function ActiveViewer({
         state={scadWorkbenchState}
         config={config}
         cameraPreset={viewPresetToCamera(activeView)}
+        cameraOverride={cameraOverride}
         viewerOptions={viewerOptions}
         refreshSignal={refreshSignal}
-        onMeshStats={onMeshStats}
+        onMeshInfo={onMeshInfo}
+        onCameraChange={onCameraChange}
       />
     );
   }
@@ -243,9 +270,14 @@ function ActiveViewer({
       label={tab.label}
       refreshSignal={refreshSignal}
       cameraPreset={viewPresetToCamera(activeView)}
+      cameraOverride={cameraOverride}
       viewerOptions={viewerOptions}
       onPreviewStatus={onPreviewStatus}
-      onStats={onMeshStats}
+      onStats={(stats) => {
+        if (!stats) onMeshInfo(null);
+      }}
+      onInfo={onMeshInfo}
+      onCameraChange={onCameraChange}
     />
   );
 }
@@ -315,6 +347,19 @@ function ViewerToolbar({
           </button>
         ))}
       </div>
+      <div className="viewer-toolbar__group" aria-label="color mode">
+        {(["color", "mono"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={options.colorMode === mode ? "active" : undefined}
+            onClick={() => onUpdateOptions({ colorMode: mode })}
+            data-testid={`viewer-color-${mode}`}
+          >
+            {mode}
+          </button>
+        ))}
+      </div>
       <div className="viewer-toolbar__group" aria-label="projection">
         <button
           type="button"
@@ -362,6 +407,20 @@ function ViewerToolbar({
             onUpdateOptions({ shadowsEnabled: !options.shadowsEnabled })
           }
         />
+        <ViewerToggle
+          active={options.fogEnabled}
+          label="fog"
+          testId="viewer-toggle-fog"
+          onClick={() => onUpdateOptions({ fogEnabled: !options.fogEnabled })}
+        />
+        <ViewerToggle
+          active={options.clipPlaneEnabled}
+          label="clip"
+          testId="viewer-toggle-clip"
+          onClick={() =>
+            onUpdateOptions({ clipPlaneEnabled: !options.clipPlaneEnabled })
+          }
+        />
       </div>
     </div>
   );
@@ -395,6 +454,12 @@ function messageClass(phase: string): string | undefined {
   if (phase.includes("error")) return "is-err";
   if (phase === "preview-ready") return "is-ok";
   return undefined;
+}
+
+function unitLabel(unit: AppConfigShape["display_unit"]): string {
+  if (unit === "centimeter") return "cm";
+  if (unit === "inch") return "in";
+  return "mm";
 }
 
 export type { ViewPreset };

@@ -6,6 +6,7 @@ import {
   mergeParameterEntries,
   parseParameterSource,
   restoreParameterValue,
+  sliderBounds,
   updateParameterValue,
 } from "../../src/workbench/parameter-model";
 
@@ -64,5 +65,25 @@ describe("parameter-model", () => {
       10,
       4,
     ]);
+  });
+
+  it("derives slider bounds with explicit range and negative fallback range", () => {
+    const ranged = parseParameterSource("size = 10; // [5:0.5:30]\n").entries[0];
+    expect(sliderBounds(ranged)).toEqual({
+      min: 5,
+      max: 30,
+      step: 0.5,
+    });
+
+    const inferred = updateParameterValue(
+      parseParameterSource("offset = -3;\n").entries,
+      "offset",
+      -8,
+    )[0];
+    expect(sliderBounds(inferred)).toEqual({
+      min: -16,
+      max: 16,
+      step: 1,
+    });
   });
 });

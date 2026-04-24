@@ -50,7 +50,9 @@ bun run web
 1. `cargo run -p app-server-host --bin websocket-host -- --bind <解析出的 host:port> --workspace <工作目录>`
 2. `bun run --cwd packages/studio-web dev`（`vite`，端口 `STUDIO_WEB_PORT`，默认 `5173`）
 
-浏览器访问 `http://127.0.0.1:5173`。
+本机浏览器访问 `http://127.0.0.1:5173`。Vite 默认监听 `0.0.0.0`，同一局域网的设备可访问开发机 IP，例如 `http://192.168.1.20:5173`。
+
+默认情况下，前端 WebSocket 连接走同源代理路径 `/app-server/ws`，Vite 会把该路径转发到本机 `websocket-host`。这可以避免外部设备访问 dev server 时把 `127.0.0.1` 解析成设备自身。
 
 ### 2.2 单独启动
 
@@ -69,10 +71,11 @@ bun run web
 
 | 变量 | 消费者 | 默认值 | 说明 |
 |------|--------|--------|------|
-| `SCAD_STUDIO_WS_URL` | `run_websocket_host.ts` / `run_studio_web_dev.ts` / Vite 注入 | `ws://127.0.0.1:38421` | 完整 WebSocket URL；host 从中解析 host/port，前端 `BrowserWebSocketTransport` 连接此地址 |
+| `SCAD_STUDIO_WS_URL` | `run_websocket_host.ts` / `run_studio_web_dev.ts` / Vite | `ws://127.0.0.1:38421` | 完整 WebSocket URL；host 从中解析 host/port。显式设置后，前端直接连接此地址 |
 | `STUDIO_WEB_WORKSPACE` | `run_websocket_host.ts` | `workspace/studio-web/` | websocket-host 的根工作目录；首次启动会自动 `mkdir -p` |
 | `STUDIO_WEB_PORT` | `run_studio_web_dev.ts` | `5173` | Vite dev server 端口 |
-| `VITE_WS_URL` | Vite（由 `run_studio_web_dev.ts` 注入） | 与 `SCAD_STUDIO_WS_URL` 一致 | 前端代码读 `import.meta.env.VITE_WS_URL`；也可改用 URL 参数 `?ws=...` 覆盖 |
+| `VITE_WS_URL` | Vite | 空 | 前端直接连接的 WebSocket URL；优先级低于 URL 参数 `?ws=...`，高于同源代理 fallback |
+| `VITE_WS_PROXY_TARGET` | Vite dev server | `ws://127.0.0.1:38421` | `/app-server/ws` 的代理目标，通常由 `bun run web` 自动注入 |
 
 手动试验不同工作目录：
 
@@ -81,6 +84,12 @@ STUDIO_WEB_WORKSPACE=/abs/path/to/my-workspace \
 SCAD_STUDIO_WS_URL=ws://127.0.0.1:38888 \
 bun run web
 ```
+
+常见连接检查：
+
+- 本机访问失败：确认 `websocket-host` 日志中监听地址与 `SCAD_STUDIO_WS_URL` 一致。
+- 局域网设备访问页面成功但一直 connecting：优先保持默认代理路径 `/app-server/ws`；如果使用了 `?ws=` 或 `SCAD_STUDIO_WS_URL`，需要确保该地址对外部设备可达。
+- 端口被占用：修改 `STUDIO_WEB_PORT` 或 `SCAD_STUDIO_WS_URL` 中的端口。
 
 ## 3. 测试矩阵
 
@@ -178,7 +187,7 @@ bun run web:smoke
 
 - 浏览器 devtools 看 Network：`studio_web_wasm_bg.wasm` 是否 200。
 - 看 Console：`TS2307` / 模块找不到多半意味着 `generated/` 里 wasm-bindgen 产物缺失 —— `bun run web:build` 跑一次会生成。
-- 连接状态：Topbar 右上应看到 `online`；若长期 `connecting`，检查 `websocket-host` 日志；若 `error`，检查 `SCAD_STUDIO_WS_URL` 与 `host` 实际监听地址是否一致。
+- 连接状态：Topbar 右上应看到 `online`；若长期 `connecting`，检查 `websocket-host` 日志和 `/app-server/ws` 代理请求；若 `error`，检查 `SCAD_STUDIO_WS_URL` 与 `host` 实际监听地址是否一致。
 
 ### 5.5 Playwright smoke `port not ready`
 

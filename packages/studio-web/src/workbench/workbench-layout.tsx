@@ -13,6 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   decodeConfigLoad,
   describeConfigGaps,
+  normalizeAppConfig,
 } from "../config/app-config";
 import {
   setAppConfigError,
@@ -23,6 +24,8 @@ import {
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
+import type { CameraState } from "../canvas/camera-state";
+import { CameraInspector } from "./camera-inspector";
 import { documentTitleForFile } from "./document-title";
 import { Inspector } from "./inspector";
 import { LeftPanel } from "./left-panel";
@@ -39,6 +42,7 @@ import {
 } from "./scad-workbench";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
+import type { MeshInfo } from "../viewers/mesh-info";
 import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 import {
   createTransport,
@@ -46,6 +50,7 @@ import {
   buildClientCallbacks,
 } from "./workbench-wiring";
 import { describeFileReadError } from "../viewers/file-read-decoder";
+import { resolveWorkbenchWsUrl } from "./ws-url";
 
 type Phase =
   | "idle"
@@ -67,14 +72,6 @@ type Snapshot = {
   } | null;
   transport_status?: string;
 } | null;
-
-function resolveWsUrl(searchParams: URLSearchParams): string {
-  const fromQuery = searchParams.get("ws");
-  if (fromQuery) return fromQuery;
-  const fromEnv = import.meta.env.VITE_WS_URL;
-  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
-  return "ws://127.0.0.1:38421";
-}
 
 function phaseToStatus(phase: Phase): TopbarStatus {
   switch (phase) {
@@ -118,10 +115,14 @@ export function WorkbenchLayout() {
   const [rootLoaded, setRootLoaded] = useState(false);
   const [clientReady, setClientReady] = useState(false);
   const [activeView, setActiveView] = useState<ViewPreset>("iso");
-  const [meshStats, setMeshStats] = useState<
-    { vertices: number; indices: number } | null
-  >(null);
+  const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
+  const [cameraState, setCameraState] = useState<CameraState | null>(null);
+  const [cameraOverride, setCameraOverride] = useState<CameraState | null>(null);
   const [activeDefines, setActiveDefines] = useState<string[]>([]);
+  const [panelWidths, setPanelWidths] = useState({
+    left: 360,
+    right: 320,
+  });
 
   const openTabs = useUiStore((s) => s.openTabs);
   const activeTabId = useUiStore((s) => s.activeTabId);
@@ -131,7 +132,13 @@ export function WorkbenchLayout() {
   const activeRail = useUiStore((s) => s.activeRail);
   const setActiveRail = useUiStore((s) => s.setActiveRail);
 
-  const wsUrl = useMemo(() => resolveWsUrl(searchParams), [searchParams]);
+  const wsUrl = useMemo(
+    () =>
+      resolveWorkbenchWsUrl(searchParams, {
+        envUrl: import.meta.env.VITE_WS_URL,
+      }),
+    [searchParams],
+  );
   const clientRef = useRef<WasmClient | null>(null);
   const expandedRef = useRef<Map<string, WorkspaceDirectoryNode>>(new Map());
   const watchActiveRef = useRef(false);
@@ -157,6 +164,62 @@ export function WorkbenchLayout() {
     onPreviewStatus: setMessage,
     enabled: activeTab?.kind === "scad" && client !== null,
   });
+
+  useEffect(() => {
+    if (appConfig.kind !== "ready") return;
+    setPanelWidths({
+      left: appConfig.config.left_panel_width ?? 360,
+      right: appConfig.config.right_panel_width ?? 320,
+    });
+  }, [appConfig]);
+
+  const persistPanelWidths = useCallback(
+    (next: { left: number; right: number }) => {
+      if (!client || appConfig.kind !== "ready") return;
+      const config = normalizeAppConfig({
+        ...appConfig.config,
+        left_panel_width: next.left,
+        right_panel_width: next.right,
+      });
+      const raw = JSON.stringify(config);
+      client
+        .dispatchConfigSave({ json: raw })
+        .then(() => setAppConfigReady(config, raw, "save"))
+        .catch((err) => {
+          logRef.current.append(
+            "warn",
+            `panel width save failed: ${describeFileReadError(err)}`,
+          );
+        });
+    },
+    [appConfig, client],
+  );
+
+  const beginPanelResize = useCallback(
+    (side: "left" | "right", event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = panelWidths[side];
+      let latest = startWidth;
+      const onMove = (move: PointerEvent) => {
+        const delta = move.clientX - startX;
+        latest = clampPanelWidth(
+          side === "left" ? startWidth + delta : startWidth - delta,
+        );
+        setPanelWidths((prev) => ({ ...prev, [side]: latest }));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const next = { ...panelWidths, [side]: latest };
+        setPanelWidths(next);
+        persistPanelWidths(next);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    },
+    [panelWidths, persistPanelWidths],
+  );
 
   useEffect(() => {
     if (activeRail !== routePanel) {
@@ -455,8 +518,8 @@ export function WorkbenchLayout() {
   );
 
   const previewTargetLabel = activeTab ? activeTab.label : "—";
-  const meshSummary = meshStats
-    ? { label: activeTab?.label ?? "mesh", ...meshStats }
+  const meshSummary = meshInfo
+    ? { label: activeTab?.label ?? "mesh", ...meshInfo }
     : null;
   const showMeshPanels = activeTab?.kind === "mesh" || activeTab?.kind === "scad";
   const defaultExportFilename = activeTab
@@ -467,13 +530,32 @@ export function WorkbenchLayout() {
     document.title = documentTitleForFile(activeTab?.label ?? null);
   }, [activeTab?.label]);
 
+  const openCameraPanel = useCallback(() => {
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[data-testid="inspector-section-camera-toggle"]',
+    );
+    if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+    const panel =
+      document.querySelector<HTMLElement>('[data-testid="camera-panel"]') ??
+      toggle;
+    panel?.scrollIntoView({ block: "nearest" });
+    toggle?.focus();
+  }, []);
+
   const scadInspectorPanels =
     activeTab?.kind === "scad"
       ? scadInspectorPanelsForState(scadWorkbenchState)
       : null;
 
   return (
-    <div className="app" data-testid="workbench-layout">
+    <div
+      className="app"
+      data-testid="workbench-layout"
+      style={{
+        "--left-panel-width": `${panelWidths.left}px`,
+        "--right-panel-width": `${panelWidths.right}px`,
+      } as React.CSSProperties}
+    >
       <Topbar
         workspaceName={rootName}
         wsUrl={wsUrl}
@@ -497,6 +579,7 @@ export function WorkbenchLayout() {
         appConfig={appConfig}
         wsUrl={wsUrl}
       />
+      <PanelResizeHandle side="left" onPointerDown={beginPanelResize} />
       <CanvasZone
         phase={phase}
         message={message}
@@ -509,10 +592,13 @@ export function WorkbenchLayout() {
         client={client}
         refreshSignal={documentRefreshSignal}
         config={appConfig.kind === "ready" ? appConfig.config : null}
-        meshStats={meshStats}
+        meshInfo={meshInfo}
         activeView={activeView}
         onSelectView={setActiveView}
-        onMeshStats={setMeshStats}
+        onMeshInfo={setMeshInfo}
+        cameraOverride={cameraOverride}
+        onCameraChange={setCameraState}
+        onOpenCameraPanel={openCameraPanel}
         scadWorkbenchState={scadWorkbenchState}
       />
       <Inspector
@@ -526,6 +612,18 @@ export function WorkbenchLayout() {
         exportDefines={activeTab?.kind === "scad" ? activeDefines : []}
         appConfig={appConfig}
         onExportStatus={setMessage}
+        cameraSlot={
+          showMeshPanels ? (
+            <CameraInspector
+              camera={cameraState}
+              meshInfo={meshInfo}
+              onChange={(camera) => {
+                setCameraState(camera);
+                setCameraOverride(camera);
+              }}
+            />
+          ) : null
+        }
         parametersSlot={
           activeTab?.kind === "scad" ? scadInspectorPanels?.parameters : null
         }
@@ -533,8 +631,35 @@ export function WorkbenchLayout() {
           activeTab?.kind === "scad" ? scadInspectorPanels?.presets : null
         }
       />
+      <PanelResizeHandle side="right" onPointerDown={beginPanelResize} />
     </div>
   );
+}
+
+function PanelResizeHandle({
+  side,
+  onPointerDown,
+}: {
+  side: "left" | "right";
+  onPointerDown: (
+    side: "left" | "right",
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => void;
+}) {
+  return (
+    <div
+      className={`panel-resize-handle panel-resize-handle--${side}`}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`${side} panel width`}
+      data-testid={`resize-${side}-panel`}
+      onPointerDown={(event) => onPointerDown(side, event)}
+    />
+  );
+}
+
+function clampPanelWidth(value: number): number {
+  return Math.min(640, Math.max(280, Math.round(value)));
 }
 
 function deriveExportFilename(label: string): string {

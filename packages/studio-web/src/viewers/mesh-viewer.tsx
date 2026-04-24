@@ -2,7 +2,12 @@
 // 所有 wgpu-style 异步在 TS 侧走 WebGL2（同步初始化），wasm 侧只传字节。
 
 import { useEffect, useRef, useState } from "react";
-import { PRESET_STATES, type CameraPreset } from "../canvas/camera-state";
+import {
+  PRESET_STATES,
+  type CameraPreset,
+  type CameraState,
+} from "../canvas/camera-state";
+import { fitCameraToBounds } from "../canvas/camera-controls";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "./file-read-decoder";
 import {
@@ -10,6 +15,7 @@ import {
   payloadFromPreview,
   type MeshViewerHandle,
 } from "./mesh-three";
+import type { MeshInfo } from "./mesh-info";
 import type { MeshViewerOptions } from "./viewer-options";
 
 type MeshViewerProps = {
@@ -19,12 +25,15 @@ type MeshViewerProps = {
   defines?: string[];
   configuredOpenscadPath?: string | null;
   cameraPreset?: CameraPreset | null;
+  cameraOverride?: CameraState | null;
   viewerOptions?: MeshViewerOptions;
   previewEnabled?: boolean;
   refreshSignal?: number;
   statusTestId?: string;
   onPreviewStatus?: (status: string) => void;
   onStats?: (stats: { vertices: number; indices: number } | null) => void;
+  onInfo?: (info: MeshInfo | null) => void;
+  onCameraChange?: (camera: CameraState) => void;
 };
 
 type LoadState =
@@ -40,16 +49,32 @@ export function MeshViewer({
   defines,
   configuredOpenscadPath,
   cameraPreset,
+  cameraOverride,
   viewerOptions,
   previewEnabled = true,
   refreshSignal,
   statusTestId,
   onPreviewStatus,
   onStats,
+  onInfo,
+  onCameraChange,
 }: MeshViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<MeshViewerHandle | null>(null);
   const [state, setState] = useState<LoadState>({ kind: "pending" });
+  const lastPathKeyRef = useRef<string | null>(null);
+  const hasReadyMeshRef = useRef(false);
+  const previewStatusRef = useRef(onPreviewStatus);
+  const statsRef = useRef(onStats);
+  const infoRef = useRef(onInfo);
+  const cameraPresetRef = useRef(cameraPreset);
+
+  useEffect(() => {
+    previewStatusRef.current = onPreviewStatus;
+    statsRef.current = onStats;
+    infoRef.current = onInfo;
+    cameraPresetRef.current = cameraPreset;
+  }, [cameraPreset, onInfo, onPreviewStatus, onStats]);
 
   // Viewer lifecycle: create on mount, dispose on unmount.
   useEffect(() => {
@@ -57,6 +82,7 @@ export function MeshViewer({
     if (!canvas) return;
     const viewer = createMeshViewer(canvas);
     viewerRef.current = viewer;
+    if (onCameraChange) viewer.onCameraChange(onCameraChange);
 
     const parent = canvas.parentElement;
     const ro = new ResizeObserver(() => {
@@ -74,7 +100,7 @@ export function MeshViewer({
       viewer.dispose();
       viewerRef.current = null;
     };
-  }, []);
+  }, [onCameraChange]);
 
   // Fetch preview on path change.
   useEffect(() => {
@@ -84,8 +110,17 @@ export function MeshViewer({
       return;
     }
     let cancelled = false;
+    const nextPathKey = stablePathKey(path);
+    const samePath = lastPathKeyRef.current === nextPathKey;
+    lastPathKeyRef.current = nextPathKey;
+    if (!samePath) {
+      viewerRef.current?.setMesh(null);
+      hasReadyMeshRef.current = false;
+      infoRef.current?.(null);
+      statsRef.current?.(null);
+    }
     setState({ kind: "pending" });
-    onPreviewStatus?.("preview pending");
+    previewStatusRef.current?.("preview pending");
     client
       .dispatchPreviewRequest({
         source: path,
@@ -99,26 +134,47 @@ export function MeshViewer({
         const viewer = viewerRef.current;
         if (!mesh || mesh.positions.length === 0) {
           if (viewer) viewer.setMesh(null);
+          hasReadyMeshRef.current = false;
           setState({ kind: "empty" });
-          onPreviewStatus?.("preview ready (empty)");
-          onStats?.(null);
+          previewStatusRef.current?.("preview ready (empty)");
+          statsRef.current?.(null);
+          infoRef.current?.(null);
           return;
         }
-        if (viewer) viewer.setMesh(mesh);
-        const vertices = mesh.positions.length / 3;
-        const indices = mesh.indices ? mesh.indices.length : vertices;
+        const info =
+          viewer?.setMesh(mesh, {
+            frame: !samePath,
+            preset: cameraPresetRef.current ?? "iso",
+          }) ?? null;
+        if (!info) {
+          setState({ kind: "empty" });
+          previewStatusRef.current?.("preview ready (empty)");
+          statsRef.current?.(null);
+          infoRef.current?.(null);
+          return;
+        }
+        const vertices = info.vertices;
+        const indices = info.indices;
+        hasReadyMeshRef.current = true;
         setState({ kind: "ready", vertices, indices });
-        onPreviewStatus?.(`preview ready | ${vertices} verts | ${indices} idx`);
-        onStats?.({ vertices, indices });
+        previewStatusRef.current?.(
+          `preview ready | ${vertices} verts | ${indices} idx`,
+        );
+        statsRef.current?.({ vertices, indices });
+        infoRef.current?.(info);
       })
       .catch((err) => {
         if (cancelled) return;
         const msg = describeFileReadError(err);
         setState({ kind: "error", message: msg });
-        onPreviewStatus?.(`preview error: ${msg}`);
-        onStats?.(null);
-        const viewer = viewerRef.current;
-        if (viewer) viewer.setMesh(null);
+        previewStatusRef.current?.(`preview error: ${msg}`);
+        statsRef.current?.(null);
+        infoRef.current?.(null);
+        if (!samePath) {
+          const viewer = viewerRef.current;
+          if (viewer) viewer.setMesh(null);
+          hasReadyMeshRef.current = false;
+        }
       });
     return () => {
       cancelled = true;
@@ -127,8 +183,6 @@ export function MeshViewer({
     client,
     configuredOpenscadPath,
     defines,
-    onPreviewStatus,
-    onStats,
     path,
     previewEnabled,
     refreshSignal,
@@ -140,6 +194,13 @@ export function MeshViewer({
     if (!cameraPreset) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
+    const info = viewer.getInfo();
+    if (info) {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const aspect = rect && rect.height > 0 ? rect.width / rect.height : 1;
+      viewer.setCamera(fitCameraToBounds(info.bounds, cameraPreset, aspect));
+      return;
+    }
     viewer.setCamera(PRESET_STATES[cameraPreset]);
   }, [cameraPreset]);
 
@@ -147,6 +208,11 @@ export function MeshViewer({
     if (!viewerOptions) return;
     viewerRef.current?.setOptions(viewerOptions);
   }, [viewerOptions]);
+
+  useEffect(() => {
+    if (!cameraOverride) return;
+    viewerRef.current?.setCamera(cameraOverride);
+  }, [cameraOverride]);
 
   return (
     <div
@@ -178,18 +244,33 @@ export function MeshViewer({
           </div>
         </>
       ) : (
-        <p
-          className="viewer__status-reader"
-          data-testid={statusTestId ?? "mesh-status"}
-          hidden
-        >
-          {state.kind === "pending"
-            ? "preview pending"
-            : state.kind === "empty"
-              ? "preview ready (empty mesh)"
-              : `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`}
-        </p>
+        <>
+          <p
+            className="viewer__status-reader"
+            data-testid={statusTestId ?? "mesh-status"}
+            hidden
+          >
+            {state.kind === "pending"
+              ? "preview pending"
+              : state.kind === "empty"
+                ? "preview ready (empty mesh)"
+                : `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`}
+          </p>
+          {state.kind === "pending" && hasReadyMeshRef.current ? (
+            <div className="viewer__loading-overlay" data-testid="mesh-loading-overlay">
+              preview updating…
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
+}
+
+function stablePathKey(path: unknown): string {
+  try {
+    return JSON.stringify(path);
+  } catch {
+    return String(path);
+  }
 }

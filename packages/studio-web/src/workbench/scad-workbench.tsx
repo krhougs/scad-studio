@@ -5,7 +5,7 @@ import {
   useState,
 } from "react";
 import type React from "react";
-import type { CameraPreset } from "../canvas/camera-state";
+import type { CameraPreset, CameraState } from "../canvas/camera-state";
 import type { AppConfigShape } from "../config/app-config";
 import { WasmClient } from "../wasm-bridge";
 import {
@@ -13,6 +13,7 @@ import {
   describeFileReadError,
 } from "../viewers/file-read-decoder";
 import { ScadPreviewViewer } from "../viewers/scad-preview-viewer";
+import type { MeshInfo } from "../viewers/mesh-info";
 import type { MeshViewerOptions } from "../viewers/viewer-options";
 import { ParametersPanel } from "./parameters-panel";
 import {
@@ -43,9 +44,11 @@ type ScadWorkbenchProps = {
   state: ScadWorkbenchState;
   config: AppConfigShape | null;
   cameraPreset?: CameraPreset | null;
+  cameraOverride?: CameraState | null;
   viewerOptions?: MeshViewerOptions;
   refreshSignal: number;
-  onMeshStats?: (stats: { vertices: number; indices: number } | null) => void;
+  onMeshInfo?: (info: MeshInfo | null) => void;
+  onCameraChange?: (camera: CameraState) => void;
 };
 
 export type ScadWorkbenchState = {
@@ -59,7 +62,6 @@ export type ScadWorkbenchState = {
   appliedDefines: string[];
   sourceReady: boolean;
   emitStatus: (status: string) => void;
-  applyOverrides: () => void;
   restoreDefaults: () => void;
   updateParameter: (name: string, value: ParameterValue) => void;
   restoreParameter: (name: string) => void;
@@ -77,9 +79,11 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
     state,
     config,
     cameraPreset,
+    cameraOverride,
     viewerOptions,
     refreshSignal,
-    onMeshStats,
+    onMeshInfo,
+    onCameraChange,
   } = props;
 
   return (
@@ -91,11 +95,16 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
         defines={state.appliedDefines}
         configuredOpenscadPath={config?.openscad_path ?? null}
         cameraPreset={cameraPreset}
+        cameraOverride={cameraOverride}
         viewerOptions={viewerOptions}
         previewEnabled={state.sourceReady}
         refreshSignal={refreshSignal}
         onPreviewStatus={state.emitStatus}
-        onStats={onMeshStats}
+        onStats={(stats) => {
+          if (!stats) onMeshInfo?.(null);
+        }}
+        onInfo={onMeshInfo}
+        onCameraChange={onCameraChange}
       />
     </div>
   );
@@ -148,12 +157,6 @@ export function useScadWorkbenchState({
     },
     [onPreviewStatus],
   );
-
-  const applyOverrides = useCallback(() => {
-    const defines = formatCurrentDefines(parameterEntries);
-    setAppliedDefines(defines);
-    onLog("info", `parameters apply (${defines.length} defines)`);
-  }, [onLog, parameterEntries]);
 
   const restoreDefaults = useCallback(() => {
     const next = restoreAllParameterValues(parameterEntries);
@@ -215,9 +218,7 @@ export function useScadWorkbenchState({
   const handleUpdateParameter = useCallback(
     (name: string, value: ParameterValue) => {
       setParameterEntries((prev) => {
-        const next = updateParameterValue(prev, name, value);
-        setAppliedDefines(formatCurrentDefines(next));
-        return next;
+        return updateParameterValue(prev, name, value);
       });
     },
     [],
@@ -225,11 +226,19 @@ export function useScadWorkbenchState({
 
   const handleRestoreParameter = useCallback((name: string) => {
     setParameterEntries((prev) => {
-      const next = restoreParameterValue(prev, name);
-      setAppliedDefines(formatCurrentDefines(next));
-      return next;
+      return restoreParameterValue(prev, name);
     });
   }, []);
+
+  useEffect(() => {
+    if (!sourceReady) return;
+    const handle = window.setTimeout(() => {
+      const defines = formatCurrentDefines(parameterEntries);
+      setAppliedDefines(defines);
+      onLog("info", `parameters preview update (${defines.length} defines)`);
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [onLog, parameterEntries, sourceReady]);
 
   const loadPresetsFrom = useCallback(
     async (
@@ -357,7 +366,6 @@ export function useScadWorkbenchState({
       previewStatus,
       appliedDefines,
       sourceReady,
-      applyOverrides,
       restoreDefaults,
       updateParameter: handleUpdateParameter,
       restoreParameter: handleRestoreParameter,
@@ -368,7 +376,6 @@ export function useScadWorkbenchState({
       emitStatus,
     }),
     [
-      applyOverrides,
       appliedDefines,
       handleRestoreParameter,
       handleUpdateParameter,
@@ -397,11 +404,11 @@ export function scadInspectorPanelsForState(
       <ParametersPanel
         entries={state.parameterEntries}
         warnings={state.parameterWarnings}
-        onUpdateValue={state.updateParameter}
-        onRestoreValue={state.restoreParameter}
-        onApply={state.applyOverrides}
-        onRestoreDefaults={state.restoreDefaults}
-        previewStatus={state.previewStatus}
+      onUpdateValue={state.updateParameter}
+      onRestoreValue={state.restoreParameter}
+      onRestoreDefaults={state.restoreDefaults}
+      onSavePreset={state.savePreset}
+      previewStatus={state.previewStatus}
       />
     ),
     presets: (
@@ -412,7 +419,6 @@ export function scadInspectorPanelsForState(
         error={state.presetError}
         onReload={state.loadPresets}
         onLoadPreset={state.loadPreset}
-        onSavePreset={state.savePreset}
         onDeletePreset={state.deletePreset}
       />
     ),

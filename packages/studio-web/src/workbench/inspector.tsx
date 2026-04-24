@@ -8,12 +8,11 @@ import type { WasmClient } from "../wasm-bridge";
 import { ExportPanel } from "./export-panel";
 import { InspectorSection } from "./inspector-section";
 import { SlicerPanel } from "./slicer-panel";
+import type { MeshInfo } from "../viewers/mesh-info";
 
 export type InspectorMeshSummary = {
   label: string;
-  vertices: number;
-  indices: number;
-};
+} & MeshInfo;
 
 type InspectorProps = {
   rootName: string;
@@ -26,6 +25,7 @@ type InspectorProps = {
   exportDefines?: string[];
   appConfig: AppConfigState;
   onExportStatus?: (status: string) => void;
+  cameraSlot?: React.ReactNode;
   parametersSlot?: React.ReactNode;
   presetsSlot?: React.ReactNode;
 };
@@ -42,10 +42,12 @@ export function Inspector(props: InspectorProps) {
     exportDefines,
     appConfig,
     onExportStatus,
+    cameraSlot,
     parametersSlot,
     presetsSlot,
   } = props;
   const readyConfig = appConfig.kind === "ready" ? appConfig.config : null;
+  const displayUnit = readyConfig?.display_unit ?? "millimeter";
   const configGaps = readyConfig ? describeConfigGaps(readyConfig) : [];
   const exportSlicers = readyConfig ? configuredSlicerRecords(readyConfig) : [];
 
@@ -64,6 +66,7 @@ export function Inspector(props: InspectorProps) {
           <PreviewSummary
             previewTargetLabel={previewTargetLabel}
             meshSummary={meshSummary}
+            displayUnit={displayUnit}
           />
         </InspectorSection>
         <InspectorSection id="config" title="config">
@@ -74,6 +77,11 @@ export function Inspector(props: InspectorProps) {
             exportSlicers={exportSlicers}
           />
         </InspectorSection>
+        {cameraSlot ? (
+          <InspectorSection id="camera" title="camera">
+            {cameraSlot}
+          </InspectorSection>
+        ) : null}
         {parametersSlot ? (
           <InspectorSection id="parameters" title="parameters">
             {parametersSlot}
@@ -117,9 +125,11 @@ export function Inspector(props: InspectorProps) {
 function PreviewSummary({
   previewTargetLabel,
   meshSummary,
+  displayUnit,
 }: {
   previewTargetLabel: string;
   meshSummary: InspectorMeshSummary | null;
+  displayUnit: "millimeter" | "centimeter" | "inch";
 }) {
   return (
     <>
@@ -144,8 +154,29 @@ function PreviewSummary({
           </div>
         </div>
       ) : null}
+      {meshSummary ? (
+        <div className="field">
+          <div className="field-label">
+            <span>size</span>
+          </div>
+          <div className="field-status is-ok" data-testid="preview-mesh-size">
+            {formatDimensions(meshSummary.dimensions, displayUnit)}
+          </div>
+        </div>
+      ) : null}
     </>
   );
+}
+
+function formatDimensions(
+  dimensions: [number, number, number],
+  unit: "millimeter" | "centimeter" | "inch",
+): string {
+  const factor = unit === "centimeter" ? 0.1 : unit === "inch" ? 1 / 25.4 : 1;
+  const label = unit === "centimeter" ? "cm" : unit === "inch" ? "in" : "mm";
+  return `${dimensions
+    .map((value) => (value * factor).toFixed(unit === "millimeter" ? 2 : 3))
+    .join(" × ")} ${label}`;
 }
 
 function ConfigSummary({

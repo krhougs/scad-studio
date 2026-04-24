@@ -56,6 +56,7 @@ function printUsage(code: number): never {
 async function main() {
   const args = parseArgs(Bun.argv.slice(2));
   const parsed = resolveWsUrl(args.wsUrl);
+  const directWsOverride = Boolean(args.wsUrl ?? process.env.SCAD_STUDIO_WS_URL);
 
   console.log(`[studio-web] starting websocket-host on ${parsed.bind}`);
   const host = await launchWebsocketHost({
@@ -64,7 +65,12 @@ async function main() {
   });
 
   const viteCwd = path.join(REPO_ROOT, "packages", "studio-web");
-  console.log(`[studio-web] starting vite dev on http://127.0.0.1:${args.webPort}`);
+  console.log(`[studio-web] starting vite dev on http://0.0.0.0:${args.webPort}`);
+  console.log(
+    directWsOverride
+      ? `[studio-web] frontend websocket override: ${parsed.url}`
+      : "[studio-web] frontend websocket proxy: /app-server/ws",
+  );
   const vite = Bun.spawn(
     [
       "bun",
@@ -73,7 +79,7 @@ async function main() {
       "--port",
       String(args.webPort),
       "--host",
-      "127.0.0.1",
+      "0.0.0.0",
       "--strictPort",
     ],
     {
@@ -81,7 +87,11 @@ async function main() {
       stdout: "inherit",
       stderr: "inherit",
       stdin: "ignore",
-      env: { ...process.env, VITE_WS_URL: parsed.url },
+      env: {
+        ...process.env,
+        VITE_WS_PROXY_TARGET: parsed.url,
+        ...(directWsOverride ? { VITE_WS_URL: parsed.url } : {}),
+      },
     },
   );
 

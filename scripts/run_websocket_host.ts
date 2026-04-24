@@ -7,7 +7,7 @@
 import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { waitForPort } from "./wait_for_port";
+import { isPortOpen, waitForPort } from "./wait_for_port";
 
 export const REPO_ROOT = path.resolve(import.meta.dir, "..");
 export const DEFAULT_WS_URL = "ws://127.0.0.1:38421";
@@ -71,6 +71,10 @@ export async function launchWebsocketHost(
 
   const stdout = options.stdout ?? (options.silent ? "ignore" : "inherit");
   const stderr = options.stderr ?? (options.silent ? "ignore" : "inherit");
+
+  if (await isPortOpen(parsed.hostname, parsed.port)) {
+    throw new Error(`websocket host port is already in use: ${parsed.bind}`);
+  }
 
   const proc = Bun.spawn(
     [

@@ -7,24 +7,32 @@ import {
   AxesHelper,
   BufferAttribute,
   BufferGeometry,
-  Box3,
   Color,
   DirectionalLight,
   DoubleSide,
+  Fog,
   GridHelper,
   Mesh,
   MeshStandardMaterial,
   OrthographicCamera,
   PerspectiveCamera,
+  Plane,
   PlaneGeometry,
   Scene,
   Vector3,
   WebGLRenderer,
 } from "three";
+import { fitCameraToBounds } from "../canvas/camera-controls";
 import {
   DEFAULT_MESH_VIEWER_OPTIONS,
   type MeshViewerOptions,
 } from "./viewer-options";
+import type { CameraPreset } from "../canvas/camera-state";
+import {
+  computeMeshInfo,
+  meshBuildPlateSize,
+  type MeshInfo,
+} from "./mesh-info";
 
 export type MeshPayload = {
   positions: Float32Array;
@@ -43,7 +51,10 @@ export type CameraState = {
 };
 
 export type MeshViewerHandle = {
-  setMesh(payload: MeshPayload | null): void;
+  setMesh(
+    payload: MeshPayload | null,
+    opts?: { frame?: boolean; preset?: CameraPreset },
+  ): MeshInfo | null;
   setCamera(camera: CameraState): void;
   setOptions(options: MeshViewerOptions): void;
   resize(width: number, height: number, dpr: number): void;
@@ -52,6 +63,7 @@ export type MeshViewerHandle = {
   dispose(): void;
   /** 返回当前显示的 mesh 统计；nullable 表示尚未载入。 */
   getStats(): { vertices: number; indices: number } | null;
+  getInfo(): MeshInfo | null;
 };
 
 type PointerMode = "idle" | "orbit" | "pan";
@@ -63,10 +75,11 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     alpha: true,
     powerPreference: "high-performance",
   });
-  renderer.setClearColor(new Color(0x070708), 1);
+  const backgroundColor = new Color(0x070708);
+  renderer.setClearColor(backgroundColor, 1);
 
   const scene = new Scene();
-  scene.background = null;
+  scene.background = backgroundColor;
 
   const ambient = new AmbientLight(0xffffff, 0.55);
   scene.add(ambient);
@@ -82,6 +95,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const fill = new DirectionalLight(0xffffff, 0.35);
   fill.position.set(-4, -2, -3);
   scene.add(fill);
+  const rim = new DirectionalLight(0xc7e5ff, 0.5);
+  rim.position.set(-5, 8, 6);
+  scene.add(rim);
 
   const grid = new GridHelper(200, 40, 0x2c2c31, 0x1a1a1d);
   (grid.material as { transparent: boolean; opacity: number }).transparent = true;
@@ -123,6 +139,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   let meshObj: Mesh | null = null;
   let meshMaterial: MeshStandardMaterial | null = null;
   let stats: { vertices: number; indices: number } | null = null;
+  let meshInfo: MeshInfo | null = null;
+  let meshHasVertexColors = false;
+  const clipPlane = new Plane(new Vector3(1, 0, 0), 0);
 
   const pointer = {
     mode: "idle" as PointerMode,
@@ -194,15 +213,28 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     axes.visible = options.showAxis;
     buildPlate.visible = options.showBuildPlate;
     renderer.shadowMap.enabled = options.shadowsEnabled;
+    renderer.localClippingEnabled = options.clipPlaneEnabled;
     key.castShadow = options.shadowsEnabled;
     fill.castShadow = options.shadowsEnabled;
+    scene.fog =
+      options.fogEnabled && meshInfo
+        ? new Fog(
+            backgroundColor,
+            Math.max(meshInfo.radius * 3, 60),
+            Math.max(meshInfo.radius * 9, 220),
+          )
+        : null;
     if (meshObj && meshMaterial) {
       meshObj.castShadow = options.shadowsEnabled;
       meshObj.receiveShadow = options.shadowsEnabled;
+      meshMaterial.color.set(options.colorMode === "mono" ? 0x9fb8c6 : 0x7f858a);
+      meshMaterial.vertexColors =
+        options.colorMode === "color" && meshHasVertexColors;
       meshMaterial.wireframe = options.renderMode === "wireframe";
       meshMaterial.transparent = options.renderMode === "xray";
       meshMaterial.opacity = options.renderMode === "xray" ? 0.36 : 1;
       meshMaterial.depthWrite = options.renderMode !== "xray";
+      meshMaterial.clippingPlanes = options.clipPlaneEnabled ? [clipPlane] : [];
       meshMaterial.needsUpdate = true;
     }
     syncCanvasDataset();
@@ -212,33 +244,39 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   function syncCanvasDataset(): void {
     canvas.dataset.renderMode = options.renderMode;
     canvas.dataset.projectionMode = options.projectionMode;
+    canvas.dataset.colorMode = options.colorMode;
     canvas.dataset.showGrid = String(options.showGrid);
     canvas.dataset.showAxis = String(options.showAxis);
     canvas.dataset.showBuildPlate = String(options.showBuildPlate);
     canvas.dataset.shadowsEnabled = String(options.shadowsEnabled);
+    canvas.dataset.fogEnabled = String(options.fogEnabled);
+    canvas.dataset.clipPlaneEnabled = String(options.clipPlaneEnabled);
   }
 
-  function frameToMesh(mesh: Mesh): void {
-    const box = new Box3().setFromObject(mesh);
-    if (box.isEmpty()) return;
-    const center = new Vector3();
-    box.getCenter(center);
-    const size = new Vector3();
-    box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z, 1);
-    const distance = maxDim * 2.4;
-    camera.position.set(
-      center.x + distance * 0.85,
-      center.y + distance * 0.85,
-      center.z + distance * 1.05,
+  function frameToInfo(info: MeshInfo, preset: CameraPreset): void {
+    applyCamera(
+      fitCameraToBounds(info.bounds, preset, viewportWidth / viewportHeight),
     );
-    target.copy(center);
-    camera.up.copy(upVec);
-    camera.lookAt(target);
-    camera.near = Math.max(maxDim / 1000, 0.01);
-    camera.far = Math.max(maxDim * 20, 1000);
-    updateProjection();
     emitCamera();
+  }
+
+  function updateSceneScale(info: MeshInfo | null): void {
+    const plateSize = meshBuildPlateSize(info);
+    const scale = plateSize / 200;
+    grid.scale.setScalar(scale);
+    axes.scale.setScalar(Math.max(0.2, plateSize / 80));
+    buildPlate.scale.set(plateSize / 200, plateSize / 200, 1);
+    if (info) {
+      const center = new Vector3(...info.center);
+      const bottom = info.bounds.min[1] - Math.max(info.radius * 0.015, 0.02);
+      grid.position.set(center.x, bottom, center.z);
+      buildPlate.position.set(center.x, bottom - 0.01, center.z);
+      clipPlane.constant = -center.x;
+      return;
+    }
+    grid.position.set(0, 0, 0);
+    buildPlate.position.set(0, -0.02, 0);
+    clipPlane.constant = 0;
   }
 
   function orbit(dx: number, dy: number): void {
@@ -340,7 +378,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   applyOptions();
 
   return {
-    setMesh(payload) {
+    setMesh(payload, opts) {
       if (meshObj) {
         scene.remove(meshObj);
         meshObj.geometry.dispose();
@@ -348,10 +386,19 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         meshObj = null;
         meshMaterial = null;
         stats = null;
+        meshInfo = null;
+        meshHasVertexColors = false;
       }
       if (!payload || payload.positions.length === 0) {
+        updateSceneScale(null);
         render();
-        return;
+        return null;
+      }
+      const info = computeMeshInfo(payload.positions, payload.indices);
+      if (!info) {
+        updateSceneScale(null);
+        render();
+        return null;
       }
       const geometry = new BufferGeometry();
       geometry.setAttribute(
@@ -379,24 +426,29 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (payload.indices) {
         geometry.setIndex(new BufferAttribute(payload.indices, 1));
       }
+      geometry.computeBoundingBox();
       const material = new MeshStandardMaterial({
-        color: 0x3a3a40,
-        metalness: 0.15,
-        roughness: 0.72,
-        vertexColors: payload.vertexColors !== null,
+        color: 0x7f858a,
+        metalness: 0.05,
+        roughness: 0.58,
+        side: DoubleSide,
+        vertexColors: options.colorMode === "color" && payload.vertexColors !== null,
       });
       meshMaterial = material;
       meshObj = new Mesh(geometry, material);
       scene.add(meshObj);
-      const vertexCount = payload.positions.length / 3;
-      const indexCount = payload.indices ? payload.indices.length : vertexCount;
-      stats = { vertices: vertexCount, indices: indexCount };
-      frameToMesh(meshObj);
+      stats = { vertices: info.vertices, indices: info.indices };
+      meshInfo = info;
+      meshHasVertexColors = payload.vertexColors !== null;
+      updateSceneScale(info);
+      if (opts?.frame !== false) frameToInfo(info, opts?.preset ?? "iso");
       applyOptions();
       render();
+      return info;
     },
     setCamera(state) {
       applyCamera(state);
+      emitCamera();
     },
     setOptions(next) {
       options = { ...next };
@@ -436,6 +488,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     },
     getStats() {
       return stats;
+    },
+    getInfo() {
+      return meshInfo;
     },
   };
 }

@@ -47,9 +47,9 @@ bun run web
 
 启动两件事：
 - `websocket-host` 进程，默认监听 `127.0.0.1:38421`
-- Vite dev server，默认 `http://127.0.0.1:5173`
+- Vite dev server，默认监听 `0.0.0.0:5173`
 
-打开 `http://127.0.0.1:5173` 即可看到 `budn'` 五区工作台（Topbar / Rail / Chat / Canvas / Inspector）。
+本机打开 `http://127.0.0.1:5173` 即可看到 `budn'` 五区工作台（Topbar / Rail / Chat / Canvas / Inspector）。同一局域网的设备可打开开发机 IP，例如 `http://192.168.1.20:5173`；前端默认通过同源路径 `/app-server/ws` 代理到 app server WebSocket，因此外部设备不需要额外添加 `?ws=`。
 
 环境变量（全部可选）：
 
@@ -58,6 +58,8 @@ bun run web
 | `SCAD_STUDIO_WS_URL` | `ws://127.0.0.1:38421` | websocket-host 绑定地址（完整 URL，端口从中解析） |
 | `STUDIO_WEB_WORKSPACE` | `workspace/studio-web/` | host 的工作目录根；首次启动会自动创建 |
 | `STUDIO_WEB_PORT` | `5173` | Vite dev 端口 |
+
+显式覆盖 WebSocket 时仍可使用 `?ws=ws://host:port`，也可设置 `SCAD_STUDIO_WS_URL`。这两种方式会让前端直接连接指定地址；默认路径继续使用 `/app-server/ws` 代理，避免外部设备把 `127.0.0.1` 解析成设备自身。
 
 单独启动：
 

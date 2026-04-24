@@ -1,4 +1,3 @@
-import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import { useState } from "react";
 import type React from "react";
 
@@ -18,7 +17,6 @@ export function InspectorSection({
   children,
 }: InspectorSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
-  const Icon = open ? CaretDown : CaretRight;
   return (
     <section className="insp-sec" data-testid={`inspector-section-${id}`}>
       <h5>
@@ -29,7 +27,9 @@ export function InspectorSection({
           onClick={() => setOpen((value) => !value)}
           data-testid={`inspector-section-${id}-toggle`}
         >
-          <Icon size={12} weight="bold" aria-hidden="true" />
+          <span className="insp-sec__marker" aria-hidden="true">
+            {open ? "-" : "+"}
+          </span>
           <span>{title}</span>
         </button>
         {actions}

@@ -107,6 +107,19 @@
   display: flex;
   gap: var(--space-2);
   justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.parameter-number-control {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.8fr) minmax(80px, 1fr);
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+.parameter-slider {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Scad workbench: 3D preview fills the central canvas ---------------- */
@@ -126,18 +139,19 @@
 
 /* Log panel --------------------------------------------------------- */
 .log-panel__list {
-  max-height: 200px;
+  flex: 1;
   overflow-y: auto;
+  padding: 10px 0;
 }
 .log-panel__row {
   display: grid;
   grid-template-columns: 72px 48px 1fr;
   gap: var(--space-2);
-  padding: 2px 0;
+  padding: 6px 20px;
   font-family: var(--font-mono);
   font-size: var(--fs-xxs);
   color: var(--fg-muted);
-  border-bottom: var(--border-hairline);
+  border-bottom: 1px solid var(--ink-4s);
 }
 .log-panel__row:last-child {
   border-bottom: 0;
@@ -186,7 +200,8 @@
   text-transform: uppercase;
   color: var(--fg-dim);
 }
-.settings-panel input {
+.settings-panel input,
+.settings-panel select {
   width: 100%;
   min-width: 0;
   height: 28px;
@@ -200,4 +215,38 @@
 .settings-panel__slicer {
   border: var(--border-hairline);
   padding: var(--space-2);
+}
+
+.camera-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.camera-panel__field {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+}
+.camera-panel__field span {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.camera-panel__field input {
+  min-width: 0;
+  height: 26px;
+  background: transparent;
+  border: var(--border-hairline);
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0 var(--space-2);
+}
+.camera-panel__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }

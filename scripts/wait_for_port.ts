@@ -1,6 +1,30 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import net from "node:net";
 
+export async function isPortOpen(
+  hostname: string,
+  port: number,
+  timeoutMs = 300,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: hostname, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
 export async function waitForPort(
   hostname: string,
   port: number,
@@ -11,22 +35,10 @@ export async function waitForPort(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect({ host: hostname, port });
-        socket.once("connect", () => {
-          socket.end();
-          resolve();
-        });
-        socket.once("error", (error) => {
-          socket.destroy();
-          reject(error);
-        });
-      });
+    if (await isPortOpen(hostname, port)) {
       return;
-    } catch {
-      await sleep(intervalMs);
     }
+    await sleep(intervalMs);
   }
 
   throw new Error(`port ${hostname}:${port} did not become ready within ${timeoutMs}ms`);

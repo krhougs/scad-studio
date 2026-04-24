@@ -129,6 +129,27 @@ export function numberBounds(entry: ParameterEntry): {
   };
 }
 
+export function sliderBounds(entry: ParameterEntry): {
+  min: number;
+  step: number;
+  max: number;
+} {
+  const bounds = numberBounds(entry);
+  const current = typeof entry.value === "number" ? entry.value : 0;
+  const fallback =
+    typeof entry.definition.default_value === "number"
+      ? entry.definition.default_value
+      : current;
+  const base = Math.max(Math.abs(current), Math.abs(fallback), 1);
+  const inferredMin = -2 * base;
+  const inferredMax = 2 * base;
+  return {
+    min: bounds.min ?? inferredMin,
+    max: bounds.max ?? inferredMax,
+    step: bounds.step ?? inferStep(current, fallback),
+  };
+}
+
 export function choiceOptions(entry: ParameterEntry): string[] {
   const kind = entry.definition.kind;
   if (!hasChoiceKind(kind)) return [];
@@ -160,4 +181,12 @@ function optionalNumber(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
+}
+
+function inferStep(current: number, fallback: number): number {
+  const value = Math.abs(current) > 0 ? current : fallback;
+  if (!Number.isFinite(value) || Number.isInteger(value)) return 1;
+  const text = String(value);
+  const decimal = text.includes(".") ? text.split(".")[1]?.length ?? 0 : 0;
+  return 1 / 10 ** Math.min(decimal, 4);
 }

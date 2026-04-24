@@ -18,6 +18,19 @@ const TEST_WORKSPACE = mkdtempSync(
 );
 cpSync(HOST_WORKSPACE, TEST_WORKSPACE, { recursive: true });
 writeFileSync(path.join(TEST_WORKSPACE, "broken.scad"), "module broken( {\n");
+writeFileSync(
+  path.join(TEST_WORKSPACE, "shifted.stl"),
+  `solid shifted_triangle
+  facet normal 0 0 1
+    outer loop
+      vertex 10 0 0
+      vertex 12 0 0
+      vertex 10 2 0
+    endloop
+  endfacet
+endsolid shifted_triangle
+`,
+);
 const HARNESS = createHarness({
   bindPort: 39182,
   vitePort: 5177,
@@ -57,9 +70,17 @@ test("@canvas-interaction view pill switches active preset", async ({ page }) =>
 
   await page.getByTestId("view-pill-front").click();
   await expect(page.getByTestId("canvas-info")).toContainText("front");
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000");
+
+  await page.getByTestId("entry-shifted.stl").click();
+  await expect(page.getByTestId("canvas-info")).toContainText("front");
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000", {
+    timeout: 30_000,
+  });
 
   await page.getByTestId("view-pill-top").click();
   await expect(page.getByTestId("canvas-info")).toContainText("top");
+  await expect(page.getByTestId("camera-elevation")).toHaveValue("86.000");
 
   await page.getByTestId("view-pill-iso").click();
   await expect(page.getByTestId("canvas-info")).toContainText("iso");
@@ -100,6 +121,47 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 
   await page.getByTestId("viewer-toggle-shadow").click();
   await expect(canvas).toHaveAttribute("data-shadows-enabled", "true");
+
+  await page.getByTestId("viewer-color-mono").click();
+  await expect(canvas).toHaveAttribute("data-color-mode", "mono");
+
+  await page.getByTestId("viewer-toggle-fog").click();
+  await expect(canvas).toHaveAttribute("data-fog-enabled", "true");
+
+  await page.getByTestId("viewer-toggle-clip").click();
+  await expect(canvas).toHaveAttribute("data-clip-plane-enabled", "true");
+});
+
+test("@canvas-interaction preview info and camera controls are available", async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-model.stl")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-model.stl").click();
+
+  await expect(page.getByTestId("preview-mesh-summary")).toContainText("verts", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("preview-mesh-size")).toContainText("mm");
+  await expect(page.getByTestId("camera-panel")).toBeVisible();
+  await expect(page.getByTestId("camera-handle")).toBeVisible();
+
+  await page.getByTestId("camera-azimuth").fill("90");
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("90.000");
+
+  await page.getByTestId("camera-target-x").fill("");
+  await page.getByTestId("camera-distance").click();
+  await expect(page.getByTestId("camera-target-x")).not.toHaveValue("NaN");
+  await expect(page.getByTestId("mesh-canvas")).toBeVisible();
+
+  const cameraToggle = page.getByTestId("inspector-section-camera-toggle");
+  await cameraToggle.click();
+  await expect(page.getByTestId("inspector-section-camera-body")).toBeHidden();
+  await page.getByTestId("camera-handle").click();
+  await expect(page.getByTestId("inspector-section-camera-body")).toBeVisible();
+  await expect(cameraToggle).toBeFocused();
 });
 
 for (const viewport of VIEWPORTS) {
@@ -167,6 +229,9 @@ for (const viewport of VIEWPORTS) {
     await expect(previewStatus).toBeHidden();
     await expect(errorCard).toHaveCSS("overflow-y", /auto|scroll/);
     await expect(errorCard).toHaveCSS("pointer-events", "auto");
+    await expect(toolbar).toBeVisible();
+    await expect(canvasInfo).toBeVisible();
+    await expect(statusBar).toBeVisible();
     await expectNoOverlap(errorCard, toolbar, "preview error must not overlap toolbar");
     await expectNoOverlap(errorCard, canvasInfo, "preview error must not overlap canvas info");
     await expectNoOverlap(errorCard, statusBar, "preview error must not overlap status bar");

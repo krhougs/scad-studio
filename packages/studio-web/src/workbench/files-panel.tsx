@@ -1,4 +1,5 @@
 import { WorkspaceTree, type WorkspaceDirectoryNode, type WorkspaceEntry } from "./workspace-tree";
+import { SidePanelHeader } from "./side-panel-header";
 
 type FilesPanelProps = {
   rootName: string;
@@ -26,16 +27,11 @@ export function FilesPanel(props: FilesPanelProps) {
   } = props;
   return (
     <section
-      className="side-panel side-panel--files"
+      className="side-panel side-panel--files side-panel--flush"
       data-testid="left-panel-files"
       aria-label="files"
     >
-      <header className="side-panel__head">
-        <div>
-          <div className="title">§ files</div>
-          <div className="sub">{rootName}</div>
-        </div>
-      </header>
+      <SidePanelHeader title="files" meta={rootName} />
       <div className="side-panel__body">
         {!entriesLoaded ? (
           <div className="tree">
