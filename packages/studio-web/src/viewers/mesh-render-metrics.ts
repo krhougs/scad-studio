@@ -51,7 +51,7 @@ export function meshSceneMetrics(
     gridSize: plateSize,
     axisSize: Math.max(20, plateSize * 0.4),
     visiblePlane: "xy",
-    gizmoSize: Math.max(48, Math.min(180, minViewport * 0.09 * viewport.dpr)),
+    gizmoSize: Math.max(24, Math.min(90, minViewport * 0.045 * viewport.dpr)),
     fogNear: Math.max(info.radius * 3, 60),
     fogFar: Math.max(info.radius * 9, 220),
     orthographicHalfHeight,

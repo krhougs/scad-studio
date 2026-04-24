@@ -1,7 +1,7 @@
 /*
  * Phase 7 surfaces: parameter & preset panels, slicer / export panels, log
  * panel. 这些面板在 Buddin 重写后搬进 Inspector `.insp-sec`；canvas toolbar /
- * statusbar 样式已删除（view-pills / part-meta 接管）。
+ * statusbar 样式已删除（part-meta 接管）。
  */
 
 /* Shared panel skeleton --------------------------------------------- */
@@ -126,7 +126,7 @@
 
 .numeric-control {
   display: grid;
-  grid-template-columns: 30px minmax(122px, 1fr);
+  grid-template-columns: 26px minmax(122px, 1fr);
   gap: var(--space-2);
   align-items: center;
   flex: 1 0 172px;
@@ -134,8 +134,8 @@
   max-width: 100%;
 }
 .numeric-control__knob {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   display: inline-grid;
   place-items: center;
   position: relative;
@@ -155,19 +155,19 @@
   outline-offset: 2px;
 }
 .numeric-control__knob-track {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--ink-9);
 }
 .numeric-control__knob-pointer {
   position: absolute;
   width: 2px;
-  height: 9px;
+  height: 7px;
   top: 4px;
   left: calc(50% - 1px);
   background: var(--t-1);
-  transform-origin: 1px 11px;
+  transform-origin: 1px 9px;
   transform: rotate(calc(-135deg + var(--knob-progress) * 270deg));
 }
 .numeric-control__number-field {
@@ -203,7 +203,7 @@
 .numeric-control__input {
   width: 100%;
   padding: 0 var(--space-2);
-  text-align: right;
+  text-align: center;
   border-left: var(--border-hairline);
   border-right: var(--border-hairline);
 }

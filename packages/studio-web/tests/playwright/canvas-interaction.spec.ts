@@ -1,6 +1,6 @@
 // Phase 7 @canvas-interaction smoke. Boots the same websocket-host + Vite dev
 // harness as browser_smoke on an isolated port pair, opens a mesh tab, and
-// drives the Buddin .view-pills to verify camera presets update the canvas
+// drives the Inspector camera presets to verify camera state updates the canvas
 // chrome, plus that pointer drag on the Three.js canvas triggers an orbit.
 
 import { expect, test, type Locator } from "@playwright/test";
@@ -69,34 +69,31 @@ test.beforeEach(async ({ page }) => {
   await clearServiceWorkerState(page);
 });
 
-test("@canvas-interaction view pill switches active preset", async ({ page }) => {
+test("@canvas-interaction sidebar camera preset switches active view", async ({ page }) => {
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
   await page
     .getByTestId("entry-model.stl")
     .waitFor({ state: "visible", timeout: 30_000 });
   await page.getByTestId("entry-model.stl").click();
 
-  await expect(page.getByTestId("canvas-view-pills")).toBeVisible();
+  await expect(page.getByTestId("canvas-view-pills")).toHaveCount(0);
 
   // iso is the default
-  await expect(page.getByTestId("view-pill-iso")).toHaveClass(/active/);
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-45.000");
 
-  await page.getByTestId("view-pill-front").click();
-  await expect(page.getByTestId("view-pill-front")).toHaveClass(/active/);
+  await page.getByTestId("camera-preset-front").click();
   await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000");
 
   await page.getByTestId("entry-shifted.stl").click();
-  await expect(page.getByTestId("view-pill-front")).toHaveClass(/active/);
-  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-90.000", {
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-45.000", {
     timeout: 30_000,
   });
 
-  await page.getByTestId("view-pill-top").click();
-  await expect(page.getByTestId("view-pill-top")).toHaveClass(/active/);
+  await page.getByTestId("camera-preset-top").click();
   await expect(page.getByTestId("camera-elevation")).toHaveValue("90.000");
 
-  await page.getByTestId("view-pill-iso").click();
-  await expect(page.getByTestId("view-pill-iso")).toHaveClass(/active/);
+  await page.getByTestId("camera-reset").click();
+  await expect(page.getByTestId("camera-azimuth")).toHaveValue("-45.000");
 });
 
 test("@canvas-interaction viewer toolbar drives render state", async ({ page }) => {
@@ -112,7 +109,7 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await expect(canvas).toHaveAttribute("data-render-mode", "solid");
   await expect(canvas).toHaveAttribute("data-projection-mode", "perspective");
   await expect(canvas).toHaveAttribute("data-show-grid", "true");
-  await expect(canvas).toHaveAttribute("data-show-axis", "true");
+  await expect(canvas).toHaveAttribute("data-show-axis", "false");
   await expect(canvas).toHaveAttribute("data-preview-background", "#101114");
   await expect(canvas).toHaveAttribute("data-gizmo-size", /\d+/);
   await expect(canvas).toHaveAttribute("data-clip-far", /\d+\.\d{3}/);
@@ -181,7 +178,7 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await expect(canvas).toHaveAttribute("data-show-grid", "false");
 
   await page.getByTestId("viewer-toggle-axis").click();
-  await expect(canvas).toHaveAttribute("data-show-axis", "false");
+  await expect(canvas).toHaveAttribute("data-show-axis", "true");
 
   await page.getByTestId("viewer-toggle-build-plate").click();
   await expect(canvas).toHaveAttribute("data-show-build-plate", "true");
@@ -289,7 +286,7 @@ test("@canvas-interaction ViewportGizmo reflects selected view", async ({
   const zAxisBefore = await page
     .getByTestId("viewport-gizmo-axis-z")
     .getAttribute("data-end");
-  await page.getByTestId("view-pill-top").click();
+  await page.getByTestId("camera-preset-top").click();
   await expect(page.getByTestId("viewport-gizmo-axis-z")).not.toHaveAttribute(
     "data-end",
     zAxisBefore ?? "",
@@ -297,32 +294,32 @@ test("@canvas-interaction ViewportGizmo reflects selected view", async ({
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("90.000");
-  await page.getByTestId("view-pill-front").click();
+  await page.getByTestId("camera-preset-front").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("-90.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("view-pill-bottom").click();
+  await page.getByTestId("camera-preset-bottom").click();
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("-90.000");
-  await page.getByTestId("view-pill-back").click();
+  await page.getByTestId("camera-preset-back").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("90.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("view-pill-right").click();
+  await page.getByTestId("camera-preset-right").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("0.000");
   await expect(
     page.getByTestId("camera-number-field-elevation").getByRole("spinbutton"),
   ).toHaveValue("0.000");
-  await page.getByTestId("view-pill-left").click();
+  await page.getByTestId("camera-preset-left").click();
   await expect(
     page.getByTestId("camera-number-field-azimuth").getByRole("spinbutton"),
   ).toHaveValue("180.000");

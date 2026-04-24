@@ -19,7 +19,7 @@ export const DEFAULT_MESH_VIEWER_OPTIONS: MeshViewerOptions = {
   projectionMode: "perspective",
   colorMode: "color",
   showGrid: true,
-  showAxis: true,
+  showAxis: false,
   showBuildPlate: false,
   shadowsEnabled: false,
   fogEnabled: false,

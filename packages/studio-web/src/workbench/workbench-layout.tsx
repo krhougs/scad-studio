@@ -114,7 +114,7 @@ export function WorkbenchLayout() {
   const [rootEntries, setRootEntries] = useState<WorkspaceEntry[]>([]);
   const [rootLoaded, setRootLoaded] = useState(false);
   const [clientReady, setClientReady] = useState(false);
-  const [activeView, setActiveView] = useState<ViewPreset>("iso");
+  const activeView: ViewPreset = "iso";
   const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
   const [cameraOverride, setCameraOverride] = useState<CameraState | null>(null);
@@ -530,6 +530,11 @@ export function WorkbenchLayout() {
     document.title = documentTitleForFile(activeTab?.label ?? null);
   }, [activeTab?.label]);
 
+  useEffect(() => {
+    setCameraOverride(null);
+    setCameraState(null);
+  }, [activeTab?.kind, activeTab?.path]);
+
   const scadInspectorPanels =
     activeTab?.kind === "scad"
       ? scadInspectorPanelsForState(scadWorkbenchState)
@@ -582,7 +587,6 @@ export function WorkbenchLayout() {
         config={appConfig.kind === "ready" ? appConfig.config : null}
         meshInfo={meshInfo}
         activeView={activeView}
-        onSelectView={setActiveView}
         onMeshInfo={setMeshInfo}
         cameraState={cameraState}
         cameraOverride={cameraOverride}

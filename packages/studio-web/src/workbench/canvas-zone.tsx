@@ -39,16 +39,6 @@ type ViewPreset =
   | "right"
   | "top"
   | "bottom";
-const VIEW_PILLS: { id: ViewPreset; label: string }[] = [
-  { id: "iso", label: "iso" },
-  { id: "front", label: "front" },
-  { id: "back", label: "back" },
-  { id: "left", label: "left" },
-  { id: "right", label: "right" },
-  { id: "top", label: "top" },
-  { id: "bottom", label: "bottom" },
-];
-
 type CanvasZoneProps = {
   phase: string;
   message: string;
@@ -63,7 +53,6 @@ type CanvasZoneProps = {
   config: AppConfigShape | null;
   meshInfo: MeshInfo | null;
   activeView: ViewPreset;
-  onSelectView: (id: ViewPreset) => void;
   onMeshInfo: (info: MeshInfo | null) => void;
   cameraState: CameraState | null;
   cameraOverride: CameraState | null;
@@ -86,7 +75,6 @@ export function CanvasZone(props: CanvasZoneProps) {
     config,
     meshInfo,
     activeView,
-    onSelectView,
     onMeshInfo,
     cameraState,
     cameraOverride,
@@ -109,7 +97,7 @@ export function CanvasZone(props: CanvasZoneProps) {
     ...stageViewport,
     projectionMode: viewerOptions.projectionMode,
   });
-  const viewportGizmoSize = metrics?.gizmoSize ?? 72;
+  const viewportGizmoSize = metrics?.gizmoSize ?? 36;
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -148,8 +136,6 @@ export function CanvasZone(props: CanvasZoneProps) {
           <div className="canvas-chrome-top">
             {isMeshLike ? (
               <ViewerToolbar
-                activeView={activeView}
-                onSelectView={onSelectView}
                 options={viewerOptions}
                 onSetRenderMode={setRenderMode}
                 onUpdateOptions={updateViewerOptions}
@@ -392,33 +378,16 @@ function EmptyStagePlaceholder() {
 }
 
 function ViewerToolbar({
-  activeView,
-  onSelectView,
   options,
   onSetRenderMode,
   onUpdateOptions,
 }: {
-  activeView: ViewPreset;
-  onSelectView: (id: ViewPreset) => void;
   options: MeshViewerOptions;
   onSetRenderMode: (mode: MeshRenderMode) => void;
   onUpdateOptions: (patch: Partial<MeshViewerOptions>) => void;
 }) {
   return (
     <div className="viewer-toolbar" data-testid="viewer-toolbar">
-      <div className="view-pills" data-testid="canvas-view-pills">
-        {VIEW_PILLS.map((pill) => (
-          <button
-            key={pill.id}
-            type="button"
-            className={pill.id === activeView ? "active" : undefined}
-            onClick={() => onSelectView(pill.id)}
-            data-testid={`view-pill-${pill.id}`}
-          >
-            {pill.label}
-          </button>
-        ))}
-      </div>
       <div className="viewer-toolbar__group" aria-label="render mode">
         {(["solid", "wireframe", "xray"] as const).map((mode) => (
           <button

@@ -139,9 +139,10 @@ export function MeshViewer({
           infoRef.current?.(null);
           return;
         }
+        const shouldFrame = !samePath || !hasReadyMeshRef.current;
         const info =
           viewer?.setMesh(mesh, {
-            frame: !samePath,
+            frame: shouldFrame,
             preset: cameraPresetRef.current ?? "iso",
           }) ?? null;
         if (!info) {
