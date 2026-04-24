@@ -16,12 +16,13 @@ import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
 import type { MeshInfo } from "../viewers/mesh-info";
 import { MeshViewer } from "../viewers/mesh-viewer";
+import { meshSceneMetrics } from "../viewers/mesh-render-metrics";
 import {
   DEFAULT_MESH_VIEWER_OPTIONS,
   type MeshRenderMode,
   type MeshViewerOptions,
 } from "../viewers/viewer-options";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PRESET_STATES } from "../canvas/camera-state";
 import { projectViewportGizmoAxes } from "./viewport-gizmo-model";
 import { TabBar } from "./tabbar";
@@ -100,6 +101,34 @@ export function CanvasZone(props: CanvasZoneProps) {
   const [viewerOptions, setViewerOptions] = useState<MeshViewerOptions>(
     DEFAULT_MESH_VIEWER_OPTIONS,
   );
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageViewport, setStageViewport] = useState({
+    width: 0,
+    height: 0,
+    dpr: 0,
+  });
+  const metrics = meshSceneMetrics(meshInfo, {
+    ...stageViewport,
+    projectionMode: viewerOptions.projectionMode,
+  });
+  const viewportGizmoSize = metrics?.gizmoSize ?? 72;
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const update = () => {
+      const rect = stage.getBoundingClientRect();
+      setStageViewport({
+        width: rect.width,
+        height: rect.height,
+        dpr: window.devicePixelRatio,
+      });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
 
   const setRenderMode = (renderMode: MeshRenderMode) => {
     setViewerOptions((prev) => ({ ...prev, renderMode }));
@@ -138,7 +167,7 @@ export function CanvasZone(props: CanvasZoneProps) {
             </div>
           </div>
 
-          <div className="canvas-stage">
+          <div className="canvas-stage" ref={stageRef}>
             {activeTab ? (
               <ActiveViewer
                 tab={activeTab}
@@ -160,6 +189,7 @@ export function CanvasZone(props: CanvasZoneProps) {
               <ViewportGizmo
                 activeView={activeView}
                 camera={cameraState}
+                size={viewportGizmoSize}
                 onSelectView={onSelectView}
               />
             ) : null}
@@ -325,13 +355,14 @@ function viewPresetToCamera(view: ViewPreset): CameraPreset {
 function ViewportGizmo({
   activeView,
   camera,
+  size,
   onSelectView,
 }: {
   activeView: ViewPreset;
   camera: CameraState | null;
+  size: number;
   onSelectView: (id: ViewPreset) => void;
 }) {
-  const size = 72;
   const axes = projectViewportGizmoAxes(
     camera ?? PRESET_STATES[viewPresetToCamera(activeView)],
     size,

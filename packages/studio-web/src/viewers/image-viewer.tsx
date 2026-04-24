@@ -88,9 +88,9 @@ export function ImageViewer({
         const nextUrl = URL.createObjectURL(blob);
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);
         urlRef.current = nextUrl;
+        setNatural(null);
         setUrl(nextUrl);
         setByteSize(decoded.bytes.length);
-        setLoading(false);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -106,6 +106,7 @@ export function ImageViewer({
     (event: React.SyntheticEvent<HTMLImageElement>) => {
       const img = event.currentTarget;
       setNatural({ width: img.naturalWidth, height: img.naturalHeight });
+      setLoading(false);
       if (img.naturalWidth > WARN_DIM || img.naturalHeight > WARN_DIM) {
         console.warn(
           `image dimensions exceed ${WARN_DIM}:`,
@@ -203,10 +204,14 @@ export function ImageViewer({
           </p>
         ) : url ? (
           <>
-            <img
-              src={url}
-              alt=""
-              onLoad={handleLoad}
+              <img
+                src={url}
+                alt=""
+                onLoad={handleLoad}
+                onError={() => {
+                  setError("failed to decode image");
+                  setLoading(false);
+                }}
               draggable={false}
               style={{
                 transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,

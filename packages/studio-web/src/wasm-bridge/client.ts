@@ -112,12 +112,18 @@ export class WasmClient {
 
   dispatchPreviewRequest(params: unknown): Promise<unknown> {
     recordTestDispatch("preview_request", params);
-    return this.dispatchWithId((h) => Wasm.client_dispatch_preview_request(h, params));
+    const result = this.dispatchWithId((h) =>
+      Wasm.client_dispatch_preview_request(h, params),
+    );
+    const delayMs = readTestPreviewDelayMs();
+    return delayMs > 0 ? delayPromise(result, delayMs) : result;
   }
 
   dispatchFileRead(params: unknown): Promise<unknown> {
     recordTestDispatch("file_read", params);
-    return this.dispatchWithId((h) => Wasm.client_dispatch_file_read(h, params));
+    const result = this.dispatchWithId((h) => Wasm.client_dispatch_file_read(h, params));
+    const delayMs = readTestFileReadDelayMs();
+    return delayMs > 0 ? delayPromise(result, delayMs) : result;
   }
 
   dispatchFileWriteText(params: unknown): Promise<unknown> {
@@ -205,4 +211,39 @@ function cloneForRecord(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+function readTestPreviewDelayMs(): number {
+  return readTestDelayMs("__studioWebPreviewDelayMs");
+}
+
+function readTestFileReadDelayMs(): number {
+  return readTestDelayMs("__studioWebFileReadDelayMs");
+}
+
+function readTestDelayMs(key: "__studioWebPreviewDelayMs" | "__studioWebFileReadDelayMs"): number {
+  if (typeof window === "undefined") return 0;
+  const value = (
+    window as Window &
+      Partial<
+        Record<"__studioWebPreviewDelayMs" | "__studioWebFileReadDelayMs", unknown>
+      >
+  )[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function delayPromise<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return promise.then(
+    (value) => delay(ms).then(() => value),
+    (error: unknown) =>
+      delay(ms).then(() => {
+        throw error;
+      }),
+  );
 }

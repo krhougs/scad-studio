@@ -10,6 +10,7 @@ import {
   clippingPlanesForBounds,
   meshRenderInputsReady,
   meshSceneMetrics,
+  orthographicHalfHeightForCamera,
   visibleProjectPlaneForCamera,
 } from "../../src/viewers/mesh-render-metrics";
 import type { MeshInfo } from "../../src/viewers/mesh-info";
@@ -30,6 +31,15 @@ const SMALL_INFO: MeshInfo = {
   center: [0, 0, 0],
   dimensions: [10, 10, 10],
   radius: 8.660254037844386,
+};
+
+const LONG_Y_INFO: MeshInfo = {
+  vertices: 8,
+  indices: 36,
+  bounds: { min: [-5, -200, -10], max: [5, 200, 10] },
+  center: [0, 0, 0],
+  dimensions: [10, 400, 20],
+  radius: 200.31225624055454,
 };
 
 describe("mesh-render-metrics", () => {
@@ -134,8 +144,11 @@ describe("mesh-render-metrics", () => {
     expect(ortho?.orthographicHalfHeight).toBeGreaterThan(0);
     expect(perspective?.orthographicHalfHeight).toBeNull();
     expect(highDpr?.gizmoSize).toBeGreaterThan(ortho?.gizmoSize ?? 0);
-    expect(wide?.orthographicHalfHeight).toBeLessThan(
-      ortho?.orthographicHalfHeight ?? 0,
+    expect(wide?.orthographicHalfHeight).toBeGreaterThanOrEqual(
+      INFO.dimensions[1] / 2,
+    );
+    expect(wide?.orthographicHalfHeight).toBeGreaterThanOrEqual(
+      INFO.dimensions[2] / 2,
     );
     expect(ortho?.fogNear).toBeGreaterThan(INFO.radius);
     expect(ortho?.fogFar).toBeGreaterThan(ortho?.fogNear ?? 0);
@@ -151,6 +164,35 @@ describe("mesh-render-metrics", () => {
     expect(visibleProjectPlaneForCamera(fitCameraToBounds(INFO.bounds, "right", 1))).toBe(
       "yz",
     );
+  });
+
+  it("derives orthographic range from current camera screen axes", () => {
+    const viewport = {
+      width: 400,
+      height: 800,
+      dpr: 2,
+      projectionMode: "orthographic" as const,
+    };
+    const right = orthographicHalfHeightForCamera(
+      LONG_Y_INFO,
+      viewport,
+      fitCameraToBounds(LONG_Y_INFO.bounds, "right", 0.5),
+    );
+    const top = orthographicHalfHeightForCamera(
+      LONG_Y_INFO,
+      viewport,
+      fitCameraToBounds(LONG_Y_INFO.bounds, "top", 0.5),
+    );
+    const front = orthographicHalfHeightForCamera(
+      LONG_Y_INFO,
+      viewport,
+      fitCameraToBounds(LONG_Y_INFO.bounds, "front", 0.5),
+    );
+
+    expect(right).toBeGreaterThan((LONG_Y_INFO.dimensions[1] / 2 / 0.5) * 1.14);
+    expect(top).toBeGreaterThan((LONG_Y_INFO.dimensions[1] / 2) * 1.14);
+    expect(front).toBeLessThan(top ?? 0);
+    expect(right).toBeGreaterThan(top ?? 0);
   });
 
   it("preserves project-coordinate mesh payload before renderer metrics consume it", () => {

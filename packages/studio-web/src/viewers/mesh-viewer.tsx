@@ -3,11 +3,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  PRESET_STATES,
   type CameraPreset,
   type CameraState,
 } from "../canvas/camera-state";
-import { fitCameraToBounds } from "../canvas/camera-controls";
 import { WasmClient } from "../wasm-bridge";
 import { describeFileReadError } from "./file-read-decoder";
 import {
@@ -194,14 +192,7 @@ export function MeshViewer({
     if (!cameraPreset) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
-    const info = viewer.getInfo();
-    if (info) {
-      const rect = canvasRef.current?.getBoundingClientRect();
-      const aspect = rect && rect.height > 0 ? rect.width / rect.height : 1;
-      viewer.setCamera(fitCameraToBounds(info.bounds, cameraPreset, aspect));
-      return;
-    }
-    viewer.setCamera(PRESET_STATES[cameraPreset]);
+    viewer.frameCamera(cameraPreset);
   }, [cameraPreset]);
 
   useEffect(() => {
@@ -256,9 +247,9 @@ export function MeshViewer({
                 ? "preview ready (empty mesh)"
                 : `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`}
           </p>
-          {state.kind === "pending" && hasReadyMeshRef.current ? (
+          {state.kind === "pending" ? (
             <div className="viewer__loading-overlay" data-testid="mesh-loading-overlay">
-              preview updating…
+              {hasReadyMeshRef.current ? "preview updating…" : "preview loading…"}
             </div>
           ) : null}
         </>

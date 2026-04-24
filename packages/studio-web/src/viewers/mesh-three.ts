@@ -31,12 +31,18 @@ import {
   DEFAULT_MESH_VIEWER_OPTIONS,
   type MeshViewerOptions,
 } from "./viewer-options";
-import type { CameraPreset } from "../canvas/camera-state";
+import { PRESET_STATES, type CameraPreset } from "../canvas/camera-state";
 import {
   computeMeshInfo,
-  meshBuildPlateSize,
   type MeshInfo,
 } from "./mesh-info";
+import {
+  clippingPlanesForBounds,
+  meshRenderInputsReady,
+  meshSceneMetrics,
+  orthographicHalfHeightForCamera,
+  type MeshRenderViewport,
+} from "./mesh-render-metrics";
 
 export type MeshPayload = {
   positions: Float32Array;
@@ -60,6 +66,7 @@ export type MeshViewerHandle = {
     opts?: { frame?: boolean; preset?: CameraPreset },
   ): MeshInfo | null;
   setCamera(camera: CameraState): void;
+  frameCamera(preset: CameraPreset): void;
   setOptions(options: MeshViewerOptions): void;
   resize(width: number, height: number, dpr: number): void;
   /** 用户通过交互改变了相机；外部 state 需要同步。 */
@@ -79,7 +86,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     alpha: true,
     powerPreference: "high-performance",
   });
-  const backgroundColor = new Color(0x070708);
+  const backgroundHex = "#101114";
+  const backgroundColor = new Color(backgroundHex);
   renderer.setClearColor(backgroundColor, 1);
 
   const scene = new Scene();
@@ -141,12 +149,17 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   let options = { ...DEFAULT_MESH_VIEWER_OPTIONS };
   let viewportWidth = 1;
   let viewportHeight = 1;
+  let viewportDpr = 1;
+  let viewportReady = false;
 
   let meshObj: Mesh | null = null;
   let meshMaterial: MeshStandardMaterial | null = null;
   let stats: { vertices: number; indices: number } | null = null;
   let meshInfo: MeshInfo | null = null;
   let meshHasVertexColors = false;
+  let pendingFrame: { info: MeshInfo; preset: CameraPreset } | null = null;
+  let framedDistance = camera.position.distanceTo(target);
+  let autoFramePreset: CameraPreset | null = null;
   const clipPlane = new Plane(new Vector3(1, 0, 0), 0);
 
   const pointer = {
@@ -177,15 +190,27 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     if (options.projectionMode === "perspective") {
       perspectiveCamera.aspect = viewportWidth / viewportHeight;
       perspectiveCamera.updateProjectionMatrix();
+      delete canvas.dataset.orthographicHalfHeight;
       return;
     }
-    const distance = Math.max(camera.position.distanceTo(target), 20);
-    const halfHeight = distance * 0.38;
+    const baseHalfHeight = orthographicHalfHeightForCamera(
+      meshInfo,
+      currentViewport(),
+      emitCameraState(),
+    );
+    if (baseHalfHeight === null) {
+      delete canvas.dataset.orthographicHalfHeight;
+      return;
+    }
+    const distance = camera.position.distanceTo(target);
+    const zoomScale = Math.max(distance, 0.1) / Math.max(framedDistance, 1);
+    const halfHeight = Math.max(baseHalfHeight * zoomScale, 0.1);
     const halfWidth = halfHeight * (viewportWidth / viewportHeight);
     orthographicCamera.left = -halfWidth;
     orthographicCamera.right = halfWidth;
     orthographicCamera.top = halfHeight;
     orthographicCamera.bottom = -halfHeight;
+    canvas.dataset.orthographicHalfHeight = halfHeight.toFixed(3);
     orthographicCamera.updateProjectionMatrix();
   }
 
@@ -197,6 +222,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     camera.near = previous.near;
     camera.far = previous.far;
     camera.lookAt(target);
+    syncClipPlanes();
     updateProjection();
   }
 
@@ -209,6 +235,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     camera.near = state.near;
     camera.far = state.far;
     camera.lookAt(target);
+    syncClipPlanes();
     updateProjection();
     render();
   }
@@ -222,13 +249,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     renderer.localClippingEnabled = options.clipPlaneEnabled;
     key.castShadow = options.shadowsEnabled;
     fill.castShadow = options.shadowsEnabled;
+    const metrics = currentMetrics();
     scene.fog =
-      options.fogEnabled && meshInfo
-        ? new Fog(
-            backgroundColor,
-            Math.max(meshInfo.radius * 3, 60),
-            Math.max(meshInfo.radius * 9, 220),
-          )
+      options.fogEnabled && metrics
+        ? new Fog(backgroundColor, metrics.fogNear, metrics.fogFar)
         : null;
     if (meshObj && meshMaterial) {
       meshObj.castShadow = options.shadowsEnabled;
@@ -248,6 +272,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function syncCanvasDataset(): void {
+    const metrics = currentMetrics();
     canvas.dataset.renderMode = options.renderMode;
     canvas.dataset.projectionMode = options.projectionMode;
     canvas.dataset.colorMode = options.colorMode;
@@ -257,20 +282,55 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.shadowsEnabled = String(options.shadowsEnabled);
     canvas.dataset.fogEnabled = String(options.fogEnabled);
     canvas.dataset.clipPlaneEnabled = String(options.clipPlaneEnabled);
+    canvas.dataset.previewBackground = backgroundHex;
+    if (metrics) {
+      canvas.dataset.gizmoSize = String(Math.round(metrics.gizmoSize));
+      canvas.dataset.fogNear = metrics.fogNear.toFixed(3);
+      canvas.dataset.fogFar = metrics.fogFar.toFixed(3);
+    } else {
+      delete canvas.dataset.gizmoSize;
+      delete canvas.dataset.fogNear;
+      delete canvas.dataset.fogFar;
+    }
+  }
+
+  function clearMetricsDataset(): void {
+    delete canvas.dataset.gizmoSize;
+    delete canvas.dataset.fogNear;
+    delete canvas.dataset.fogFar;
+    delete canvas.dataset.clipNear;
+    delete canvas.dataset.clipFar;
+    delete canvas.dataset.orthographicHalfHeight;
   }
 
   function frameToInfo(info: MeshInfo, preset: CameraPreset): void {
-    applyCamera(
-      fitCameraToBounds(info.bounds, preset, viewportWidth / viewportHeight),
+    if (!meshRenderInputsReady(info, currentViewport())) {
+      pendingFrame = { info, preset };
+      return;
+    }
+    pendingFrame = null;
+    const nextCamera = fitCameraToBounds(
+      info.bounds,
+      preset,
+      viewportWidth / viewportHeight,
     );
+    framedDistance = Math.hypot(
+      nextCamera.position[0] - nextCamera.target[0],
+      nextCamera.position[1] - nextCamera.target[1],
+      nextCamera.position[2] - nextCamera.target[2],
+    );
+    autoFramePreset = preset;
+    applyCamera(nextCamera);
     emitCamera();
   }
 
   function updateSceneScale(info: MeshInfo | null): void {
-    const plateSize = meshBuildPlateSize(info);
+    const metrics = meshSceneMetrics(info, currentViewport());
+    if (info && !metrics) return;
+    const plateSize = metrics?.plateSize ?? 200;
     const scale = plateSize / 200;
     grid.scale.setScalar(scale);
-    axes.scale.setScalar(Math.max(0.2, plateSize / 80));
+    axes.scale.setScalar(Math.max(0.2, (metrics?.axisSize ?? 80) / 80));
     buildPlate.scale.set(plateSize / 200, plateSize / 200, 1);
     if (info) {
       const center = new Vector3(...info.center);
@@ -303,7 +363,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     upVec = orbitUp(nextAzimuth, nextElevation);
     camera.position.copy(target.clone().add(offset));
     camera.up.copy(upVec);
+    autoFramePreset = null;
     camera.lookAt(target);
+    syncClipPlanes();
+    updateProjection();
     emitCamera();
     render();
   }
@@ -321,7 +384,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const delta = right.multiplyScalar(shiftX).add(trueUp.multiplyScalar(shiftY));
     camera.position.add(delta);
     target.add(delta);
+    autoFramePreset = null;
     camera.lookAt(target);
+    syncClipPlanes();
+    updateProjection();
     emitCamera();
     render();
   }
@@ -333,6 +399,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const nextDist = offset.length();
     if (nextDist < 0.1 || nextDist > 20000) return;
     camera.position.copy(target.clone().add(offset));
+    autoFramePreset = null;
+    syncClipPlanes();
     camera.lookAt(target);
     updateProjection();
     emitCamera();
@@ -375,6 +443,43 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
   function onContextMenu(ev: Event): void {
     ev.preventDefault();
+  }
+
+  function currentViewport(): MeshRenderViewport {
+    return {
+      width: viewportReady ? viewportWidth : 0,
+      height: viewportReady ? viewportHeight : 0,
+      dpr: viewportReady ? viewportDpr : 0,
+      projectionMode: options.projectionMode,
+    };
+  }
+
+  function currentMetrics() {
+    return meshSceneMetrics(meshInfo, currentViewport());
+  }
+
+  function syncClipPlanes(): void {
+    if (!meshInfo) return;
+    const planes = clippingPlanesForBounds(emitCameraState(), meshInfo.bounds);
+    perspectiveCamera.near = planes.near;
+    perspectiveCamera.far = planes.far;
+    orthographicCamera.near = planes.near;
+    orthographicCamera.far = planes.far;
+    camera.near = planes.near;
+    camera.far = planes.far;
+    canvas.dataset.clipNear = planes.near.toFixed(3);
+    canvas.dataset.clipFar = planes.far.toFixed(3);
+  }
+
+  function emitCameraState(): CameraState {
+    return {
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [target.x, target.y, target.z],
+      up: [upVec.x, upVec.y, upVec.z],
+      fovYDeg: perspectiveCamera.fov,
+      near: camera.near,
+      far: camera.far,
+    };
   }
 
   function wrapAngle(angle: number): number {
@@ -445,15 +550,19 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         stats = null;
         meshInfo = null;
         meshHasVertexColors = false;
+        pendingFrame = null;
+        if (opts?.frame !== false) autoFramePreset = null;
       }
       if (!payload || payload.positions.length === 0) {
         updateSceneScale(null);
+        clearMetricsDataset();
         render();
         return null;
       }
       const info = computeMeshInfo(payload.positions, payload.indices);
       if (!info) {
         updateSceneScale(null);
+        clearMetricsDataset();
         render();
         return null;
       }
@@ -498,13 +607,26 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       meshInfo = info;
       meshHasVertexColors = payload.vertexColors !== null;
       updateSceneScale(info);
-      if (opts?.frame !== false) frameToInfo(info, opts?.preset ?? "iso");
+      if (opts?.frame !== false) {
+        frameToInfo(info, opts?.preset ?? "iso");
+      }
       applyOptions();
       render();
       return info;
     },
     setCamera(state) {
+      autoFramePreset = null;
       applyCamera(state);
+      emitCamera();
+    },
+    frameCamera(preset) {
+      if (meshInfo) {
+        frameToInfo(meshInfo, preset);
+        applyOptions();
+        return;
+      }
+      autoFramePreset = preset;
+      applyCamera(PRESET_STATES[preset]);
       emitCamera();
     },
     setOptions(next) {
@@ -516,10 +638,24 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       const h = Math.max(1, Math.floor(height));
       viewportWidth = w;
       viewportHeight = h;
-      renderer.setPixelRatio(Math.min(dpr, 2));
+      viewportDpr = Math.max(0, dpr);
+      viewportReady =
+        Number.isFinite(width) &&
+        Number.isFinite(height) &&
+        Number.isFinite(dpr) &&
+        width > 0 &&
+        height > 0 &&
+        dpr > 0;
+      renderer.setPixelRatio(Math.max(1, Math.min(dpr, 2)));
       renderer.setSize(w, h, false);
-      updateProjection();
-      render();
+      if (meshInfo) updateSceneScale(meshInfo);
+      syncClipPlanes();
+      if (pendingFrame && meshRenderInputsReady(pendingFrame.info, currentViewport())) {
+        frameToInfo(pendingFrame.info, pendingFrame.preset);
+      } else if (autoFramePreset && meshInfo && meshRenderInputsReady(meshInfo, currentViewport())) {
+        frameToInfo(meshInfo, autoFramePreset);
+      }
+      applyOptions();
     },
     onCameraChange(cb) {
       cameraCallback = cb;

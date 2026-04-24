@@ -145,13 +145,38 @@
 
 ## Phase 4：预览可读性、加载状态与真实尺寸时机
 
-- 状态：未完成。
-- 待执行：
-  - 调整预览呈现，使背景稍灰且模型主体、辅助线和控件层级更清楚。
-  - 将视图、投影、plate、网格、gizmo、fog 和裁切相关计算与真实数据、真实 viewport 的可用状态绑定。
-  - 让加载状态覆盖初次渲染前、参数重新渲染、同一文件刷新和远端异步等待场景。
-  - 运行加载状态、真实尺寸时机和辅助元素尺寸相关测试。
-  - 独立 subagent review Phase 4 diff 或涉及文件清单。
+- 状态：已完成。
+- 前序目标保护：
+  - Phase 1 的参数与相机数值控件结构、测试标识和自动预览路径保持不变。
+  - Phase 2 的 ViewportGizmo 三轴显示、动态尺寸和六向点击入口保持可用。
+  - Phase 3 的项目坐标系、Z-up 场景语义、相机 preset、orbit / pan / zoom 行为保持不变。
+  - 同一文件刷新期间不清空上一帧，不重置用户手动相机；未手动调整的自动取景状态在 resize 后继续按当前 viewport 重算。
+- 本轮变更摘要：
+  - Three.js 预览背景调整为稍灰的 `#101114`，并通过 `data-preview-background` 暴露可验证标识。
+  - `meshRenderInputsReady` 和 `meshSceneMetrics` 统一要求真实 mesh info、真实 viewport、有效 device pixel ratio 后再输出 plate、grid、axis、gizmo、fog、orthographic 和 clipping 相关指标。
+  - `MeshViewer` 将初次加载和刷新期间都显示明显 overlay：初次为 `preview loading...`，已有上一帧时为 `preview updating...`。
+  - `WasmClient` 增加仅用于浏览器测试的 preview / file read 延迟钩子，延迟真实 dispatch promise，覆盖远端异步等待路径；延迟实现会立即绑定 resolve / reject，避免未处理 rejection。
+  - 同一 mesh 文件刷新走 `frame:false` 时保留上一帧和当前相机；自动取景状态不因同一路径刷新丢失，resize 后仍会根据真实 viewport 重算。
+  - Orthographic 投影在真实 metrics 缺失时不输出占位 half-height；真实 mesh / viewport 到达后，按当前 camera 的 screen right / screen up 轴投影 bounds 计算 half-height，避免 right / left / front / back 在窄 viewport 下裁剪模型。
+  - clipping near / far 同步应用到 perspective 和 orthographic camera，并通过 dataset 暴露回归标识。
+  - CanvasZone 使用真实 stage viewport 计算 ViewportGizmo 尺寸。
+  - ImageViewer 刷新同一路径时保留旧图，等待新图片 `onLoad` 后才结束 loading，并在新 URL 设置时清空旧 natural size。
+- 本轮验证：
+  - `bun run typecheck`
+    - 结果：通过。
+  - `bun x vitest run tests/unit/mesh-render-metrics.test.ts tests/unit/camera-controls.test.ts tests/unit/viewport-gizmo-model.test.ts`
+    - 结果：3 个测试文件通过，26 个测试通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "viewer toolbar drives render state|initial mesh preview exposes prominent loading|parameter preview exposes updating loading|image refresh exposes updating loading|status bar and chrome do not overlap|preview error card avoids chrome|three.js canvas renders and accepts pointer drag|view pill switches active preset|ViewportGizmo click switches view"`
+    - 结果：13 个浏览器用例通过。
+- 独立 review：
+  - 第一轮 review 指出远端异步等待测试没有真实延迟，参数更新 loading 缺少覆盖；已让 preview dispatch promise 消费延迟钩子，并新增参数更新 overlay 测试。
+  - 第二轮 review 指出延迟 promise 的 rejection handler 绑定过晚、背景色缺少可验证标识、初次 loading 文案断言过宽、同一文件刷新 pending 缺少覆盖；已修复延迟实现、暴露背景 dataset、精确断言 loading 文案，并通过文件 watch 刷新覆盖同一路径 pending。
+  - 第三轮 review 指出 orthographic 在 metrics 缺失时仍输出占位 half-height，并建议补图片刷新覆盖；已改为 metrics 缺失时不输出 half-height，真实返回后再输出，并补充图片刷新 overlay 测试。
+  - 第四轮 review 指出 orthographic half-height 未按当前相机方向计算；已新增按 screen right / screen up 投影 bounds 的计算，并补窄 viewport 下 long-Y mesh 的 Right / Top / Front 单元测试。
+  - 第五轮 review 只剩 image load 时机和 helper 占位尺寸两个 minor；已让图片 loading 等新图 onLoad，并避免有 mesh 但 metrics 不可用时用占位 helper 尺寸重算。
+  - 最终 review 无 blocker / important / minor，确认 Phase 4 可进入记录与提交。
+- 遗留问题：
+  - `MeshSceneMetrics.visiblePlane` 当前仍保留为通用字段，实际用户可见平面判断继续由 `visibleProjectPlaneForCamera` 和相机状态驱动；本 Phase 没有新增消费该字段。
 
 ## Phase 5：远距离相机与完整回归
 

@@ -29,8 +29,22 @@ writeFileSync(
     endloop
   endfacet
 endsolid shifted_triangle
-`,
+  `,
 );
+const MODEL_FILE = path.join(TEST_WORKSPACE, "model.stl");
+const IMAGE_FILE = path.join(TEST_WORKSPACE, "screenshot.png");
+const ALT_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8/5+hHgAHggJ/PWdwRwAAAABJRU5ErkJggg==";
+const MODEL_STL_REFRESHED = `solid smoke_triangle
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 2 0 0
+      vertex 0 1 0
+    endloop
+  endfacet
+endsolid smoke_triangle
+`;
 const HARNESS = createHarness({
   bindPort: 39182,
   vitePort: 5177,
@@ -100,6 +114,14 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await expect(canvas).toHaveAttribute("data-projection-mode", "perspective");
   await expect(canvas).toHaveAttribute("data-show-grid", "true");
   await expect(canvas).toHaveAttribute("data-show-axis", "true");
+  await expect(canvas).toHaveAttribute("data-preview-background", "#101114");
+  await expect(canvas).toHaveAttribute("data-gizmo-size", /\d+/);
+  await expect(canvas).toHaveAttribute("data-clip-far", /\d+\.\d{3}/);
+  const distanceBeforeResize = await page.getByTestId("camera-distance").inputValue();
+  await page.setViewportSize({ width: 900, height: 1200 });
+  await expect(page.getByTestId("camera-distance")).not.toHaveValue(
+    distanceBeforeResize,
+  );
 
   await page.getByTestId("viewer-render-wireframe").click();
   await expect(canvas).toHaveAttribute("data-render-mode", "wireframe");
@@ -109,6 +131,52 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 
   await page.getByTestId("viewer-projection-orthographic").click();
   await expect(canvas).toHaveAttribute("data-projection-mode", "orthographic");
+  await expect(canvas).toHaveAttribute("data-orthographic-half-height", /\d+\.\d{3}/);
+  const halfHeightBeforeWheel = await canvas.getAttribute(
+    "data-orthographic-half-height",
+  );
+  await canvas.evaluate((element) => {
+    element.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -120,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  await expect(canvas).not.toHaveAttribute(
+    "data-orthographic-half-height",
+    halfHeightBeforeWheel ?? "",
+  );
+  const halfHeightAfterWheel = await canvas.getAttribute(
+    "data-orthographic-half-height",
+  );
+  await page.getByTestId("viewer-toggle-fog").click();
+  await expect(canvas).toHaveAttribute("data-fog-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-fog-near", /\d+\.\d{3}/);
+  await expect(canvas).toHaveAttribute("data-fog-far", /\d+\.\d{3}/);
+
+  await setPreviewDelay(page, 2_500);
+  writeFileSync(MODEL_FILE, MODEL_STL_REFRESHED);
+  await expect(page.getByTestId("mesh-loading-overlay")).toContainText(
+    "preview updating",
+    { timeout: 15_000 },
+  );
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute(
+    "data-orthographic-half-height",
+    halfHeightAfterWheel ?? "",
+  );
+  await expect(page.getByTestId("message")).toContainText("preview ready", {
+    timeout: 30_000,
+  });
+  await setPreviewDelay(page, 0);
+  await page.getByTestId("entry-shifted.stl").click();
+  await expect(canvas).not.toHaveAttribute(
+    "data-orthographic-half-height",
+    halfHeightAfterWheel ?? "",
+  );
 
   await page.getByTestId("viewer-toggle-grid").click();
   await expect(canvas).toHaveAttribute("data-show-grid", "false");
@@ -124,9 +192,6 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 
   await page.getByTestId("viewer-color-mono").click();
   await expect(canvas).toHaveAttribute("data-color-mode", "mono");
-
-  await page.getByTestId("viewer-toggle-fog").click();
-  await expect(canvas).toHaveAttribute("data-fog-enabled", "true");
 
   await page.getByTestId("viewer-toggle-clip").click();
   await expect(canvas).toHaveAttribute("data-clip-plane-enabled", "true");
@@ -265,7 +330,7 @@ test("@canvas-interaction ViewportGizmo click switches view", async ({
 test("@canvas-interaction initial mesh preview exposes prominent loading", async ({
   page,
 }) => {
-  await installPreviewDelay(page, 2_500);
+  await setPreviewDelay(page, 2_500);
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
   await page
     .getByTestId("entry-examples")
@@ -275,13 +340,86 @@ test("@canvas-interaction initial mesh preview exposes prominent loading", async
     .getByTestId("entry-cube.scad")
     .waitFor({ state: "visible", timeout: 15_000 });
   await page.getByTestId("entry-cube.scad").click();
+  const canvas = page.getByTestId("mesh-canvas");
+  await page.getByTestId("viewer-projection-orthographic").click();
 
   await expect(page.getByTestId("mesh-loading-overlay")).toBeVisible({
     timeout: 1_000,
   });
   await expect(page.getByTestId("mesh-loading-overlay")).toContainText(
-    /loading|updating/,
+    "preview loading",
   );
+  await expect(canvas).not.toHaveAttribute(
+    "data-orthographic-half-height",
+    /\d/,
+  );
+  await expect(canvas).toHaveAttribute(
+    "data-orthographic-half-height",
+    /\d+\.\d{3}/,
+    { timeout: 30_000 },
+  );
+});
+
+test("@canvas-interaction parameter preview exposes updating loading", async ({
+  page,
+}) => {
+  await setPreviewDelay(page, 0);
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-params-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-params-cube.scad").click();
+
+  const canvas = page.getByTestId("mesh-canvas");
+  await canvas.waitFor({ state: "visible", timeout: 30_000 });
+  await expect(page.getByTestId("message")).toContainText("preview ready", {
+    timeout: 30_000,
+  });
+
+  await setPreviewDelay(page, 2_500);
+  const size = page
+    .getByTestId("workbench-inspector")
+    .getByTestId("parameter-number-field-size")
+    .getByRole("spinbutton");
+  await size.fill("12");
+
+  const overlay = page.getByTestId("mesh-loading-overlay");
+  await expect(overlay).toBeVisible({ timeout: 1_000 });
+  await expect(overlay).toContainText("preview updating");
+  await expect(canvas).toBeVisible();
+});
+
+test("@canvas-interaction image refresh exposes updating loading", async ({
+  page,
+}) => {
+  await setFileReadDelay(page, 0);
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-screenshot.png")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-screenshot.png").click();
+  const image = page.getByTestId("image-element");
+  await image.waitFor({ state: "visible", timeout: 15_000 });
+  const originalSrc = await image.getAttribute("src");
+  if (!originalSrc) throw new Error("image viewer did not expose a blob src");
+
+  await setFileReadDelay(page, 2_500);
+  writeFileSync(IMAGE_FILE, Buffer.from(ALT_IMAGE_BASE64, "base64"));
+  await expect(page.getByTestId("image-loading-overlay")).toContainText(
+    "image updating",
+    { timeout: 15_000 },
+  );
+  await expect(image).toHaveAttribute("src", originalSrc);
+  await expect
+    .poll(async () => page.getByTestId("image-element").getAttribute("src"), {
+      timeout: 30_000,
+    })
+    .not.toBe(originalSrc);
+  await setFileReadDelay(page, 0);
 });
 
 for (const viewport of VIEWPORTS) {
@@ -418,13 +556,45 @@ function boxesOverlap(first: Box, second: Box): boolean {
   );
 }
 
-async function installPreviewDelay(
+async function setPreviewDelay(
   page: import("@playwright/test").Page,
   delayMs: number,
 ): Promise<void> {
-  await page.addInitScript((ms) => {
-    (
-      window as Window & { __studioWebPreviewDelayMs?: number }
-    ).__studioWebPreviewDelayMs = ms;
-  }, delayMs);
+  await setWindowDelay(page, "__studioWebPreviewDelayMs", delayMs);
+}
+
+async function setFileReadDelay(
+  page: import("@playwright/test").Page,
+  delayMs: number,
+): Promise<void> {
+  await setWindowDelay(page, "__studioWebFileReadDelayMs", delayMs);
+}
+
+async function setWindowDelay(
+  page: import("@playwright/test").Page,
+  key: "__studioWebPreviewDelayMs" | "__studioWebFileReadDelayMs",
+  delayMs: number,
+): Promise<void> {
+  await page.addInitScript(
+    ({ delayKey, ms }) => {
+      (
+        window as Window & {
+          __studioWebPreviewDelayMs?: number;
+          __studioWebFileReadDelayMs?: number;
+        }
+      )[delayKey] = ms;
+    },
+    { delayKey: key, ms: delayMs },
+  );
+  await page.evaluate(
+    ({ delayKey, ms }) => {
+      (
+        window as Window & {
+          __studioWebPreviewDelayMs?: number;
+          __studioWebFileReadDelayMs?: number;
+        }
+      )[delayKey] = ms;
+    },
+    { delayKey: key, ms: delayMs },
+  );
 }
