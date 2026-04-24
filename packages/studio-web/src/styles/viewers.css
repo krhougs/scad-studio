@@ -98,6 +98,24 @@
   padding: 6px 10px;
 }
 
+.viewer__loading-overlay--mesh {
+  inset: 0;
+  left: 0;
+  bottom: 0;
+  transform: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.viewer__loading-card {
+  border: 1px solid var(--ink-4s);
+  background: rgba(11, 11, 13, 0.76);
+  padding: 6px 10px;
+}
+
 .viewer__empty {
   display: flex;
   flex-direction: column;
@@ -146,9 +164,13 @@
   cursor: grab;
   touch-action: none;
   outline: none;
+  transition: filter var(--dur-fast) var(--ease);
 }
 .mesh-viewer__canvas:active {
   cursor: grabbing;
+}
+.viewer--mesh.is-loading .mesh-viewer__canvas {
+  filter: blur(8px);
 }
 
 /* Markdown body ------------------------------------------------------- */

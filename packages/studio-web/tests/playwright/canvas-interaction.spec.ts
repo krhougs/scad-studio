@@ -350,6 +350,12 @@ test("@canvas-interaction initial mesh preview exposes prominent loading", async
   await expect(page.getByTestId("mesh-loading-overlay")).toContainText(
     "preview loading",
   );
+  await expect(canvas).toHaveCSS("filter", "blur(8px)");
+  await expectCenteredIn(
+    page.getByTestId("mesh-loading-card"),
+    page.getByTestId("mesh-loading-overlay"),
+    "initial mesh loading prompt must stay centered",
+  );
   await expect(canvas).not.toHaveAttribute(
     "data-orthographic-half-height",
     /\d/,
@@ -391,6 +397,12 @@ test("@canvas-interaction parameter preview exposes updating loading", async ({
   const overlay = page.getByTestId("mesh-loading-overlay");
   await expect(overlay).toBeVisible({ timeout: 1_000 });
   await expect(overlay).toContainText("preview updating");
+  await expect(canvas).toHaveCSS("filter", "blur(8px)");
+  await expectCenteredIn(
+    page.getByTestId("mesh-loading-card"),
+    overlay,
+    "mesh updating prompt must stay centered",
+  );
   await expect(canvas).toBeVisible();
 });
 
@@ -541,6 +553,21 @@ async function expectNoOverlap(
   const firstBox = await boxFor(first);
   const secondBox = await boxFor(second);
   expect(boxesOverlap(firstBox, secondBox), message).toBe(false);
+}
+
+async function expectCenteredIn(
+  inner: Locator,
+  outer: Locator,
+  message: string,
+): Promise<void> {
+  const innerBox = await boxFor(inner);
+  const outerBox = await boxFor(outer);
+  const innerCenterX = innerBox.x + innerBox.width / 2;
+  const innerCenterY = innerBox.y + innerBox.height / 2;
+  const outerCenterX = outerBox.x + outerBox.width / 2;
+  const outerCenterY = outerBox.y + outerBox.height / 2;
+  expect(Math.abs(innerCenterX - outerCenterX), `${message}: x`).toBeLessThanOrEqual(1);
+  expect(Math.abs(innerCenterY - outerCenterY), `${message}: y`).toBeLessThanOrEqual(1);
 }
 
 function boxesOverlap(first: Box, second: Box): boolean {

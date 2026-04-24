@@ -208,7 +208,7 @@ export function MeshViewer({
 
   return (
     <div
-      className="viewer viewer--mesh"
+      className={`viewer viewer--mesh${state.kind === "pending" ? " is-loading" : ""}`}
       data-testid="mesh-viewer"
       data-label={label}
     >
@@ -249,8 +249,13 @@ export function MeshViewer({
                 : `preview ready | vertices: ${state.vertices} | indices: ${state.indices}`}
           </p>
           {state.kind === "pending" ? (
-            <div className="viewer__loading-overlay" data-testid="mesh-loading-overlay">
-              {hasReadyMeshRef.current ? "preview updating…" : "preview loading…"}
+            <div
+              className="viewer__loading-overlay viewer__loading-overlay--mesh"
+              data-testid="mesh-loading-overlay"
+            >
+              <span className="viewer__loading-card" data-testid="mesh-loading-card">
+                {hasReadyMeshRef.current ? "preview updating…" : "preview loading…"}
+              </span>
             </div>
           ) : null}
         </>
