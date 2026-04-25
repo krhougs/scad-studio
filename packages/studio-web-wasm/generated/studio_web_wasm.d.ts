@@ -84,6 +84,8 @@ export function client_snapshot(handle: ClientHandle): any;
 
 export function client_subscribe_directory_watch(handle: ClientHandle, params: any): bigint;
 
+export function client_take_preview_mesh(handle: ClientHandle, request_id: bigint): MeshHandle | undefined;
+
 export function client_tick(handle: ClientHandle, now_ms: bigint): void;
 
 export function mesh_decode(bytes: Uint8Array): MeshHandle;

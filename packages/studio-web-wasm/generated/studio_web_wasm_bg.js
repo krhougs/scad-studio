@@ -382,6 +382,20 @@ export function client_subscribe_directory_watch(handle, params) {
 
 /**
  * @param {ClientHandle} handle
+ * @param {bigint} request_id
+ * @returns {MeshHandle | undefined}
+ */
+export function client_take_preview_mesh(handle, request_id) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_take_preview_mesh(handle.__wbg_ptr, request_id);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] === 0 ? undefined : MeshHandle.__wrap(ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
  * @param {bigint} now_ms
  */
 export function client_tick(handle, now_ms) {
@@ -620,6 +634,10 @@ export function __wbg_entries_616b1a459b85be0b(arg0) {
     const ret = Object.entries(arg0);
     return ret;
 }
+export function __wbg_from_741da0f916ab74aa(arg0) {
+    const ret = Array.from(arg0);
+    return ret;
+}
 export function __wbg_get_4848e350b40afc16(arg0, arg1) {
     const ret = arg0[arg1 >>> 0];
     return ret;
@@ -738,11 +756,16 @@ export function __wbindgen_cast_0000000000000002(arg0) {
     return ret;
 }
 export function __wbindgen_cast_0000000000000003(arg0, arg1) {
+    // Cast intrinsic for `Ref(Slice(U8)) -> NamedExternref("Uint8Array")`.
+    const ret = getArrayU8FromWasm0(arg0, arg1);
+    return ret;
+}
+export function __wbindgen_cast_0000000000000004(arg0, arg1) {
     // Cast intrinsic for `Ref(String) -> Externref`.
     const ret = getStringFromWasm0(arg0, arg1);
     return ret;
 }
-export function __wbindgen_cast_0000000000000004(arg0) {
+export function __wbindgen_cast_0000000000000005(arg0) {
     // Cast intrinsic for `U64 -> Externref`.
     const ret = BigInt.asUintN(64, arg0);
     return ret;

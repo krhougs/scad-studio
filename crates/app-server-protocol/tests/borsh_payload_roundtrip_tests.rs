@@ -2,10 +2,11 @@ use app_server_protocol::{
     CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities,
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     FileReadCapability, FileReadContents, FileReadResponse, PathHandle, PreviewArtifact,
-    PreviewArtifact3mf, PreviewMeshPayload, PreviewReadyResponse, PreviewRenderedImagePayload,
-    PreviewRequest, PreviewRequestKind, PreviewUnit, ProtocolError, ProtocolErrorCode,
-    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload, PreviewReadyResponse,
+    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewResponseFormat,
+    PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId,
+    ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
     WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceEntryKind, WorkspaceId, decode_client_frame,
     decode_server_frame, encode_client_frame, encode_server_frame, negotiate_protocol_version,
     web_file_read_capability,
@@ -158,6 +159,13 @@ fn reclaim_and_artifact_variants_roundtrip() {
     let decoded: PreviewArtifact = borsh::from_slice(&borsh::to_vec(&artifact).unwrap()).unwrap();
     assert_eq!(decoded, artifact);
 
+    let artifact = PreviewArtifact::Stl(PreviewArtifactStl {
+        bytes: vec![4, 5, 6],
+        media_type: "model/stl".into(),
+    });
+    let decoded: PreviewArtifact = borsh::from_slice(&borsh::to_vec(&artifact).unwrap()).unwrap();
+    assert_eq!(decoded, artifact);
+
     let artifact = PreviewArtifact::RenderedImage(PreviewRenderedImagePayload {
         bytes: vec![9, 8, 7],
         media_type: "image/png".into(),
@@ -190,4 +198,10 @@ fn reclaim_and_artifact_variants_roundtrip() {
         denied_extensions: vec![".bin".into()],
     };
     assert_eq!(capability.denied_extensions, vec![".bin"]);
+}
+
+#[test]
+fn preview_response_format_stl_uses_stable_discriminant() {
+    let encoded = borsh::to_vec(&PreviewResponseFormat::Stl).expect("format encodes");
+    assert_eq!(encoded, vec![3]);
 }

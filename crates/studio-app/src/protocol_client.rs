@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
@@ -16,7 +17,7 @@ use app_server_protocol::{
     WatchSubscriptionAck, WatchUnsubscribeRequest,
 };
 use app_server_transport::ServerEnvelope;
-use scad_scene::MeshData;
+use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use scad_ui::file_tree::{FileTreeEntry, FileTreeEntryKind};
 use scad_viewer::app::SlicerInstall;
 use studio_common::{AppConfig, DisplayUnit, ExportFormat, PresetFile, SlicerConfig};
@@ -350,6 +351,14 @@ impl DesktopProtocolClient {
                 source_path: path.to_path_buf(),
                 mesh: mesh_from_preview_payload(mesh),
             }),
+            PreviewArtifact::ThreeMf(artifact) => Ok(PreviewSuccess {
+                source_path: path.to_path_buf(),
+                mesh: mesh_from_3mf_bytes(&artifact.bytes)?,
+            }),
+            PreviewArtifact::Stl(artifact) => Ok(PreviewSuccess {
+                source_path: path.to_path_buf(),
+                mesh: mesh_from_stl_bytes(&artifact.bytes)?,
+            }),
             other => Err(format!("桌面端暂不支持的预览结果: {other:?}")),
         }
     }
@@ -640,4 +649,14 @@ fn mesh_from_preview_payload(payload: app_server_protocol::PreviewMeshPayload) -
     } = payload;
     MeshData::from_indexed_buffers(positions, normals, vertex_colors, indices)
         .expect("preview mesh payload should convert into renderable mesh")
+}
+
+fn mesh_from_3mf_bytes(bytes: &[u8]) -> Result<MeshData, String> {
+    let mut cursor = Cursor::new(bytes);
+    load_3mf_from_reader(&mut cursor).map_err(|error| format!("解析 3MF 预览失败: {error}"))
+}
+
+fn mesh_from_stl_bytes(bytes: &[u8]) -> Result<MeshData, String> {
+    let mut cursor = Cursor::new(bytes);
+    load_stl_from_reader(&mut cursor).map_err(|error| format!("解析 STL 预览失败: {error}"))
 }

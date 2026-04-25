@@ -1,23 +1,34 @@
 //! `ClientHandle` wasm_bindgen 包装与所有 `client_*` 导出。
 //!
 //! 所有业务状态机归 `studio_common::ManagedClient<NullTransport>`；本文件
-//! 仅负责参数反序列化、错误转换和结果序列化。禁止在这里引入协议状态机。
+//! 仅负责参数反序列化、错误转换和结果序列化。重载荷预览 artifact 使用
+//! request_id side buffer 暂存，避免 `serde_wasm_bindgen` 把字节数组展开为 JS
+//! number 数组。
+
+use std::collections::{HashMap, VecDeque};
+use std::io::Cursor;
 
 use app_server_protocol::{
-    CapabilityHandshakeRequest, ConfigSaveRequest, ExportRunRequest, FileReadRequest,
-    FileWriteTextRequest, PreviewRequest, RequestId, SlicerListRequest, WorkspaceListRequest,
+    CapabilityHandshakeRequest, CommandSuccess, ConfigSaveRequest, ExportRunRequest,
+    FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact, PreviewRequest, RequestId,
+    SlicerListRequest, WorkspaceListRequest,
 };
+use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
     ClientError, ClientTimeouts, ManagedClient, TransportCloseReason, WatchParams,
 };
-use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::prelude::wasm_bindgen;
 
-use super::transport::NullTransport;
+use super::{mesh::MeshHandle, transport::NullTransport};
+
+const PREVIEW_SIDE_BUFFER_CAPACITY: usize = 8;
 
 #[wasm_bindgen]
 pub struct ClientHandle {
     inner: Option<ManagedClient<NullTransport>>,
+    preview_artifacts: PreviewSideBuffer,
+    preview_targets: HashMap<RequestId, PathHandle>,
 }
 
 impl ClientHandle {
@@ -34,6 +45,8 @@ impl ClientHandle {
 pub fn client_create() -> ClientHandle {
     ClientHandle {
         inner: Some(ManagedClient::new(NullTransport)),
+        preview_artifacts: PreviewSideBuffer::default(),
+        preview_targets: HashMap::new(),
     }
 }
 
@@ -43,14 +56,13 @@ pub fn client_create_with_timeouts(timeouts: JsValue) -> Result<ClientHandle, Js
         .map_err(|err| JsValue::from_str(&format!("invalid timeouts: {err}")))?;
     Ok(ClientHandle {
         inner: Some(ManagedClient::with_timeouts(NullTransport, parsed)),
+        preview_artifacts: PreviewSideBuffer::default(),
+        preview_targets: HashMap::new(),
     })
 }
 
 #[wasm_bindgen]
-pub fn client_begin_handshake(
-    handle: &mut ClientHandle,
-    params: JsValue,
-) -> Result<(), JsValue> {
+pub fn client_begin_handshake(handle: &mut ClientHandle, params: JsValue) -> Result<(), JsValue> {
     let parsed: CapabilityHandshakeRequest = serde_wasm_bindgen::from_value(params)
         .map_err(|err| JsValue::from_str(&format!("invalid handshake params: {err}")))?;
     handle
@@ -79,6 +91,8 @@ pub fn client_mark_transport_closed(
 ) -> Result<(), JsValue> {
     let parsed: TransportCloseReason = serde_wasm_bindgen::from_value(reason)
         .map_err(|err| JsValue::from_str(&format!("invalid close reason: {err}")))?;
+    handle.preview_artifacts.clear();
+    handle.preview_targets.clear();
     handle.borrow_mut()?.mark_transport_closed(parsed);
     Ok(())
 }
@@ -100,14 +114,70 @@ pub fn client_tick(handle: &mut ClientHandle, now_ms: u64) -> Result<(), JsValue
 
 #[wasm_bindgen]
 pub fn client_destroy(handle: &mut ClientHandle) {
+    handle.preview_artifacts.clear();
+    handle.preview_targets.clear();
     handle.inner.take();
 }
 
 #[wasm_bindgen]
 pub fn client_drain_events(handle: &mut ClientHandle) -> Result<JsValue, JsValue> {
-    let events = handle.borrow_mut()?.drain_events();
+    let mut events = handle.borrow_mut()?.drain_events();
+    for event in &mut events {
+        match event {
+            studio_common::ClientEvent::RequestSucceeded {
+                request_id,
+                payload: CommandSuccess::PreviewReady(ready),
+            } => {
+                let target = handle.preview_targets.remove(request_id).or_else(|| {
+                    handle
+                        .borrow()
+                        .ok()
+                        .and_then(|client| {
+                            client
+                                .snapshot()
+                                .preview_tasks
+                                .into_iter()
+                                .find(|task| task.request_id == *request_id)
+                        })
+                        .map(|task| task.target)
+                });
+                let Some(buffered) = BufferedPreview::take_from_artifact(&mut ready.artifact)
+                else {
+                    continue;
+                };
+                handle
+                    .preview_artifacts
+                    .insert(*request_id, target, buffered);
+            }
+            studio_common::ClientEvent::RequestSucceeded { request_id, .. }
+            | studio_common::ClientEvent::RequestFailed { request_id, .. }
+            | studio_common::ClientEvent::RequestTimedOut { request_id } => {
+                handle.preview_targets.remove(request_id);
+            }
+            _ => {}
+        }
+    }
     serde_wasm_bindgen::to_value(&events)
         .map_err(|err| JsValue::from_str(&format!("drain_events serialize: {err}")))
+}
+
+#[wasm_bindgen]
+pub fn client_take_preview_mesh(
+    handle: &mut ClientHandle,
+    request_id: u64,
+) -> Result<Option<MeshHandle>, JsValue> {
+    handle.borrow()?;
+    let request_id = RequestId(request_id);
+    let Some(buffered) = handle.preview_artifacts.take(request_id) else {
+        return Ok(None);
+    };
+    let decoded = buffered.decode().map_err(|message| {
+        if let Ok(client) = handle.borrow_mut() {
+            client.fail_preview_decode(request_id, message.clone());
+        }
+        JsValue::from_str(&message)
+    })?;
+    Ok(Some(MeshHandle { data: decoded }))
 }
 
 #[wasm_bindgen]
@@ -147,10 +217,14 @@ pub fn client_dispatch_preview_request(
 ) -> Result<u64, JsValue> {
     let parsed: PreviewRequest = serde_wasm_bindgen::from_value(params)
         .map_err(|err| JsValue::from_str(&format!("invalid preview_request params: {err}")))?;
+    let target = parsed.source.clone();
     handle
         .borrow_mut()?
         .dispatch_preview_request(parsed)
-        .map(|id| id.0)
+        .map(|id| {
+            handle.preview_targets.insert(id, target);
+            id.0
+        })
         .map_err(client_error_to_js)
 }
 
@@ -255,4 +329,105 @@ fn client_error_to_js(err: ClientError) -> JsValue {
 fn invalid_handle_js() -> JsValue {
     serde_wasm_bindgen::to_value(&ClientError::InvalidHandle)
         .unwrap_or_else(|_| JsValue::from_str("invalid handle"))
+}
+
+#[derive(Default)]
+struct PreviewSideBuffer {
+    entries: HashMap<RequestId, BufferedPreview>,
+    order: VecDeque<RequestId>,
+    targets: HashMap<RequestId, PathHandle>,
+}
+
+impl PreviewSideBuffer {
+    fn insert(
+        &mut self,
+        request_id: RequestId,
+        target: Option<PathHandle>,
+        artifact: BufferedPreview,
+    ) {
+        if let Some(target) = target {
+            let stale_newer = self.targets.iter().find_map(|(id, existing)| {
+                (id.0 > request_id.0 && *existing == target).then_some(*id)
+            });
+            if stale_newer.is_some() {
+                return;
+            }
+            let stale_older = self.targets.iter().find_map(|(id, existing)| {
+                (id.0 < request_id.0 && *existing == target).then_some(*id)
+            });
+            if let Some(stale) = stale_older {
+                self.remove(stale);
+            }
+            self.targets.insert(request_id, target);
+        }
+        if !self.entries.contains_key(&request_id) {
+            self.order.push_back(request_id);
+        }
+        self.entries.insert(request_id, artifact);
+        while self.entries.len() > PREVIEW_SIDE_BUFFER_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+                self.targets.remove(&oldest);
+            }
+        }
+    }
+
+    fn take(&mut self, request_id: RequestId) -> Option<BufferedPreview> {
+        let value = self.entries.remove(&request_id);
+        if value.is_some() {
+            self.targets.remove(&request_id);
+            self.order.retain(|id| *id != request_id);
+        }
+        value
+    }
+
+    fn remove(&mut self, request_id: RequestId) {
+        self.entries.remove(&request_id);
+        self.targets.remove(&request_id);
+        self.order.retain(|id| *id != request_id);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.targets.clear();
+    }
+}
+
+enum BufferedPreview {
+    ThreeMf { bytes: Vec<u8>, media_type: String },
+    Stl { bytes: Vec<u8>, media_type: String },
+}
+
+impl BufferedPreview {
+    fn take_from_artifact(artifact: &mut PreviewArtifact) -> Option<Self> {
+        match artifact {
+            PreviewArtifact::ThreeMf(payload) => Some(Self::ThreeMf {
+                bytes: std::mem::take(&mut payload.bytes),
+                media_type: payload.media_type.clone(),
+            }),
+            PreviewArtifact::Stl(payload) => Some(Self::Stl {
+                bytes: std::mem::take(&mut payload.bytes),
+                media_type: payload.media_type.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn decode(self) -> Result<MeshData, String> {
+        match self {
+            Self::ThreeMf { bytes, media_type } => {
+                let _ = media_type;
+                let mut cursor = Cursor::new(bytes);
+                load_3mf_from_reader(&mut cursor)
+                    .map_err(|error| format!("3mf decode failed: {error}"))
+            }
+            Self::Stl { bytes, media_type } => {
+                let _ = media_type;
+                let mut cursor = Cursor::new(bytes);
+                load_stl_from_reader(&mut cursor)
+                    .map_err(|error| format!("stl decode failed: {error}"))
+            }
+        }
+    }
 }

@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 borsh.workspace = true
 serde.workspace = true
+serde_bytes = "0.11"
 emojis.workspace = true
 unicode-casefold.workspace = true
 unicode-general-category.workspace = true

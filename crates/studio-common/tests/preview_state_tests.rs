@@ -1,6 +1,6 @@
 use app_server_protocol::{
-    PathHandle, PreviewArtifact, PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest,
-    PreviewRequestKind, PreviewUnit, WorkspaceId,
+    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
+    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewUnit, WorkspaceId,
 };
 use studio_common::PreviewState;
 
@@ -135,4 +135,42 @@ fn unsupported_artifact_reports_unsupported_status() {
     assert!(state.current_request().is_none());
     assert_eq!(state.last_result(), Some(&ready));
     assert!(state.last_error().is_some());
+}
+
+#[test]
+fn ready_three_mf_and_stl_clear_pending_request_and_format_byte_summary() {
+    let mut state = PreviewState::default();
+    state.start(geometry_request(["meshes", "demo.3mf"]));
+    let three_mf = PreviewReadyResponse {
+        requested_kind: PreviewRequestKind::GeometryArtifact,
+        artifact: PreviewArtifact::ThreeMf(PreviewArtifact3mf {
+            bytes: vec![1, 2, 3, 4],
+            media_type: "model/3mf".into(),
+        }),
+    };
+
+    state.complete(three_mf.clone());
+
+    assert_eq!(state.status_label(), "preview ready");
+    assert_eq!(state.summary_label(), "3mf bytes: 4");
+    assert!(state.current_request().is_none());
+    assert_eq!(state.last_result(), Some(&three_mf));
+    assert!(state.last_error().is_none());
+
+    state.start(geometry_request(["meshes", "demo.stl"]));
+    let stl = PreviewReadyResponse {
+        requested_kind: PreviewRequestKind::GeometryArtifact,
+        artifact: PreviewArtifact::Stl(PreviewArtifactStl {
+            bytes: vec![1, 2, 3],
+            media_type: "model/stl".into(),
+        }),
+    };
+
+    state.complete(stl.clone());
+
+    assert_eq!(state.status_label(), "preview ready");
+    assert_eq!(state.summary_label(), "stl bytes: 3");
+    assert!(state.current_request().is_none());
+    assert_eq!(state.last_result(), Some(&stl));
+    assert!(state.last_error().is_none());
 }

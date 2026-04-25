@@ -147,7 +147,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         });
     }
 
-    fn is_latest_preview(&self, request_id: RequestId) -> bool {
+    pub(super) fn is_latest_preview(&self, request_id: RequestId) -> bool {
         self.preview_tasks
             .keys()
             .max_by_key(|id| id.0)

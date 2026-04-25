@@ -691,6 +691,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
 export function payloadFromPreview(payload: unknown): MeshPayload | null {
   if (!payload || typeof payload !== "object") return null;
   const outer = payload as Record<string, unknown>;
+  const typed = meshFromTypedPayload(outer);
+  if (typed) return typed;
   const ready = (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
   const artifact = ready["artifact"] as Record<string, unknown> | undefined;
   if (!artifact) return null;
@@ -701,6 +703,23 @@ export function payloadFromPreview(payload: unknown): MeshPayload | null {
     return meshFromPayload(inner);
   }
   return null;
+}
+
+function meshFromTypedPayload(inner: Record<string, unknown>): MeshPayload | null {
+  const positions = inner["positions"];
+  if (!(positions instanceof Float32Array)) return null;
+  const normals = inner["normals"];
+  const vertexColors = inner["vertex_colors"];
+  const indices = inner["indices"];
+  return {
+    positions,
+    normals: normals instanceof Float32Array && normals.length > 0 ? normals : null,
+    vertexColors:
+      vertexColors instanceof Float32Array && vertexColors.length > 0
+        ? vertexColors
+        : null,
+    indices: indices instanceof Uint32Array && indices.length > 0 ? indices : null,
+  };
 }
 
 function meshFromPayload(inner: Record<string, unknown>): MeshPayload | null {

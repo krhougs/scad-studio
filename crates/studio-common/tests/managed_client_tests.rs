@@ -11,7 +11,8 @@ use app_server_protocol::{
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
-    ClientEvent, ClientTimeouts, ManagedClient, TransportCloseReason, TransportStatus, WatchParams,
+    ClientEvent, ClientTimeouts, ManagedClient, PreviewPhase, TransportCloseReason,
+    TransportStatus, WatchParams,
 };
 
 #[derive(Default)]
@@ -591,6 +592,66 @@ fn stale_preview_response_does_not_overwrite_current_preview_state() {
         event,
         ClientEvent::RequestFailed { request_id: rid, .. } if *rid == req_a
     )));
+}
+
+#[test]
+fn fail_preview_decode_moves_latest_preview_to_error() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let request_id = client
+        .dispatch_preview_request(preview_request_for("broken.stl"))
+        .expect("dispatch preview");
+    let _ = drain_outbound(&mut client);
+
+    client.fail_preview_decode(request_id, "stl decode failed".into());
+
+    let snapshot = client.snapshot();
+    let task = snapshot
+        .preview_tasks
+        .iter()
+        .find(|task| task.request_id == request_id)
+        .expect("preview task remains");
+    assert_eq!(task.phase, PreviewPhase::Error);
+    assert_eq!(
+        snapshot
+            .preview_error
+            .as_ref()
+            .map(|error| error.message.as_str()),
+        Some("stl decode failed")
+    );
+}
+
+#[test]
+fn fail_preview_decode_ignores_stale_preview_request() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let req_a = client
+        .dispatch_preview_request(preview_request_for("a.stl"))
+        .expect("dispatch preview A");
+    let _ = drain_outbound(&mut client);
+    let req_b = client
+        .dispatch_preview_request(preview_request_for("b.stl"))
+        .expect("dispatch preview B");
+    let _ = drain_outbound(&mut client);
+
+    client.fail_preview_decode(req_a, "stale decode failed".into());
+
+    let snapshot = client.snapshot();
+    assert!(snapshot.preview_error.is_none());
+    assert!(
+        snapshot
+            .preview_tasks
+            .iter()
+            .all(|task| task.request_id != req_a)
+    );
+    assert!(
+        snapshot
+            .preview_tasks
+            .iter()
+            .any(|task| task.request_id == req_b && task.phase == PreviewPhase::Pending)
+    );
 }
 
 #[test]

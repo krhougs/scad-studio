@@ -110,9 +110,7 @@ export class WasmClient {
   }
 
   dispatchPreviewRequest(params: unknown): Promise<unknown> {
-    const result = this.dispatchWithId((h) =>
-      Wasm.client_dispatch_preview_request(h, params),
-    );
+    const result = this.dispatchPreviewWithMeshTake(params);
     const delayMs = readTestPreviewDelayMs();
     return delayMs > 0 ? delayPromise(result, delayMs) : result;
   }
@@ -173,6 +171,45 @@ export class WasmClient {
         return;
       }
       this.resolvers.register(requestId, { resolve, reject });
+      this.pump();
+    });
+  }
+
+  private dispatchPreviewWithMeshTake(params: unknown): Promise<unknown> {
+    this.requireHandle();
+    return new Promise((resolve, reject) => {
+      let requestId: bigint;
+      try {
+        requestId = Wasm.client_dispatch_preview_request(this.handle!, params);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      this.resolvers.register(requestId, {
+        resolve: (payload) => {
+          try {
+            const mesh = Wasm.client_take_preview_mesh(this.handle!, requestId);
+            if (!mesh) {
+              resolve(payload);
+              return;
+            }
+            try {
+              resolve({
+                positions: mesh.positions(),
+                normals: mesh.normals(),
+                vertex_colors: mesh.colors(),
+                indices: mesh.indices(),
+              });
+            } finally {
+              mesh.free();
+            }
+          } catch (err) {
+            this.callbacks.onSnapshotDirty();
+            reject(err);
+          }
+        },
+        reject,
+      });
       this.pump();
     });
   }

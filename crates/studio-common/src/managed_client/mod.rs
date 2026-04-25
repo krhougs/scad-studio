@@ -11,12 +11,12 @@ use app_server_protocol::{CapabilityHandshakeRequest, PathHandle, RequestId};
 
 use crate::AppServerTransportPort;
 
+use pending::{PendingKind, PendingRequestInfo};
 pub use types::{
     ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, PreviewErrorSummary, PreviewPhase,
     PreviewTaskState, TransportCloseReason, TransportStatus, WatchEventPayload,
     WatchLifecycleSummary, WatchParams,
 };
-use pending::{PendingKind, PendingRequestInfo};
 use watch::WatchRegistryEntry;
 
 use envelopes::{
@@ -172,6 +172,21 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         }
         self.events
             .push_back(ClientEvent::TransportClosed { reason });
+    }
+
+    pub fn fail_preview_decode(&mut self, request_id: RequestId, message: String) {
+        if !self.is_latest_preview(request_id) {
+            self.preview_tasks.remove(&request_id);
+            return;
+        }
+        let Some(task) = self.preview_tasks.get_mut(&request_id) else {
+            return;
+        };
+        task.phase = PreviewPhase::Error;
+        self.preview_error = Some(PreviewErrorSummary {
+            code: "decode_error".into(),
+            message,
+        });
     }
 
     pub fn next_outbound(&mut self) -> Option<Vec<u8>> {

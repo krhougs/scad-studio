@@ -171,7 +171,7 @@ pub struct FileReadRequest {
 #[repr(u8)]
 pub enum FileReadContents {
     Utf8Text(String) = 0,
-    Binary(Vec<u8>) = 1,
+    Binary(#[serde(with = "serde_bytes")] Vec<u8>) = 1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -322,6 +322,7 @@ pub enum PreviewResponseFormat {
     Mesh = 0,
     ThreeMf = 1,
     RenderedImage = 2,
+    Stl = 3,
 }
 
 #[derive(
@@ -344,12 +345,21 @@ pub struct PreviewMeshPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewArtifact3mf {
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+    pub media_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct PreviewArtifactStl {
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
     pub media_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PreviewRenderedImagePayload {
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
     pub media_type: String,
     pub width: u32,
@@ -364,6 +374,7 @@ pub enum PreviewArtifact {
     Mesh(PreviewMeshPayload) = 0,
     ThreeMf(PreviewArtifact3mf) = 1,
     RenderedImage(PreviewRenderedImagePayload) = 2,
+    Stl(PreviewArtifactStl) = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

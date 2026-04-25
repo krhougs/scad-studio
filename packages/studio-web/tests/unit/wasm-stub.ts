@@ -3,7 +3,21 @@
 // only exercises the React hook wiring around renderer_create's error path.
 
 export class ClientHandle {}
-export class MeshHandle {}
+export class MeshHandle {
+  free(): void {}
+  positions(): Float32Array {
+    return new Float32Array();
+  }
+  normals(): Float32Array {
+    return new Float32Array();
+  }
+  colors(): Float32Array {
+    return new Float32Array();
+  }
+  indices(): Uint32Array {
+    return new Uint32Array();
+  }
+}
 export class RendererHandle {}
 
 export function client_create(): ClientHandle {
@@ -59,6 +73,9 @@ export function client_subscribe_directory_watch(): bigint {
   return 0n;
 }
 export function client_tick(): void {}
+export function client_take_preview_mesh(): MeshHandle | undefined {
+  return undefined;
+}
 export function mesh_decode(): MeshHandle {
   return new MeshHandle();
 }

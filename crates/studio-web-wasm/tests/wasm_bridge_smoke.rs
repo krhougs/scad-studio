@@ -4,26 +4,34 @@
 //! 握手、请求成功、cancel、transport 断开重连、watch 重订阅、请求超时、
 //! 以及 renderer 幂等。
 
+use std::io::{Cursor, Write};
+
 use app_server_protocol::{
     CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities,
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    PathHandle, PreviewRequestKind, ProtocolVersionRange, RequestId, ServerCapabilities,
-    ServerEnvelope, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
-    encode_server_frame, web_file_read_capability,
+    FileReadContents, PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl,
+    PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
+    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerResponseEnvelope,
+    SessionToken, SubscriptionId, WatchSubscribeRequest, WatchSubscriptionAck,
+    WorkspaceCurrentResponse, WorkspaceId, decode_client_frame, encode_server_frame,
+    web_file_read_capability,
 };
+use js_sys::{Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use studio_web_wasm::wasm_bridge::{
     client::{
-        client_begin_handshake, client_cancel, client_create, client_create_with_timeouts,
-        client_destroy, client_dispatch_workspace_current, client_drain_events,
-        client_mark_transport_closed, client_next_outbound, client_receive_inbound,
-        client_snapshot, client_subscribe_directory_watch, client_tick, ClientHandle,
+        ClientHandle, client_begin_handshake, client_cancel, client_create,
+        client_create_with_timeouts, client_destroy, client_dispatch_preview_request,
+        client_dispatch_workspace_current, client_drain_events, client_mark_transport_closed,
+        client_next_outbound, client_receive_inbound, client_snapshot,
+        client_subscribe_directory_watch, client_take_preview_mesh, client_tick,
     },
     renderer::{renderer_create, renderer_destroy, renderer_resize},
 };
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -71,6 +79,133 @@ fn workspace_current_success() -> CommandSuccess {
     })
 }
 
+fn preview_ready_stl(bytes: Vec<u8>) -> CommandSuccess {
+    CommandSuccess::PreviewReady(PreviewReadyResponse {
+        requested_kind: PreviewRequestKind::GeometryArtifact,
+        artifact: PreviewArtifact::Stl(PreviewArtifactStl {
+            bytes,
+            media_type: "model/stl".into(),
+        }),
+    })
+}
+
+fn preview_ready_3mf(bytes: Vec<u8>) -> CommandSuccess {
+    CommandSuccess::PreviewReady(PreviewReadyResponse {
+        requested_kind: PreviewRequestKind::GeometryArtifact,
+        artifact: PreviewArtifact::ThreeMf(PreviewArtifact3mf {
+            bytes,
+            media_type: "model/3mf".into(),
+        }),
+    })
+}
+
+fn preview_request() -> PreviewRequest {
+    preview_request_for("model.stl")
+}
+
+fn preview_request_for(name: &str) -> PreviewRequest {
+    PreviewRequest {
+        source: PathHandle::new(WorkspaceId("ws-smoke".into()), [name])
+            .expect("valid preview path"),
+        defines: Vec::new(),
+        kind: PreviewRequestKind::GeometryArtifact,
+        configured_openscad_path: None,
+    }
+}
+
+fn binary_stl_bytes() -> Vec<u8> {
+    let mut bytes = vec![0; 80];
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    for value in [
+        0.0_f32, 0.0, 1.0, // normal
+        0.0, 0.0, 0.0, // v0
+        1.0, 0.0, 0.0, // v1
+        0.0, 1.0, 0.0, // v2
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes
+}
+
+fn minimal_three_mf_bytes() -> Vec<u8> {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/>
+          <vertex x="1" y="0" z="0"/>
+          <vertex x="0" y="1" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build>
+    <item objectid="1"/>
+  </build>
+</model>"#;
+    three_mf_archive(xml)
+}
+
+fn mixed_color_three_mf_bytes() -> Vec<u8> {
+    let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <basematerials id="1">
+      <base name="Red" displaycolor="#FF0000"/>
+    </basematerials>
+    <object id="1" type="model" pid="1" pindex="0">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/>
+          <vertex x="1" y="0" z="0"/>
+          <vertex x="0" y="1" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+        </triangles>
+      </mesh>
+    </object>
+    <object id="2" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="2" y="0" z="0"/>
+          <vertex x="3" y="0" z="0"/>
+          <vertex x="2" y="1" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build>
+    <item objectid="1"/>
+    <item objectid="2"/>
+  </build>
+</model>"##;
+    three_mf_archive(xml)
+}
+
+fn three_mf_archive(model_xml: &str) -> Vec<u8> {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("3D/3dmodel.model", SimpleFileOptions::default())
+        .expect("fixture should open archive entry");
+    writer
+        .write_all(model_xml.as_bytes())
+        .expect("fixture should write xml");
+    writer
+        .finish()
+        .expect("fixture should finish archive")
+        .into_inner()
+}
+
 fn watch_ack(subscription_id: &str) -> CommandSuccess {
     CommandSuccess::WatchSubscribed(WatchSubscriptionAck {
         subscription_id: SubscriptionId(subscription_id.into()),
@@ -95,6 +230,18 @@ fn drain_events(handle: &mut ClientHandle) -> Vec<DrainedEvent> {
 
 fn to_js<T: Serialize>(value: &T) -> JsValue {
     serde_wasm_bindgen::to_value(value).expect("to_js")
+}
+
+fn js_prop(value: &JsValue, name: &str) -> JsValue {
+    Reflect::get(value, &JsValue::from_str(name)).expect("js property")
+}
+
+fn assert_uint8array(value: &JsValue, expected_len: u32) {
+    let bytes: Uint8Array = value
+        .clone()
+        .dyn_into()
+        .expect("expected Uint8Array from serde_bytes");
+    assert_eq!(bytes.length(), expected_len);
 }
 
 fn new_client_with_timeouts(workspace_current_ms: Option<u64>) -> ClientHandle {
@@ -190,9 +337,11 @@ fn handshake_completes_and_emits_event() {
     let mut handle = client_create();
     perform_handshake(&mut handle);
     let events = drain_events(&mut handle);
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, DrainedEvent::HandshakeAccepted { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, DrainedEvent::HandshakeAccepted { .. }))
+    );
 }
 
 #[wasm_bindgen_test]
@@ -220,9 +369,316 @@ fn request_success_emits_succeeded_event() {
     assert!(succeeded, "expected RequestSucceeded, got {:?}", events);
 
     let snapshot = client_snapshot(&handle).expect("snapshot");
-    let value: serde_json::Value =
-        serde_wasm_bindgen::from_value(snapshot).expect("snapshot json");
+    let value: serde_json::Value = serde_wasm_bindgen::from_value(snapshot).expect("snapshot json");
     assert!(value.get("workspace_current").is_some());
+}
+
+#[wasm_bindgen_test]
+fn preview_stl_artifact_is_taken_from_side_buffer_as_mesh_handle() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(request_id), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+
+    let events = drain_events(&mut handle);
+    let preview_event = events
+        .iter()
+        .find_map(|event| match event {
+            DrainedEvent::RequestSucceeded { payload, .. } => Some(payload),
+            _ => None,
+        })
+        .expect("preview succeeded event");
+    let bytes = preview_event
+        .pointer("/payload/artifact/payload/bytes")
+        .and_then(|value| value.as_array())
+        .expect("serialized event keeps only lightweight bytes marker");
+    assert!(bytes.is_empty());
+
+    let mesh = client_take_preview_mesh(&mut handle, request_id)
+        .expect("take succeeds")
+        .expect("mesh exists");
+    assert_eq!(mesh.vertex_count(), 3);
+    assert_eq!(mesh.index_count(), 3);
+    assert_eq!(mesh.colors().len(), 0);
+    assert!(
+        client_take_preview_mesh(&mut handle, request_id)
+            .expect("second take succeeds")
+            .is_none()
+    );
+}
+
+#[wasm_bindgen_test]
+fn preview_3mf_artifact_is_taken_from_side_buffer_as_mesh_handle() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request = preview_request_for("model.3mf");
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&request)).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(
+        RequestId(request_id),
+        preview_ready_3mf(minimal_three_mf_bytes()),
+    );
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    let mesh = client_take_preview_mesh(&mut handle, request_id)
+        .expect("take succeeds")
+        .expect("mesh exists");
+    assert_eq!(mesh.vertex_count(), 3);
+    assert_eq!(mesh.index_count(), 3);
+    assert_eq!(mesh.colors().len(), 0);
+}
+
+#[wasm_bindgen_test]
+fn preview_3mf_mixed_colors_emit_white_for_sentinel_vertices() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request = preview_request_for("mixed.3mf");
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&request)).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(
+        RequestId(request_id),
+        preview_ready_3mf(mixed_color_three_mf_bytes()),
+    );
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    let mesh = client_take_preview_mesh(&mut handle, request_id)
+        .expect("take succeeds")
+        .expect("mesh exists");
+    assert_eq!(mesh.vertex_count(), 6);
+    let colors = mesh.colors();
+    assert_eq!(colors.len(), 24);
+    assert_eq!(&colors[0..4], &[1.0, 0.0, 0.0, 1.0]);
+    assert!(
+        colors[12..]
+            .chunks_exact(4)
+            .all(|chunk| chunk == [1.0, 1.0, 1.0, 1.0])
+    );
+}
+
+#[wasm_bindgen_test]
+fn serde_bytes_fields_serialize_to_uint8array() {
+    let three_mf = to_js(&PreviewArtifact::ThreeMf(PreviewArtifact3mf {
+        bytes: vec![1, 2, 3, 4],
+        media_type: "model/3mf".into(),
+    }));
+    let three_mf_payload = js_prop(&three_mf, "payload");
+    assert_uint8array(&js_prop(&three_mf_payload, "bytes"), 4);
+
+    let stl = to_js(&PreviewArtifact::Stl(PreviewArtifactStl {
+        bytes: vec![1, 2, 3],
+        media_type: "model/stl".into(),
+    }));
+    let stl_payload = js_prop(&stl, "payload");
+    assert_uint8array(&js_prop(&stl_payload, "bytes"), 3);
+
+    let image = to_js(&PreviewRenderedImagePayload {
+        bytes: vec![1, 2],
+        media_type: "image/png".into(),
+        width: 1,
+        height: 1,
+    });
+    assert_uint8array(&js_prop(&image, "bytes"), 2);
+
+    let file_read = to_js(&FileReadContents::Binary(vec![1, 2, 3, 4, 5]));
+    assert_uint8array(&js_prop(&file_read, "payload"), 5);
+}
+
+#[wasm_bindgen_test]
+fn bad_preview_stl_take_marks_snapshot_error() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(request_id), preview_ready_stl(vec![1, 2, 3]));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    let err = match client_take_preview_mesh(&mut handle, request_id) {
+        Ok(_) => panic!("bad stl should fail"),
+        Err(err) => err,
+    };
+    assert!(format!("{err:?}").contains("stl decode failed"));
+    let snapshot = client_snapshot(&handle).expect("snapshot");
+    let value: serde_json::Value = serde_wasm_bindgen::from_value(snapshot).expect("snapshot json");
+    assert_eq!(
+        value
+            .pointer("/preview_error/payload/message")
+            .and_then(|v| v.as_str()),
+        Some("stl decode failed: 解析 STL 失败: STL malformed")
+    );
+}
+
+#[wasm_bindgen_test]
+fn preview_side_buffer_clears_on_destroy() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(request_id), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    client_destroy(&mut handle);
+    assert!(client_take_preview_mesh(&mut handle, request_id).is_err());
+}
+
+#[wasm_bindgen_test]
+fn preview_side_buffer_clears_on_transport_close() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request_id =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(request_id), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    client_mark_transport_closed(&mut handle, json_close_reason(1006, "net", false))
+        .expect("transport close");
+    assert!(
+        client_take_preview_mesh(&mut handle, request_id)
+            .expect("handle remains valid")
+            .is_none()
+    );
+}
+
+#[wasm_bindgen_test]
+fn preview_side_buffer_evicts_oldest_entry() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let mut request_ids = Vec::new();
+    for index in 0..9 {
+        let request = preview_request_for(&format!("model-{index}.stl"));
+        let request_id =
+            client_dispatch_preview_request(&mut handle, to_js(&request)).expect("dispatch");
+        let _ = client_next_outbound(&mut handle)
+            .expect("handle alive")
+            .expect("preview outbound");
+        let response = response_bytes(RequestId(request_id), preview_ready_stl(binary_stl_bytes()));
+        client_receive_inbound(&mut handle, &response).expect("preview response");
+        let _ = drain_events(&mut handle);
+        request_ids.push(request_id);
+    }
+
+    assert!(
+        client_take_preview_mesh(&mut handle, request_ids[0])
+            .expect("handle remains valid")
+            .is_none()
+    );
+    assert!(
+        client_take_preview_mesh(&mut handle, request_ids[8])
+            .expect("take succeeds")
+            .is_some()
+    );
+}
+
+#[wasm_bindgen_test]
+fn preview_side_buffer_replaces_same_target_entry() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let first =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(first), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    let second =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+    let response = response_bytes(RequestId(second), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    assert!(
+        client_take_preview_mesh(&mut handle, first)
+            .expect("handle remains valid")
+            .is_none()
+    );
+    assert!(
+        client_take_preview_mesh(&mut handle, second)
+            .expect("take succeeds")
+            .is_some()
+    );
+}
+
+#[wasm_bindgen_test]
+fn stale_same_target_preview_does_not_replace_newer_buffer() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let first =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+
+    let second =
+        client_dispatch_preview_request(&mut handle, to_js(&preview_request())).expect("dispatch");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("preview outbound");
+
+    let response = response_bytes(RequestId(second), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    let response = response_bytes(RequestId(first), preview_ready_stl(binary_stl_bytes()));
+    client_receive_inbound(&mut handle, &response).expect("preview response");
+    let _ = drain_events(&mut handle);
+
+    assert!(
+        client_take_preview_mesh(&mut handle, first)
+            .expect("handle remains valid")
+            .is_none()
+    );
+    assert!(
+        client_take_preview_mesh(&mut handle, second)
+            .expect("newer preview remains")
+            .is_some()
+    );
 }
 
 #[wasm_bindgen_test]
@@ -375,11 +831,7 @@ fn watch_resubscribes_after_reconnect_and_emits_watch_resubscribed() {
         DrainedEvent::WatchResubscribed { request_id } => request_id.0 == watch_request_id,
         _ => false,
     });
-    assert!(
-        resubscribed,
-        "expected WatchResubscribed, got {:?}",
-        events
-    );
+    assert!(resubscribed, "expected WatchResubscribed, got {:?}", events);
 }
 
 #[wasm_bindgen_test]
@@ -404,7 +856,10 @@ fn request_timeout_fires_via_tick() {
 #[wasm_bindgen_test]
 fn renderer_create_returns_stub_error() {
     let result = renderer_create("preview-canvas");
-    assert!(result.is_err(), "renderer_create should stub error in Phase 2b");
+    assert!(
+        result.is_err(),
+        "renderer_create should stub error in Phase 2b"
+    );
 }
 
 #[wasm_bindgen_test]

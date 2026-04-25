@@ -42,7 +42,7 @@ export interface ConfigSaveRequest {
 
 export type ClientPlatform = "desktop" | "web" | "other";
 export type PreviewRequestKind = "geometry_artifact" | "rendered_image";
-export type PreviewResponseFormat = "mesh" | "three_mf" | "rendered_image";
+export type PreviewResponseFormat = "mesh" | "three_mf" | "rendered_image" | "stl";
 export type PreviewUnit = "millimeter";
 export type ExportFormat = "stl" | "three_mf";
 export type WorkspaceEntryKind = "directory" | "file";
@@ -187,6 +187,11 @@ export interface PreviewArtifact3mf {
   media_type: string;
 }
 
+export interface PreviewArtifactStl {
+  bytes: Uint8Array;
+  media_type: string;
+}
+
 export interface PreviewRenderedImagePayload {
   bytes: Uint8Array;
   media_type: string;
@@ -197,7 +202,8 @@ export interface PreviewRenderedImagePayload {
 export type PreviewArtifact =
   | { format: "mesh"; payload: PreviewMeshPayload }
   | { format: "three_mf"; payload: PreviewArtifact3mf }
-  | { format: "rendered_image"; payload: PreviewRenderedImagePayload };
+  | { format: "rendered_image"; payload: PreviewRenderedImagePayload }
+  | { format: "stl"; payload: PreviewArtifactStl };
 
 export interface PreviewReadyResponse {
   requested_kind: PreviewRequestKind;

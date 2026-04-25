@@ -59,7 +59,7 @@ impl PreviewState {
     pub fn complete(&mut self, ready: PreviewReadyResponse) {
         self.current_request = None;
         let phase = match ready.artifact {
-            PreviewArtifact::Mesh(_) => {
+            PreviewArtifact::Mesh(_) | PreviewArtifact::ThreeMf(_) | PreviewArtifact::Stl(_) => {
                 self.last_error = None;
                 PreviewPhase::Ready
             }
@@ -129,6 +129,12 @@ fn ready_summary(result: Option<&PreviewReadyResponse>) -> String {
                 mesh.indices.len(),
                 mesh.indices.len() / 3
             )
+        }
+        Some(PreviewArtifact::ThreeMf(artifact)) => {
+            format!("3mf bytes: {}", artifact.bytes.len())
+        }
+        Some(PreviewArtifact::Stl(artifact)) => {
+            format!("stl bytes: {}", artifact.bytes.len())
         }
         _ => "Preview result unavailable.".into(),
     }

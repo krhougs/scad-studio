@@ -19,8 +19,8 @@ pub use document::DocumentState;
 pub use document_session::{DocumentDescriptor, DocumentKey, DocumentKind};
 pub use document_workspace::{DocumentOpenOutcome, DocumentSlot, DocumentTab, DocumentWorkspace};
 pub use managed_client::{
-    ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, ManagedClient, TransportCloseReason,
-    TransportStatus, WatchEventPayload, WatchParams,
+    ClientError, ClientEvent, ClientSnapshot, ClientTimeouts, ManagedClient, PreviewPhase,
+    TransportCloseReason, TransportStatus, WatchEventPayload, WatchParams,
 };
 pub use params::{ParameterStore, parameter_entries_to_cli_defines, parse_parameters};
 pub use presets::preset_path_for_source;

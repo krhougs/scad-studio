@@ -8,8 +8,8 @@
 //! 无需重新解码一遍 .3mf / .stl 字节。
 
 use scad_scene::MeshData;
-use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::mesh_decode::decode_mesh_bytes;
 
@@ -57,13 +57,17 @@ impl MeshHandle {
             .data
             .vertices
             .iter()
-            .any(|v| v.color != [1.0, 1.0, 1.0, 1.0]);
+            .any(|v| v.color[3] >= 0.0 && v.color != [1.0, 1.0, 1.0, 1.0]);
         if !has_color {
             return Vec::new();
         }
         let mut out = Vec::with_capacity(self.data.vertices.len() * 4);
         for v in &self.data.vertices {
-            out.extend_from_slice(&v.color);
+            if v.color[3] < 0.0 {
+                out.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
+            } else {
+                out.extend_from_slice(&v.color);
+            }
         }
         out
     }
