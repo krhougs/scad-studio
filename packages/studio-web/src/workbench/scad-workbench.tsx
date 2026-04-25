@@ -81,7 +81,6 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
     cameraPreset,
     cameraOverride,
     viewerOptions,
-    refreshSignal,
     onMeshInfo,
     onCameraChange,
   } = props;
@@ -98,7 +97,6 @@ export function ScadWorkbench(props: ScadWorkbenchProps) {
         cameraOverride={cameraOverride}
         viewerOptions={viewerOptions}
         previewEnabled={state.sourceReady}
-        refreshSignal={refreshSignal}
         onPreviewStatus={state.emitStatus}
         onStats={(stats) => {
           if (!stats) onMeshInfo?.(null);

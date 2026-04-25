@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import {
@@ -9,6 +11,7 @@ import {
 import {
   clearServiceWorkerState,
   createHarness,
+  HOST_WORKSPACE,
   REPO_ROOT,
 } from "./_smoke-harness";
 
@@ -26,9 +29,15 @@ type PreviewRequestRecord = {
   t: number;
 };
 
+const TEST_WORKSPACE = mkdtempSync(
+  path.join(tmpdir(), "scad-studio-preview-dedup-"),
+);
+cpSync(HOST_WORKSPACE, TEST_WORKSPACE, { recursive: true });
+
 const HARNESS = createHarness({
   bindPort: 39214,
   vitePort: 5214,
+  workspacePath: TEST_WORKSPACE,
 });
 
 let protocolWasmReady = false;
@@ -39,6 +48,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await HARNESS.stop();
+  rmSync(TEST_WORKSPACE, { recursive: true, force: true });
 });
 
 test.beforeEach(async ({ page }) => {
@@ -55,6 +65,7 @@ test("@preview-dedup opening scad emits one equivalent preview request", async (
   await page.waitForTimeout(500);
 
   const requests = await recordedPreviewRequests(page);
+  singleRequestForSource(requests, "cube.scad");
   const duplicates = duplicatePreviewRequests(requests);
 
   expect(duplicates, formatDuplicatePreviewRequests(duplicates)).toEqual([]);
@@ -99,6 +110,27 @@ test("@preview-dedup parameter changes still emit updated preview request", asyn
     "enabled=true",
     'mode="draft"',
   ]);
+});
+
+test("@preview-dedup scad refresh emits one equivalent preview request", async ({
+  page,
+}) => {
+  await clearRecordedFrames(page);
+  await openExampleScad(page, "cube.scad");
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(500);
+
+  await clearRecordedFrames(page);
+  const cubePath = path.join(TEST_WORKSPACE, "examples", "cube.scad");
+  const source = await readFile(cubePath, "utf-8");
+  await writeFile(cubePath, `${source}\n// refresh ${Date.now()}\n`);
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(700);
+
+  const requests = await recordedPreviewRequests(page);
+  const duplicates = duplicatePreviewRequests(requests);
+
+  expect(duplicates, formatDuplicatePreviewRequests(duplicates)).toEqual([]);
 });
 
 async function openExampleScad(
@@ -281,6 +313,7 @@ function previewRequestPayload(decoded: unknown): {
   if (root?.["kind"] !== "request") return null;
   const payload = asRecord(root["payload"]);
   const command = asRecord(payload?.["command"]);
+  if (!command) return null;
   if ((command?.["command"] ?? command?.["type"]) !== "preview.request") return null;
   const body = asRecord(command["payload"]);
   if (!body) return null;

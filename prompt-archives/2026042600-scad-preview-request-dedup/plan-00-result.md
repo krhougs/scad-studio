@@ -34,11 +34,19 @@
 
 ## Phase 3: 评估并补齐预览请求层幂等保护
 
-- 状态：未开始
-- 完成情况：无
-- 变更摘要：无
-- 验证命令：未运行
-- Review：未执行
+- 状态：已完成编码，等待独立 review
+- 完成情况：未新增通用 `MeshViewer` 请求层幂等保护；改为修正 `.scad` refresh 双入口。Phase 3 review 指出同一个 `refreshSignal` 会同时驱动源码重读和 `MeshViewer` 直接请求，已补充测试并修复。
+- 变更摘要：
+  - `packages/studio-web/tests/playwright/preview-request-dedup.spec.ts` 改为使用临时 workspace，并新增 `.scad` 文件刷新回归测试。
+  - 修复前 refresh 测试按预期失败，重复 key 为 `examples/cube.scad + [] + null`，request id 为 `[14, 18]`，时间差约 `64ms`。
+  - `packages/studio-web/src/workbench/scad-workbench.tsx` 不再把 `refreshSignal` 直接传给 `ScadPreviewViewer`；`.scad` refresh 只通过 `useScadWorkbenchState` 重读源码，然后由 `sourceReady` / defines 状态驱动预览。
+  - 保留真实参数变化与文件 refresh 触发新预览的能力，避免用全局节流或请求层防御掩盖状态双入口。
+- 验证命令：
+  - `bun run --cwd packages/studio-web test:e2e preview-request-dedup.spec.ts`
+  - 结果：3 passed，覆盖初次打开、参数变化、`.scad` 文件 refresh。
+  - `bun run --cwd packages/studio-web typecheck`
+  - 结果：通过。
+- Review：通过。首次 review 指出 `.scad` refresh 双入口风险；已补充 refresh 红灯测试并修复。复审确认 `refreshSignal` 不再直达 `ScadPreviewViewer`，`.scad` refresh 只剩源码重读入口，不需要新增通用 `MeshViewer` 请求层幂等保护。按复审建议，refresh 测试已显式断言刷新后恰好一次 `cube.scad` 请求。
 - 遗留问题：无
 
 ## Phase 4: 全量回归与结果归档
