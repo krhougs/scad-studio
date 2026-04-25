@@ -97,3 +97,30 @@
 
 - `app-server-core::watch` 中既有 dead_code warning 仍存在，非本 plan 引入。
 - 浏览器 wasm 原生 `wasm-pack test --headless --chrome` 仍受已知 ChromeDriver 环境问题影响；本 Phase 已用 Playwright browser smoke、wasm bridge smoke、watch smoke 覆盖浏览器端主路径。
+
+## 最终整体验收
+
+完成情况：
+
+- Phase 1 到 Phase 3 已连续完成，并分别提交为：
+  - `91f994d Enable deflate websocket transport`
+  - `87697e4 Add raw preview artifact clients`
+  - `8b17a64 Emit raw preview artifacts from server`
+- 最终独立 review 结论：Blocker/High/Medium/Low 均无，整个 plan 已收敛。
+- 复核重点包括 WebSocket deflate、protocol discriminant、side buffer 生命周期、服务端 raw artifact 输出、`.scad` 3MF 校验保留、`mesh_to_preview_payload` 服务端导出移除。
+
+最终验证结果：
+
+- `bun scripts/run_smoke.ts --case all`：通过。
+- 聚合覆盖项包括：
+  - `cargo test -p studio-web-wasm --tests`
+  - Playwright `wasm-bridge-smoke.spec.ts`
+  - wasm package generated 产物一致性检查
+  - Playwright `browser-smoke.spec.ts`
+  - Playwright `browser-watch-smoke.spec.ts`
+  - `bun scripts/build_studio_web.ts`
+
+最终遗留问题：
+
+- `wasm-pack test --headless --chrome crates/studio-web-wasm` 仍受已记录的本机 ChromeDriver `http status: 404` / `SIGKILL` 环境问题影响，未作为当前完成阻断项。
+- `app-server-core::watch` 中既有 dead_code warning 仍存在，非本 plan 引入。
