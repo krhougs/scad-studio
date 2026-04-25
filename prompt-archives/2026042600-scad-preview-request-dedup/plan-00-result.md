@@ -20,12 +20,17 @@
 
 ## Phase 2: 收敛 `.scad` appliedDefines 等价更新
 
-- 状态：未开始
-- 完成情况：无
-- 变更摘要：无
-- 验证命令：未运行
-- Review：未执行
-- 遗留问题：无
+- 状态：已完成
+- 完成情况：`.scad` 初次打开时不再因等价 `appliedDefines` 数组替换触发第二个等价 `preview.request`；真实参数变化仍触发新的 `preview.request`。
+- 变更摘要：
+  - `packages/studio-web/src/workbench/scad-workbench.tsx` 新增 `applyDefines` guarded setter，按字符串数组内容比较，内容相同时保留旧数组引用。
+  - 源码解析、参数 debounce、恢复默认、预设加载、路径切换清空等 `appliedDefines` 写入点统一接入 guarded setter。
+  - `packages/studio-web/tests/playwright/preview-request-dedup.spec.ts` 增加参数变化正向验证，确认修改 `params-cube.scad` 参数后产生新的 request id 且 decoded defines 变化。
+- 验证命令：
+  - `bun run --cwd packages/studio-web test:e2e preview-request-dedup.spec.ts`
+  - 结果：2 passed。初次打开去重和参数变化正向验证均通过。
+- Review：通过。独立 reviewer 确认 `applyDefines` 只按顺序比较字符串数组内容，真实参数变化不会被吞掉；`setAppliedDefines` 只剩 guarded setter 内部调用；hook 依赖合理；测试覆盖初次打开去重和参数变化正向路径。
+- 遗留问题：参数 debounce 在等价更新被跳过后仍会记录一条 `parameters preview update` 日志，这是既有语义延续，不影响本轮重复请求修复。
 
 ## Phase 3: 评估并补齐预览请求层幂等保护
 

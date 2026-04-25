@@ -49,19 +49,8 @@ test.beforeEach(async ({ page }) => {
 test("@preview-dedup opening scad emits one equivalent preview request", async ({
   page,
 }) => {
-  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
-  await page.getByTestId("entry-examples").waitFor({
-    state: "visible",
-    timeout: 30_000,
-  });
-  await page.getByTestId("entry-examples").click();
-  await page.getByTestId("entry-cube.scad").waitFor({
-    state: "visible",
-    timeout: 30_000,
-  });
-
   await clearRecordedFrames(page);
-  await page.getByTestId("entry-cube.scad").click();
+  await openExampleScad(page, "cube.scad");
   await waitForPreviewResponse(page);
   await page.waitForTimeout(500);
 
@@ -70,6 +59,64 @@ test("@preview-dedup opening scad emits one equivalent preview request", async (
 
   expect(duplicates, formatDuplicatePreviewRequests(duplicates)).toEqual([]);
 });
+
+test("@preview-dedup parameter changes still emit updated preview request", async ({
+  page,
+}) => {
+  await clearRecordedFrames(page);
+  await openExampleScad(page, "params-cube.scad");
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(500);
+
+  const initial = singleRequestForSource(
+    await recordedPreviewRequests(page),
+    "params-cube.scad",
+  );
+  expect(initial.defines).toEqual([
+    "size=10",
+    "wall=2",
+    "enabled=true",
+    'mode="draft"',
+  ]);
+
+  await clearRecordedFrames(page);
+  const inspector = page.getByTestId("workbench-inspector");
+  const sizeField = inspector
+    .getByTestId("parameter-number-field-size")
+    .getByRole("spinbutton");
+  await sizeField.fill("24");
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(500);
+
+  const updated = singleRequestForSource(
+    await recordedPreviewRequests(page),
+    "params-cube.scad",
+  );
+  expect(updated.requestId).not.toBe(initial.requestId);
+  expect(updated.defines).toEqual([
+    "size=24",
+    "wall=2",
+    "enabled=true",
+    'mode="draft"',
+  ]);
+});
+
+async function openExampleScad(
+  page: import("@playwright/test").Page,
+  filename: string,
+): Promise<void> {
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page.getByTestId("entry-examples").waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId("entry-examples").click();
+  await page.getByTestId(`entry-${filename}`).waitFor({
+    state: "visible",
+    timeout: 30_000,
+  });
+  await page.getByTestId(`entry-${filename}`).click();
+}
 
 async function installBidirectionalProtocolRecorder(
   page: import("@playwright/test").Page,
@@ -191,6 +238,19 @@ function duplicatePreviewRequests(
     groups.set(request.key, group);
   }
   return [...groups.values()].filter((group) => group.length > 1);
+}
+
+function singleRequestForSource(
+  requests: PreviewRequestRecord[],
+  filename: string,
+): PreviewRequestRecord {
+  const matches = requests.filter((request) => {
+    const source = asRecord(request.source);
+    const segments = source?.["path_segments"];
+    return Array.isArray(segments) && segments.at(-1) === filename;
+  });
+  expect(matches, `preview requests for ${filename}`).toHaveLength(1);
+  return matches[0];
 }
 
 function formatDuplicatePreviewRequests(

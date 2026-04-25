@@ -140,15 +140,23 @@ export function useScadWorkbenchState({
   const presetPath = useMemo(() => derivePresetPath(path), [path]);
   const presetPathLabel = useMemo(() => derivePresetPathLabel(path), [path]);
   const legacyPresetPaths = useMemo(() => deriveLegacyPresetPaths(path), [path]);
+  const applyDefines = useCallback((next: string[]) => {
+    setAppliedDefines((previous) => {
+      const same =
+        previous.length === next.length &&
+        previous.every((item, index) => item === next[index]);
+      return same ? previous : next;
+    });
+  }, []);
 
   useEffect(() => {
     setParameterEntries([]);
     setParameterWarnings([]);
-    setAppliedDefines([]);
+    applyDefines([]);
     setSourceReady(false);
     setPresets([]);
     setPresetError(null);
-  }, [active, path]);
+  }, [active, applyDefines, path]);
 
   const emitStatus = useCallback(
     (status: string) => {
@@ -161,9 +169,9 @@ export function useScadWorkbenchState({
   const restoreDefaults = useCallback(() => {
     const next = restoreAllParameterValues(parameterEntries);
     setParameterEntries(next);
-    setAppliedDefines(formatCurrentDefines(next));
+    applyDefines(formatCurrentDefines(next));
     onLog("info", "parameters restore defaults");
-  }, [onLog, parameterEntries]);
+  }, [applyDefines, onLog, parameterEntries]);
 
   const applySourceText = useCallback(
     (source: string | null, ready: boolean) => {
@@ -171,21 +179,21 @@ export function useScadWorkbenchState({
       if (source === null) {
         setParameterEntries([]);
         setParameterWarnings([]);
-        setAppliedDefines([]);
+        applyDefines([]);
         return;
       }
       const parsed = parseParameterSource(source);
       setParameterWarnings(parsed.warnings);
       setParameterEntries((previous) => {
         const next = mergeParameterEntries(previous, parsed.entries);
-        setAppliedDefines(formatCurrentDefines(next));
+        applyDefines(formatCurrentDefines(next));
         return next;
       });
       for (const warning of parsed.warnings) {
         onLog("warn", `parameter parse warning: ${warning}`);
       }
     },
-    [onLog],
+    [applyDefines, onLog],
   );
 
   useEffect(() => {
@@ -234,11 +242,11 @@ export function useScadWorkbenchState({
     if (!sourceReady) return;
     const handle = window.setTimeout(() => {
       const defines = formatCurrentDefines(parameterEntries);
-      setAppliedDefines(defines);
+      applyDefines(defines);
       onLog("info", `parameters preview update (${defines.length} defines)`);
     }, 250);
     return () => window.clearTimeout(handle);
-  }, [onLog, parameterEntries, sourceReady]);
+  }, [applyDefines, onLog, parameterEntries, sourceReady]);
 
   const loadPresetsFrom = useCallback(
     async (
@@ -349,10 +357,10 @@ export function useScadWorkbenchState({
       if (!preset) return;
       const next = applyPresetValues(parameterEntries, preset.values);
       setParameterEntries(next);
-      setAppliedDefines(formatCurrentDefines(next));
+      applyDefines(formatCurrentDefines(next));
       onLog("info", `preset loaded: ${name}`);
     },
-    [onLog, parameterEntries, presets],
+    [applyDefines, onLog, parameterEntries, presets],
   );
 
   return useMemo(
