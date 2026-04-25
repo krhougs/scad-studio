@@ -4,7 +4,7 @@
 // chrome, plus that pointer drag on the Three.js canvas triggers an orbit.
 
 import { expect, test, type Locator } from "@playwright/test";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -33,6 +33,11 @@ endsolid shifted_triangle
 );
 const MODEL_FILE = path.join(TEST_WORKSPACE, "model.stl");
 const IMAGE_FILE = path.join(TEST_WORKSPACE, "screenshot.png");
+const PARAMS_CUBE_SCAD_JSON = path.join(
+  TEST_WORKSPACE,
+  "examples",
+  "params-cube.scad.json",
+);
 const ALT_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8/5+hHgAHggJ/PWdwRwAAAABJRU5ErkJggg==";
 const MODEL_STL_REFRESHED = `solid smoke_triangle
@@ -67,6 +72,7 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await clearServiceWorkerState(page);
+  rmSync(PARAMS_CUBE_SCAD_JSON, { force: true });
 });
 
 test("@canvas-interaction sidebar camera preset switches active view", async ({ page }) => {
@@ -110,7 +116,10 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await expect(canvas).toHaveAttribute("data-projection-mode", "perspective");
   await expect(canvas).toHaveAttribute("data-show-grid", "true");
   await expect(canvas).toHaveAttribute("data-show-axis", "false");
-  await expect(canvas).toHaveAttribute("data-preview-background", "#101114");
+  await expect(canvas).toHaveAttribute("data-preview-background", "#181b20");
+  await expect(canvas).toHaveAttribute("data-grid-major-color", "#5a6573");
+  await expect(canvas).toHaveAttribute("data-grid-minor-color", "#343b45");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.25");
   await expect(canvas).toHaveAttribute("data-gizmo-size", /\d+/);
   await expect(canvas).toHaveAttribute("data-clip-far", /\d+\.\d{3}/);
   const distanceBeforeResize = await page.getByTestId("camera-distance").inputValue();
@@ -191,6 +200,70 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 
   await page.getByTestId("viewer-toggle-clip").click();
   await expect(canvas).toHaveAttribute("data-clip-plane-enabled", "true");
+});
+
+test("@canvas-interaction scad preview appearance controls persist per file", async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
+  await page
+    .getByTestId("entry-examples")
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByTestId("entry-examples").click();
+  await page
+    .getByTestId("entry-params-cube.scad")
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("entry-params-cube.scad").click();
+
+  const inspector = page.getByTestId("workbench-inspector");
+  const canvas = page.getByTestId("mesh-canvas");
+  await canvas.waitFor({ state: "visible", timeout: 30_000 });
+  await expect(inspector.getByTestId("preview-appearance-panel")).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-preview-background", "#181b20");
+
+  await inspector.getByTestId("preview-background-color").fill("#20242b");
+  await expect(canvas).toHaveAttribute("data-preview-background", "#20242b");
+
+  await inspector.getByTestId("preview-grid-major-color").fill("#7c8795");
+  await expect(canvas).toHaveAttribute("data-grid-major-color", "#7c8795");
+
+  await inspector.getByTestId("preview-grid-minor-color").fill("#46505d");
+  await expect(canvas).toHaveAttribute("data-grid-minor-color", "#46505d");
+
+  const lightingField = inspector
+    .getByTestId("preview-lighting-number-field")
+    .getByRole("spinbutton");
+  await lightingField.fill("1.6");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
+
+  await expect
+    .poll(async () => readJsonFile(path.join(TEST_WORKSPACE, "examples", "params-cube.scad.json")), {
+      timeout: 10_000,
+    })
+    .toMatchObject({
+      previewAppearance: {
+        backgroundColor: "#20242b",
+        gridMajorColor: "#7c8795",
+        gridMinorColor: "#46505d",
+        lightingIntensity: 1.6,
+      },
+    });
+
+  await page.getByTestId("entry-cube.scad").click();
+  await expect(canvas).toHaveAttribute("data-preview-background", "#181b20", {
+    timeout: 30_000,
+  });
+  await expect(canvas).toHaveAttribute("data-grid-major-color", "#5a6573");
+  await expect(canvas).toHaveAttribute("data-grid-minor-color", "#343b45");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.25");
+
+  await page.getByTestId("entry-params-cube.scad").click();
+  await expect(canvas).toHaveAttribute("data-preview-background", "#20242b", {
+    timeout: 30_000,
+  });
+  await expect(canvas).toHaveAttribute("data-grid-major-color", "#7c8795");
+  await expect(canvas).toHaveAttribute("data-grid-minor-color", "#46505d");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
 });
 
 test("@canvas-interaction preview info and camera controls are available", async ({
@@ -620,4 +693,8 @@ async function setWindowDelay(
     },
     { delayKey: key, ms: delayMs },
   );
+}
+
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8"));
 }

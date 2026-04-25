@@ -6,6 +6,7 @@ import {
 } from "../../src/canvas/camera-controls";
 import { computeMeshInfo } from "../../src/viewers/mesh-info";
 import { payloadFromPreview } from "../../src/viewers/mesh-three";
+import { DEFAULT_MESH_VIEWER_OPTIONS } from "../../src/viewers/viewer-options";
 import {
   clippingPlanesForBounds,
   meshRenderInputsReady,
@@ -43,6 +44,15 @@ const LONG_Y_INFO: MeshInfo = {
 };
 
 describe("mesh-render-metrics", () => {
+  it("provides bright default preview appearance controls", () => {
+    expect(DEFAULT_MESH_VIEWER_OPTIONS).toMatchObject({
+      backgroundColor: "#181b20",
+      gridMajorColor: "#5a6573",
+      gridMinorColor: "#343b45",
+      lightingIntensity: 1.25,
+    });
+  });
+
   it("does not frame until mesh info and real viewport are available", () => {
     expect(
       meshRenderInputsReady(null, {

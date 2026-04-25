@@ -86,6 +86,83 @@ describe("preset-io", () => {
     ]);
   });
 
+  it("parsePresetFile returns default preview appearance when shared file omits it", () => {
+    const text = JSON.stringify({ presets: {} });
+    const file = parsePresetFile(text) as unknown as {
+      previewAppearance?: {
+        backgroundColor: string;
+        gridMajorColor: string;
+        gridMinorColor: string;
+        lightingIntensity: number;
+      };
+    };
+
+    expect(file.previewAppearance).toEqual({
+      backgroundColor: "#181b20",
+      gridMajorColor: "#5a6573",
+      gridMinorColor: "#343b45",
+      lightingIntensity: 1.25,
+    });
+  });
+
+  it("parsePresetFile accepts preview appearance beside presets", () => {
+    const text = JSON.stringify({
+      presets: {
+        bright: {
+          size: 20,
+        },
+      },
+      previewAppearance: {
+        backgroundColor: "#20242b",
+        gridMajorColor: "#7c8795",
+        gridMinorColor: "#46505d",
+        lightingIntensity: 1.6,
+      },
+    });
+    const file = parsePresetFile(text) as unknown as {
+      previewAppearance?: {
+        backgroundColor: string;
+        gridMajorColor: string;
+        gridMinorColor: string;
+        lightingIntensity: number;
+      };
+    };
+
+    expect(file.previewAppearance).toEqual({
+      backgroundColor: "#20242b",
+      gridMajorColor: "#7c8795",
+      gridMinorColor: "#46505d",
+      lightingIntensity: 1.6,
+    });
+  });
+
+  it("parsePresetFile normalizes invalid preview appearance values", () => {
+    const text = JSON.stringify({
+      presets: {},
+      previewAppearance: {
+        backgroundColor: "red",
+        gridMajorColor: "#bad",
+        gridMinorColor: "transparent",
+        lightingIntensity: 100,
+      },
+    });
+    const file = parsePresetFile(text) as unknown as {
+      previewAppearance?: {
+        backgroundColor: string;
+        gridMajorColor: string;
+        gridMinorColor: string;
+        lightingIntensity: number;
+      };
+    };
+
+    expect(file.previewAppearance).toEqual({
+      backgroundColor: "#181b20",
+      gridMajorColor: "#5a6573",
+      gridMinorColor: "#343b45",
+      lightingIntensity: 3,
+    });
+  });
+
   it("stringifyPresetFile round-trips", () => {
     const file = {
       presets: [{ name: "a", values: { flag: true, mode: "fast", x: 1 } }],
@@ -102,5 +179,35 @@ describe("preset-io", () => {
         },
       },
     });
+  });
+
+  it("stringifyPresetFile writes presets and preview appearance together", () => {
+    const file = {
+      presets: [{ name: "a", values: { flag: true, mode: "fast", x: 1 } }],
+      previewAppearance: {
+        backgroundColor: "#20242b",
+        gridMajorColor: "#7c8795",
+        gridMinorColor: "#46505d",
+        lightingIntensity: 1.6,
+      },
+    };
+    const text = stringifyPresetFile(file);
+
+    expect(JSON.parse(text)).toEqual({
+      presets: {
+        a: {
+          flag: true,
+          mode: "fast",
+          x: 1,
+        },
+      },
+      previewAppearance: {
+        backgroundColor: "#20242b",
+        gridMajorColor: "#7c8795",
+        gridMinorColor: "#46505d",
+        lightingIntensity: 1.6,
+      },
+    });
+    expect(parsePresetFile(text)).toEqual(file);
   });
 });
