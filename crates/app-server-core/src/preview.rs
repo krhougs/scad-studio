@@ -1,10 +1,12 @@
 use crate::terminate_child;
 use app_server_protocol::{
-    PreviewArtifact, PreviewMeshPayload, PreviewReadyResponse, PreviewRequestKind, PreviewUnit,
+    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
+    PreviewRequestKind,
 };
-use scad_scene::{MeshData, three_mf};
+use scad_scene::three_mf;
 use std::{
     env, fmt, fs,
+    io::Cursor,
     io::ErrorKind,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -29,7 +31,7 @@ pub struct LogEntry {
 #[derive(Debug, Clone)]
 pub struct RenderedArtifact {
     pub source_path: PathBuf,
-    pub mesh: MeshData,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,17 +122,25 @@ pub fn preview_artifact(
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "stl" => scad_scene::mesh::load_stl(source_path)
-            .map(mesh_to_preview_payload)
-            .map(PreviewArtifact::Mesh)
-            .map_err(|error| OpenScadError::new(error.to_string())),
-        "3mf" => three_mf::load_3mf(source_path)
-            .map(mesh_to_preview_payload)
-            .map(PreviewArtifact::Mesh)
-            .map_err(|error| OpenScadError::new(error.to_string())),
+        "stl" => read_preview_bytes(source_path).map(|bytes| {
+            PreviewArtifact::Stl(PreviewArtifactStl {
+                bytes,
+                media_type: "model/stl".into(),
+            })
+        }),
+        "3mf" => read_preview_bytes(source_path).map(|bytes| {
+            PreviewArtifact::ThreeMf(PreviewArtifact3mf {
+                bytes,
+                media_type: "model/3mf".into(),
+            })
+        }),
         "scad" => render_scad_preview(configured_openscad_path, source_path, defines),
         _ => Err(OpenScadError::new("暂不支持的预览文件类型")),
     }
+}
+
+fn read_preview_bytes(path: &Path) -> Result<Vec<u8>, OpenScadError> {
+    fs::read(path).map_err(|error| OpenScadError::new(format!("读取预览文件失败: {error}")))
 }
 
 fn render_scad_preview(
@@ -152,22 +162,10 @@ fn render_scad_preview(
         output.status.success(),
         Ok(output),
     )?;
-    Ok(PreviewArtifact::Mesh(mesh_to_preview_payload(
-        artifact.mesh,
-    )))
-}
-
-pub fn mesh_to_preview_payload(mesh: MeshData) -> PreviewMeshPayload {
-    let positions = mesh.vertices.iter().map(|vertex| vertex.position).collect();
-    let normals = mesh.vertices.iter().map(|vertex| vertex.normal).collect();
-    let vertex_colors = mesh.vertices.iter().map(|vertex| vertex.color).collect();
-    PreviewMeshPayload {
-        unit: PreviewUnit::Millimeter,
-        positions,
-        normals,
-        vertex_colors,
-        indices: mesh.indices,
-    }
+    Ok(PreviewArtifact::ThreeMf(PreviewArtifact3mf {
+        bytes: artifact.bytes,
+        media_type: "model/3mf".into(),
+    }))
 }
 
 fn worker_loop<F>(rx: Receiver<RunnerCommand>, notify: F)
@@ -270,11 +268,14 @@ pub fn finalize_job(
             "OpenSCAD 3MF 预览失败：CLI 未生成可解析的 3MF 输出文件",
         ));
     }
-    let mesh = three_mf::load_3mf(&preview_path)
-        .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 3MF 预览失败: {error}")));
+    let bytes = fs::read(&preview_path)
+        .map_err(|error| OpenScadError::new(format!("读取 OpenSCAD 3MF 预览失败: {error}")));
     remove_preview_file(&preview_path);
-    let mesh = mesh?;
-    Ok(RenderedArtifact { source_path, mesh })
+    let bytes = bytes?;
+    let mut cursor = Cursor::new(&bytes);
+    three_mf::load_3mf_from_reader(&mut cursor)
+        .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 3MF 预览失败: {error}")))?;
+    Ok(RenderedArtifact { source_path, bytes })
 }
 
 fn cancel_job(job: &mut Option<RunningJob>) {

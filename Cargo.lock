@@ -147,6 +147,7 @@ dependencies = [
  "scad-scene",
  "serde_json",
  "studio-common",
+ "zip",
 ]
 
 [[package]]

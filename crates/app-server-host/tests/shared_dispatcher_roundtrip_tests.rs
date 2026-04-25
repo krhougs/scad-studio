@@ -104,7 +104,7 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     });
     match preview.result.expect("preview should succeed") {
         CommandSuccess::PreviewReady(response) => match response.artifact {
-            PreviewArtifact::Mesh(mesh) => assert!(!mesh.positions.is_empty()),
+            PreviewArtifact::Stl(stl) => assert!(!stl.bytes.is_empty()),
             other => panic!("unexpected preview artifact: {other:?}"),
         },
         other => panic!("unexpected preview response: {other:?}"),

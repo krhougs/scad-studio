@@ -22,8 +22,8 @@ pub use presets::{PresetError, delete_preset, load_presets, preset_path_for_sour
 pub use preview::{
     CliOutputFormat, LogEntry, LogLevel, OpenScadError, OpenScadMessage, OpenScadRunner,
     RenderedArtifact, build_cli_args, build_preview_job_args, collect_process_logs,
-    detect_openscad_path, finalize_job, mesh_to_preview_payload, preview_artifact,
-    preview_ready_response, resolve_openscad_path,
+    detect_openscad_path, finalize_job, preview_artifact, preview_ready_response,
+    resolve_openscad_path,
 };
 pub use watch::{FileWatcher, WatchError, WatchMessage, matches_any_path, matches_path};
 pub use workspace::{

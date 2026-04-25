@@ -1,13 +1,22 @@
 use app_server_core::{
     CliOutputFormat, OpenScadError, build_cli_args, build_preview_job_args, detect_openscad_path,
-    finalize_job, resolve_openscad_path,
+    finalize_job, preview_artifact, resolve_openscad_path,
 };
+use app_server_protocol::PreviewArtifact;
 use std::{
     fs,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
+    process::{ExitStatus, Output},
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 #[test]
 fn build_cli_args_includes_defines_before_source_path() {
@@ -59,6 +68,42 @@ fn preview_job_args_force_3mf_output() {
             "/tmp/model.scad".to_string(),
         ]
     );
+}
+
+#[test]
+fn preview_artifact_stl_reads_raw_bytes_without_server_decode() {
+    let path = temp_file("preview-raw").with_extension("stl");
+    let bytes = b"not a valid stl but still raw preview bytes".to_vec();
+    fs::write(&path, &bytes).expect("write raw stl");
+
+    let artifact = preview_artifact(None, &path, &[]).expect("stl raw preview should succeed");
+
+    match artifact {
+        PreviewArtifact::Stl(stl) => {
+            assert_eq!(stl.bytes, bytes);
+            assert_eq!(stl.media_type, "model/stl");
+        }
+        other => panic!("unexpected artifact: {other:?}"),
+    }
+    remove_file(&path);
+}
+
+#[test]
+fn preview_artifact_3mf_reads_raw_bytes_without_server_decode() {
+    let path = temp_file("preview-raw").with_extension("3mf");
+    let bytes = b"not a valid 3mf but direct preview is client-decoded".to_vec();
+    fs::write(&path, &bytes).expect("write raw 3mf");
+
+    let artifact = preview_artifact(None, &path, &[]).expect("3mf raw preview should succeed");
+
+    match artifact {
+        PreviewArtifact::ThreeMf(three_mf) => {
+            assert_eq!(three_mf.bytes, bytes);
+            assert_eq!(three_mf.media_type, "model/3mf");
+        }
+        other => panic!("unexpected artifact: {other:?}"),
+    }
+    remove_file(&path);
 }
 
 #[test]
@@ -211,6 +256,40 @@ fn finalize_job_cleans_preview_file_when_output_collection_fails() {
     );
 }
 
+#[test]
+fn finalize_job_reads_valid_3mf_bytes_and_cleans_preview_file() {
+    let preview_path = temp_file("preview-finalize-valid").with_extension("3mf");
+    let bytes = minimal_three_mf_bytes();
+    fs::write(&preview_path, &bytes).expect("write valid 3mf");
+
+    let artifact = finalize_job(
+        PathBuf::from("/tmp/example.scad"),
+        preview_path.clone(),
+        true,
+        Ok(successful_output()),
+    )
+    .expect("valid 3mf should finalize");
+
+    assert_eq!(artifact.bytes, bytes);
+    assert!(!preview_path.exists());
+}
+
+#[test]
+fn finalize_job_rejects_invalid_3mf_and_cleans_preview_file() {
+    let preview_path = temp_file("preview-finalize-invalid").with_extension("3mf");
+    fs::write(&preview_path, b"not a 3mf").expect("write invalid 3mf");
+
+    let result = finalize_job(
+        PathBuf::from("/tmp/example.scad"),
+        preview_path.clone(),
+        true,
+        Ok(successful_output()),
+    );
+
+    assert!(result.is_err());
+    assert!(!preview_path.exists());
+}
+
 fn temp_path(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -244,6 +323,58 @@ fn create_file(path: &Path) {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("mark temp executable file");
     }
+}
+
+fn successful_output() -> Output {
+    Output {
+        status: successful_status(),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    }
+}
+
+#[cfg(unix)]
+fn successful_status() -> ExitStatus {
+    ExitStatus::from_raw(0)
+}
+
+#[cfg(windows)]
+fn successful_status() -> ExitStatus {
+    ExitStatus::from_raw(0)
+}
+
+fn minimal_three_mf_bytes() -> Vec<u8> {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/>
+          <vertex x="1" y="0" z="0"/>
+          <vertex x="0" y="1" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build>
+    <item objectid="1"/>
+  </build>
+</model>"#;
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("3D/3dmodel.model", SimpleFileOptions::default())
+        .expect("fixture should open archive entry");
+    writer
+        .write_all(xml.as_bytes())
+        .expect("fixture should write xml");
+    writer
+        .finish()
+        .expect("fixture should finish archive")
+        .into_inner()
 }
 
 fn remove_file(path: &Path) {

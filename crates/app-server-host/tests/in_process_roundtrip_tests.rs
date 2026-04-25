@@ -110,8 +110,8 @@ fn spawned_in_process_host_roundtrips_workspace_file_and_preview() {
         ServerEnvelope::Response(envelope) => match envelope.result.unwrap() {
             app_server_protocol::CommandSuccess::PreviewReady(response) => {
                 match response.artifact {
-                    app_server_protocol::PreviewArtifact::Mesh(mesh) => {
-                        assert!(!mesh.positions.is_empty())
+                    app_server_protocol::PreviewArtifact::Stl(stl) => {
+                        assert!(!stl.bytes.is_empty())
                     }
                     other => panic!("unexpected preview artifact: {other:?}"),
                 }

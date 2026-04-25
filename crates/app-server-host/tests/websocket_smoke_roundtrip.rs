@@ -138,8 +138,8 @@ fn websocket_smoke_roundtrip() {
         match preview.result.unwrap() {
             app_server_protocol::CommandSuccess::PreviewReady(response) => {
                 match response.artifact {
-                    app_server_protocol::PreviewArtifact::Mesh(mesh) => {
-                        assert!(!mesh.positions.is_empty())
+                    app_server_protocol::PreviewArtifact::Stl(stl) => {
+                        assert!(!stl.bytes.is_empty())
                     }
                     other => panic!("unexpected artifact: {other:?}"),
                 }

@@ -61,3 +61,39 @@
 
 - 浏览器 wasm 测试仍受本机 ChromeDriver 环境问题影响，暂以 wasm32 编译检查、Rust 状态测试、Web 构建、TypeScript 类型检查和单元测试作为本 Phase 验证证据。
 - Playwright 端到端测试将在 Phase 3 服务端切换和最终全量验证中统一运行。
+
+## Phase 3：服务端切换为原始 artifact 字节
+
+完成情况：
+
+- `.stl` 直接预览已改为读取文件原始字节并返回 `PreviewArtifact::Stl`，不再做服务端 mesh 解码。
+- `.3mf` 直接预览已改为读取文件原始字节并返回 `PreviewArtifact::ThreeMf`，不再做服务端 mesh 解码。
+- `.scad` 预览仍通过 OpenSCAD CLI 输出 3MF 临时文件；`finalize_job` 读取原始字节后保留 `load_3mf_from_reader` 服务端验证，验证通过后返回 `PreviewArtifact::ThreeMf`。
+- `RenderedArtifact` 已从携带 `MeshData` 改为携带原始 `bytes`。
+- 服务端 `mesh_to_preview_payload` 实现与公开导出已移除。
+- `app-server-host` 的 WebSocket、in-process 和 dispatcher roundtrip 断言已同步到 `Stl` raw bytes。
+
+验证结果：
+
+- `cargo test -p app-server-core --test openscad_command_tests`：15 个测试通过。
+- `cargo test -p app-server-host --test websocket_smoke_roundtrip`：6 个测试通过。
+- `cargo test -p app-server-host --test in_process_roundtrip_tests`：1 个测试通过。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：2 个测试通过。
+- `cargo check -p studio-app`：通过，仅保留既有 `app-server-core::watch` dead_code warning。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：19 个测试文件、84 个测试通过。
+- `bun run web:build`：通过。
+- `bun scripts/run_smoke.ts --case browser_smoke`：5 个 Playwright 测试通过。
+- `bun scripts/run_smoke.ts --case wasm_bridge_smoke`：1 个 Playwright 测试通过。
+- `bun scripts/run_smoke.ts --case browser_watch_smoke`：6 个 Playwright 测试通过。
+
+独立 review：
+
+- 初次 review 发现一个跨平台测试问题：`openscad_command_tests.rs` 无条件使用 Unix 专属 `ExitStatusExt`，会破坏 Windows test target 编译。
+- 已将 `ExitStatusExt` 与 `successful_status()` 按 Unix / Windows 分支隔离，并重新回归 Phase 3 核心测试。
+- 复审结论：Blocker/High/Medium/Low 均无，Phase 3 可以提交。
+
+遗留问题：
+
+- `app-server-core::watch` 中既有 dead_code warning 仍存在，非本 plan 引入。
+- 浏览器 wasm 原生 `wasm-pack test --headless --chrome` 仍受已知 ChromeDriver 环境问题影响；本 Phase 已用 Playwright browser smoke、wasm bridge smoke、watch smoke 覆盖浏览器端主路径。

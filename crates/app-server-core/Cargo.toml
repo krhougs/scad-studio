@@ -15,3 +15,6 @@ notify = "8.2"
 scad-scene = { path = "../scad-scene" }
 serde_json.workspace = true
 studio-common = { path = "../studio-common" }
+
+[dev-dependencies]
+zip = { version = "8.5.0", default-features = false, features = ["deflate"] }
