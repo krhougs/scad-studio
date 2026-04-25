@@ -2,7 +2,7 @@
 
 ## 状态总览
 
-- 状态：进行中。
+- 状态：已完成。
 - 当前任务：按 `.scad` 文件持久化背景颜色、平面网格颜色和光照强度，并优化默认预览外观。
 - 计划存档：`prompt-archives/2026042601-web-preview-appearance/plan-00.md`。
 
@@ -100,4 +100,41 @@
 
 ## Phase 4：完整回归与结果归档
 
-- 状态：未开始。
+- 状态：已完成。
+- 前序目标保护：
+  - Phase 1 的配置模型、默认值和归一化测试保持通过。
+  - Phase 2 的 per `.scad` 持久化、presets 保留、文件隔离和 appearance 不触发 `.scad` preview request 保持通过。
+  - Phase 3 的 Three.js 背景、网格和光照实时应用保持通过。
+  - viewer toolbar、相机控制、preset round-trip、watch refresh 和 `.scad.json` settings refresh 均完成针对性回归。
+- 本轮验证：
+  - `bun run --cwd packages/studio-web typecheck`
+    - 结果：通过。
+  - `bun x vitest run tests/unit/preset-io.test.ts tests/unit/mesh-render-metrics.test.ts`
+    - 结果：2 个测试文件通过，20 个测试通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "viewer toolbar drives render state|scad preview appearance controls persist per file|preview info and camera controls are available"`
+    - 结果：3 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/preview-request-dedup.spec.ts --grep "appearance changes do not emit preview request|external scad settings refresh does not emit preview request"`
+    - 结果：2 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "save, load, delete round-trip"`
+    - 结果：1 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/browser-watch-smoke.spec.ts --grep "mesh viewer refreshes|preset list refreshes"`
+    - 结果：2 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "scad preview appearance controls persist per file"`
+    - 结果：1 个浏览器用例通过，并生成 `preview-appearance-background.png`。
+- 截图检查：
+  - 已打开 Playwright 生成的 `preview-appearance-background.png`。
+  - 检查结果：画面非空白，模型、网格和背景可见，主要模型没有被控件遮挡。
+- diff 范围检查：
+  - `git diff --name-only 3788772..HEAD` 只包含 Studio Web 外观配置、渲染、右侧栏、watch 回归、测试和本计划存档文件。
+  - 未修改 app server、protocol、transport、OpenSCAD mesh payload 或后端请求契约。
+- 独立 review：
+  - Phase 4 最终 review 未发现功能实现层面的 blocker 或 important。
+  - review 确认背景 / 网格 / 光照配置、右侧栏控制、per `.scad` 持久化、默认颜色、presets 保留、settings 刷新不触发 `.scad` preview request 均有代码路径和测试覆盖。
+  - review 指出的 important 是本结果文件仍显示 Phase 4 未开始；本次已修复状态总览和 Phase 4 记录。
+  - review minor：`ScadWorkbenchProps.refreshSignal` 当前未直接传给 `ScadPreviewViewer`，但 `.scad` 刷新由 `useScadWorkbenchState` 重新读取源码并切换 `sourceReady` 驱动，相关测试已通过；本轮不为此做额外结构调整。
+- 最终结论：
+  - 本计划要求的背景颜色、网格颜色、光照强度右侧栏实时控制已完成。
+  - 配置按 `.scad` 文件写入现有 `<stem>.scad.json`，并保留 presets。
+  - 默认预览外观集中维护，旧文件缺字段时回退默认值。
+  - 修改 appearance 或外部 `.scad.json` settings 不触发新的 `.scad` preview request。
+  - 相关单元测试和 Playwright 回归通过。
