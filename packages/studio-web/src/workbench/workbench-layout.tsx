@@ -450,12 +450,20 @@ export function WorkbenchLayout() {
             const matchedSpecific = changed.has(activeKey);
             const matchedSettings =
               activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
+            const refreshableDocument =
+              activeTab.kind === "scad" ||
+              activeTab.kind === "mesh" ||
+              activeTab.kind === "markdown" ||
+              activeTab.kind === "image";
+            const directoryRefreshableDocument =
+              activeTab.kind === "mesh" ||
+              activeTab.kind === "markdown" ||
+              activeTab.kind === "image";
             if (
-              matchedSpecific &&
-              (activeTab.kind === "scad" ||
-                activeTab.kind === "mesh" ||
-                activeTab.kind === "markdown" ||
-                activeTab.kind === "image")
+              (matchedSpecific && refreshableDocument) ||
+              (!matchedSpecific &&
+                !matchedSettings &&
+                directoryRefreshableDocument)
             ) {
               setDocumentRefreshSignal((n) => n + 1);
               logRef.current.append(

@@ -47,9 +47,18 @@ export function normalizePreviewAppearance(input: unknown): PreviewAppearance {
   }
   const record = input as Record<string, unknown>;
   return {
-    backgroundColor: normalizeHexColor(record["backgroundColor"], DEFAULT_PREVIEW_APPEARANCE.backgroundColor),
-    gridMajorColor: normalizeHexColor(record["gridMajorColor"], DEFAULT_PREVIEW_APPEARANCE.gridMajorColor),
-    gridMinorColor: normalizeHexColor(record["gridMinorColor"], DEFAULT_PREVIEW_APPEARANCE.gridMinorColor),
+    backgroundColor: normalizeHexColor(
+      record["backgroundColor"],
+      DEFAULT_PREVIEW_APPEARANCE.backgroundColor,
+    ),
+    gridMajorColor: normalizeHexColor(
+      record["gridMajorColor"],
+      DEFAULT_PREVIEW_APPEARANCE.gridMajorColor,
+    ),
+    gridMinorColor: normalizeHexColor(
+      record["gridMinorColor"],
+      DEFAULT_PREVIEW_APPEARANCE.gridMinorColor,
+    ),
     lightingIntensity: normalizeLightingIntensity(record["lightingIntensity"]),
   };
 }

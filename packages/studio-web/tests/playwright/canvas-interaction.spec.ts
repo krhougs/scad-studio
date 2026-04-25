@@ -32,6 +32,7 @@ endsolid shifted_triangle
   `,
 );
 const MODEL_FILE = path.join(TEST_WORKSPACE, "model.stl");
+const MODEL_STL_ORIGINAL = readFileSync(MODEL_FILE, "utf8");
 const IMAGE_FILE = path.join(TEST_WORKSPACE, "screenshot.png");
 const PARAMS_CUBE_SCAD_JSON = path.join(
   TEST_WORKSPACE,
@@ -73,6 +74,7 @@ test.afterAll(async () => {
 test.beforeEach(async ({ page }) => {
   await clearServiceWorkerState(page);
   rmSync(PARAMS_CUBE_SCAD_JSON, { force: true });
+  writeFileSync(MODEL_FILE, MODEL_STL_ORIGINAL);
 });
 
 test("@canvas-interaction sidebar camera preset switches active view", async ({ page }) => {
@@ -204,7 +206,7 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 
 test("@canvas-interaction scad preview appearance controls persist per file", async ({
   page,
-}) => {
+}, testInfo) => {
   writeFileSync(
     PARAMS_CUBE_SCAD_JSON,
     JSON.stringify({ presets: { existing: { size: 18 } } }, null, 2),
@@ -224,19 +226,35 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await canvas.waitFor({ state: "visible", timeout: 30_000 });
   await expect(inspector.getByTestId("preview-appearance-panel")).toBeVisible();
   await expect(canvas).toHaveAttribute("data-preview-background", "#181b20");
+  const defaultGridSignature = await canvas.getAttribute("data-grid-color-signature");
+  if (!defaultGridSignature) throw new Error("grid color signature should be present");
 
   await inspector.getByTestId("preview-background-color").fill("#20242b");
   await expect(canvas).toHaveAttribute("data-preview-background", "#20242b");
+  await canvas.screenshot({
+    path: testInfo.outputPath("preview-appearance-background.png"),
+  });
 
   await inspector.getByTestId("preview-grid-major-color").fill("#7c8795");
   await expect(canvas).toHaveAttribute("data-grid-major-color", "#7c8795");
 
   await inspector.getByTestId("preview-grid-minor-color").fill("#46505d");
   await expect(canvas).toHaveAttribute("data-grid-minor-color", "#46505d");
+  await expect(canvas).not.toHaveAttribute(
+    "data-grid-color-signature",
+    defaultGridSignature,
+  );
 
   const lightingField = inspector
     .getByTestId("preview-lighting-number-field")
     .getByRole("spinbutton");
+  await lightingField.fill("0.4");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "0.4");
+  const dimRigIntensity = await numericAttribute(canvas, "data-light-rig-intensity");
+  await lightingField.fill("2.4");
+  await expect(canvas).toHaveAttribute("data-lighting-intensity", "2.4");
+  const brightRigIntensity = await numericAttribute(canvas, "data-light-rig-intensity");
+  expect(brightRigIntensity / dimRigIntensity).toBeCloseTo(6, 1);
   await lightingField.fill("1.6");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
 
@@ -717,4 +735,12 @@ function readJsonFile(filePath: string): unknown {
     }
     throw err;
   }
+}
+
+async function numericAttribute(locator: Locator, name: string): Promise<number> {
+  const value = await locator.getAttribute(name);
+  if (value === null) throw new Error(`missing numeric attribute ${name}`);
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(`invalid numeric attribute ${name}: ${value}`);
+  return number;
 }

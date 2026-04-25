@@ -79,6 +79,7 @@ export type MeshViewerHandle = {
 };
 
 type PointerMode = "idle" | "orbit" | "pan";
+const GRID_DIVISIONS = 40;
 
 export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const renderer = new WebGLRenderer({
@@ -97,6 +98,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const ambient = new AmbientLight(0xffffff, 0.35);
   scene.add(ambient);
   const hemi = new HemisphereLight(0xf4f8ff, 0x6a7480, 0.65);
+  hemi.position.set(0, 0, 1);
   scene.add(hemi);
   const key = new DirectionalLight(0xffffff, 0.85);
   key.position.set(4, 6, 4);
@@ -328,7 +330,16 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.previewBackground = options.backgroundColor;
     canvas.dataset.gridMajorColor = options.gridMajorColor;
     canvas.dataset.gridMinorColor = options.gridMinorColor;
+    canvas.dataset.gridColorSignature = String(grid.userData["colorSignature"] ?? "");
     canvas.dataset.lightingIntensity = String(options.lightingIntensity);
+    canvas.dataset.lightRigIntensity = (
+      ambient.intensity +
+      hemi.intensity +
+      key.intensity +
+      fill.intensity +
+      rim.intensity +
+      back.intensity
+    ).toFixed(3);
     if (metrics) {
       canvas.dataset.gizmoSize = String(Math.round(metrics.gizmoSize));
       canvas.dataset.fogNear = metrics.fogNear.toFixed(3);
@@ -577,10 +588,11 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function createGrid(majorColor: string, minorColor: string): GridHelper {
-    const next = new GridHelper(200, 40, majorColor, minorColor);
+    const next = new GridHelper(200, GRID_DIVISIONS, majorColor, minorColor);
     next.rotation.x = Math.PI / 2;
     next.userData["majorColor"] = majorColor;
     next.userData["minorColor"] = minorColor;
+    next.userData["colorSignature"] = gridColorSignature(next);
     if (Array.isArray(next.material)) {
       for (const material of next.material) {
         material.transparent = true;
@@ -599,6 +611,30 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       return;
     }
     material.dispose();
+  }
+
+  function gridColorSignature(helper: GridHelper): string {
+    const colors = helper.geometry.getAttribute("color");
+    const centerVertex = (GRID_DIVISIONS / 2) * 4;
+    return `${gridColorHex(colors, centerVertex)}|${gridColorHex(colors, 0)}`;
+  }
+
+  function gridColorHex(
+    colors: {
+      getX(index: number): number;
+      getY(index: number): number;
+      getZ(index: number): number;
+    },
+    index: number,
+  ): string {
+    const r = Math.round(colors.getX(index) * 255);
+    const g = Math.round(colors.getY(index) * 255);
+    const b = Math.round(colors.getZ(index) * 255);
+    return `#${hexByte(r)}${hexByte(g)}${hexByte(b)}`;
+  }
+
+  function hexByte(value: number): string {
+    return Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0");
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
@@ -743,8 +779,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         (meshObj.material as MeshStandardMaterial).dispose();
       }
       grid.geometry.dispose();
-      const gridMat = grid.material as { dispose?: () => void };
-      gridMat.dispose?.();
+      disposeGridMaterial(grid.material);
       axes.dispose();
       buildPlate.geometry.dispose();
       (buildPlate.material as MeshStandardMaterial).dispose();
