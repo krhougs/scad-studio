@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-计划已创建，尚未执行。
+计划已执行完成，正在做最终 review 反馈修正后的收敛验证。
 
 ## Phase 1: 固化复现与回归测试
 
@@ -16,7 +16,7 @@
   - `bun run --cwd packages/studio-web test:e2e preview-request-dedup.spec.ts`
   - 结果：按预期失败。失败信息显示重复 key 为 `examples/cube.scad + [] + null`，request id 为 `[10, 12]`，时间差约 `255ms`。
 - Review：通过。独立 reviewer 确认测试基于 decoded WS frame 与 request id，不依赖 UI 文案；等待逻辑覆盖 250ms debounce 后的第二次请求；recorder 隔离在本 spec 内；失败信息满足证据要求。
-- 遗留问题：该测试当前红灯，需 Phase 2 修复生产代码后转绿。
+- 遗留问题：无。该测试在 Phase 2 和 Phase 3 修复后已转绿。
 
 ## Phase 2: 收敛 `.scad` appliedDefines 等价更新
 
@@ -34,7 +34,7 @@
 
 ## Phase 3: 评估并补齐预览请求层幂等保护
 
-- 状态：已完成编码，等待独立 review
+- 状态：已完成
 - 完成情况：未新增通用 `MeshViewer` 请求层幂等保护；改为修正 `.scad` refresh 双入口。Phase 3 review 指出同一个 `refreshSignal` 会同时驱动源码重读和 `MeshViewer` 直接请求，已补充测试并修复。
 - 变更摘要：
   - `packages/studio-web/tests/playwright/preview-request-dedup.spec.ts` 改为使用临时 workspace，并新增 `.scad` 文件刷新回归测试。
@@ -46,14 +46,29 @@
   - 结果：3 passed，覆盖初次打开、参数变化、`.scad` 文件 refresh。
   - `bun run --cwd packages/studio-web typecheck`
   - 结果：通过。
-- Review：通过。首次 review 指出 `.scad` refresh 双入口风险；已补充 refresh 红灯测试并修复。复审确认 `refreshSignal` 不再直达 `ScadPreviewViewer`，`.scad` refresh 只剩源码重读入口，不需要新增通用 `MeshViewer` 请求层幂等保护。按复审建议，refresh 测试已显式断言刷新后恰好一次 `cube.scad` 请求。
+- Review：通过。首次 review 指出 `.scad` refresh 双入口风险；已补充 refresh 红灯测试并修复。复审确认 `refreshSignal` 不再直达 `ScadPreviewViewer`，`.scad` refresh 只剩源码重读入口，不需要新增通用 `MeshViewer` 请求层幂等保护。最终 review 要求 refresh 测试显式断言刷新后恰好一次 `cube.scad` 请求，已补充该断言。
 - 遗留问题：无
 
 ## Phase 4: 全量回归与结果归档
 
-- 状态：未开始
-- 完成情况：无
-- 变更摘要：无
-- 验证命令：未运行
-- Review：未执行
+- 状态：已完成验证，正在复核最终 review 反馈
+- 完成情况：完成最终回归、diff 范围检查与结果归档。
+- 变更摘要：
+  - 代码变更范围仅包含 `packages/studio-web/src/workbench/scad-workbench.tsx`、`packages/studio-web/tests/playwright/preview-request-dedup.spec.ts`、本 result 文档。
+  - 后端 protocol、transport、app-server-host 未改动。
+  - `.scad` 初次打开、参数变化、文件 refresh 三条路径均通过 decoded WebSocket frame 验证。
+- 验证命令：
+  - `bun run --cwd packages/studio-web test:e2e preview-request-dedup.spec.ts`
+    - 结果：3 passed。
+  - `bun run --cwd packages/studio-web typecheck`
+    - 结果：通过。
+  - `bun run --cwd packages/studio-web test:e2e parameters-presets.spec.ts`
+    - 结果：7 passed。
+  - `bun run --cwd packages/studio-web test:e2e browser-watch-smoke.spec.ts`
+    - 结果：6 passed。
+  - `git diff --check 38cc7b4..HEAD`
+    - 结果：通过。
+  - `git diff --stat 38cc7b4..HEAD && git diff --name-only 38cc7b4..HEAD`
+    - 结果：3 个文件变更，范围符合计划。
+- Review：最终 review 发现两项需小改：refresh 测试缺少“恰好一次 `cube.scad` 请求”断言，result 文档状态不一致。两项均已修正，修正后重新运行验证。
 - 遗留问题：无

@@ -128,6 +128,7 @@ test("@preview-dedup scad refresh emits one equivalent preview request", async (
   await page.waitForTimeout(700);
 
   const requests = await recordedPreviewRequests(page);
+  singleRequestForSource(requests, "cube.scad");
   const duplicates = duplicatePreviewRequests(requests);
 
   expect(duplicates, formatDuplicatePreviewRequests(duplicates)).toEqual([]);
