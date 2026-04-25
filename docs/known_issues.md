@@ -8,13 +8,14 @@
   - `wasm-pack` 本轮下载并启动的 ChromeDriver 版本为 `148.0.7778.56`。
   - ChromeDriver 启动后，`wasm-bindgen-test-runner` 报 `http status: 404`，driver 进程状态为 `signal: 9 (SIGKILL)`。
 - 影响范围：
-  - `studio-web-wasm` 的 wasm 浏览器 smoke 在当前机器上无法作为 Phase 4 的通过证据。
+  - 直接运行 `wasm-pack test --headless --chrome crates/studio-web-wasm --test wasm_bridge_smoke` 在当前机器上无法作为通过证据。
+  - 默认 `bun run web:smoke` 已改为 Playwright S1b，不再依赖 wasm-pack 下载的 ChromeDriver。
   - Rust native 目标的 `cargo test -p studio-web-wasm --tests` 仍可执行，但 `wasm_bridge_smoke.rs` 在 native target 下没有实际用例，不能替代浏览器 wasm 验证。
 - 可能的解法：
   - 安装与本机 Chrome 147 匹配的 ChromeDriver，并通过 `CHROMEDRIVER` 指向该二进制。
   - 或升级本机 Chrome 到与 `wasm-pack` 下载的 ChromeDriver 148 匹配的版本。
   - 若 CI 固定浏览器版本，需要同步固定 ChromeDriver 来源，避免 wasm smoke 因环境漂移失败。
-- 当前处理方式：本轮记录为环境阻塞；继续用 `cargo test -p studio-web-wasm --tests`、`bun run --cwd packages/studio-web test:unit`、`bun run --cwd packages/studio-web typecheck` 和其它协议/transport 测试覆盖可验证部分。
+- 当前处理方式：默认 smoke 链路改用 `packages/studio-web/tests/playwright/wasm-bridge-smoke.spec.ts`，由 Playwright 启动浏览器并验证 browser wasm bridge 的 Borsh frame。`wasm-pack` 直接命令的问题保留为环境记录。
 
 ## 2026-04-24 14:40:28: plan-01 已修复多项旧 Web parity 记录
 

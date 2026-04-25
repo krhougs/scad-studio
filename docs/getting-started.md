@@ -13,14 +13,6 @@ cargo install wasm-bindgen-cli --version 0.2.117 --locked
 
 `wasm-bindgen-cli` 版本必须与 `crates/studio-web-wasm/Cargo.toml` 里的 `wasm-bindgen` crate 版本严格一致；否则生成的 js wrapper 会与运行期 wasm 不兼容。执行 `bun run check:wasm-bindgen` 可随时校验两侧版本是否对齐。
 
-（可选）跑 S1b wasm-pack smoke：
-
-```bash
-cargo install wasm-pack
-```
-
-系统需要可用的 Chrome / Chromium（`wasm-pack test --headless --chrome` 会调用系统 Chrome；`crates/studio-web-wasm/webdriver.json` 里预置了 `--no-sandbox`、`--disable-dev-shm-usage`、`--enable-unsafe-webgpu` 等参数，方便在容器 / root 环境下跑）。
-
 ### 1.2 JS 工具链
 
 ```bash
@@ -35,7 +27,7 @@ bun install
 bun run --cwd packages/studio-web exec playwright install chromium
 ```
 
-只有运行浏览器级 smoke（S2 / S3 / Phase 6-7 扩展用例）时才需要。首次下载约 200 MB；容器环境请一并执行 `bun run --cwd packages/studio-web exec playwright install-deps chromium` 安装系统依赖。
+运行统一 smoke 的 S1b / S2 / S3 以及 Phase 6-7 扩展用例时需要。首次下载约 200 MB；容器环境请一并执行 `bun run --cwd packages/studio-web exec playwright install-deps chromium` 安装系统依赖。
 
 ## 2. 日常开发
 
@@ -106,13 +98,13 @@ cargo test --workspace --tests
 - `studio-common::managed_client`（15+ 测试）—— 握手 / 取消 / 超时 / watch 节流 / reconnect
 - `studio-web-wasm` 纯函数 `mesh_decode`
 
-### 3.2 wasm-pack 浏览器测试（S1b）
+### 3.2 Playwright wasm bridge smoke（S1b）
 
 ```bash
-wasm-pack test --headless --chrome crates/studio-web-wasm --test wasm_bridge_smoke
+bun run web:smoke -- --case wasm_bridge_smoke
 ```
 
-9 条用例：handshake / request success / cancel / transport close + reconnect / watch resubscribe / tick-driven timeout / destroy 幂等 / renderer stub。
+该用例启动 `websocket-host` + Vite，通过真实浏览器页面捕获 browser wasm bridge 发出的 WebSocket binary frame，并用 `@budn/app-server-protocol` 解码，覆盖 handshake 与 `workspace.current` 的 Borsh frame 边界。旧的 `wasm-pack test --headless --chrome crates/studio-web-wasm --test wasm_bridge_smoke` 可作为手动补充，但不属于默认 `web:smoke` 链路。
 
 ### 3.3 统一 smoke dispatcher
 
@@ -125,6 +117,7 @@ bun run web:smoke -- --case <name>                      # 单条
 
 | case | 对应 phase | 入口 |
 |------|-----------|------|
+| `wasm_bridge_smoke` | Phase 5 S1b | `packages/studio-web/tests/playwright/wasm-bridge-smoke.spec.ts` |
 | `wasm_package_smoke` | Phase 5 S1c | `scripts/smoke/wasm_package_smoke.ts`（generated/ diff） |
 | `browser_smoke` | Phase 3 S2 | `packages/studio-web/tests/playwright/browser-smoke.spec.ts` |
 | `browser_watch_smoke` | Phase 5 S3 | `packages/studio-web/tests/playwright/browser-watch-smoke.spec.ts` |
@@ -154,7 +147,7 @@ bun run web:build && \
 bun run web:smoke
 ```
 
-大约 6–10 分钟（大头是 wasm-pack 首次编译 + Playwright cold start）。之后增量跑视改动面挑单条 smoke。
+大约 6–10 分钟（大头是 wasm 构建 + Playwright cold start）。之后增量跑视改动面挑单条 smoke。
 
 ## 5. 故障排查
 
@@ -164,10 +157,11 @@ bun run web:smoke
 - `.gitignore` 会忽略 `pnpm-lock.yaml` 与 `node_modules/`，仓库提交的是 `bun.lock`。
 - 如果本地存在 `pnpm-lock.yaml`，删除后重跑 `bun install`。
 
-### 5.2 `web:smoke` S1b 报 Chrome 启动失败
+### 5.2 `web:smoke` S1b 报 Playwright 浏览器启动失败
 
-- 确认系统有 Chrome/Chromium，`which chromedriver` 或 `wasm-pack` 自带的 geckodriver/chromedriver 在 PATH。
-- 容器 / root 环境：`crates/studio-web-wasm/webdriver.json` 已加 `--no-sandbox`；如果还失败，检查 `/dev/shm` 大小（`--disable-dev-shm-usage` 已开）。
+- 确认已执行 `bun run --cwd packages/studio-web exec playwright install chromium`。
+- 容器环境同时执行 `bun run --cwd packages/studio-web exec playwright install-deps chromium`。
+- 若仍失败，先单独运行 `bun run web:smoke -- --case wasm_bridge_smoke`，再查看 Playwright trace。
 
 ### 5.3 `web:smoke` S1c 报 generated/ drift
 

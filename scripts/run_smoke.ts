@@ -3,11 +3,11 @@
 //   bun scripts/run_smoke.ts --case <name>
 //   bun scripts/run_smoke.ts            # 等价于 --case all
 //
-// 支持 case：wasm_package_smoke / browser_smoke / browser_watch_smoke / all
+// 支持 case：wasm_bridge_smoke / wasm_package_smoke / browser_smoke / browser_watch_smoke / all
 //           / markdown_view / image_view / scad_viewer（Phase 6 扩展）
 //           / canvas_interaction / parameters_presets / export_slicer /
 //             config_settings / scad_autorerender（Phase 7 扩展）
-// S1a / S1b / S4 通过直接命令调度。
+// S1a / S4 通过直接命令调度；S1b / S2 / S3 通过 Playwright 调度。
 // all 仅覆盖 S1a-S4 基本用例，不跑 Phase 6 / 7 扩展用例（需手动触发）。
 
 import path from "node:path";
@@ -15,6 +15,7 @@ import { runWasmPackageSmoke } from "./smoke/wasm_package_smoke";
 import { REPO_ROOT } from "./run_websocket_host";
 
 type Case =
+  | "wasm_bridge_smoke"
   | "wasm_package_smoke"
   | "browser_smoke"
   | "browser_watch_smoke"
@@ -29,6 +30,7 @@ type Case =
   | "all";
 
 const VALID_CASES: readonly Case[] = [
+  "wasm_bridge_smoke",
   "wasm_package_smoke",
   "browser_smoke",
   "browser_watch_smoke",
@@ -89,22 +91,8 @@ async function runS1aHostTests(): Promise<number> {
   return runCommand(["cargo", "test", "-p", "studio-web-wasm", "--tests"]);
 }
 
-async function runS1bWasmBindgen(): Promise<number> {
-  if (!(await commandExists("wasm-pack"))) {
-    console.error(
-      "[smoke] missing wasm-pack; install it with: cargo install wasm-pack",
-    );
-    return 1;
-  }
-  return runCommand([
-    "wasm-pack",
-    "test",
-    "--headless",
-    "--chrome",
-    "crates/studio-web-wasm",
-    "--test",
-    "wasm_bridge_smoke",
-  ]);
+async function runS1bWasmBridgeSmoke(): Promise<number> {
+  return runPlaywrightSpec("tests/playwright/wasm-bridge-smoke.spec.ts");
 }
 
 async function runPlaywrightSpec(
@@ -142,20 +130,10 @@ async function runPhase7Spec(spec: string, tag?: string): Promise<number> {
   return runPlaywrightSpec(spec, tag);
 }
 
-async function commandExists(command: string): Promise<boolean> {
-  const proc = Bun.spawn(["sh", "-lc", `command -v ${command}`], {
-    cwd: REPO_ROOT,
-    stdout: "ignore",
-    stderr: "ignore",
-    stdin: "ignore",
-  });
-  return (await proc.exited) === 0;
-}
-
 async function runAll(): Promise<number> {
   const steps: Array<{ label: string; fn: () => Promise<number> }> = [
     { label: "S1a rust_unit_smoke", fn: runS1aHostTests },
-    { label: "S1b wasm_bindgen_smoke", fn: runS1bWasmBindgen },
+    { label: "S1b wasm_bridge_smoke", fn: runS1bWasmBridgeSmoke },
     { label: "S1c wasm_package_smoke", fn: runS1c },
     { label: "S2 browser_smoke", fn: runS2BrowserSmoke },
     { label: "S3 browser_watch_smoke", fn: runS3BrowserWatchSmoke },
@@ -175,6 +153,8 @@ async function runAll(): Promise<number> {
 
 async function dispatch(which: Case): Promise<number> {
   switch (which) {
+    case "wasm_bridge_smoke":
+      return runS1bWasmBridgeSmoke();
     case "wasm_package_smoke":
       return runS1c();
     case "browser_smoke":

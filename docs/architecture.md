@@ -94,7 +94,8 @@
 
 - `wasm_bridge/`：`#[wasm_bindgen]` 薄 wrapper，把 `ManagedClient<NullTransport>` 暴露给 JS（`client_*` 15 个导出 + `mesh_*` + `renderer_*` 桩）。`NullTransport` 是永远返回 `Ok` 的 trait 实现 —— envelope 通过内部字节队列（`next_outbound` / `receive_inbound`）流动，不经 trait。
 - `mesh_decode` 顶层模块：`scad_scene::MeshData` 解码纯函数，host + wasm32 共享，测试文件 `tests/mesh_decode_tests.rs` 覆盖。
-- `tests/wasm_bridge_smoke.rs`：`wasm-pack test --headless --chrome` 的 9 条 S1b 用例。
+- `tests/playwright/wasm-bridge-smoke.spec.ts`：默认 `web:smoke` 的 S1b 浏览器 wasm bridge 用例，通过 Playwright 捕获真实 binary frame 并用 protocol wasm 解码。
+- `tests/wasm_bridge_smoke.rs`：可手动通过 `wasm-pack test --headless --chrome` 运行的补充用例；不属于默认 smoke 链路。
 - **不含**任何业务 UI、任何 WebSocket、任何 `wasm-bindgen-futures`（契约禁止 wasm 侧等待 JS Promise）。
 
 ### 2.7 `studio-app`（桌面）
