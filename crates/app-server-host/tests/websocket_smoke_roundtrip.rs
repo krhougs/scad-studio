@@ -8,8 +8,11 @@ use app_server_transport::{
     ClientEnvelope, ServerEnvelope, decode_server_envelope_binary, encode_client_envelope_binary,
 };
 use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use yawc::frame::Frame;
+use yawc::{CompressionLevel, Options, WebSocket};
 
 #[test]
 fn websocket_smoke_roundtrip() {
@@ -158,6 +161,154 @@ fn websocket_smoke_roundtrip() {
 }
 
 #[test]
+fn websocket_negotiates_permessage_deflate() {
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let workspace = temp_workspace();
+        let url = run_websocket_host_once(WebSocketHostConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            workspace_path: workspace.clone(),
+        })
+        .await
+        .unwrap();
+        let address = url.strip_prefix("ws://").unwrap();
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "GET / HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buffer = vec![0; 2048];
+        let read = stream.read(&mut buffer).await.unwrap();
+        let response = String::from_utf8_lossy(&buffer[..read]).to_ascii_lowercase();
+        assert!(response.contains("101 switching protocols"));
+        assert!(response.contains("sec-websocket-extensions: permessage-deflate"));
+
+        cleanup_workspace(workspace);
+    });
+}
+
+#[test]
+fn websocket_compressed_client_roundtrip_handles_large_frame() {
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let workspace = temp_workspace();
+        let large_bytes = vec![0xff_u8; 2 * 1024 * 1024];
+        std::fs::write(workspace.join("large.bin"), &large_bytes).unwrap();
+        let url = run_websocket_host_once(WebSocketHostConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            workspace_path: workspace.clone(),
+        })
+        .await
+        .unwrap();
+
+        let mut socket = WebSocket::connect(url.parse().unwrap())
+            .with_options(
+                Options::default()
+                    .with_compression_level(CompressionLevel::fast())
+                    .with_max_payload_read(64 * 1024 * 1024)
+                    .with_max_read_buffer(64 * 1024 * 1024),
+            )
+            .await
+            .unwrap();
+        let handshake = ClientEnvelope::Handshake(CapabilityHandshakeRequest {
+            capabilities: ClientCapabilities {
+                client_name: "compressed-smoke".into(),
+                platform: ClientPlatform::Web,
+                protocol_version: ProtocolVersionRange::new(1, 1),
+                file_read: web_file_read_capability(),
+                supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
+            },
+        });
+        socket
+            .send(Frame::binary(
+                encode_client_envelope_binary(&handshake).unwrap(),
+            ))
+            .await
+            .unwrap();
+        let _ = recv_yawc_server_message(&mut socket).await;
+
+        send_yawc_request(&mut socket, RequestId(1), ClientCommand::WorkspaceCurrent).await;
+        let current = recv_yawc_server_message(&mut socket).await;
+        let ServerEnvelope::Response(current) = current else {
+            panic!("expected response")
+        };
+        let workspace_id = match current.result.unwrap() {
+            app_server_protocol::CommandSuccess::WorkspaceCurrent(response) => {
+                response.workspace_id
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+
+        let large_path = app_server_protocol::PathHandle::new(workspace_id, ["large.bin"])
+            .expect("large file path should be valid");
+        send_yawc_request(
+            &mut socket,
+            RequestId(2),
+            ClientCommand::FileRead(app_server_protocol::FileReadRequest { path: large_path }),
+        )
+        .await;
+        let file_read = recv_yawc_server_message(&mut socket).await;
+        let ServerEnvelope::Response(file_read) = file_read else {
+            panic!("expected response")
+        };
+        match file_read.result.unwrap() {
+            app_server_protocol::CommandSuccess::FileRead(response) => match response.contents {
+                app_server_protocol::FileReadContents::Binary(bytes) => {
+                    assert_eq!(bytes.len(), large_bytes.len());
+                    assert_eq!(bytes[0], 0xff);
+                }
+                other => panic!("unexpected file contents: {other:?}"),
+            },
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        let _ = socket
+            .send(Frame::binary(
+                encode_client_envelope_binary(&ClientEnvelope::Close).unwrap(),
+            ))
+            .await;
+        cleanup_workspace(workspace);
+    });
+}
+
+#[test]
+fn websocket_accepts_large_inbound_frame_before_protocol_decode() {
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let workspace = temp_workspace();
+        let url = run_websocket_host_once(WebSocketHostConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            workspace_path: workspace.clone(),
+        })
+        .await
+        .unwrap();
+
+        let mut socket = WebSocket::connect(url.parse().unwrap())
+            .with_options(
+                Options::default()
+                    .with_compression_level(CompressionLevel::fast())
+                    .with_max_payload_read(64 * 1024 * 1024)
+                    .with_max_read_buffer(64 * 1024 * 1024),
+            )
+            .await
+            .unwrap();
+        let large_invalid_frame = vec![0_u8; 2 * 1024 * 1024];
+        socket
+            .send(Frame::binary(large_invalid_frame))
+            .await
+            .unwrap();
+
+        let rejected = recv_yawc_server_message(&mut socket).await;
+        let ServerEnvelope::TransportError(error) = rejected else {
+            panic!("expected transport error")
+        };
+        assert!(error.message.contains("magic"));
+
+        cleanup_workspace(workspace);
+    });
+}
+
+#[test]
 fn websocket_rejects_text_handshake_frame() {
     let runtime = Runtime::new().unwrap();
     runtime.block_on(async {
@@ -235,13 +386,37 @@ async fn recv_server_message(
     decode_server_envelope_binary(&bytes).unwrap()
 }
 
+async fn send_yawc_request<S>(socket: &mut S, request_id: RequestId, command: ClientCommand)
+where
+    S: futures_util::Sink<Frame, Error = yawc::WebSocketError> + Unpin,
+{
+    let message = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id,
+        command,
+    });
+    let bytes = encode_client_envelope_binary(&message).unwrap();
+    socket.send(Frame::binary(bytes)).await.unwrap();
+}
+
+async fn recv_yawc_server_message<S>(socket: &mut S) -> ServerEnvelope
+where
+    S: futures_util::Stream<Item = Frame> + Unpin,
+{
+    let message = socket.next().await.unwrap();
+    decode_server_envelope_binary(message.payload()).unwrap()
+}
+
 fn temp_workspace() -> std::path::PathBuf {
+    static NEXT_WORKSPACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let sequence = NEXT_WORKSPACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("websocket-smoke-{}-{unique}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "websocket-smoke-{}-{sequence}-{unique}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("README.md"), "hello websocket").unwrap();
 
@@ -260,7 +435,5 @@ fn temp_workspace() -> std::path::PathBuf {
 }
 
 fn cleanup_workspace(workspace: std::path::PathBuf) {
-    let _ = std::fs::remove_file(workspace.join("README.md"));
-    let _ = std::fs::remove_file(workspace.join("model.stl"));
-    let _ = std::fs::remove_dir(workspace);
+    let _ = std::fs::remove_dir_all(workspace);
 }

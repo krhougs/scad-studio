@@ -4,11 +4,23 @@ use app_server_transport::{
     ClientEnvelope, ServerEnvelope, TransportErrorFrame, decode_client_envelope_binary,
     encode_server_envelope_binary,
 };
+use bytes::Bytes;
 use futures_util::{Sink, SinkExt, StreamExt};
+use http_body_util::Empty;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use yawc::frame::{Frame, OpCode};
+use yawc::{CompressionLevel, Options, WebSocket};
+
+const MAX_WS_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct WebSocketHostConfig {
@@ -25,10 +37,7 @@ pub async fn run_websocket_host(config: WebSocketHostConfig) -> Result<String, S
             };
             let workspace_path = config.workspace_path.clone();
             tokio::spawn(async move {
-                let Ok(socket) = accept_async(stream).await else {
-                    return;
-                };
-                handle_connection(socket, workspace_path).await;
+                serve_websocket_upgrade(stream, workspace_path).await;
             });
         }
     });
@@ -39,10 +48,7 @@ pub async fn run_websocket_host_once(config: WebSocketHostConfig) -> Result<Stri
     let (listener, url) = bind_listener(&config.bind_addr).await?;
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept should succeed");
-        let socket = accept_async(stream)
-            .await
-            .expect("websocket accept should succeed");
-        handle_connection(socket, config.workspace_path).await;
+        serve_websocket_upgrade(stream, config.workspace_path).await;
     });
     Ok(url)
 }
@@ -55,10 +61,51 @@ async fn bind_listener(bind_addr: &str) -> Result<(TcpListener, String), String>
     Ok((listener, format!("ws://{local_addr}")))
 }
 
-async fn handle_connection(
-    socket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+async fn serve_websocket_upgrade(stream: tokio::net::TcpStream, workspace_path: PathBuf) {
+    let io = TokioIo::new(stream);
+    let service = service_fn(move |request| {
+        let workspace_path = workspace_path.clone();
+        async move { handle_upgrade(request, workspace_path).await }
+    });
+    let _ = http1::Builder::new()
+        .serve_connection(io, service)
+        .with_upgrades()
+        .await;
+}
+
+async fn handle_upgrade(
+    mut request: Request<Incoming>,
     workspace_path: PathBuf,
-) {
+) -> Result<Response<Empty<Bytes>>, Infallible> {
+    let options = websocket_options();
+    let response = match WebSocket::upgrade_with_options(&mut request, options) {
+        Ok((response, upgraded)) => {
+            tokio::spawn(async move {
+                if let Ok(socket) = upgraded.await {
+                    handle_connection(socket, workspace_path).await;
+                }
+            });
+            response
+        }
+        Err(_) => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Empty::new())
+            .expect("websocket bad request response should build"),
+    };
+    Ok(response)
+}
+
+fn websocket_options() -> Options {
+    Options::default()
+        .with_compression_level(CompressionLevel::fast())
+        .with_max_payload_read(MAX_WS_PAYLOAD_BYTES)
+        .with_max_read_buffer(MAX_WS_PAYLOAD_BYTES)
+}
+
+async fn handle_connection<S>(socket: WebSocket<S>, workspace_path: PathBuf)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut sink, mut stream) = socket.split();
     let (push_tx, mut push_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEnvelope>();
     let push_sink = {
@@ -75,7 +122,7 @@ async fn handle_connection(
     );
 
     let handshake = match stream.next().await {
-        Some(Ok(message)) => message,
+        Some(message) => message,
         _ => return,
     };
     let request = match decode_client_message(handshake) {
@@ -112,10 +159,6 @@ async fn handle_connection(
                     dispatcher.disconnect();
                     break;
                 };
-                let Ok(message) = message else {
-                    dispatcher.disconnect();
-                    break;
-                };
                 let request = match decode_client_message(message) {
                     Ok(request) => request,
                     Err(error) => {
@@ -147,11 +190,18 @@ async fn handle_connection(
     }
 }
 
-fn decode_client_message(message: Message) -> Result<ClientEnvelope, ServerEnvelope> {
+fn decode_client_message(message: Frame) -> Result<ClientEnvelope, ServerEnvelope> {
+    let opcode = message.opcode();
     let bytes = match message {
-        Message::Binary(bytes) => bytes,
-        Message::Text(_) => return Err(transport_error("websocket message must be binary")),
-        Message::Close(_) => return Ok(ClientEnvelope::Close),
+        message if opcode == OpCode::Binary => message.into_payload(),
+        message if opcode == OpCode::Text => {
+            let _ = message;
+            return Err(transport_error("websocket message must be binary"));
+        }
+        message if opcode == OpCode::Close => {
+            let _ = message;
+            return Ok(ClientEnvelope::Close);
+        }
         _ => return Err(transport_error("unsupported websocket message kind")),
     };
     decode_client_envelope_binary(&bytes).map_err(|error| {
@@ -172,9 +222,9 @@ fn transport_error(message: impl Into<String>) -> ServerEnvelope {
 async fn send_transport_error<S>(
     sink: &mut S,
     message: impl Into<String>,
-) -> Result<(), tokio_tungstenite::tungstenite::Error>
+) -> Result<(), yawc::WebSocketError>
 where
-    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    S: Sink<Frame, Error = yawc::WebSocketError> + Unpin,
 {
     send_server_message(sink, transport_error(message)).await
 }
@@ -182,11 +232,11 @@ where
 async fn send_server_message<S>(
     sink: &mut S,
     message: ServerEnvelope,
-) -> Result<(), tokio_tungstenite::tungstenite::Error>
+) -> Result<(), yawc::WebSocketError>
 where
-    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    S: Sink<Frame, Error = yawc::WebSocketError> + Unpin,
 {
     let bytes =
         encode_server_envelope_binary(&message).expect("server websocket payload should serialize");
-    sink.send(Message::Binary(bytes.into())).await
+    sink.send(Frame::binary(bytes)).await
 }

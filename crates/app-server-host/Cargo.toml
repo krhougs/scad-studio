@@ -12,8 +12,13 @@ app-server-core = { path = "../app-server-core" }
 app-server-protocol = { path = "../app-server-protocol" }
 app-server-transport = { path = "../app-server-transport" }
 futures-util = "0.3"
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "net", "macros", "time"] }
-tokio-tungstenite = "0.28"
+yawc = "0.3.3"
 
 [dev-dependencies]
 stl_io = "0.7"
+tokio-tungstenite = "0.28"
