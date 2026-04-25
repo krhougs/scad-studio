@@ -205,6 +205,10 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
 test("@canvas-interaction scad preview appearance controls persist per file", async ({
   page,
 }) => {
+  writeFileSync(
+    PARAMS_CUBE_SCAD_JSON,
+    JSON.stringify({ presets: { existing: { size: 18 } } }, null, 2),
+  );
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
   await page
     .getByTestId("entry-examples")
@@ -241,6 +245,11 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
       timeout: 10_000,
     })
     .toMatchObject({
+      presets: {
+        existing: {
+          size: 18,
+        },
+      },
       previewAppearance: {
         backgroundColor: "#20242b",
         gridMajorColor: "#7c8795",
@@ -696,5 +705,16 @@ async function setWindowDelay(
 }
 
 function readJsonFile(filePath: string): unknown {
-  return JSON.parse(readFileSync(filePath, "utf8"));
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (err) {
+    if (
+      err &&
+      typeof err === "object" &&
+      (err as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw err;
+  }
 }

@@ -42,6 +42,7 @@ import {
   scadInspectorPanelsForState,
   useScadWorkbenchState,
 } from "./scad-workbench";
+import { derivePresetPath } from "./preset-io";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
 import type { MeshInfo } from "../viewers/mesh-info";
@@ -160,6 +161,7 @@ export function WorkbenchLayout() {
   const logRef = useRef(log);
   logRef.current = log;
   const [documentRefreshSignal, setDocumentRefreshSignal] = useState(0);
+  const [scadSettingsRefreshSignal, setScadSettingsRefreshSignal] = useState(0);
   const openTabsRef = useRef(openTabs);
   openTabsRef.current = openTabs;
   const activeTabIdRef = useRef(activeTabId);
@@ -174,6 +176,7 @@ export function WorkbenchLayout() {
     path: activeTab?.kind === "scad" ? activeTab.path : null,
     client,
     refreshSignal: documentRefreshSignal,
+    settingsRefreshSignal: scadSettingsRefreshSignal,
     onLog: log.append,
     onPreviewStatus: setMessage,
     enabled: activeTab?.kind === "scad" && client !== null,
@@ -438,22 +441,40 @@ export function WorkbenchLayout() {
           const activeId = activeTabIdRef.current;
           const activeTab =
             openTabsRef.current.find((t) => t.id === activeId) ?? null;
-          if (
-            activeTab &&
-            (activeTab.kind === "scad" ||
-              activeTab.kind === "mesh" ||
-              activeTab.kind === "markdown" ||
-              activeTab.kind === "image")
-          ) {
+          if (activeTab) {
             const activeKey = pathKey(activeTab.path);
+            const activeSettingsKey =
+              activeTab.kind === "scad"
+                ? pathKey(derivePresetPath(activeTab.path))
+                : "";
             const matchedSpecific = changed.has(activeKey);
-            setDocumentRefreshSignal((n) => n + 1);
-            logRef.current.append(
-              "info",
-              matchedSpecific
-                ? `document refresh triggered by ${activeKey}`
-                : `document refresh triggered by ${activeKey} (directory change)`,
-            );
+            const matchedSettings =
+              activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
+            if (
+              matchedSpecific &&
+              (activeTab.kind === "scad" ||
+                activeTab.kind === "mesh" ||
+                activeTab.kind === "markdown" ||
+                activeTab.kind === "image")
+            ) {
+              setDocumentRefreshSignal((n) => n + 1);
+              logRef.current.append(
+                "info",
+                `document refresh triggered by ${activeKey}`,
+              );
+            } else if (matchedSettings) {
+              setScadSettingsRefreshSignal((n) => n + 1);
+              logRef.current.append(
+                "info",
+                `scad settings refresh triggered by ${activeSettingsKey}`,
+              );
+            } else if (activeTab.kind === "scad") {
+              setScadSettingsRefreshSignal((n) => n + 1);
+              logRef.current.append(
+                "info",
+                `scad settings refresh triggered by directory change`,
+              );
+            }
           }
           for (const key of changed) {
             logRef.current.append("info", `watch event: ${key}`);
@@ -637,6 +658,9 @@ export function WorkbenchLayout() {
         }
         parametersSlot={
           activeTab?.kind === "scad" ? scadInspectorPanels?.parameters : null
+        }
+        appearanceSlot={
+          activeTab?.kind === "scad" ? scadInspectorPanels?.appearance : null
         }
         presetsSlot={
           activeTab?.kind === "scad" ? scadInspectorPanels?.presets : null

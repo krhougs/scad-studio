@@ -26,6 +26,7 @@ type InspectorProps = {
   appConfig: AppConfigState;
   onExportStatus?: (status: string) => void;
   cameraSlot?: React.ReactNode;
+  appearanceSlot?: React.ReactNode;
   parametersSlot?: React.ReactNode;
   presetsSlot?: React.ReactNode;
 };
@@ -43,6 +44,7 @@ export function Inspector(props: InspectorProps) {
     appConfig,
     onExportStatus,
     cameraSlot,
+    appearanceSlot,
     parametersSlot,
     presetsSlot,
   } = props;
@@ -80,6 +82,11 @@ export function Inspector(props: InspectorProps) {
         {cameraSlot ? (
           <InspectorSection id="camera" title="camera">
             {cameraSlot}
+          </InspectorSection>
+        ) : null}
+        {appearanceSlot ? (
+          <InspectorSection id="preview-appearance" title="appearance">
+            {appearanceSlot}
           </InspectorSection>
         ) : null}
         {parametersSlot ? (

@@ -33,6 +33,11 @@ const TEST_WORKSPACE = mkdtempSync(
   path.join(tmpdir(), "scad-studio-preview-dedup-"),
 );
 cpSync(HOST_WORKSPACE, TEST_WORKSPACE, { recursive: true });
+const PARAMS_CUBE_SCAD_JSON = path.join(
+  TEST_WORKSPACE,
+  "examples",
+  "params-cube.scad.json",
+);
 
 const HARNESS = createHarness({
   bindPort: 39214,
@@ -52,6 +57,7 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  rmSync(PARAMS_CUBE_SCAD_JSON, { force: true });
   await clearServiceWorkerState(page);
   await installBidirectionalProtocolRecorder(page);
 });
@@ -110,6 +116,63 @@ test("@preview-dedup parameter changes still emit updated preview request", asyn
     "enabled=true",
     'mode="draft"',
   ]);
+});
+
+test("@preview-dedup appearance changes do not emit preview request", async ({
+  page,
+}) => {
+  await clearRecordedFrames(page);
+  await openExampleScad(page, "params-cube.scad");
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(500);
+
+  await clearRecordedFrames(page);
+  const inspector = page.getByTestId("workbench-inspector");
+  await inspector.getByTestId("preview-background-color").fill("#20242b");
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-preview-background",
+    "#20242b",
+  );
+  await page.waitForTimeout(700);
+
+  expect(await recordedPreviewRequests(page)).toEqual([]);
+});
+
+test("@preview-dedup external scad settings refresh does not emit preview request", async ({
+  page,
+}) => {
+  await clearRecordedFrames(page);
+  await openExampleScad(page, "params-cube.scad");
+  await waitForPreviewResponse(page);
+  await page.waitForTimeout(500);
+
+  await clearRecordedFrames(page);
+  await writeFile(
+    PARAMS_CUBE_SCAD_JSON,
+    JSON.stringify(
+      {
+        presets: {
+          external: {
+            size: 18,
+          },
+        },
+        previewAppearance: {
+          backgroundColor: "#20242b",
+          gridMajorColor: "#7c8795",
+          gridMinorColor: "#46505d",
+          lightingIntensity: 1.6,
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  await expect(page.getByTestId("preset-row-external")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(700);
+
+  expect(await recordedPreviewRequests(page)).toEqual([]);
 });
 
 test("@preview-dedup scad refresh emits one equivalent preview request", async ({

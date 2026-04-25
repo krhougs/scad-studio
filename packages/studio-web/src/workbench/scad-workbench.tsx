@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type React from "react";
@@ -14,8 +15,14 @@ import {
 } from "../viewers/file-read-decoder";
 import { ScadPreviewViewer } from "../viewers/scad-preview-viewer";
 import type { MeshInfo } from "../viewers/mesh-info";
-import type { MeshViewerOptions } from "../viewers/viewer-options";
+import {
+  DEFAULT_PREVIEW_APPEARANCE,
+  normalizePreviewAppearance,
+  type MeshViewerOptions,
+  type PreviewAppearance,
+} from "../viewers/viewer-options";
 import { ParametersPanel } from "./parameters-panel";
+import { PreviewAppearancePanel } from "./preview-appearance-panel";
 import {
   applyPresetValues,
   currentParameterValues,
@@ -34,6 +41,7 @@ import {
   derivePresetPath,
   derivePresetPathLabel,
   parsePresetFile,
+  type PresetFile,
   stringifyPresetFile,
 } from "./preset-io";
 
@@ -59,9 +67,11 @@ export type ScadWorkbenchState = {
   presetLoading: boolean;
   presetError: string | null;
   previewStatus: string;
+  previewAppearance: PreviewAppearance;
   appliedDefines: string[];
   sourceReady: boolean;
   emitStatus: (status: string) => void;
+  updatePreviewAppearance: (patch: Partial<PreviewAppearance>) => void;
   restoreDefaults: () => void;
   updateParameter: (name: string, value: ParameterValue) => void;
   restoreParameter: (name: string) => void;
@@ -112,6 +122,7 @@ type ScadWorkbenchStateInput = {
   path: unknown | null;
   client: WasmClient | null;
   refreshSignal: number;
+  settingsRefreshSignal: number;
   onLog: (level: "info" | "warn" | "error", message: string) => void;
   onPreviewStatus?: (status: string) => void;
   enabled?: boolean;
@@ -121,6 +132,7 @@ export function useScadWorkbenchState({
   path,
   client,
   refreshSignal,
+  settingsRefreshSignal,
   onLog,
   onPreviewStatus,
   enabled = true,
@@ -134,6 +146,24 @@ export function useScadWorkbenchState({
   const [presets, setPresets] = useState<PresetEntry[]>([]);
   const [presetLoading, setPresetLoading] = useState(false);
   const [presetError, setPresetError] = useState<string | null>(null);
+  const [previewAppearance, setPreviewAppearance] = useState<PreviewAppearance>({
+    ...DEFAULT_PREVIEW_APPEARANCE,
+  });
+  const presetsRef = useRef(presets);
+  const previewAppearanceRef = useRef(previewAppearance);
+  const presetsLoadedRef = useRef(false);
+  const previewAppearanceDirtyRef = useRef(false);
+  const previewAppearanceVersionRef = useRef(0);
+  const settingsWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const settingsWriteEpochRef = useRef(0);
+  const flushPendingPresetFileWriteRef = useRef<() => void>(() => {});
+  const presetLoadSeqRef = useRef(0);
+  const pendingPresetFileWriteRef = useRef<{
+    path: unknown;
+    file: PresetFile;
+    timer: number;
+    appearanceVersion: number;
+  } | null>(null);
 
   const presetPath = useMemo(() => derivePresetPath(path), [path]);
   const presetPathLabel = useMemo(() => derivePresetPathLabel(path), [path]);
@@ -148,13 +178,130 @@ export function useScadWorkbenchState({
   }, []);
 
   useEffect(() => {
+    presetsRef.current = presets;
+  }, [presets]);
+
+  useEffect(() => {
+    previewAppearanceRef.current = previewAppearance;
+  }, [previewAppearance]);
+
+  useEffect(() => {
+    flushPendingPresetFileWriteRef.current = flushPendingPresetFileWrite;
+  });
+
+  useEffect(() => {
+    return () => {
+      flushPendingPresetFileWriteRef.current();
+    };
+  }, []);
+
+  useEffect(() => {
+    presetLoadSeqRef.current += 1;
+    flushPendingPresetFileWrite();
+    presetsLoadedRef.current = false;
+    previewAppearanceDirtyRef.current = false;
+    previewAppearanceVersionRef.current += 1;
     setParameterEntries([]);
     setParameterWarnings([]);
     applyDefines([]);
     setSourceReady(false);
     setPresets([]);
     setPresetError(null);
+    setPreviewAppearance({ ...DEFAULT_PREVIEW_APPEARANCE });
   }, [active, applyDefines, path]);
+
+  function enqueuePresetFileWrite(
+    targetPath: unknown,
+    file: PresetFile,
+    successMessage: string,
+    appearanceVersion: number,
+  ): Promise<void> {
+    if (!client || !targetPath) return Promise.resolve();
+    const writeEpoch = settingsWriteEpochRef.current;
+    const task = settingsWriteChainRef.current
+      .catch(() => {})
+      .then(() => {
+        if (writeEpoch !== settingsWriteEpochRef.current) {
+          throw staleSettingsWriteError();
+        }
+        const payload = stringifyPresetFile(file);
+        return client.dispatchFileWriteText({ path: targetPath, contents: payload });
+      })
+      .then(() => {
+        if (writeEpoch !== settingsWriteEpochRef.current) {
+          throw staleSettingsWriteError();
+        }
+        if (appearanceVersion === previewAppearanceVersionRef.current) {
+          previewAppearanceDirtyRef.current = false;
+        }
+        onLog("info", successMessage);
+      })
+      .catch((err) => {
+        if (!isStaleSettingsWriteError(err)) {
+          settingsWriteEpochRef.current += 1;
+        }
+        throw err;
+      });
+    settingsWriteChainRef.current = task.catch(() => {});
+    return task;
+  }
+
+  function schedulePresetFileWrite(
+    targetPath: unknown,
+    file: PresetFile,
+    successMessage: string,
+    appearanceVersion: number,
+  ): void {
+    if (!client || !targetPath) return;
+    if (pendingPresetFileWriteRef.current) {
+      window.clearTimeout(pendingPresetFileWriteRef.current.timer);
+    }
+    const timer = window.setTimeout(() => {
+      pendingPresetFileWriteRef.current = null;
+      if (
+        !previewAppearanceDirtyRef.current ||
+        appearanceVersion !== previewAppearanceVersionRef.current
+      ) {
+        return;
+      }
+      enqueuePresetFileWrite(
+        targetPath,
+        file,
+        successMessage,
+        appearanceVersion,
+      ).catch((err) => {
+        onLog("error", `scad settings save failed: ${describeFileReadError(err)}`);
+      });
+    }, 250);
+    pendingPresetFileWriteRef.current = {
+      path: targetPath,
+      file,
+      timer,
+      appearanceVersion,
+    };
+  }
+
+  function cancelPendingPresetFileWrite(): void {
+    const pending = pendingPresetFileWriteRef.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingPresetFileWriteRef.current = null;
+  }
+
+  function flushPendingPresetFileWrite(): void {
+    const pending = pendingPresetFileWriteRef.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingPresetFileWriteRef.current = null;
+    enqueuePresetFileWrite(
+      pending.path,
+      pending.file,
+      "preview appearance saved",
+      pending.appearanceVersion,
+    ).catch((err) => {
+      onLog("error", `scad settings save failed: ${describeFileReadError(err)}`);
+    });
+  }
 
   const emitStatus = useCallback(
     (status: string) => {
@@ -249,7 +396,11 @@ export function useScadWorkbenchState({
   const loadPresetsFrom = useCallback(
     async (
       targetPath: unknown,
-    ): Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }> => {
+    ): Promise<{
+      file: PresetEntry[];
+      previewAppearance: PreviewAppearance;
+      source: "primary" | "legacy";
+    }> => {
       if (!client) throw new Error("transport not ready");
       const response = await client.dispatchFileRead({ path: targetPath });
       const decoded = response as Record<string, unknown>;
@@ -264,8 +415,12 @@ export function useScadWorkbenchState({
       if (typeof text !== "string") {
         throw new Error("preset file payload missing");
       }
+      const parsed = parsePresetFile(text);
       return {
-        file: parsePresetFile(text).presets,
+        file: parsed.presets,
+        previewAppearance: parsed.previewAppearance ?? {
+          ...DEFAULT_PREVIEW_APPEARANCE,
+        },
         source: targetPath === presetPath ? "primary" : "legacy",
       };
     },
@@ -278,11 +433,32 @@ export function useScadWorkbenchState({
       setPresetError("no preset path");
       return;
     }
+    const loadSeq = ++presetLoadSeqRef.current;
+    cancelPendingPresetFileWrite();
+    settingsWriteEpochRef.current += 1;
+    presetsLoadedRef.current = false;
     setPresetLoading(true);
     setPresetError(null);
     loadFirstExistingPreset([presetPath, ...legacyPresetPaths], loadPresetsFrom)
-      .then(({ file, source }) => {
+      .then(({ file, previewAppearance: loadedAppearance, source }) => {
+        if (loadSeq !== presetLoadSeqRef.current) return;
         setPresets(file);
+        presetsLoadedRef.current = true;
+        const nextAppearance = previewAppearanceDirtyRef.current
+          ? previewAppearanceRef.current
+          : source === "primary"
+            ? loadedAppearance
+            : { ...DEFAULT_PREVIEW_APPEARANCE };
+        setPreviewAppearance(nextAppearance);
+        previewAppearanceRef.current = nextAppearance;
+        if (previewAppearanceDirtyRef.current) {
+          schedulePresetFileWrite(
+            presetPath,
+            { presets: file, previewAppearance: nextAppearance },
+            "preview appearance saved",
+            previewAppearanceVersionRef.current,
+          );
+        }
         setPresetLoading(false);
         onLog(
           "info",
@@ -290,9 +466,24 @@ export function useScadWorkbenchState({
         );
       })
       .catch((err) => {
+        if (loadSeq !== presetLoadSeqRef.current) return;
         const message = describeFileReadError(err);
         if (isMissingPresetError(err)) {
           setPresets([]);
+          presetsLoadedRef.current = true;
+          const nextAppearance = previewAppearanceDirtyRef.current
+            ? previewAppearanceRef.current
+            : { ...DEFAULT_PREVIEW_APPEARANCE };
+          setPreviewAppearance(nextAppearance);
+          previewAppearanceRef.current = nextAppearance;
+          if (previewAppearanceDirtyRef.current) {
+            schedulePresetFileWrite(
+              presetPath,
+              { presets: [], previewAppearance: nextAppearance },
+              "preview appearance saved",
+              previewAppearanceVersionRef.current,
+            );
+          }
           setPresetLoading(false);
           setPresetError(null);
           onLog("info", "presets file not found, treating as empty");
@@ -306,26 +497,58 @@ export function useScadWorkbenchState({
 
   useEffect(() => {
     if (active) loadPresets();
-  }, [active, loadPresets, refreshSignal]);
+  }, [active, loadPresets, settingsRefreshSignal]);
 
   const persistPresets = useCallback(
     (next: PresetEntry[]) => {
       if (!client || !presetPath) return;
-      const payload = stringifyPresetFile({ presets: next });
-      client
-        .dispatchFileWriteText({ path: presetPath, contents: payload })
+      cancelPendingPresetFileWrite();
+      const file = {
+        presets: next,
+        previewAppearance: previewAppearanceRef.current,
+      };
+      const appearanceVersion = previewAppearanceVersionRef.current;
+      const previousPresets = presetsRef.current;
+      presetsRef.current = next;
+      enqueuePresetFileWrite(
+        presetPath,
+        file,
+        `presets saved (${next.length})`,
+        appearanceVersion,
+      )
         .then(() => {
           setPresets(next);
           setPresetError(null);
-          onLog("info", `presets saved (${next.length})`);
         })
         .catch((err) => {
+          presetsRef.current = previousPresets;
           const message = describeFileReadError(err);
           setPresetError(message);
           onLog("error", `preset save failed: ${message}`);
         });
     },
     [client, onLog, presetPath],
+  );
+
+  const updatePreviewAppearance = useCallback(
+    (patch: Partial<PreviewAppearance>) => {
+      setPreviewAppearance((previous) => {
+        const next = normalizePreviewAppearance({ ...previous, ...patch });
+        previewAppearanceDirtyRef.current = true;
+        previewAppearanceVersionRef.current += 1;
+        previewAppearanceRef.current = next;
+        if (presetsLoadedRef.current) {
+          schedulePresetFileWrite(
+            presetPath,
+            { presets: presetsRef.current, previewAppearance: next },
+            "preview appearance saved",
+            previewAppearanceVersionRef.current,
+          );
+        }
+        return next;
+      });
+    },
+    [presetPath],
   );
 
   const savePreset = useCallback(
@@ -370,8 +593,10 @@ export function useScadWorkbenchState({
       presetLoading,
       presetError,
       previewStatus,
+      previewAppearance,
       appliedDefines,
       sourceReady,
+      updatePreviewAppearance,
       restoreDefaults,
       updateParameter: handleUpdateParameter,
       restoreParameter: handleRestoreParameter,
@@ -393,6 +618,8 @@ export function useScadWorkbenchState({
       presetLoading,
       presetPathLabel,
       presets,
+      previewAppearance,
+      updatePreviewAppearance,
       restoreDefaults,
       savePreset,
       deletePreset,
@@ -404,8 +631,18 @@ export function useScadWorkbenchState({
 
 export function scadInspectorPanelsForState(
   state: ScadWorkbenchState,
-): { parameters: React.ReactNode; presets: React.ReactNode } {
+): {
+  appearance: React.ReactNode;
+  parameters: React.ReactNode;
+  presets: React.ReactNode;
+} {
   return {
+    appearance: (
+      <PreviewAppearancePanel
+        appearance={state.previewAppearance}
+        onChange={state.updatePreviewAppearance}
+      />
+    ),
     parameters: (
       <ParametersPanel
         entries={state.parameterEntries}
@@ -434,12 +671,28 @@ function isMissingPresetError(err: unknown): boolean {
   return /not found|no such file|cannot find/i.test(describeFileReadError(err));
 }
 
+function staleSettingsWriteError(): Error {
+  return new Error("stale scad settings write skipped");
+}
+
+function isStaleSettingsWriteError(err: unknown): boolean {
+  return err instanceof Error && err.message === "stale scad settings write skipped";
+}
+
 async function loadFirstExistingPreset(
   paths: unknown[],
   load: (
     targetPath: unknown,
-  ) => Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }>,
-): Promise<{ file: PresetEntry[]; source: "primary" | "legacy" }> {
+  ) => Promise<{
+    file: PresetEntry[];
+    previewAppearance: PreviewAppearance;
+    source: "primary" | "legacy";
+  }>,
+): Promise<{
+  file: PresetEntry[];
+  previewAppearance: PreviewAppearance;
+  source: "primary" | "legacy";
+}> {
   let missing: unknown = null;
   for (const targetPath of paths) {
     if (!targetPath) continue;

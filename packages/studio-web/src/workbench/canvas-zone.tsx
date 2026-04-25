@@ -97,6 +97,10 @@ export function CanvasZone(props: CanvasZoneProps) {
     ...stageViewport,
     projectionMode: viewerOptions.projectionMode,
   });
+  const effectiveViewerOptions =
+    activeTab?.kind === "scad"
+      ? { ...viewerOptions, ...scadWorkbenchState.previewAppearance }
+      : viewerOptions;
   const viewportGizmoSize = metrics?.gizmoSize ?? 36;
 
   useEffect(() => {
@@ -156,7 +160,7 @@ export function CanvasZone(props: CanvasZoneProps) {
                 onPreviewStatus={onPreviewStatus}
                 refreshSignal={refreshSignal}
                 config={config}
-                viewerOptions={viewerOptions}
+                viewerOptions={effectiveViewerOptions}
                 onMeshInfo={onMeshInfo}
                 cameraOverride={cameraOverride}
                 onCameraChange={onCameraChange}

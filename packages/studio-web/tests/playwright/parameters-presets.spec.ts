@@ -183,6 +183,7 @@ test("@parameters-presets save, load, delete round-trip", async ({ page }) => {
   });
   const persisted = JSON.parse(await readFile(PRESET_FILE, "utf-8")) as {
     presets?: Record<string, Record<string, unknown>>;
+    previewAppearance?: Record<string, unknown>;
   };
   expect(persisted).toEqual({
     presets: {
@@ -192,6 +193,12 @@ test("@parameters-presets save, load, delete round-trip", async ({ page }) => {
         size: 10,
         wall: 4,
       },
+    },
+    previewAppearance: {
+      backgroundColor: "#181b20",
+      gridMajorColor: "#5a6573",
+      gridMinorColor: "#343b45",
+      lightingIntensity: 1.25,
     },
   });
 

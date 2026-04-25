@@ -8,13 +8,19 @@ import {
 } from "@budn/studio-web-wasm";
 import type { ParameterValue, PresetValueMap } from "./parameter-model";
 import type { PresetEntry } from "./presets-panel";
+import {
+  DEFAULT_PREVIEW_APPEARANCE,
+  normalizePreviewAppearance,
+  type PreviewAppearance,
+} from "../viewers/viewer-options";
 
 export type PresetFile = {
   presets: PresetEntry[];
+  previewAppearance?: PreviewAppearance;
 };
 
 export function emptyPresetFile(): PresetFile {
-  return { presets: [] };
+  return { presets: [], previewAppearance: { ...DEFAULT_PREVIEW_APPEARANCE } };
 }
 
 export function parsePresetFile(text: string): PresetFile {
@@ -24,7 +30,10 @@ export function parsePresetFile(text: string): PresetFile {
   }
   const outer = raw as Record<string, unknown>;
   if (typeof outer["version"] === "number") {
-    return parseLegacyPresetFile(outer);
+    return {
+      ...parseLegacyPresetFile(outer),
+      previewAppearance: { ...DEFAULT_PREVIEW_APPEARANCE },
+    };
   }
   const shared = presets_parse_shared_file(text) as Record<string, unknown>;
   const presets = shared["presets"];
@@ -36,14 +45,21 @@ export function parsePresetFile(text: string): PresetFile {
     if (!values || typeof values !== "object" || Array.isArray(values)) continue;
     out.push({ name, values: normalizePresetValues(values) });
   }
-  return { presets: out };
+  return {
+    presets: out,
+    previewAppearance: normalizePreviewAppearance(outer["previewAppearance"]),
+  };
 }
 
 export function stringifyPresetFile(file: PresetFile): string {
   const presets = Object.fromEntries(
     file.presets.map((entry) => [entry.name, entry.values]),
   );
-  return presets_stringify_shared_file({ presets });
+  const shared = JSON.parse(
+    presets_stringify_shared_file({ presets }),
+  ) as Record<string, unknown>;
+  shared["previewAppearance"] = normalizePreviewAppearance(file.previewAppearance);
+  return JSON.stringify(shared, null, 2);
 }
 
 export function derivePresetPath(sourcePath: unknown): unknown {
@@ -109,7 +125,10 @@ function parseLegacyPresetFile(outer: Record<string, unknown>): PresetFile {
     if (typeof name !== "string" || !Array.isArray(defines)) continue;
     out.push({ name, values: valuesFromDefines(defines) });
   }
-  return { presets: out };
+  return {
+    presets: out,
+    previewAppearance: { ...DEFAULT_PREVIEW_APPEARANCE },
+  };
 }
 
 function derivePresetFilename(sourceName: string): string {

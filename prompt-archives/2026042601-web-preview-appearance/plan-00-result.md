@@ -33,7 +33,38 @@
 
 ## Phase 2：外观配置读写与右侧栏接线
 
-- 状态：未开始。
+- 状态：已完成。
+- 前序目标保护：
+  - 保留 Phase 1 的失败测试语义，并让其转为通过。
+  - 保留 presets save / load / delete round-trip，`.scad.json` 新增 `previewAppearance` 时不丢 presets。
+  - 外观变化不触发新的远端 `preview.request`，只更新本地 Three.js viewer options。
+  - 外部 `.scad.json` 修改仍刷新 presets 面板，但不刷新 mesh preview。
+- 本轮变更摘要：
+  - `viewer-options.ts` 新增 `PreviewAppearance`、`DEFAULT_PREVIEW_APPEARANCE` 与 `normalizePreviewAppearance`，默认背景为 `#181b20`，网格主线为 `#5a6573`，网格细线为 `#343b45`，光照强度为 `1.25`。
+  - `preset-io.ts` 扩展 `.scad.json` 读写，支持 `previewAppearance` 与 `presets` 共存；旧文件缺字段时回退默认值，非法颜色和光照强度会归一化。
+  - 新增 `PreviewAppearancePanel`，右侧 Inspector 的 `.scad` 文件上下文中显示背景颜色、网格主线颜色、网格细线颜色和光照强度控件。
+  - `ScadWorkbenchState` 加载当前 `.scad` 对应 `<stem>.scad.json` 中的外观配置；调整后实时更新 viewer options，并按 debounce 写回同一个 `.scad.json`。
+  - `.scad.json` 写入使用 path + 完整 `PresetFile` 快照，并通过写入队列、epoch、dirty/version 检查处理文件切换、外部刷新、preset 保存和 appearance 写回的并发风险。
+  - `WorkbenchLayout` 将 `.scad` 源文件刷新和 `.scad.json` settings 刷新拆分；settings 刷新只重新加载 presets / appearance，不触发 mesh 重新预览。
+  - 修复用户补充发现的问题：修改 appearance 不再触发 `.scad` 重新渲染请求。
+- 本轮验证：
+  - `bun run typecheck`
+    - 结果：通过。
+  - `bun x vitest run tests/unit/preset-io.test.ts tests/unit/mesh-render-metrics.test.ts`
+    - 结果：2 个测试文件通过，20 个测试通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "save, load, delete round-trip"`
+    - 结果：1 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "scad preview appearance controls persist per file"`
+    - 结果：1 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/preview-request-dedup.spec.ts --grep "appearance changes do not emit preview request|external scad settings refresh does not emit preview request"`
+    - 结果：2 个浏览器用例通过。
+  - `bun x playwright test tests/playwright/browser-watch-smoke.spec.ts --grep "preset list refreshes"`
+    - 结果：1 个浏览器用例通过。
+- 独立 review：
+  - 多轮 review 发现并推动修复了 `.scad.json` 异步加载污染、debounce 写回串文件、presets 与 appearance 全量写回互相覆盖、dirty 状态自触发写回、in-flight 写入覆盖、旧测试断言不兼容新字段、外部 settings 刷新与本地 pending 写入交错等问题。
+  - 最后一轮 review 无 blocker；指出的外部 settings refresh 与 in-flight 旧写入风险已通过 settings refresh 递增 write epoch 修复，并完成针对性验证。
+- 遗留问题：
+  - 当前没有已确认的 Phase 2 blocker。失败写入路径已有错误日志与 presetError 回写；更复杂的事务型冲突恢复不在本轮范围内。
 
 ## Phase 3：Three.js 背景、网格与打光优化
 

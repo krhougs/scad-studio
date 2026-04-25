@@ -169,7 +169,15 @@ describe("preset-io", () => {
     };
     const text = stringifyPresetFile(file);
     const back = parsePresetFile(text);
-    expect(back).toEqual(file);
+    expect(back).toEqual({
+      ...file,
+      previewAppearance: {
+        backgroundColor: "#181b20",
+        gridMajorColor: "#5a6573",
+        gridMinorColor: "#343b45",
+        lightingIntensity: 1.25,
+      },
+    });
     expect(JSON.parse(text)).toEqual({
       presets: {
         a: {
@@ -177,6 +185,12 @@ describe("preset-io", () => {
           mode: "fast",
           x: 1,
         },
+      },
+      previewAppearance: {
+        backgroundColor: "#181b20",
+        gridMajorColor: "#5a6573",
+        gridMinorColor: "#343b45",
+        lightingIntensity: 1.25,
       },
     });
   });

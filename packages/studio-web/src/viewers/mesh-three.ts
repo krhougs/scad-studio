@@ -12,6 +12,7 @@ import {
   DoubleSide,
   Fog,
   GridHelper,
+  HemisphereLight,
   Mesh,
   MeshStandardMaterial,
   OrthographicCamera,
@@ -86,16 +87,18 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     alpha: true,
     powerPreference: "high-performance",
   });
-  const backgroundHex = "#101114";
+  const backgroundHex = DEFAULT_MESH_VIEWER_OPTIONS.backgroundColor;
   const backgroundColor = new Color(backgroundHex);
   renderer.setClearColor(backgroundColor, 1);
 
   const scene = new Scene();
   scene.background = backgroundColor;
 
-  const ambient = new AmbientLight(0xffffff, 0.55);
+  const ambient = new AmbientLight(0xffffff, 0.35);
   scene.add(ambient);
-  const key = new DirectionalLight(0xffffff, 0.75);
+  const hemi = new HemisphereLight(0xf4f8ff, 0x6a7480, 0.65);
+  scene.add(hemi);
+  const key = new DirectionalLight(0xffffff, 0.85);
   key.position.set(4, 6, 4);
   key.shadow.camera.left = -240;
   key.shadow.camera.right = 240;
@@ -104,17 +107,20 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   key.shadow.camera.near = 1;
   key.shadow.camera.far = 1200;
   scene.add(key);
-  const fill = new DirectionalLight(0xffffff, 0.35);
-  fill.position.set(-4, -2, -3);
+  const fill = new DirectionalLight(0xffffff, 0.5);
+  fill.position.set(-5, -4, 3);
   scene.add(fill);
-  const rim = new DirectionalLight(0xc7e5ff, 0.5);
-  rim.position.set(-5, 8, 6);
+  const rim = new DirectionalLight(0xd9ecff, 0.42);
+  rim.position.set(-4, 5, 7);
   scene.add(rim);
+  const back = new DirectionalLight(0xffffff, 0.35);
+  back.position.set(4, -6, -2);
+  scene.add(back);
 
-  const grid = new GridHelper(200, 40, 0x2c2c31, 0x1a1a1d);
-  grid.rotation.x = Math.PI / 2;
-  (grid.material as { transparent: boolean; opacity: number }).transparent = true;
-  (grid.material as { transparent: boolean; opacity: number }).opacity = 0.5;
+  let grid = createGrid(
+    DEFAULT_MESH_VIEWER_OPTIONS.gridMajorColor,
+    DEFAULT_MESH_VIEWER_OPTIONS.gridMinorColor,
+  );
   scene.add(grid);
 
   const axes = new AxesHelper(80);
@@ -241,6 +247,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function applyOptions(): void {
+    applyAppearance();
     setProjectionMode(options.projectionMode);
     grid.visible = options.showGrid;
     axes.visible = options.showAxis;
@@ -248,7 +255,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     renderer.shadowMap.enabled = options.shadowsEnabled;
     renderer.localClippingEnabled = options.clipPlaneEnabled;
     key.castShadow = options.shadowsEnabled;
-    fill.castShadow = options.shadowsEnabled;
+    fill.castShadow = false;
+    rim.castShadow = false;
+    back.castShadow = false;
     const metrics = currentMetrics();
     scene.fog =
       options.fogEnabled && metrics
@@ -271,6 +280,40 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     render();
   }
 
+  function applyAppearance(): void {
+    backgroundColor.set(options.backgroundColor);
+    renderer.setClearColor(backgroundColor, 1);
+    scene.background = backgroundColor;
+    syncGridColors();
+    const intensity = options.lightingIntensity;
+    ambient.intensity = 0.35 * intensity;
+    hemi.intensity = 0.65 * intensity;
+    key.intensity = 0.85 * intensity;
+    fill.intensity = 0.5 * intensity;
+    rim.intensity = 0.42 * intensity;
+    back.intensity = 0.35 * intensity;
+  }
+
+  function syncGridColors(): void {
+    const currentMajor = grid.userData["majorColor"];
+    const currentMinor = grid.userData["minorColor"];
+    if (
+      currentMajor === options.gridMajorColor &&
+      currentMinor === options.gridMinorColor
+    ) {
+      return;
+    }
+    const next = createGrid(options.gridMajorColor, options.gridMinorColor);
+    next.visible = grid.visible;
+    next.position.copy(grid.position);
+    next.scale.copy(grid.scale);
+    scene.remove(grid);
+    grid.geometry.dispose();
+    disposeGridMaterial(grid.material);
+    grid = next;
+    scene.add(grid);
+  }
+
   function syncCanvasDataset(): void {
     const metrics = currentMetrics();
     canvas.dataset.renderMode = options.renderMode;
@@ -282,7 +325,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.shadowsEnabled = String(options.shadowsEnabled);
     canvas.dataset.fogEnabled = String(options.fogEnabled);
     canvas.dataset.clipPlaneEnabled = String(options.clipPlaneEnabled);
-    canvas.dataset.previewBackground = backgroundHex;
+    canvas.dataset.previewBackground = options.backgroundColor;
+    canvas.dataset.gridMajorColor = options.gridMajorColor;
+    canvas.dataset.gridMinorColor = options.gridMinorColor;
+    canvas.dataset.lightingIntensity = String(options.lightingIntensity);
     if (metrics) {
       canvas.dataset.gizmoSize = String(Math.round(metrics.gizmoSize));
       canvas.dataset.fogNear = metrics.fogNear.toFixed(3);
@@ -528,6 +574,31 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       -Math.sin(elevation) * Math.sin(azimuth),
       Math.cos(elevation),
     ).normalize();
+  }
+
+  function createGrid(majorColor: string, minorColor: string): GridHelper {
+    const next = new GridHelper(200, 40, majorColor, minorColor);
+    next.rotation.x = Math.PI / 2;
+    next.userData["majorColor"] = majorColor;
+    next.userData["minorColor"] = minorColor;
+    if (Array.isArray(next.material)) {
+      for (const material of next.material) {
+        material.transparent = true;
+        material.opacity = 0.58;
+      }
+    } else {
+      next.material.transparent = true;
+      next.material.opacity = 0.58;
+    }
+    return next;
+  }
+
+  function disposeGridMaterial(material: GridHelper["material"]): void {
+    if (Array.isArray(material)) {
+      for (const item of material) item.dispose();
+      return;
+    }
+    material.dispose();
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
