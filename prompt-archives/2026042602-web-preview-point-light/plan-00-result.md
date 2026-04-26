@@ -50,7 +50,23 @@
 
 ## Phase 3：Three.js 点光源运行时与自动位置
 
-- 状态：未开始。
+- 状态：已完成。
+- 变更摘要：
+  - 在 Three.js viewer 中创建真实 `PointLight` 并加入 scene。
+  - 根据 configured mode、shadow 开关和 manual/auto 位置同步真实点光源的 visible、intensity、position、castShadow。
+  - `data-point-light-enabled`、`data-point-light-cast-shadow`、`data-point-light-position` 改为来自真实 `PointLight` 实例状态。
+  - 清空 mesh 或无效 mesh 时先同步真实点光源，再同步 canvas dataset，避免保留上一帧点光源状态。
+  - 保留现有 renderer shadowMap、mesh cast/receive、DirectionalLight shadow camera 和 toolbar shadow 开关链路。
+- 验证结果：
+  - `bun run --cwd packages/studio-web typecheck`：通过。
+  - `bun x vitest run tests/unit/mesh-render-metrics.test.ts`：通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "scad preview appearance controls persist per file" --timeout=60000`：通过。
+  - `bun x playwright test tests/playwright/preview-request-dedup.spec.ts --grep "appearance changes do not emit preview request" --timeout=30000`：通过。
+- 独立 review：
+  - 初轮 review 发现清空 mesh 时真实点光源可能保留上一帧状态；已修复。
+  - 复审结论为无 blocker、无 important，可以提交 Phase 3 并进入 Phase 4。
+- 遗留问题：
+  - Phase 4 回归时检查无 mesh / viewport 未就绪时 auto fallback 的短暂 dataset 表现是否需要补充测试。
 
 ## Phase 4：完整回归与结果归档
 

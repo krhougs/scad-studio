@@ -19,6 +19,7 @@ import {
   PerspectiveCamera,
   Plane,
   PlaneGeometry,
+  PointLight,
   Scene,
   Vector3,
   WebGLRenderer,
@@ -120,6 +121,14 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const back = new DirectionalLight(0xffffff, 0.35);
   back.position.set(4, -6, -2);
   scene.add(back);
+  const extraPoint = new PointLight(0xffffff, 0, 0, 2);
+  extraPoint.visible = false;
+  extraPoint.castShadow = false;
+  extraPoint.shadow.mapSize.width = 1024;
+  extraPoint.shadow.mapSize.height = 1024;
+  extraPoint.shadow.camera.near = 0.5;
+  extraPoint.shadow.camera.far = 5000;
+  scene.add(extraPoint);
 
   let grid = createGrid(
     DEFAULT_MESH_VIEWER_OPTIONS.gridMajorColor,
@@ -262,6 +271,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     fill.castShadow = false;
     rim.castShadow = false;
     back.castShadow = false;
+    syncPointLight();
     const metrics = currentMetrics();
     scene.fog =
       options.fogEnabled && metrics
@@ -296,6 +306,22 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     fill.intensity = 0.5 * intensity;
     rim.intensity = 0.42 * intensity;
     back.intensity = 0.35 * intensity;
+    syncPointLight();
+  }
+
+  function syncPointLight(): void {
+    const mode = effectivePointLightMode();
+    if (mode === "off") {
+      extraPoint.visible = false;
+      extraPoint.intensity = 0;
+      extraPoint.castShadow = false;
+      return;
+    }
+    const position = currentPointLightPosition(mode);
+    extraPoint.position.set(position[0], position[1], position[2]);
+    extraPoint.visible = true;
+    extraPoint.intensity = Math.max(0, options.lightingIntensity * 0.55);
+    extraPoint.castShadow = options.shadowsEnabled;
   }
 
   function syncGridColors(): void {
@@ -335,19 +361,19 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.gridColorSignature = String(grid.userData["colorSignature"] ?? "");
     canvas.dataset.lightingIntensity = String(options.lightingIntensity);
     const pointLightMode = effectivePointLightMode();
-    const pointLightPosition =
-      pointLightMode === "off" ? null : currentPointLightPosition(pointLightMode);
     canvas.dataset.pointLightMode = options.pointLightMode;
     canvas.dataset.effectivePointLightMode = pointLightMode;
     canvas.dataset.pointLightForced = String(
       options.shadowsEnabled && options.pointLightMode === "off",
     );
-    canvas.dataset.pointLightEnabled = String(pointLightMode !== "off");
-    canvas.dataset.pointLightCastShadow = String(
-      pointLightMode !== "off" && options.shadowsEnabled,
-    );
-    if (pointLightPosition) {
-      canvas.dataset.pointLightPosition = formatPointLightPosition(pointLightPosition);
+    canvas.dataset.pointLightEnabled = String(extraPoint.visible);
+    canvas.dataset.pointLightCastShadow = String(extraPoint.castShadow);
+    if (extraPoint.visible) {
+      canvas.dataset.pointLightPosition = formatPointLightPosition([
+        extraPoint.position.x,
+        extraPoint.position.y,
+        extraPoint.position.z,
+      ]);
     } else {
       delete canvas.dataset.pointLightPosition;
     }
@@ -357,7 +383,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       key.intensity +
       fill.intensity +
       rim.intensity +
-      back.intensity
+      back.intensity +
+      extraPoint.intensity
     ).toFixed(3);
     if (metrics) {
       canvas.dataset.gizmoSize = String(Math.round(metrics.gizmoSize));
@@ -704,6 +731,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (!payload || payload.positions.length === 0) {
         updateSceneScale(null);
         clearMetricsDataset();
+        syncPointLight();
         syncCanvasDataset();
         render();
         return null;
@@ -712,6 +740,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (!info) {
         updateSceneScale(null);
         clearMetricsDataset();
+        syncPointLight();
         syncCanvasDataset();
         render();
         return null;
