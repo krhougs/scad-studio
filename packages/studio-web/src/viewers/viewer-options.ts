@@ -9,6 +9,7 @@ export type PreviewAppearance = {
   gridMajorColor: string;
   gridMinorColor: string;
   lightingIntensity: number;
+  pointLightIntensity: number;
   pointLightMode: PointLightMode;
   pointLightPosition: PointLightPosition | null;
 };
@@ -30,6 +31,7 @@ export const DEFAULT_PREVIEW_APPEARANCE: PreviewAppearance = {
   gridMajorColor: "#5a6573",
   gridMinorColor: "#343b45",
   lightingIntensity: 1.25,
+  pointLightIntensity: 1.6,
   pointLightMode: "off",
   pointLightPosition: null,
 };
@@ -66,6 +68,9 @@ export function normalizePreviewAppearance(input: unknown): PreviewAppearance {
       DEFAULT_PREVIEW_APPEARANCE.gridMinorColor,
     ),
     lightingIntensity: normalizeLightingIntensity(record["lightingIntensity"]),
+    pointLightIntensity: normalizePointLightIntensity(
+      record["pointLightIntensity"],
+    ),
     pointLightMode: normalizePointLightMode(record["pointLightMode"]),
     pointLightPosition: normalizePointLightPosition(record["pointLightPosition"]),
   };
@@ -82,6 +87,13 @@ function normalizeLightingIntensity(value: unknown): number {
     return DEFAULT_PREVIEW_APPEARANCE.lightingIntensity;
   }
   return Math.min(3, Math.max(0.25, value));
+}
+
+function normalizePointLightIntensity(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_PREVIEW_APPEARANCE.pointLightIntensity;
+  }
+  return Math.min(5, Math.max(0, value));
 }
 
 function normalizePointLightMode(value: unknown): PointLightMode {

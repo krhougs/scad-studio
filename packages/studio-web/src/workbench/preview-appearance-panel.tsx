@@ -86,6 +86,21 @@ export function PreviewAppearancePanel({
       </div>
       <div className="preview-appearance-panel__field">
         <span className="preview-appearance-panel__field-label">point light</span>
+        <NumericControl
+          label="point light intensity"
+          value={appearance.pointLightIntensity}
+          min={0}
+          max={5}
+          step={0.05}
+          inputTestId="preview-point-light-intensity"
+          knobTestId="preview-point-light-intensity-knob"
+          numberFieldTestId="preview-point-light-intensity-number-field"
+          fractionDigits={2}
+          onChange={(pointLightIntensity) => onChange({ pointLightIntensity })}
+        />
+      </div>
+      <div className="preview-appearance-panel__field">
+        <span className="preview-appearance-panel__field-label">point mode</span>
         <div className="preview-appearance-panel__segmented">
           {(["off", "auto", "manual"] as const).map((mode) => (
             <button

@@ -94,6 +94,7 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightIntensity: number;
         pointLightMode: string;
         pointLightPosition: [number, number, number] | null;
       };
@@ -104,6 +105,7 @@ describe("preset-io", () => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 1.25,
+      pointLightIntensity: 1.6,
       pointLightMode: "off",
       pointLightPosition: null,
     });
@@ -129,6 +131,7 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightIntensity: number;
         pointLightMode: string;
         pointLightPosition: [number, number, number] | null;
       };
@@ -139,6 +142,7 @@ describe("preset-io", () => {
       gridMajorColor: "#7c8795",
       gridMinorColor: "#46505d",
       lightingIntensity: 1.6,
+      pointLightIntensity: 1.6,
       pointLightMode: "off",
       pointLightPosition: null,
     });
@@ -152,6 +156,7 @@ describe("preset-io", () => {
         gridMajorColor: "#bad",
         gridMinorColor: "transparent",
         lightingIntensity: 100,
+        pointLightIntensity: 100,
       },
     });
     const file = parsePresetFile(text) as unknown as {
@@ -160,6 +165,7 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightIntensity: number;
         pointLightMode: string;
         pointLightPosition: [number, number, number] | null;
       };
@@ -170,6 +176,7 @@ describe("preset-io", () => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 3,
+      pointLightIntensity: 5,
       pointLightMode: "off",
       pointLightPosition: null,
     });
@@ -187,6 +194,7 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightIntensity: 2.4,
         pointLightMode: "manual" as const,
         pointLightPosition: [11, 22, 33] as [number, number, number],
       },
@@ -198,6 +206,7 @@ describe("preset-io", () => {
       gridMajorColor: "#7c8795",
       gridMinorColor: "#46505d",
       lightingIntensity: 1.6,
+      pointLightIntensity: 2.4,
       pointLightMode: "manual",
       pointLightPosition: [11, 22, 33],
     });
@@ -262,6 +271,7 @@ describe("preset-io", () => {
         gridMajorColor: "#5a6573",
         gridMinorColor: "#343b45",
         lightingIntensity: 1.25,
+        pointLightIntensity: 1.6,
         pointLightMode: "off",
         pointLightPosition: null,
       },
@@ -279,6 +289,7 @@ describe("preset-io", () => {
         gridMajorColor: "#5a6573",
         gridMinorColor: "#343b45",
         lightingIntensity: 1.25,
+        pointLightIntensity: 1.6,
         pointLightMode: "off",
         pointLightPosition: null,
       },
@@ -293,6 +304,7 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightIntensity: 2.4,
         pointLightMode: "manual" as const,
         pointLightPosition: [11, 22, 33] as [number, number, number],
       },
@@ -312,6 +324,7 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightIntensity: 2.4,
         pointLightMode: "manual",
         pointLightPosition: [11, 22, 33],
       },

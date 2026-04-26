@@ -1,5 +1,22 @@
 # 已知问题记录
 
+## 2026-04-26 22:24:20: Web `.scad` 外部刷新用例等不到第二次 preview_ready
+
+- 来源：执行 `bun --cwd packages/studio-web test:e2e tests/playwright/preview-request-dedup.spec.ts -g "scad refresh emits one equivalent preview request"`，连续两次失败；在包含 `canvas-interaction`、`parameters-presets`、`preview-request-dedup` 的组合 Playwright 回归中同样失败。
+- 原因：
+  - 用例在打开 `cube.scad` 并收到初始 `preview_ready` 后，清空协议录制帧，再向 `examples/cube.scad` 追加一行注释，随后等待新的 `preview_ready`。
+  - 当前失败点是第二次等待超时，说明本轮环境中没有观察到文件变更后对应的 `preview_ready` response。
+  - 本轮点光源强度改动只触及 web preview appearance、Three.js 渲染选项和相关测试，没有修改 `.scad` 文件 watch、preview request dispatch 或 app server 刷新路径；该失败暂不能直接归因为本轮功能改动。
+- 影响范围：
+  - 不能把完整 `preview-request-dedup.spec.ts` 作为本轮通过证据。
+  - 会影响后续判断 Web 文件监听刷新链路是否可靠，尤其是外部修改已打开 `.scad` 后是否能自动触发预览。
+  - 本轮新增的点光源强度持久化、appearance 不触发 OpenSCAD 重新渲染、参数预设持久化相关目标仍由更聚焦的测试覆盖。
+- 可能的解法：
+  - 单独调查 `WorkbenchLayout` 的 watch event 到 `ScadWorkbench` refresh signal，再到 preview request 的完整链路。
+  - 在该用例中增加对 watch event、outgoing `preview.request`、incoming response 类型的诊断输出，确认是未发请求、请求未完成，还是 response 录制遗漏。
+  - 若根因是目录级 watch 去抖或事件丢失，应回到 Web 文件监听刷新计划中统一修复，而不是在点光源配置任务中扩大改动范围。
+- 当前处理方式：本轮先记录为已知问题；点光源强度任务只使用相关通过用例作为验收证据，不把该刷新用例计入本轮功能完成条件。
+
 ## 2026-04-25 06:18:49: wasm-pack Chrome smoke 在本机 ChromeDriver 版本不匹配时失败
 
 - 来源：执行 `wasm-pack test --headless --chrome crates/studio-web-wasm --test wasm_bridge_smoke`，以及带 `-- --nocapture` 的复现命令。

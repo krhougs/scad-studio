@@ -234,6 +234,8 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
   await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "off");
   await expect(canvas).toHaveAttribute("data-point-light-enabled", "false");
+  await expect(canvas).toHaveAttribute("data-point-light-config-intensity", "1.6");
+  await expect(canvas).toHaveAttribute("data-build-plate-visible", "false");
   await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "off");
 
   await page.getByTestId("viewer-toggle-shadow").click();
@@ -243,6 +245,12 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-point-light-forced", "true");
   await expect(canvas).toHaveAttribute("data-point-light-enabled", "true");
   await expect(canvas).toHaveAttribute("data-point-light-cast-shadow", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-decay", "0");
+  await expect(canvas).toHaveAttribute("data-point-light-intensity", "2.000");
+  await expect(canvas).toHaveAttribute("data-mesh-cast-shadow", "true");
+  await expect(canvas).toHaveAttribute("data-mesh-receive-shadow", "false");
+  await expect(canvas).toHaveAttribute("data-show-build-plate", "false");
+  await expect(canvas).toHaveAttribute("data-build-plate-visible", "true");
   await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "off");
   await expect.poll(() => readJsonFile(PARAMS_CUBE_SCAD_JSON)).toEqual(explicitOffFile());
   await inspector.getByTestId("preview-background-color").fill("#20242b");
@@ -252,12 +260,14 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
     const appearance = previewAppearanceFromFile(file);
     return (
       appearance?.backgroundColor === "#20242b" &&
+      appearance.pointLightIntensity === 1.6 &&
       appearance.pointLightMode === "off" &&
       appearance.pointLightPosition === null
     );
   }).toBe(true);
   await page.getByTestId("viewer-toggle-shadow").click();
   await expect(canvas).toHaveAttribute("data-shadows-enabled", "false");
+  await expect(canvas).toHaveAttribute("data-build-plate-visible", "false");
 
   await canvas.screenshot({
     path: testInfo.outputPath("preview-appearance-background.png"),
@@ -286,9 +296,16 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await lightingField.fill("1.6");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
 
+  const pointLightIntensityField = inspector
+    .getByTestId("preview-point-light-intensity-number-field")
+    .getByRole("spinbutton");
+  await pointLightIntensityField.fill("2.5");
+  await expect(canvas).toHaveAttribute("data-point-light-config-intensity", "2.5");
+
   await pointLightManual.click();
   await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
   await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-intensity", "4.000");
   await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "manual");
   const directManualPointLightPosition = await canvas.getAttribute("data-point-light-position");
   if (!directManualPointLightPosition) {
@@ -346,6 +363,7 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightIntensity: 2.5,
         pointLightMode: "manual",
         pointLightPosition: [11, 22, 33],
       },
@@ -464,6 +482,7 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-grid-major-color", "#5a6573");
   await expect(canvas).toHaveAttribute("data-grid-minor-color", "#343b45");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.25");
+  await expect(canvas).toHaveAttribute("data-point-light-config-intensity", "1.6");
   await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
   await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "off");
 
@@ -474,6 +493,7 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-grid-major-color", "#7c8795");
   await expect(canvas).toHaveAttribute("data-grid-minor-color", "#46505d");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
+  await expect(canvas).toHaveAttribute("data-point-light-config-intensity", "2.5");
   await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
   await expect(canvas).toHaveAttribute("data-point-light-position", autoPointLightPosition);
 });
@@ -934,6 +954,7 @@ function explicitOffFile(): unknown {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 1.25,
+      pointLightIntensity: 1.6,
       pointLightMode: "off",
       pointLightPosition: null,
     },
@@ -965,6 +986,7 @@ function pointLightPositionNumbers(value: string): number[] {
 
 function previewAppearanceFromFile(file: unknown): {
   backgroundColor?: unknown;
+  pointLightIntensity?: unknown;
   pointLightMode?: unknown;
   pointLightPosition?: unknown;
 } | null {
@@ -973,6 +995,7 @@ function previewAppearanceFromFile(file: unknown): {
   if (!appearance || typeof appearance !== "object") return null;
   return appearance as {
     backgroundColor?: unknown;
+    pointLightIntensity?: unknown;
     pointLightMode?: unknown;
     pointLightPosition?: unknown;
   };

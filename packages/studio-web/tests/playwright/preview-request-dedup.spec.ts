@@ -133,6 +133,14 @@ test("@preview-dedup appearance changes do not emit preview request", async ({
     "data-preview-background",
     "#20242b",
   );
+  await inspector
+    .getByTestId("preview-point-light-intensity-number-field")
+    .getByRole("spinbutton")
+    .fill("2.5");
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-config-intensity",
+    "2.5",
+  );
   await inspector.getByTestId("preview-point-light-mode-manual").click();
   await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
     "data-point-light-mode",

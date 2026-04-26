@@ -121,13 +121,15 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   const back = new DirectionalLight(0xffffff, 0.35);
   back.position.set(4, -6, -2);
   scene.add(back);
-  const extraPoint = new PointLight(0xffffff, 0, 0, 2);
+  const extraPoint = new PointLight(0xffffff, 0, 0, 0);
   extraPoint.visible = false;
   extraPoint.castShadow = false;
   extraPoint.shadow.mapSize.width = 1024;
   extraPoint.shadow.mapSize.height = 1024;
   extraPoint.shadow.camera.near = 0.5;
   extraPoint.shadow.camera.far = 5000;
+  extraPoint.shadow.bias = -0.0005;
+  extraPoint.shadow.normalBias = 0.03;
   scene.add(extraPoint);
 
   let grid = createGrid(
@@ -264,7 +266,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     setProjectionMode(options.projectionMode);
     grid.visible = options.showGrid;
     axes.visible = options.showAxis;
-    buildPlate.visible = options.showBuildPlate;
+    buildPlate.visible = options.showBuildPlate || options.shadowsEnabled;
     renderer.shadowMap.enabled = options.shadowsEnabled;
     renderer.localClippingEnabled = options.clipPlaneEnabled;
     key.castShadow = options.shadowsEnabled;
@@ -279,7 +281,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         : null;
     if (meshObj && meshMaterial) {
       meshObj.castShadow = options.shadowsEnabled;
-      meshObj.receiveShadow = options.shadowsEnabled;
+      meshObj.receiveShadow = false;
       meshMaterial.color.set(options.colorMode === "mono" ? 0x9fb8c6 : 0x7f858a);
       meshMaterial.vertexColors =
         options.colorMode === "color" && meshHasVertexColors;
@@ -320,7 +322,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const position = currentPointLightPosition(mode);
     extraPoint.position.set(position[0], position[1], position[2]);
     extraPoint.visible = true;
-    extraPoint.intensity = Math.max(0, options.lightingIntensity * 0.55);
+    extraPoint.intensity = Math.max(
+      0,
+      options.lightingIntensity * options.pointLightIntensity,
+    );
     extraPoint.castShadow = options.shadowsEnabled;
   }
 
@@ -352,6 +357,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.showGrid = String(options.showGrid);
     canvas.dataset.showAxis = String(options.showAxis);
     canvas.dataset.showBuildPlate = String(options.showBuildPlate);
+    canvas.dataset.buildPlateVisible = String(buildPlate.visible);
     canvas.dataset.shadowsEnabled = String(options.shadowsEnabled);
     canvas.dataset.fogEnabled = String(options.fogEnabled);
     canvas.dataset.clipPlaneEnabled = String(options.clipPlaneEnabled);
@@ -360,6 +366,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.gridMinorColor = options.gridMinorColor;
     canvas.dataset.gridColorSignature = String(grid.userData["colorSignature"] ?? "");
     canvas.dataset.lightingIntensity = String(options.lightingIntensity);
+    canvas.dataset.pointLightConfigIntensity = String(options.pointLightIntensity);
     const pointLightMode = effectivePointLightMode();
     canvas.dataset.pointLightMode = options.pointLightMode;
     canvas.dataset.effectivePointLightMode = pointLightMode;
@@ -368,6 +375,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     );
     canvas.dataset.pointLightEnabled = String(extraPoint.visible);
     canvas.dataset.pointLightCastShadow = String(extraPoint.castShadow);
+    canvas.dataset.pointLightDecay = String(extraPoint.decay);
+    canvas.dataset.pointLightIntensity = extraPoint.intensity.toFixed(3);
+    canvas.dataset.meshCastShadow = String(meshObj?.castShadow ?? false);
+    canvas.dataset.meshReceiveShadow = String(meshObj?.receiveShadow ?? false);
     if (extraPoint.visible) {
       canvas.dataset.pointLightPosition = formatPointLightPosition([
         extraPoint.position.x,
