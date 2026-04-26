@@ -95,12 +95,12 @@ export function clippingPlanesForBounds(
   camera: CameraState,
   bounds: MeshBounds,
 ): { near: number; far: number } {
-  const center = [
+  const center: [number, number, number] = [
     (bounds.min[0] + bounds.max[0]) / 2,
     (bounds.min[1] + bounds.max[1]) / 2,
     (bounds.min[2] + bounds.max[2]) / 2,
   ];
-  const dimensions = [
+  const dimensions: [number, number, number] = [
     Math.max(0, bounds.max[0] - bounds.min[0]),
     Math.max(0, bounds.max[1] - bounds.min[1]),
     Math.max(0, bounds.max[2] - bounds.min[2]),
@@ -109,13 +109,25 @@ export function clippingPlanesForBounds(
     Math.hypot(dimensions[0], dimensions[1], dimensions[2]) / 2,
     0.25,
   );
-  const distance = Math.hypot(
-    camera.position[0] - center[0],
-    camera.position[1] - center[1],
-    camera.position[2] - center[2],
+  const forward = normalize([
+    camera.target[0] - camera.position[0],
+    camera.target[1] - camera.position[1],
+    camera.target[2] - camera.position[2],
+  ]);
+  const meshDepths = depthRangeForPoints(
+    boundsCorners(bounds),
+    camera.position,
+    forward,
   );
-  const near = Math.max(0.01, Math.min(10, Math.max(distance - radius * 4, 0.01)));
-  const far = Math.max(1000, distance + radius * 2 + 100);
+  const helperDepths = depthRangeForPoints(
+    buildPlateCorners(bounds, center, dimensions, radius),
+    camera.position,
+    forward,
+  );
+  const sceneNear = Math.max(0.01, radius / 20);
+  const near = nearClipForDepth(meshDepths.min, sceneNear);
+  const maxDepth = Math.max(meshDepths.max, helperDepths.max);
+  const far = Math.max(near + 1, maxDepth + Math.max(radius * 0.5, 1));
   return { near, far };
 }
 
@@ -158,6 +170,61 @@ function boundsCorners(bounds: MeshBounds): Array<[number, number, number]> {
     [bounds.max[0], bounds.max[1], bounds.min[2]],
     [bounds.max[0], bounds.max[1], bounds.max[2]],
   ];
+}
+
+function buildPlateCorners(
+  bounds: MeshBounds,
+  center: [number, number, number],
+  dimensions: [number, number, number],
+  radius: number,
+): Array<[number, number, number]> {
+  const plateSize = meshBuildPlateSize({
+    vertices: 0,
+    indices: 0,
+    bounds,
+    center,
+    dimensions,
+    radius,
+  });
+  const half = plateSize / 2;
+  const bottom = bounds.min[2] - Math.max(radius * 0.015, 0.02) - 0.01;
+  return [
+    [center[0] - half, center[1] - half, bottom],
+    [center[0] - half, center[1] + half, bottom],
+    [center[0] + half, center[1] - half, bottom],
+    [center[0] + half, center[1] + half, bottom],
+  ];
+}
+
+function depthRangeForPoints(
+  points: Array<[number, number, number]>,
+  cameraPosition: [number, number, number],
+  forward: [number, number, number],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const point of points) {
+    const depth = dot(
+      [
+        point[0] - cameraPosition[0],
+        point[1] - cameraPosition[1],
+        point[2] - cameraPosition[2],
+      ],
+      forward,
+    );
+    min = Math.min(min, depth);
+    max = Math.max(max, depth);
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0.01, max: 1 };
+  return { min, max };
+}
+
+function nearClipForDepth(meshNearDepth: number, sceneNear: number): number {
+  if (meshNearDepth <= 0.02) return 0.01;
+  if (meshNearDepth <= sceneNear * 2) {
+    return Math.max(0.01, meshNearDepth * 0.5);
+  }
+  return Math.min(10, Math.max(sceneNear, meshNearDepth * 0.8));
 }
 
 function length(value: [number, number, number]): number {

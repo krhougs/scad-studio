@@ -4,6 +4,7 @@ import {
   fitCameraToBounds,
   updateCameraFromSpherical,
 } from "../../src/canvas/camera-controls";
+import type { CameraState } from "../../src/canvas/camera-state";
 import { computeMeshInfo } from "../../src/viewers/mesh-info";
 import { payloadFromPreview } from "../../src/viewers/mesh-three";
 import { DEFAULT_MESH_VIEWER_OPTIONS } from "../../src/viewers/viewer-options";
@@ -271,4 +272,147 @@ describe("mesh-render-metrics", () => {
     expect(planes.far).toBeGreaterThan(distanceTo(farCamera) + INFO.radius);
     expect(planes.far).toBeGreaterThan(planes.near);
   });
+
+  it("keeps clipping planes tight while dollying near the mesh", () => {
+    const base = fitCameraToBounds(SMALL_INFO.bounds, "iso", 1);
+    const nearCamera = updateCameraFromSpherical(base, {
+      distance: SMALL_INFO.radius * 2.5,
+    });
+    const planes = clippingPlanesForBounds(nearCamera, SMALL_INFO.bounds);
+
+    expect(planes.near).toBeGreaterThan(SMALL_INFO.radius / 20);
+    expect(planes.far).toBeLessThan(120);
+    expect(planes.far / planes.near).toBeLessThan(100);
+    expect(planes.near).toBeLessThan(distanceTo(nearCamera) - SMALL_INFO.radius);
+    expect(planes.far).toBeGreaterThan(distanceTo(nearCamera) + SMALL_INFO.radius);
+  });
+
+  it("keeps the build plate inside the far clipping plane for small meshes", () => {
+    const base = fitCameraToBounds(SMALL_INFO.bounds, "iso", 1);
+    const nearCamera = updateCameraFromSpherical(base, {
+      distance: SMALL_INFO.radius * 2.5,
+    });
+    const planes = clippingPlanesForBounds(nearCamera, SMALL_INFO.bounds);
+    const plateFarDepth = maxProjectedDepth(nearCamera, buildPlateCorners(SMALL_INFO));
+
+    expect(planes.far).toBeGreaterThan(plateFarDepth);
+  });
+
+  it("does not clip a panned mesh near the camera", () => {
+    const base = updateCameraFromSpherical(
+      fitCameraToBounds(SMALL_INFO.bounds, "iso", 1),
+      { distance: SMALL_INFO.radius * 1.8 },
+    );
+    const panned = panCamera(base, 40);
+    const planes = clippingPlanesForBounds(panned, SMALL_INFO.bounds);
+    const meshNearDepth = minProjectedDepth(panned, boundsCorners(SMALL_INFO.bounds));
+
+    expect(planes.near).toBeLessThan(meshNearDepth);
+  });
 });
+
+function buildPlateCorners(info: MeshInfo): Array<[number, number, number]> {
+  const plateSize = Math.max(80, Math.max(...info.dimensions, info.radius * 2, 1) * 1.8);
+  const half = plateSize / 2;
+  const bottom = info.bounds.min[2] - Math.max(info.radius * 0.015, 0.02) - 0.01;
+  return [
+    [info.center[0] - half, info.center[1] - half, bottom],
+    [info.center[0] - half, info.center[1] + half, bottom],
+    [info.center[0] + half, info.center[1] - half, bottom],
+    [info.center[0] + half, info.center[1] + half, bottom],
+  ];
+}
+
+function boundsCorners(bounds: MeshBounds): Array<[number, number, number]> {
+  return [
+    [bounds.min[0], bounds.min[1], bounds.min[2]],
+    [bounds.min[0], bounds.min[1], bounds.max[2]],
+    [bounds.min[0], bounds.max[1], bounds.min[2]],
+    [bounds.min[0], bounds.max[1], bounds.max[2]],
+    [bounds.max[0], bounds.min[1], bounds.min[2]],
+    [bounds.max[0], bounds.min[1], bounds.max[2]],
+    [bounds.max[0], bounds.max[1], bounds.min[2]],
+    [bounds.max[0], bounds.max[1], bounds.max[2]],
+  ];
+}
+
+function panCamera(camera: CameraState, amount: number): CameraState {
+  const forward = normalize([
+    camera.target[0] - camera.position[0],
+    camera.target[1] - camera.position[1],
+    camera.target[2] - camera.position[2],
+  ]);
+  const right = normalize(cross(forward, camera.up));
+  const shift = right.map((item) => item * amount) as [number, number, number];
+  return {
+    ...camera,
+    position: add(camera.position, shift),
+    target: add(camera.target, shift),
+  };
+}
+
+function minProjectedDepth(
+  camera: CameraState,
+  points: Array<[number, number, number]>,
+): number {
+  return Math.min(...projectedDepths(camera, points));
+}
+
+function maxProjectedDepth(
+  camera: CameraState,
+  points: Array<[number, number, number]>,
+): number {
+  return Math.max(...projectedDepths(camera, points));
+}
+
+function projectedDepths(
+  camera: CameraState,
+  points: Array<[number, number, number]>,
+): number[] {
+  const forward = normalize([
+    camera.target[0] - camera.position[0],
+    camera.target[1] - camera.position[1],
+    camera.target[2] - camera.position[2],
+  ]);
+  return points.map((point) =>
+    dot(
+      [
+        point[0] - camera.position[0],
+        point[1] - camera.position[1],
+        point[2] - camera.position[2],
+      ],
+      forward,
+    ),
+  );
+}
+
+function add(
+  left: [number, number, number],
+  right: [number, number, number],
+): [number, number, number] {
+  return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+}
+
+function normalize(value: [number, number, number]): [number, number, number] {
+  const size = Math.hypot(value[0], value[1], value[2]);
+  if (size < 1e-9) return [0, 0, 0];
+  return [value[0] / size, value[1] / size, value[2] / size];
+}
+
+function cross(
+  left: [number, number, number],
+  right: [number, number, number],
+): [number, number, number] {
+  return [
+    left[1] * right[2] - left[2] * right[1],
+    left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0],
+  ];
+}
+
+function dot(
+  left: [number, number, number],
+  right: [number, number, number],
+): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
