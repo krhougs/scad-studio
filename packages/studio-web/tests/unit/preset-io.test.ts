@@ -187,8 +187,8 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
-        pointLightMode: "manual",
-        pointLightPosition: [11, 22, 33],
+        pointLightMode: "manual" as const,
+        pointLightPosition: [11, 22, 33] as [number, number, number],
       },
     });
     const file = parsePresetFile(text);
@@ -293,8 +293,8 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
-        pointLightMode: "manual",
-        pointLightPosition: [11, 22, 33],
+        pointLightMode: "manual" as const,
+        pointLightPosition: [11, 22, 33] as [number, number, number],
       },
     };
     const text = stringifyPresetFile(file);

@@ -19,6 +19,7 @@ import {
   DEFAULT_PREVIEW_APPEARANCE,
   normalizePreviewAppearance,
   type MeshViewerOptions,
+  type PointLightPosition,
   type PreviewAppearance,
 } from "../viewers/viewer-options";
 import { ParametersPanel } from "./parameters-panel";
@@ -68,10 +69,12 @@ export type ScadWorkbenchState = {
   presetError: string | null;
   previewStatus: string;
   previewAppearance: PreviewAppearance;
+  previewPointLightAutoPosition: PointLightPosition | null;
   appliedDefines: string[];
   sourceReady: boolean;
   emitStatus: (status: string) => void;
   updatePreviewAppearance: (patch: Partial<PreviewAppearance>) => void;
+  setPreviewPointLightAutoPosition: (position: PointLightPosition | null) => void;
   restoreDefaults: () => void;
   updateParameter: (name: string, value: ParameterValue) => void;
   restoreParameter: (name: string) => void;
@@ -149,6 +152,19 @@ export function useScadWorkbenchState({
   const [previewAppearance, setPreviewAppearance] = useState<PreviewAppearance>({
     ...DEFAULT_PREVIEW_APPEARANCE,
   });
+  const [
+    previewPointLightAutoPosition,
+    setPreviewPointLightAutoPosition,
+  ] = useState<PointLightPosition | null>(null);
+  const updatePreviewPointLightAutoPosition = useCallback(
+    (position: PointLightPosition | null) => {
+      setPreviewPointLightAutoPosition((previous) => {
+        if (samePointLightPosition(previous, position)) return previous;
+        return position;
+      });
+    },
+    [],
+  );
   const presetsRef = useRef(presets);
   const previewAppearanceRef = useRef(previewAppearance);
   const presetsLoadedRef = useRef(false);
@@ -208,6 +224,7 @@ export function useScadWorkbenchState({
     setPresets([]);
     setPresetError(null);
     setPreviewAppearance({ ...DEFAULT_PREVIEW_APPEARANCE });
+    setPreviewPointLightAutoPosition(null);
   }, [active, applyDefines, path]);
 
   function enqueuePresetFileWrite(
@@ -594,9 +611,11 @@ export function useScadWorkbenchState({
       presetError,
       previewStatus,
       previewAppearance,
+      previewPointLightAutoPosition,
       appliedDefines,
       sourceReady,
       updatePreviewAppearance,
+      setPreviewPointLightAutoPosition: updatePreviewPointLightAutoPosition,
       restoreDefaults,
       updateParameter: handleUpdateParameter,
       restoreParameter: handleRestoreParameter,
@@ -619,7 +638,9 @@ export function useScadWorkbenchState({
       presetPathLabel,
       presets,
       previewAppearance,
+      previewPointLightAutoPosition,
       updatePreviewAppearance,
+      updatePreviewPointLightAutoPosition,
       restoreDefaults,
       savePreset,
       deletePreset,
@@ -640,6 +661,7 @@ export function scadInspectorPanelsForState(
     appearance: (
       <PreviewAppearancePanel
         appearance={state.previewAppearance}
+        autoPointLightPosition={state.previewPointLightAutoPosition}
         onChange={state.updatePreviewAppearance}
       />
     ),
@@ -669,6 +691,15 @@ export function scadInspectorPanelsForState(
 
 function isMissingPresetError(err: unknown): boolean {
   return /not found|no such file|cannot find/i.test(describeFileReadError(err));
+}
+
+function samePointLightPosition(
+  left: PointLightPosition | null,
+  right: PointLightPosition | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.every((item, index) => Math.abs(item - right[index]) < 1e-9);
 }
 
 function staleSettingsWriteError(): Error {

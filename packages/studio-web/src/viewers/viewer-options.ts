@@ -1,12 +1,16 @@
 export type MeshRenderMode = "solid" | "wireframe" | "xray";
 export type MeshProjectionMode = "perspective" | "orthographic";
 export type MeshColorMode = "mono" | "color";
+export type PointLightMode = "off" | "auto" | "manual";
+export type PointLightPosition = [number, number, number];
 
 export type PreviewAppearance = {
   backgroundColor: string;
   gridMajorColor: string;
   gridMinorColor: string;
   lightingIntensity: number;
+  pointLightMode: PointLightMode;
+  pointLightPosition: PointLightPosition | null;
 };
 
 export type MeshViewerOptions = {
@@ -26,6 +30,8 @@ export const DEFAULT_PREVIEW_APPEARANCE: PreviewAppearance = {
   gridMajorColor: "#5a6573",
   gridMinorColor: "#343b45",
   lightingIntensity: 1.25,
+  pointLightMode: "off",
+  pointLightPosition: null,
 };
 
 export const DEFAULT_MESH_VIEWER_OPTIONS: MeshViewerOptions = {
@@ -60,6 +66,8 @@ export function normalizePreviewAppearance(input: unknown): PreviewAppearance {
       DEFAULT_PREVIEW_APPEARANCE.gridMinorColor,
     ),
     lightingIntensity: normalizeLightingIntensity(record["lightingIntensity"]),
+    pointLightMode: normalizePointLightMode(record["pointLightMode"]),
+    pointLightPosition: normalizePointLightPosition(record["pointLightPosition"]),
   };
 }
 
@@ -74,4 +82,15 @@ function normalizeLightingIntensity(value: unknown): number {
     return DEFAULT_PREVIEW_APPEARANCE.lightingIntensity;
   }
   return Math.min(3, Math.max(0.25, value));
+}
+
+function normalizePointLightMode(value: unknown): PointLightMode {
+  return value === "auto" || value === "manual" ? value : "off";
+}
+
+function normalizePointLightPosition(value: unknown): PointLightPosition | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const position = value.map((item) => Number(item));
+  if (!position.every((item) => Number.isFinite(item))) return null;
+  return [position[0], position[1], position[2]];
 }

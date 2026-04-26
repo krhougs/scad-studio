@@ -16,13 +16,16 @@ import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
 import type { MeshInfo } from "../viewers/mesh-info";
 import { MeshViewer } from "../viewers/mesh-viewer";
-import { meshSceneMetrics } from "../viewers/mesh-render-metrics";
+import {
+  meshSceneMetrics,
+  pointLightAutoPositionForBounds,
+} from "../viewers/mesh-render-metrics";
 import {
   DEFAULT_MESH_VIEWER_OPTIONS,
   type MeshRenderMode,
   type MeshViewerOptions,
 } from "../viewers/viewer-options";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PRESET_STATES } from "../canvas/camera-state";
 import { projectViewportGizmoAxes } from "./viewport-gizmo-model";
 import { TabBar } from "./tabbar";
@@ -97,6 +100,19 @@ export function CanvasZone(props: CanvasZoneProps) {
     ...stageViewport,
     projectionMode: viewerOptions.projectionMode,
   });
+  const autoPointLightPosition = useMemo(
+    () =>
+      activeTab?.kind === "scad" &&
+      meshInfo &&
+      stageViewport.width > 0 &&
+      stageViewport.height > 0
+        ? pointLightAutoPositionForBounds(
+            meshInfo.bounds,
+            stageViewport.width / stageViewport.height,
+          )
+        : null,
+    [activeTab?.kind, meshInfo, stageViewport.height, stageViewport.width],
+  );
   const effectiveViewerOptions =
     activeTab?.kind === "scad"
       ? { ...viewerOptions, ...scadWorkbenchState.previewAppearance }
@@ -119,6 +135,18 @@ export function CanvasZone(props: CanvasZoneProps) {
     observer.observe(stage);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (activeTab?.kind !== "scad") {
+      scadWorkbenchState.setPreviewPointLightAutoPosition(null);
+      return;
+    }
+    scadWorkbenchState.setPreviewPointLightAutoPosition(autoPointLightPosition);
+  }, [
+    activeTab?.kind,
+    autoPointLightPosition,
+    scadWorkbenchState.setPreviewPointLightAutoPosition,
+  ]);
 
   const setRenderMode = (renderMode: MeshRenderMode) => {
     setViewerOptions((prev) => ({ ...prev, renderMode }));

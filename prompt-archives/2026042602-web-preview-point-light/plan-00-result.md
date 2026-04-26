@@ -27,7 +27,26 @@
 
 ## Phase 2：点光源配置读写与右侧栏状态流
 
-- 状态：未开始。
+- 状态：已完成。
+- 变更摘要：
+  - 扩展 `PreviewAppearance`，支持 `pointLightMode` 与 `pointLightPosition` 的默认值、归一化和写回。
+  - 增加自动点光源位置纯函数，复用 `front` camera framing distance。
+  - 右侧栏增加 off / auto / manual 按钮、manual X/Y/Z 输入和 reset。
+  - manual 默认位置和 reset 使用当前真实自动位置；无可靠位置时禁用会写配置的 manual/reset 路径，避免写入 fallback。
+  - CanvasZone 将当前 `.scad` 预览的自动位置传给 ScadWorkbench；appearance 操作继续只写 `.scad.json`，不触发 `.scad` preview request。
+  - 临时将点光源状态流同步到 canvas dataset，真实 Three.js `PointLight` 对象留给 Phase 3。
+- 验证结果：
+  - `bun run --cwd packages/studio-web typecheck`：通过。
+  - `bun x vitest run tests/unit/preset-io.test.ts tests/unit/mesh-render-metrics.test.ts`：通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "scad preview appearance controls persist per file" --timeout=60000`：通过。
+  - `bun x playwright test tests/playwright/preview-request-dedup.spec.ts --grep "appearance changes do not emit preview request" --timeout=30000`：通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "save, load, delete round-trip" --timeout=60000`：通过。
+- 独立 review：
+  - 初轮 review 发现无可靠自动位置时可能写入 fallback；已修复。
+  - 复审结论为无 blocker、无 important，可以提交 Phase 2 并进入 Phase 3。
+- 遗留问题：
+  - 真实 `PointLight` 状态与 dataset 来源将在 Phase 3 处理。
+  - Phase 4 回归可补充 manual 缺失 position 且 auto 未就绪的定向测试。
 
 ## Phase 3：Three.js 点光源运行时与自动位置
 

@@ -1,5 +1,7 @@
 import type { CameraState } from "../canvas/camera-state";
+import { distanceTo, fitCameraToBounds } from "../canvas/camera-controls";
 import { meshBuildPlateSize, type MeshBounds, type MeshInfo } from "./mesh-info";
+import type { PointLightPosition } from "./viewer-options";
 
 export type MeshRenderViewport = {
   width: number;
@@ -115,6 +117,20 @@ export function clippingPlanesForBounds(
   const near = Math.max(0.01, Math.min(10, Math.max(distance - radius * 4, 0.01)));
   const far = Math.max(1000, distance + radius * 2 + 100);
   return { near, far };
+}
+
+export function pointLightAutoPositionForBounds(
+  bounds: MeshBounds,
+  aspectRatio: number,
+): PointLightPosition {
+  const camera = fitCameraToBounds(bounds, "front", aspectRatio);
+  const distance = distanceTo(camera);
+  const scale = distance / Math.sqrt(3);
+  return [
+    camera.target[0] + scale,
+    camera.target[1] - scale,
+    camera.target[2] + scale,
+  ];
 }
 
 export function visibleProjectPlaneForCamera(

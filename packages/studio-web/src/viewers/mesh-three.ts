@@ -42,8 +42,10 @@ import {
   meshRenderInputsReady,
   meshSceneMetrics,
   orthographicHalfHeightForCamera,
+  pointLightAutoPositionForBounds,
   type MeshRenderViewport,
 } from "./mesh-render-metrics";
+import type { PointLightMode, PointLightPosition } from "./viewer-options";
 
 export type MeshPayload = {
   positions: Float32Array;
@@ -332,6 +334,23 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.gridMinorColor = options.gridMinorColor;
     canvas.dataset.gridColorSignature = String(grid.userData["colorSignature"] ?? "");
     canvas.dataset.lightingIntensity = String(options.lightingIntensity);
+    const pointLightMode = effectivePointLightMode();
+    const pointLightPosition =
+      pointLightMode === "off" ? null : currentPointLightPosition(pointLightMode);
+    canvas.dataset.pointLightMode = options.pointLightMode;
+    canvas.dataset.effectivePointLightMode = pointLightMode;
+    canvas.dataset.pointLightForced = String(
+      options.shadowsEnabled && options.pointLightMode === "off",
+    );
+    canvas.dataset.pointLightEnabled = String(pointLightMode !== "off");
+    canvas.dataset.pointLightCastShadow = String(
+      pointLightMode !== "off" && options.shadowsEnabled,
+    );
+    if (pointLightPosition) {
+      canvas.dataset.pointLightPosition = formatPointLightPosition(pointLightPosition);
+    } else {
+      delete canvas.dataset.pointLightPosition;
+    }
     canvas.dataset.lightRigIntensity = (
       ambient.intensity +
       hemi.intensity +
@@ -349,6 +368,28 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       delete canvas.dataset.fogNear;
       delete canvas.dataset.fogFar;
     }
+  }
+
+  function effectivePointLightMode(): PointLightMode {
+    if (options.shadowsEnabled && options.pointLightMode === "off") return "auto";
+    return options.pointLightMode;
+  }
+
+  function currentPointLightPosition(mode: PointLightMode): PointLightPosition {
+    if (mode === "manual" && options.pointLightPosition) {
+      return options.pointLightPosition;
+    }
+    if (meshInfo && viewportReady) {
+      return pointLightAutoPositionForBounds(
+        meshInfo.bounds,
+        viewportWidth / viewportHeight,
+      );
+    }
+    return options.pointLightPosition ?? [0, -160, 160];
+  }
+
+  function formatPointLightPosition(position: PointLightPosition): string {
+    return position.map((item) => item.toFixed(3)).join(",");
   }
 
   function clearMetricsDataset(): void {
@@ -663,6 +704,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (!payload || payload.positions.length === 0) {
         updateSceneScale(null);
         clearMetricsDataset();
+        syncCanvasDataset();
         render();
         return null;
       }
@@ -670,6 +712,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (!info) {
         updateSceneScale(null);
         clearMetricsDataset();
+        syncCanvasDataset();
         render();
         return null;
       }

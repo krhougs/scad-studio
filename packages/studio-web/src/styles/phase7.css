@@ -353,6 +353,41 @@
   border: var(--border-hairline);
   background: transparent;
 }
+.preview-appearance-panel__segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: var(--border-hairline);
+  background: var(--bg-surface);
+}
+.preview-appearance-panel__mode,
+.preview-appearance-panel__reset {
+  min-height: 28px;
+  border: 0;
+  color: var(--fg-muted);
+  background: transparent;
+  font: inherit;
+}
+.preview-appearance-panel__mode + .preview-appearance-panel__mode {
+  border-left: var(--border-hairline);
+}
+.preview-appearance-panel__mode:hover,
+.preview-appearance-panel__reset:hover {
+  color: var(--fg-primary);
+  background: var(--bg-surface-raised);
+}
+.preview-appearance-panel__mode:disabled,
+.preview-appearance-panel__reset:disabled {
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+.preview-appearance-panel__mode.is-active {
+  color: var(--fg-primary);
+  background: var(--ink-5);
+}
+.preview-appearance-panel__reset {
+  width: 100%;
+  border: var(--border-hairline);
+}
 .camera-panel__presets {
   display: flex;
   flex-wrap: wrap;
