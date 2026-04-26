@@ -209,7 +209,7 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
 }, testInfo) => {
   writeFileSync(
     PARAMS_CUBE_SCAD_JSON,
-    JSON.stringify({ presets: { existing: { size: 18 } } }, null, 2),
+    JSON.stringify(explicitOffFile(), null, 2),
   );
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
   await page
@@ -223,14 +223,42 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
 
   const inspector = page.getByTestId("workbench-inspector");
   const canvas = page.getByTestId("mesh-canvas");
+  const pointLightOff = inspector.getByTestId("preview-point-light-mode-off");
+  const pointLightAuto = inspector.getByTestId("preview-point-light-mode-auto");
+  const pointLightManual = inspector.getByTestId("preview-point-light-mode-manual");
   await canvas.waitFor({ state: "visible", timeout: 30_000 });
   await expect(inspector.getByTestId("preview-appearance-panel")).toBeVisible();
   await expect(canvas).toHaveAttribute("data-preview-background", "#181b20");
   const defaultGridSignature = await canvas.getAttribute("data-grid-color-signature");
   if (!defaultGridSignature) throw new Error("grid color signature should be present");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-point-light-enabled", "false");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "off");
 
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-point-light-forced", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-cast-shadow", "true");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "off");
+  await expect.poll(() => readJsonFile(PARAMS_CUBE_SCAD_JSON)).toEqual(explicitOffFile());
   await inspector.getByTestId("preview-background-color").fill("#20242b");
   await expect(canvas).toHaveAttribute("data-preview-background", "#20242b");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.backgroundColor === "#20242b" &&
+      appearance.pointLightMode === "off" &&
+      appearance.pointLightPosition === null
+    );
+  }).toBe(true);
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "false");
+
   await canvas.screenshot({
     path: testInfo.outputPath("preview-appearance-background.png"),
   });
@@ -258,6 +286,51 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await lightingField.fill("1.6");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
 
+  await pointLightManual.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "manual");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "manual");
+  const directManualPointLightPosition = await canvas.getAttribute("data-point-light-position");
+  if (!directManualPointLightPosition) {
+    throw new Error("direct manual point light position should be present");
+  }
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "manual" &&
+      pointLightPositionClose(appearance.pointLightPosition, directManualPointLightPosition)
+    );
+  }).toBe(true);
+
+  await pointLightAuto.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-point-light-enabled", "true");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "auto");
+  const autoPointLightPosition = await canvas.getAttribute("data-point-light-position");
+  if (!autoPointLightPosition) throw new Error("auto point light position should be present");
+  expect(autoPointLightPosition).toBe(directManualPointLightPosition);
+
+  await pointLightManual.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-position", autoPointLightPosition);
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "manual");
+  const pointLightX = inspector
+    .getByTestId("preview-point-light-x-number-field")
+    .getByRole("spinbutton");
+  const pointLightY = inspector
+    .getByTestId("preview-point-light-y-number-field")
+    .getByRole("spinbutton");
+  const pointLightZ = inspector
+    .getByTestId("preview-point-light-z-number-field")
+    .getByRole("spinbutton");
+  await pointLightX.fill("11");
+  await pointLightY.fill("22");
+  await pointLightZ.fill("33");
+  await expect(canvas).toHaveAttribute("data-point-light-position", "11.000,22.000,33.000");
+
   await expect
     .poll(async () => readJsonFile(path.join(TEST_WORKSPACE, "examples", "params-cube.scad.json")), {
       timeout: 10_000,
@@ -273,8 +346,116 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightMode: "manual",
+        pointLightPosition: [11, 22, 33],
       },
     });
+
+  await pointLightAuto.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "auto");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "auto");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "auto" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "auto");
+  await expect(canvas).toHaveAttribute("data-point-light-forced", "false");
+  await expect(canvas).toHaveAttribute("data-point-light-enabled", "true");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "auto" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "false");
+
+  await pointLightManual.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-position", "11.000,22.000,33.000");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "manual");
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-forced", "false");
+  await expect(canvas).toHaveAttribute("data-point-light-position", "11.000,22.000,33.000");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "manual" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "false");
+
+  await pointLightOff.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "off");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "off");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "off" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "true");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "auto");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "off" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+  await page.getByTestId("viewer-toggle-shadow").click();
+  await expect(canvas).toHaveAttribute("data-shadows-enabled", "false");
+
+  await pointLightAuto.click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "auto");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "auto");
+  await expect.poll(() => {
+    const file = readJsonFile(PARAMS_CUBE_SCAD_JSON);
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "auto" &&
+      pointLightPositionClose(appearance.pointLightPosition, "11.000,22.000,33.000")
+    );
+  }).toBe(true);
+
+  await pointLightManual.click();
+  await expect(canvas).toHaveAttribute("data-point-light-position", "11.000,22.000,33.000");
+  await expectPointLightButtons(pointLightOff, pointLightAuto, pointLightManual, "manual");
+
+  await inspector.getByTestId("preview-point-light-reset").click();
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-position", autoPointLightPosition);
+  await expect.poll(async () => {
+    const file = readJsonFile(path.join(TEST_WORKSPACE, "examples", "params-cube.scad.json"));
+    const appearance = previewAppearanceFromFile(file);
+    return (
+      appearance?.pointLightMode === "manual" &&
+      pointLightPositionClose(appearance.pointLightPosition, autoPointLightPosition)
+    );
+  }).toBe(true);
 
   await page.getByTestId("entry-cube.scad").click();
   await expect(canvas).toHaveAttribute("data-preview-background", "#181b20", {
@@ -283,6 +464,8 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-grid-major-color", "#5a6573");
   await expect(canvas).toHaveAttribute("data-grid-minor-color", "#343b45");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.25");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "off");
+  await expect(canvas).toHaveAttribute("data-effective-point-light-mode", "off");
 
   await page.getByTestId("entry-params-cube.scad").click();
   await expect(canvas).toHaveAttribute("data-preview-background", "#20242b", {
@@ -291,6 +474,8 @@ test("@canvas-interaction scad preview appearance controls persist per file", as
   await expect(canvas).toHaveAttribute("data-grid-major-color", "#7c8795");
   await expect(canvas).toHaveAttribute("data-grid-minor-color", "#46505d");
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.6");
+  await expect(canvas).toHaveAttribute("data-point-light-mode", "manual");
+  await expect(canvas).toHaveAttribute("data-point-light-position", autoPointLightPosition);
 });
 
 test("@canvas-interaction preview info and camera controls are available", async ({
@@ -737,10 +922,69 @@ function readJsonFile(filePath: string): unknown {
   }
 }
 
+function explicitOffFile(): unknown {
+  return {
+    presets: {
+      existing: {
+        size: 18,
+      },
+    },
+    previewAppearance: {
+      backgroundColor: "#181b20",
+      gridMajorColor: "#5a6573",
+      gridMinorColor: "#343b45",
+      lightingIntensity: 1.25,
+      pointLightMode: "off",
+      pointLightPosition: null,
+    },
+  };
+}
+
 async function numericAttribute(locator: Locator, name: string): Promise<number> {
   const value = await locator.getAttribute(name);
   if (value === null) throw new Error(`missing numeric attribute ${name}`);
   const number = Number(value);
   if (!Number.isFinite(number)) throw new Error(`invalid numeric attribute ${name}: ${value}`);
   return number;
+}
+
+async function expectPointLightButtons(
+  off: Locator,
+  auto: Locator,
+  manual: Locator,
+  active: "off" | "auto" | "manual",
+): Promise<void> {
+  await expect(off).toHaveAttribute("aria-pressed", String(active === "off"));
+  await expect(auto).toHaveAttribute("aria-pressed", String(active === "auto"));
+  await expect(manual).toHaveAttribute("aria-pressed", String(active === "manual"));
+}
+
+function pointLightPositionNumbers(value: string): number[] {
+  return value.split(",").map((item) => Number(item));
+}
+
+function previewAppearanceFromFile(file: unknown): {
+  backgroundColor?: unknown;
+  pointLightMode?: unknown;
+  pointLightPosition?: unknown;
+} | null {
+  if (!file || typeof file !== "object") return null;
+  const appearance = (file as { previewAppearance?: unknown }).previewAppearance;
+  if (!appearance || typeof appearance !== "object") return null;
+  return appearance as {
+    backgroundColor?: unknown;
+    pointLightMode?: unknown;
+    pointLightPosition?: unknown;
+  };
+}
+
+function pointLightPositionClose(value: unknown, expected: string): boolean {
+  if (!Array.isArray(value) || value.length !== 3) return false;
+  const expectedNumbers = pointLightPositionNumbers(expected);
+  return value.every(
+    (item, index) =>
+      typeof item === "number" &&
+      Number.isFinite(item) &&
+      Math.abs(item - expectedNumbers[index]) < 0.001,
+  );
 }

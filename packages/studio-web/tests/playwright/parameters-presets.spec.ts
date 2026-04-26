@@ -199,6 +199,8 @@ test("@parameters-presets save, load, delete round-trip", async ({ page }) => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 1.25,
+      pointLightMode: "off",
+      pointLightPosition: null,
     },
   });
 

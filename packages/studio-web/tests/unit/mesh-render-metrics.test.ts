@@ -12,9 +12,10 @@ import {
   meshRenderInputsReady,
   meshSceneMetrics,
   orthographicHalfHeightForCamera,
+  pointLightAutoPositionForBounds,
   visibleProjectPlaneForCamera,
 } from "../../src/viewers/mesh-render-metrics";
-import type { MeshInfo } from "../../src/viewers/mesh-info";
+import type { MeshBounds, MeshInfo } from "../../src/viewers/mesh-info";
 
 const INFO: MeshInfo = {
   vertices: 8,
@@ -50,7 +51,32 @@ describe("mesh-render-metrics", () => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 1.25,
+      pointLightMode: "off",
+      pointLightPosition: null,
     });
+  });
+
+  it("places automatic point light at the front view upper-right distance", () => {
+    const aspectRatio = 1.5;
+    const bounds: MeshBounds = { min: [10, -30, 5], max: [210, 70, 55] };
+    const center = [110, 20, 30];
+    const frontCamera = fitCameraToBounds(bounds, "front", aspectRatio);
+    const expectedDistance = distanceTo(frontCamera);
+    const position = pointLightAutoPositionForBounds(bounds, aspectRatio);
+    const directionScale = expectedDistance / Math.sqrt(3);
+
+    expect(position).toEqual([
+      expect.closeTo(center[0] + directionScale, 5),
+      expect.closeTo(center[1] - directionScale, 5),
+      expect.closeTo(center[2] + directionScale, 5),
+    ]);
+    expect(
+      Math.hypot(
+        position[0] - center[0],
+        position[1] - center[1],
+        position[2] - center[2],
+      ),
+    ).toBeCloseTo(expectedDistance, 5);
   });
 
   it("does not frame until mesh info and real viewport are available", () => {

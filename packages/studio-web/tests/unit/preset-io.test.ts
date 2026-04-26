@@ -94,6 +94,8 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightMode: string;
+        pointLightPosition: [number, number, number] | null;
       };
     };
 
@@ -102,6 +104,8 @@ describe("preset-io", () => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 1.25,
+      pointLightMode: "off",
+      pointLightPosition: null,
     });
   });
 
@@ -125,6 +129,8 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightMode: string;
+        pointLightPosition: [number, number, number] | null;
       };
     };
 
@@ -133,6 +139,8 @@ describe("preset-io", () => {
       gridMajorColor: "#7c8795",
       gridMinorColor: "#46505d",
       lightingIntensity: 1.6,
+      pointLightMode: "off",
+      pointLightPosition: null,
     });
   });
 
@@ -152,6 +160,8 @@ describe("preset-io", () => {
         gridMajorColor: string;
         gridMinorColor: string;
         lightingIntensity: number;
+        pointLightMode: string;
+        pointLightPosition: [number, number, number] | null;
       };
     };
 
@@ -160,6 +170,82 @@ describe("preset-io", () => {
       gridMajorColor: "#5a6573",
       gridMinorColor: "#343b45",
       lightingIntensity: 3,
+      pointLightMode: "off",
+      pointLightPosition: null,
+    });
+  });
+
+  it("parsePresetFile accepts point light appearance state beside presets", () => {
+    const text = JSON.stringify({
+      presets: {
+        lit: {
+          size: 20,
+        },
+      },
+      previewAppearance: {
+        backgroundColor: "#20242b",
+        gridMajorColor: "#7c8795",
+        gridMinorColor: "#46505d",
+        lightingIntensity: 1.6,
+        pointLightMode: "manual",
+        pointLightPosition: [11, 22, 33],
+      },
+    });
+    const file = parsePresetFile(text);
+
+    expect(file.previewAppearance).toEqual({
+      backgroundColor: "#20242b",
+      gridMajorColor: "#7c8795",
+      gridMinorColor: "#46505d",
+      lightingIntensity: 1.6,
+      pointLightMode: "manual",
+      pointLightPosition: [11, 22, 33],
+    });
+  });
+
+  it("parsePresetFile preserves remembered point light position outside manual mode", () => {
+    const autoFile = parsePresetFile(
+      JSON.stringify({
+        presets: {},
+        previewAppearance: {
+          pointLightMode: "auto",
+          pointLightPosition: [11, 22, 33],
+        },
+      }),
+    );
+    const offFile = parsePresetFile(
+      JSON.stringify({
+        presets: {},
+        previewAppearance: {
+          pointLightMode: "off",
+          pointLightPosition: [11, 22, 33],
+        },
+      }),
+    );
+
+    expect(autoFile.previewAppearance).toMatchObject({
+      pointLightMode: "auto",
+      pointLightPosition: [11, 22, 33],
+    });
+    expect(offFile.previewAppearance).toMatchObject({
+      pointLightMode: "off",
+      pointLightPosition: [11, 22, 33],
+    });
+  });
+
+  it("parsePresetFile rejects invalid point light mode and position", () => {
+    const text = JSON.stringify({
+      presets: {},
+      previewAppearance: {
+        pointLightMode: "forced",
+        pointLightPosition: [1, null, "z"],
+      },
+    });
+    const file = parsePresetFile(text);
+
+    expect(file.previewAppearance).toMatchObject({
+      pointLightMode: "off",
+      pointLightPosition: null,
     });
   });
 
@@ -176,6 +262,8 @@ describe("preset-io", () => {
         gridMajorColor: "#5a6573",
         gridMinorColor: "#343b45",
         lightingIntensity: 1.25,
+        pointLightMode: "off",
+        pointLightPosition: null,
       },
     });
     expect(JSON.parse(text)).toEqual({
@@ -191,6 +279,8 @@ describe("preset-io", () => {
         gridMajorColor: "#5a6573",
         gridMinorColor: "#343b45",
         lightingIntensity: 1.25,
+        pointLightMode: "off",
+        pointLightPosition: null,
       },
     });
   });
@@ -203,6 +293,8 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightMode: "manual",
+        pointLightPosition: [11, 22, 33],
       },
     };
     const text = stringifyPresetFile(file);
@@ -220,6 +312,8 @@ describe("preset-io", () => {
         gridMajorColor: "#7c8795",
         gridMinorColor: "#46505d",
         lightingIntensity: 1.6,
+        pointLightMode: "manual",
+        pointLightPosition: [11, 22, 33],
       },
     });
     expect(parsePresetFile(text)).toEqual(file);

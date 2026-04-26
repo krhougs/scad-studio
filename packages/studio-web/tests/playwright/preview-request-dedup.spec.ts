@@ -133,6 +133,48 @@ test("@preview-dedup appearance changes do not emit preview request", async ({
     "data-preview-background",
     "#20242b",
   );
+  await inspector.getByTestId("preview-point-light-mode-manual").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-mode",
+    "manual",
+  );
+  await inspector.getByTestId("preview-point-light-mode-auto").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-mode",
+    "auto",
+  );
+  await inspector.getByTestId("preview-point-light-mode-manual").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-mode",
+    "manual",
+  );
+  await inspector
+    .getByTestId("preview-point-light-x-number-field")
+    .getByRole("spinbutton")
+    .fill("11");
+  await inspector
+    .getByTestId("preview-point-light-y-number-field")
+    .getByRole("spinbutton")
+    .fill("22");
+  await inspector
+    .getByTestId("preview-point-light-z-number-field")
+    .getByRole("spinbutton")
+    .fill("33");
+  await inspector.getByTestId("preview-point-light-reset").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-effective-point-light-mode",
+    "manual",
+  );
+  await inspector.getByTestId("preview-point-light-mode-auto").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-mode",
+    "auto",
+  );
+  await inspector.getByTestId("preview-point-light-mode-off").click();
+  await expect(page.getByTestId("mesh-canvas")).toHaveAttribute(
+    "data-point-light-mode",
+    "off",
+  );
   await page.waitForTimeout(700);
 
   expect(await recordedPreviewRequests(page)).toEqual([]);
