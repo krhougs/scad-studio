@@ -2,7 +2,7 @@
 
 ## 状态总览
 
-- 状态：执行中。
+- 状态：已完成。
 - 当前任务：为 Studio Web 预览增加额外点光源模式、手动位置、reset 和 shadow 强制启用运行时语义。
 - 计划存档：`prompt-archives/2026042602-web-preview-point-light/plan-00.md`。
 
@@ -70,4 +70,22 @@
 
 ## Phase 4：完整回归与结果归档
 
-- 状态：未开始。
+- 状态：已完成。
+- 验证结果：
+  - `bun run --cwd packages/studio-web typecheck`：通过。
+  - `bun x vitest run tests/unit/preset-io.test.ts tests/unit/mesh-render-metrics.test.ts`：通过。
+  - `bun x playwright test tests/playwright/canvas-interaction.spec.ts --grep "scad preview appearance controls persist per file|preview info and camera controls are available" --timeout=60000`：通过。
+  - `bun x playwright test tests/playwright/preview-request-dedup.spec.ts --grep "appearance changes do not emit preview request" --timeout=30000`：通过。
+  - `bun x playwright test tests/playwright/parameters-presets.spec.ts --grep "save, load, delete round-trip" --timeout=60000`：通过。
+- 截图与像素检查：
+  - 使用 Playwright 启动真实 harness，读取 canvas 截图 PNG 像素。
+  - base / point-auto / point-auto-shadow 三种状态非背景像素比例约 `0.279`。
+  - 三种状态亮度范围约 `16` 到 `236`，标准差约 `27`。
+  - 结论：画面非空白，模型与背景存在可检测对比，shadow on/off 均非全黑或全白。
+- 范围检查：
+  - 变更集中在 Studio Web preview/UI、Three.js viewer、测试与计划归档。
+  - 未修改 app server、protocol、transport 或 OpenSCAD 请求契约。
+- 独立 review：
+  - 最终只读 review 结论为无 blocker；原始需求均已覆盖，可以完成 Phase 4。
+- 遗留问题：
+  - `normalizePointLightPosition` 当前允许可转换为 number 的值；该行为不影响本需求，后续若需要更严格损坏配置处理，可单独收紧。
