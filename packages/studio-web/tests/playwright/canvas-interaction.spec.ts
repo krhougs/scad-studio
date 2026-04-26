@@ -759,8 +759,13 @@ for (const viewport of VIEWPORTS) {
     const workbenchCanvas = page.getByTestId("workbench-canvas");
     const toolbar = page.getByTestId("viewer-toolbar");
     const meshStatus = page.getByTestId("mesh-status");
+    const fps = page.getByTestId("canvas-fps");
     await canvas.waitFor({ state: "visible", timeout: 30_000 });
     await expect(statusBar).toBeVisible();
+    await expect(fps).toContainText(/\d+ fps/);
+    await expect
+      .poll(() => canvas.getAttribute("data-render-fps"))
+      .toMatch(/^\d+$/);
     await expect(meshStatus).toContainText(/preview pending|preview ready/, {
       timeout: 30_000,
     });
@@ -773,6 +778,14 @@ for (const viewport of VIEWPORTS) {
     expect(statusBox.y).toBeGreaterThanOrEqual(canvasBox.y + canvasBox.height - 1);
     expect(Math.abs(statusBox.x - workbenchCanvasBox.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(statusBox.width - workbenchCanvasBox.width)).toBeLessThanOrEqual(2);
+    const fpsBox = await boxFor(fps);
+    expect(fpsBox.x).toBeGreaterThan(statusBox.x + statusBox.width / 2);
+    expect(fpsBox.x + fpsBox.width).toBeLessThanOrEqual(statusBox.x + statusBox.width);
+    await expectNoOverlap(
+      page.getByTestId("message"),
+      fps,
+      "status message must not overlap fps display",
+    );
 
     await expectNoOverlap(toolbar, statusBar, "viewer toolbar must not overlap status bar");
     await expectNoOverlap(canvas, statusBar, "mesh canvas must not overlap status bar");

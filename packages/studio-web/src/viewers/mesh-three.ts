@@ -190,6 +190,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   };
 
   let cameraCallback: ((c: CameraState) => void) | null = null;
+  let fpsStatusValue = findFpsStatusValue();
+  let fpsLastFrameTime = 0;
+
+  setFpsStatusText("— fps");
 
   function emitCamera(): void {
     if (!cameraCallback) return;
@@ -205,6 +209,36 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
 
   function render(): void {
     renderer.render(scene, camera);
+    recordFrame();
+  }
+
+  function recordFrame(): void {
+    const now = performance.now();
+    if (fpsLastFrameTime === 0) {
+      fpsLastFrameTime = now;
+      return;
+    }
+    const elapsed = now - fpsLastFrameTime;
+    fpsLastFrameTime = now;
+    if (elapsed <= 0) return;
+    const fps = 1000 / elapsed;
+    const fpsLabel = Math.max(0, Math.round(fps)).toString();
+    canvas.dataset.renderFps = fpsLabel;
+    setFpsStatusText(`${fpsLabel} fps`);
+  }
+
+  function findFpsStatusValue(): HTMLElement | null {
+    const scope = canvas.closest("[data-canvas-fps-scope]");
+    return scope?.querySelector<HTMLElement>("[data-canvas-fps-value]") ?? null;
+  }
+
+  function setFpsStatusText(text: string): void {
+    if (!fpsStatusValue?.isConnected) {
+      fpsStatusValue = findFpsStatusValue();
+    }
+    if (fpsStatusValue) {
+      fpsStatusValue.textContent = text;
+    }
   }
 
   function updateProjection(): void {
@@ -851,6 +885,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       cameraCallback = cb;
     },
     dispose() {
+      setFpsStatusText("— fps");
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);

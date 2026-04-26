@@ -163,7 +163,7 @@ export function CanvasZone(props: CanvasZoneProps) {
         onActivate={onActivateTab}
         onClose={onCloseTab}
       />
-      <div className="canvas-well">
+      <div className="canvas-well" data-canvas-fps-scope="">
         <div className="canvas-frame">
           <div className="canvas-chrome-top">
             {isMeshLike ? (
@@ -227,6 +227,15 @@ export function CanvasZone(props: CanvasZoneProps) {
                 </div>
                 <div className="cell">
                   idx<span>{meshInfo.indices}</span>
+                </div>
+              </>
+            ) : null}
+            {isMeshLike ? (
+              <>
+                <div className="div part-meta__fps-divider" aria-hidden="true" />
+                <div className="cell part-meta__fps" data-testid="canvas-fps">
+                  render
+                  <span data-canvas-fps-value="" />
                 </div>
               </>
             ) : null}

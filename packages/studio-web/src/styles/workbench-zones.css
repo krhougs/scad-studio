@@ -522,13 +522,20 @@
   min-width: 0;
   overflow: hidden;
 }
+.part-meta > div:first-child {
+  min-width: 0;
+  overflow: hidden;
+}
 .part-meta b {
+  display: block;
   font-family: var(--sans);
   font-size: var(--fs-sm);
   font-weight: 500;
   letter-spacing: var(--tr-tight);
   color: var(--t-1);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .part-meta .cell {
   font-family: var(--mono);
@@ -540,6 +547,8 @@
   flex-direction: column;
   gap: 2px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 .part-meta .cell span {
   font-family: var(--mono);
@@ -547,6 +556,8 @@
   color: var(--t-1);
   text-transform: none;
   letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .part-meta .cell span.is-ok {
   color: var(--signal-ok);
@@ -555,9 +566,17 @@
   color: var(--signal-err);
 }
 .part-meta .div {
-  width: 1px;
+  flex: 0 0 1px;
   height: 24px;
   background: var(--ink-4s);
+}
+.part-meta__fps-divider {
+  margin-left: auto;
+}
+.part-meta__fps {
+  flex: 0 0 auto;
+  align-items: flex-end;
+  text-align: right;
 }
 .canvas-actions {
   display: flex;
