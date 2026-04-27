@@ -1,3 +1,4 @@
+pub mod cadquery;
 mod child_terminator;
 mod config;
 mod export;
@@ -7,6 +8,12 @@ mod preview;
 mod watch;
 mod workspace;
 
+pub use cadquery::{
+    CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
+    CadQueryRunnerErrorKind, StagedCadQueryProject, cadquery_result_ready,
+    execute_cadquery_with_staging, parse_cadquery_success_json, run_cadquery_runner,
+    stage_cadquery_project, validate_cadquery_mesh_payload,
+};
 pub use child_terminator::{
     ChildTerminator, DefaultChildTerminator, terminate_child, terminate_child_with,
 };

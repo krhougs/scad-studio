@@ -3,6 +3,9 @@
 export const memory: WebAssembly.Memory;
 export const protocol_decode_client_frame: (a: number, b: number) => [number, number, number];
 export const protocol_decode_server_frame: (a: number, b: number) => [number, number, number];
+export const protocol_encode_cadquery_execute_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_cadquery_preview_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_cadquery_result_get_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_cancel_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_close_frame: () => [number, number, number, number];
 export const protocol_encode_config_load_request: (a: bigint) => [number, number, number, number];

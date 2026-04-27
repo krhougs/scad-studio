@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const python = Bun.env.CADQUERY_RUNNER_PYTHON ?? "python3.11";
+const RUNNER_TEST_TIMEOUT_MS = 20_000;
 
 type RunnerResult = {
   code: number | null;
@@ -13,8 +14,26 @@ type RunnerResult = {
   json: any;
 };
 
-async function runRunner(projectRoot: string, script: string): Promise<RunnerResult> {
-  const outputDir = await mkdtemp(join(tmpdir(), "budn-cq-output-"));
+function translationOf(transform: number[]): number[] {
+  return [transform[3], transform[7], transform[11]];
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runRunner(
+  projectRoot: string,
+  script: string,
+  exports = "",
+  requestedOutputDir?: string,
+): Promise<RunnerResult> {
+  const outputDir = requestedOutputDir ?? (await mkdtemp(join(tmpdir(), "budn-cq-output-")));
   const env = {
     ...Bun.env,
     PYTHONPATH: [repoRoot, Bun.env.PYTHONPATH].filter(Boolean).join(":"),
@@ -32,7 +51,7 @@ async function runRunner(projectRoot: string, script: string): Promise<RunnerRes
       "--output-dir",
       outputDir,
       "--exports",
-      "",
+      exports,
     ],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
   );
@@ -41,7 +60,9 @@ async function runRunner(projectRoot: string, script: string): Promise<RunnerRes
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  await rm(outputDir, { force: true, recursive: true });
+  if (!requestedOutputDir) {
+    await rm(outputDir, { force: true, recursive: true });
+  }
   let json: any;
   try {
     json = JSON.parse(stdout);
@@ -62,11 +83,16 @@ test("cadquery runner emits a single part mesh for a Workplane build", async () 
   expect(result.json.root_object_kind).toBe("part");
   expect(result.json.parts).toHaveLength(1);
   expect(result.json.parts[0].mesh.faces.length).toBeGreaterThan(0);
+  expect(result.json.parts[0].mesh.edges.length).toBeGreaterThan(0);
+  expect(result.json.parts[0].mesh.vertices.length).toBeGreaterThan(0);
+  expect(result.json.parts[0].mesh.edges[0].polyline.length).toBeGreaterThanOrEqual(6);
+  expect(result.json.parts[0].mesh.vertices[0].position).toHaveLength(3);
+  expect(result.json.parts[0].feature_map.top_surface.face_indices.length).toBeGreaterThan(0);
   expect(result.json.metadata.bounding_box).toEqual({
     min: [-40, -30, -4],
     max: [40, 30, 4],
   });
-});
+}, RUNNER_TEST_TIMEOUT_MS);
 
 test("cadquery runner emits assembly parts with instance paths and metadata refs", async () => {
   const projectRoot = join(repoRoot, "tests/fixtures/cadquery-runner/assembly");
@@ -88,7 +114,52 @@ test("cadquery runner emits assembly parts with instance paths and metadata refs
   ]);
   expect(result.json.parts[2].transform).toHaveLength(16);
   expect(result.json.parts[2].object_kind).toBe("component");
-});
+  expect(result.json.parts[0].feature_map.floor.face_indices.length).toBeGreaterThan(0);
+  expect(result.json.parts[1].feature_map.top_surface.face_indices.length).toBeGreaterThan(0);
+  expect(result.json.parts[2].feature_map.board_body.face_indices.length).toBeGreaterThan(0);
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner flattens nested assembly parts with full instance paths", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "budn-cq-nested-assembly-"));
+  try {
+    await mkdir(join(projectRoot, "assemblies"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "assemblies/nested.py"),
+      [
+        "import cadquery as cq",
+        'REFS = {"assembly": "root_assembly"}',
+        "def build(params=None):",
+        '    root = cq.Assembly(name="root_assembly")',
+        '    module = cq.Assembly(name="module")',
+        '    module.add(cq.Workplane("XY").box(1, 1, 1), name="inner_a", metadata={"ref_text": "@part[inner_a]", "object_kind": "part"})',
+        '    module.add(cq.Workplane("XY").box(2, 1, 1), name="inner_b", loc=cq.Location(cq.Vector(3, 0, 0)), metadata={"ref_text": "@part[inner_b]", "object_kind": "part"})',
+        '    root.add(module, name="module", loc=cq.Location(cq.Vector(0, 2, 0)), metadata={"ref_text": "@assembly[module]", "object_kind": "assembly"})',
+        "    return root",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runRunner(projectRoot, "assemblies/nested.py");
+
+    expect(result.code).toBe(0);
+    expect(result.json.root_ref_text).toBe("@assembly[root_assembly]");
+    expect(result.json.parts.map((part: any) => part.instance_path)).toEqual([
+      "root_assembly/module/inner_a",
+      "root_assembly/module/inner_b",
+    ]);
+    expect(result.json.parts.map((part: any) => part.ref_text)).toEqual([
+      "@part[inner_a]",
+      "@part[inner_b]",
+    ]);
+    expect(result.json.parts.map((part: any) => translationOf(part.transform))).toEqual([
+      [0, 2, 0],
+      [3, 2, 0],
+    ]);
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+}, RUNNER_TEST_TIMEOUT_MS);
 
 test("cadquery runner changes deps_hash and build_id when an imported file changes", async () => {
   const sourceRoot = join(repoRoot, "tests/fixtures/cadquery-runner/imported");
@@ -114,7 +185,50 @@ test("cadquery runner changes deps_hash and build_id when an imported file chang
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
   }
-});
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner tracks from-import module aliases as dependencies", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "budn-cq-from-import-"));
+  try {
+    await mkdir(join(projectRoot, "parts"), { recursive: true });
+    await mkdir(join(projectRoot, "components"), { recursive: true });
+    await writeFile(
+      join(projectRoot, "components/dimensions.py"),
+      "WIDTH = 80\nLENGTH = 60\nHEIGHT = 8\n",
+      "utf8",
+    );
+    await writeFile(
+      join(projectRoot, "parts/top_lid.py"),
+      [
+        "import cadquery as cq",
+        "from components import dimensions",
+        'REFS = {"part": "top_lid"}',
+        "def build(params=None):",
+        '    return cq.Workplane("XY").box(dimensions.WIDTH, dimensions.LENGTH, dimensions.HEIGHT)',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await runRunner(projectRoot, "parts/top_lid.py");
+    await writeFile(
+      join(projectRoot, "components/dimensions.py"),
+      "WIDTH = 96\nLENGTH = 60\nHEIGHT = 8\n",
+      "utf8",
+    );
+    const second = await runRunner(projectRoot, "parts/top_lid.py");
+
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(first.json.manifest.dependencies.map((dep: any) => dep.path)).toContain(
+      "components/dimensions.py",
+    );
+    expect(second.json.manifest.deps_hash).not.toBe(first.json.manifest.deps_hash);
+    expect(second.json.build_id).not.toBe(first.json.build_id);
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+}, RUNNER_TEST_TIMEOUT_MS);
 
 test("cadquery runner reports build exceptions as build_error", async () => {
   const projectRoot = join(repoRoot, "tests/fixtures/cadquery-runner/build-error");
@@ -125,4 +239,67 @@ test("cadquery runner reports build exceptions as build_error", async () => {
   expect(result.json.error_type).toBe("ValueError");
   expect(result.json.error).toContain("intentional build failure");
   expect(result.stderr).toContain("ValueError");
-});
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner exports requested artifacts and hashes them", async () => {
+  const sourceRoot = join(repoRoot, "tests/fixtures/cadquery-runner/simple");
+  const projectRoot = await mkdtemp(join(tmpdir(), "budn-cq-export-project-"));
+  await cp(sourceRoot, projectRoot, { recursive: true });
+
+  try {
+    const result = await runRunner(
+      projectRoot,
+      "parts/top_lid.py",
+      "step,stl",
+      join(projectRoot, "outputs"),
+    );
+
+    expect(result.code).toBe(0);
+    expect(Object.keys(result.json.exports).sort()).toEqual(["step", "stl"]);
+    expect(result.json.exports.step).toBe("outputs/top_lid.step");
+    expect(result.json.exports.stl).toBe("outputs/top_lid.stl");
+    expect(result.json.manifest.export_hashes.step).toStartWith("sha256:");
+    expect(result.json.manifest.export_hashes.stl).toStartWith("sha256:");
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner rejects invalid selector strings without eval", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "budn-cq-invalid-selector-"));
+  try {
+    await writeFile(
+      join(projectRoot, "bad_selector.py"),
+      [
+        "import cadquery as cq",
+        'REFS = {"part": "bad", "features": {"bad": {"selector": "__import__(\\"os\\")"}}}',
+        "def build(params=None):",
+        '    return cq.Workplane("XY").box(1, 1, 1)',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const result = await runRunner(projectRoot, "bad_selector.py");
+
+    expect(result.code).toBe(2);
+    expect(result.json.status).toBe("runner_error");
+    expect(result.json.error).toContain("invalid selector");
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner rejects export paths outside project root", async () => {
+  const projectRoot = join(repoRoot, "tests/fixtures/cadquery-runner/simple");
+  const outputDir = await mkdtemp(join(tmpdir(), "budn-cq-external-output-"));
+  try {
+    const result = await runRunner(projectRoot, "parts/top_lid.py", "step", outputDir);
+
+    expect(result.code).toBe(2);
+    expect(result.json.status).toBe("runner_error");
+    expect(result.json.error).toContain("project root");
+    expect(await pathExists(join(outputDir, "top_lid.step"))).toBe(false);
+  } finally {
+    await rm(outputDir, { force: true, recursive: true });
+  }
+}, RUNNER_TEST_TIMEOUT_MS);

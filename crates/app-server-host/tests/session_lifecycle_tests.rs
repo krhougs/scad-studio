@@ -114,6 +114,9 @@ fn build_session() -> HostSession {
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             supports_session_reclaim: true,
+            cadquery: true,
+            agent: false,
+            selection_sync: false,
         },
     )
 }

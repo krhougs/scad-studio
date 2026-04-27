@@ -1,6 +1,22 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export class CadQueryMeshHandle {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    edge_polyline(part_index: number, edge_index: number): Float32Array;
+    face_normals(part_index: number, face_index: number): Float32Array;
+    face_positions(part_index: number, face_index: number): Float32Array;
+    metadata(): any;
+    vertex_position(part_index: number, vertex_index: number): Float32Array;
+    readonly build_id: string;
+    readonly part_count: number;
+    readonly result_id: string;
+    readonly root_object_kind: string;
+    readonly root_ref_text: string;
+}
+
 export class ClientHandle {
     private constructor();
     free(): void;
@@ -54,6 +70,12 @@ export function client_create_with_timeouts(timeouts: any): ClientHandle;
 
 export function client_destroy(handle: ClientHandle): void;
 
+export function client_dispatch_cadquery_execute(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_cadquery_preview(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_cadquery_result_get(handle: ClientHandle, params: any): bigint;
+
 export function client_dispatch_config_load(handle: ClientHandle): bigint;
 
 export function client_dispatch_config_save(handle: ClientHandle, params: any): bigint;
@@ -83,6 +105,8 @@ export function client_receive_inbound(handle: ClientHandle, bytes: Uint8Array):
 export function client_snapshot(handle: ClientHandle): any;
 
 export function client_subscribe_directory_watch(handle: ClientHandle, params: any): bigint;
+
+export function client_take_cadquery_mesh(handle: ClientHandle, result_id: string): CadQueryMeshHandle | undefined;
 
 export function client_take_preview_mesh(handle: ClientHandle, request_id: bigint): MeshHandle | undefined;
 

@@ -126,3 +126,50 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 
 - Phase 0b 未发现需要写入 `docs/known_issues.md` 的新问题。
 - `--exports` 参数在 Phase 0b 仅保留 CLI 形态，实际 STEP / STL / 3MF 导出按 plan 留到 Phase 0c。
+
+## Phase 0c — 完整 runner + Rust CadQuery 集成
+
+### 完成情况
+
+- 扩展 `budn_cad_runner`，输出统一 `parts[]` schema，包含 face / edge / vertex topology、`feature_map`、exports、metadata、manifest、dependencies、`deps_hash`、`build_id`、root / part 的 `ref_text` 与 `object_kind`。
+- 新增安全 selector parser、feature ref mapper 和 exporter；selector 不使用 `eval()`，导出前先确认输出路径真实位置仍在 project root 内。
+- 扩展 Assembly 处理：递归展开 nested Assembly，保留完整 `instance_path`，组合父子 transform，并通过 child metadata / refs 保留 part 与 feature 映射。
+- 扩展 `app-server-protocol`：`WIRE_VERSION` 升到 2，新增 CadQuery command / response、`CadQueryMeshPayload`、`CadQueryResultReady`、`CadQueryObjectKind`、edge / vertex topology、CadQuery capability 字段。
+- 新增 Rust runner JSON 解析与校验：验证 `unit=millimeter`、`sha256:` build_id、manifest hash、dependencies、exports / `export_hashes`、topology 索引范围、有限 `f32` 和扁平数组长度。
+- 在 `app-server-core/src/cadquery/` 实现 CadQuery 子进程调用与 staging 写入：执行成功后才回写目标文件和 outputs，执行失败或冲突时不污染真实 workspace。
+- 修正 staging 时序：目标文件 baseline 在复制 workspace 前捕获；回写 target 和 outputs 前复查同一 baseline，复制期间或执行期间发生外部修改时返回 file conflict。
+- 修正 outputs 回写路径安全：回写前逐级检查目标父目录，拒绝 workspace 内 `outputs` 符号链接逃逸；已覆盖外部目录不产生 artifact 的回归测试。
+- 扩展 app-server-host dispatcher、`studio-common::ManagedClient` 和桌面协议 client，使 CadQuery preview / execute / result get 走同一 app server protocol 路径。
+- 扩展 `studio-web-wasm`：新增按 `result_id` 存取的 CadQuery side buffer 和 `CadQueryMeshHandle`，JS 可见事件只暴露轻量 `CadQueryResultReady`，大数组通过 handle getter 读取。
+- 更新 TypeScript protocol package、wasm generated 产物、Web handshake 版本和相关单元测试。
+
+### Review 与修复记录
+
+- 第一轮独立 review 发现多项阻断风险：nested Assembly transform、`commit_outputs()` baseline、protocol `build_id` / `unit` 校验、Web handshake 版本、TS protocol 类型、outside export path 绝对 fallback。均已修复并回归。
+- 第二轮独立 review 发现 outside export path 写入前拒绝不充分、topology 自索引未校验、Assembly child `feature_map` 为空。均以红绿回归方式修复。
+- 第三轮独立 review 发现 Rust 未校验 runner JSON 的 `exports` / `manifest.export_hashes`，以及 staging baseline 捕获时机在 workspace copy 之后。均已修复并补充测试。
+- 第四轮独立 review 发现 CadQuery outputs 回写可通过 workspace 内 `outputs` 符号链接写出 workspace。已补充 `cadquery_staging_rejects_output_symlink_escape` 红灯测试，并修复为回写前拒绝符号链接父目录。
+- 最终独立 review 结论：未发现阻塞 Phase 0c 提交的问题。残余风险仅为 prepare 与最终普通路径写入之间的本地并发 TOCTOU，已记录到 `docs/known_issues.md`。
+
+### 验证记录
+
+- `cargo test -p app-server-core --test cadquery_tests`：16 个测试通过。
+- `cargo test --workspace`：通过。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests`：12 个测试通过。
+- `cargo test -p studio-web-wasm --test wasm_bridge_smoke --target wasm32-unknown-unknown --no-run`：通过。
+- `cargo check -p app-server-protocol-wasm --target wasm32-unknown-unknown`：通过。
+- `cargo check -p studio-web-wasm --target wasm32-unknown-unknown`：通过。
+- `bun test tests/cadquery_runner.test.ts`：9 个测试、57 个断言通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：20 个文件、98 个测试通过。
+- `bun run protocol:build`：通过。
+- `bun run check:wasm-bindgen`：通过。
+- `bun run web:build`：构建成功，仍有既有 Vite 大 chunk warning。
+- `rustfmt --edition 2024 --config skip_children=true --check crates/app-server-core/src/cadquery/runner_json.rs crates/app-server-core/src/cadquery/staging.rs crates/app-server-core/tests/cadquery_tests.rs`：通过。
+- `git diff --check`：通过。
+
+### 遗留问题
+
+- `docs/known_issues.md` 新增记录：CadQuery output 回写在本地可信 workspace 假设下仍有普通路径写入 TOCTOU 残余风险；当前不阻断 MVP，后续若要把 workspace 当作不可信输入，需要基于目录句柄和 no-follow 语义重新设计写入 API。
+- `bun run web:build` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
+- CadQuery Python 环境仍按 MVP 策略手动安装；分发与沙盒策略留到产品化阶段。

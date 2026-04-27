@@ -1,12 +1,13 @@
 import cadquery as cq
 from OCP.BRep import BRep_Tool
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.TopAbs import TopAbs_FACE
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 from .errors import RunnerError
+from .ref_mapper import map_features
 
 
 def ref_from_refs(refs: dict, fallback: str) -> tuple[str, str]:
@@ -43,10 +44,93 @@ def face_triangles(triangulation, loc):
     return positions
 
 
-def tessellate_shape(shape) -> dict:
+def vector_xyz(vector):
+    return [vector.x, vector.y, vector.z]
+
+
+def vertex_xyz(vertex):
+    point = BRep_Tool.Pnt_s(vertex)
+    return [point.X(), point.Y(), point.Z()]
+
+
+def append_unique(shapes: list, candidate) -> int:
+    for index, shape in enumerate(shapes):
+        if candidate.IsSame(shape):
+            return index
+    shapes.append(candidate)
+    return len(shapes) - 1
+
+
+def collect_shapes(shape, kind, caster) -> list:
+    explorer = TopExp_Explorer(shape, kind)
+    shapes = []
+    while explorer.More():
+        append_unique(shapes, caster(explorer.Current()))
+        explorer.Next()
+    return shapes
+
+
+def edge_vertices(edge) -> list:
+    return collect_shapes(edge, TopAbs_VERTEX, TopoDS.Vertex_s)
+
+
+def face_edges(face) -> list:
+    return collect_shapes(face, TopAbs_EDGE, TopoDS.Edge_s)
+
+
+def edge_polyline(edge) -> list:
+    points = []
+    try:
+        sampled, _ = cq.Edge(edge).sample(12)
+        points = [vector_xyz(point) for point in sampled]
+    except Exception:
+        points = [vertex_xyz(vertex) for vertex in edge_vertices(edge)]
+    if len(points) < 2:
+        points = [vertex_xyz(vertex) for vertex in edge_vertices(edge)]
+    return [coordinate for point in points for coordinate in point]
+
+
+def edge_payloads(edges: list, topo_faces: list) -> list[dict]:
+    payloads = []
+    face_edge_sets = [face_edges(face) for face in topo_faces]
+    for edge_idx, edge in enumerate(edges):
+        adjacent_faces = []
+        for face_idx, face_edges_for_face in enumerate(face_edge_sets):
+            if any(edge.IsSame(face_edge) for face_edge in face_edges_for_face):
+                adjacent_faces.append(face_idx)
+        payloads.append(
+            {
+                "edge_idx": edge_idx,
+                "polyline": edge_polyline(edge),
+                "adjacent_faces": adjacent_faces,
+            }
+        )
+    return payloads
+
+
+def vertex_payloads(vertices: list, edges: list) -> list[dict]:
+    payloads = []
+    edge_vertex_sets = [edge_vertices(edge) for edge in edges]
+    for vertex_idx, vertex in enumerate(vertices):
+        adjacent_edges = []
+        for edge_idx, vertices_for_edge in enumerate(edge_vertex_sets):
+            if any(vertex.IsSame(edge_vertex) for edge_vertex in vertices_for_edge):
+                adjacent_edges.append(edge_idx)
+        payloads.append(
+            {
+                "vertex_idx": vertex_idx,
+                "position": vertex_xyz(vertex),
+                "adjacent_edges": adjacent_edges,
+            }
+        )
+    return payloads
+
+
+def tessellate_shape(shape) -> tuple[dict, list]:
     BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5, True)
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     faces = []
+    topo_faces = []
     face_idx = 0
     while explorer.More():
         face = TopoDS.Face_s(explorer.Current())
@@ -67,20 +151,16 @@ def tessellate_shape(shape) -> dict:
                     "candidate_selectors": [],
                 }
             )
+            topo_faces.append(face)
         face_idx += 1
         explorer.Next()
-    return {"faces": faces, "edges": [], "vertices": []}
-
-
-def feature_map(refs: dict) -> dict:
-    features = refs.get("features", {})
+    edges = collect_shapes(shape, TopAbs_EDGE, TopoDS.Edge_s)
+    vertices = collect_shapes(shape, TopAbs_VERTEX, TopoDS.Vertex_s)
     return {
-        name: {
-            "face_indices": [],
-            **{key: value for key, value in definition.items() if key in {"selector", "tag"}},
-        }
-        for name, definition in features.items()
-    }
+        "faces": faces,
+        "edges": edge_payloads(edges, topo_faces),
+        "vertices": vertex_payloads(vertices, edges),
+    }, topo_faces
 
 
 def transform_matrix(location) -> list[float]:
@@ -105,8 +185,20 @@ def transform_matrix(location) -> list[float]:
     ]
 
 
+def composed_child_location(assembly, name: str, child):
+    location = child.loc
+    path_segments = name.split("/")
+    for index in range(1, len(path_segments)):
+        parent_name = "/".join(path_segments[:index])
+        parent = assembly.objects.get(parent_name)
+        if parent is not None and getattr(parent, "obj", None) is None:
+            location = parent.loc * location
+    return location
+
+
 def part_payload(name, cq_object, refs, instance_path=None, transform=None):
     ref_text, object_kind = ref_from_refs(refs, name)
+    mesh, topo_faces = tessellate_shape(shape_from_object(cq_object))
     return {
         "name": name,
         "object_kind": object_kind,
@@ -114,8 +206,8 @@ def part_payload(name, cq_object, refs, instance_path=None, transform=None):
         "instance_path": instance_path,
         "transform": transform,
         "refs": refs,
-        "mesh": tessellate_shape(shape_from_object(cq_object)),
-        "feature_map": feature_map(refs),
+        "mesh": mesh,
+        "feature_map": map_features(cq_object, refs, mesh, topo_faces),
     }
 
 
@@ -124,7 +216,11 @@ def child_refs(child, name):
     object_kind = metadata.get("object_kind", "part")
     ref_text = metadata.get("ref_text", f"@{object_kind}[{name}]")
     ref_id = ref_text.split("[", 1)[1].rstrip("]") if "[" in ref_text else name
-    return {object_kind: ref_id, "features": {}}
+    refs = metadata.get("refs", {}) if isinstance(metadata.get("refs"), dict) else {}
+    features = metadata.get("features", refs.get("features", {}))
+    if not isinstance(features, dict):
+        features = {}
+    return {object_kind: ref_id, "features": features}
 
 
 def tessellate_assembly(assembly, root_ref: str) -> list[dict]:
@@ -140,7 +236,7 @@ def tessellate_assembly(assembly, root_ref: str) -> list[dict]:
                 child.obj,
                 refs,
                 instance_path=f"{root_name}/{name}",
-                transform=transform_matrix(child.loc),
+                transform=transform_matrix(composed_child_location(assembly, name, child)),
             )
         )
     return parts

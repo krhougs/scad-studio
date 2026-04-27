@@ -11,6 +11,7 @@ pub enum PendingKind {
     ConfigSave,
     SlicerList,
     ExportRun,
+    CadQuery,
     Cancel { target: RequestId },
     WatchSubscribe,
 }

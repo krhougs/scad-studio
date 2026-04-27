@@ -115,7 +115,7 @@ fn handshake_poll_updates_session_state() {
         client.session_token().map(|token| token.0.as_str()),
         Some("session-1")
     );
-    assert_eq!(client.negotiated_version(), Some(1));
+    assert_eq!(client.negotiated_version(), Some(2));
     assert_eq!(
         client
             .server_capabilities()
@@ -166,7 +166,7 @@ fn handshake_request() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "studio-common-tests".into(),
             platform: ClientPlatform::Desktop,
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -175,14 +175,17 @@ fn handshake_request() -> CapabilityHandshakeRequest {
 
 fn handshake_response() -> CapabilityHandshakeResponse {
     CapabilityHandshakeResponse {
-        negotiated_version: 1,
+        negotiated_version: 2,
         session_token: SessionToken("session-1".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             supports_session_reclaim: true,
+            cadquery: true,
+            agent: false,
+            selection_sync: false,
         },
     }
 }

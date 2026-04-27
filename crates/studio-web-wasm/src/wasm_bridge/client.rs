@@ -9,9 +9,10 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 
 use app_server_protocol::{
-    CapabilityHandshakeRequest, CommandSuccess, ConfigSaveRequest, ExportRunRequest,
-    FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact, PreviewRequest, RequestId,
-    SlicerListRequest, WorkspaceListRequest,
+    CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest,
+    CadQueryResultReady, CapabilityHandshakeRequest, CommandSuccess, ConfigSaveRequest,
+    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
+    PreviewRequest, RequestId, SlicerListRequest, WorkspaceListRequest,
 };
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
@@ -20,15 +21,17 @@ use studio_common::{
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use super::{mesh::MeshHandle, transport::NullTransport};
+use super::{cadquery_mesh::CadQueryMeshHandle, mesh::MeshHandle, transport::NullTransport};
 
 const PREVIEW_SIDE_BUFFER_CAPACITY: usize = 8;
+const CADQUERY_SIDE_BUFFER_CAPACITY: usize = 8;
 
 #[wasm_bindgen]
 pub struct ClientHandle {
     inner: Option<ManagedClient<NullTransport>>,
     preview_artifacts: PreviewSideBuffer,
     preview_targets: HashMap<RequestId, PathHandle>,
+    cadquery_meshes: CadQuerySideBuffer,
 }
 
 impl ClientHandle {
@@ -47,6 +50,7 @@ pub fn client_create() -> ClientHandle {
         inner: Some(ManagedClient::new(NullTransport)),
         preview_artifacts: PreviewSideBuffer::default(),
         preview_targets: HashMap::new(),
+        cadquery_meshes: CadQuerySideBuffer::default(),
     }
 }
 
@@ -58,6 +62,7 @@ pub fn client_create_with_timeouts(timeouts: JsValue) -> Result<ClientHandle, Js
         inner: Some(ManagedClient::with_timeouts(NullTransport, parsed)),
         preview_artifacts: PreviewSideBuffer::default(),
         preview_targets: HashMap::new(),
+        cadquery_meshes: CadQuerySideBuffer::default(),
     })
 }
 
@@ -93,6 +98,7 @@ pub fn client_mark_transport_closed(
         .map_err(|err| JsValue::from_str(&format!("invalid close reason: {err}")))?;
     handle.preview_artifacts.clear();
     handle.preview_targets.clear();
+    handle.cadquery_meshes.clear();
     handle.borrow_mut()?.mark_transport_closed(parsed);
     Ok(())
 }
@@ -116,6 +122,7 @@ pub fn client_tick(handle: &mut ClientHandle, now_ms: u64) -> Result<(), JsValue
 pub fn client_destroy(handle: &mut ClientHandle) {
     handle.preview_artifacts.clear();
     handle.preview_targets.clear();
+    handle.cadquery_meshes.clear();
     handle.inner.take();
 }
 
@@ -124,6 +131,12 @@ pub fn client_drain_events(handle: &mut ClientHandle) -> Result<JsValue, JsValue
     let mut events = handle.borrow_mut()?.drain_events();
     for event in &mut events {
         match event {
+            studio_common::ClientEvent::RequestSucceeded {
+                payload: success @ CommandSuccess::CadQueryMesh(_),
+                ..
+            } => {
+                handle.cadquery_meshes.insert_from_success(success);
+            }
             studio_common::ClientEvent::RequestSucceeded {
                 request_id,
                 payload: CommandSuccess::PreviewReady(ready),
@@ -159,6 +172,18 @@ pub fn client_drain_events(handle: &mut ClientHandle) -> Result<JsValue, JsValue
     }
     serde_wasm_bindgen::to_value(&events)
         .map_err(|err| JsValue::from_str(&format!("drain_events serialize: {err}")))
+}
+
+#[wasm_bindgen]
+pub fn client_take_cadquery_mesh(
+    handle: &mut ClientHandle,
+    result_id: &str,
+) -> Result<Option<CadQueryMeshHandle>, JsValue> {
+    handle.borrow()?;
+    Ok(handle
+        .cadquery_meshes
+        .take(result_id)
+        .map(|payload| CadQueryMeshHandle { payload }))
 }
 
 #[wasm_bindgen]
@@ -225,6 +250,48 @@ pub fn client_dispatch_preview_request(
             handle.preview_targets.insert(id, target);
             id.0
         })
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_cadquery_execute(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: CadQueryExecuteRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid cadquery_execute params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_cadquery_execute(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_cadquery_preview(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: CadQueryPreviewRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid cadquery_preview params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_cadquery_preview(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_cadquery_result_get(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: CadQueryResultGetRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid cadquery_result_get params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_cadquery_result_get(parsed)
+        .map(|id| id.0)
         .map_err(client_error_to_js)
 }
 
@@ -329,6 +396,83 @@ fn client_error_to_js(err: ClientError) -> JsValue {
 fn invalid_handle_js() -> JsValue {
     serde_wasm_bindgen::to_value(&ClientError::InvalidHandle)
         .unwrap_or_else(|_| JsValue::from_str("invalid handle"))
+}
+
+#[derive(Default)]
+struct CadQuerySideBuffer {
+    entries: HashMap<String, CadQueryMeshPayload>,
+    order: VecDeque<String>,
+}
+
+impl CadQuerySideBuffer {
+    fn insert_from_success(&mut self, success: &mut CommandSuccess) {
+        let CommandSuccess::CadQueryMesh(payload) = success else {
+            return;
+        };
+        let ready = cadquery_ready_from_payload(payload);
+        let buffered = std::mem::replace(payload, empty_cadquery_payload(&ready));
+        self.insert(buffered);
+        *success = CommandSuccess::CadQueryResultReady(ready);
+    }
+
+    fn insert(&mut self, payload: CadQueryMeshPayload) {
+        let result_id = payload.result_id.clone();
+        self.order.retain(|value| value != &result_id);
+        self.order.push_back(result_id.clone());
+        self.entries.insert(result_id, payload);
+        while self.entries.len() > CADQUERY_SIDE_BUFFER_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+
+    fn take(&mut self, result_id: &str) -> Option<CadQueryMeshPayload> {
+        let value = self.entries.remove(result_id);
+        if value.is_some() {
+            self.order.retain(|id| id != result_id);
+        }
+        value
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+}
+
+fn cadquery_ready_from_payload(payload: &CadQueryMeshPayload) -> CadQueryResultReady {
+    CadQueryResultReady {
+        result_id: payload.result_id.clone(),
+        build_id: payload.build_id.clone(),
+        part_count: payload.parts.len() as u32,
+        face_count: payload
+            .parts
+            .iter()
+            .map(|part| part.faces.len() as u32)
+            .sum(),
+        edge_count: payload
+            .parts
+            .iter()
+            .map(|part| part.edges.len() as u32)
+            .sum(),
+        vertex_count: payload
+            .parts
+            .iter()
+            .map(|part| part.vertices.len() as u32)
+            .sum(),
+    }
+}
+
+fn empty_cadquery_payload(ready: &CadQueryResultReady) -> CadQueryMeshPayload {
+    CadQueryMeshPayload {
+        result_id: ready.result_id.clone(),
+        build_id: ready.build_id.clone(),
+        unit: app_server_protocol::PreviewUnit::Millimeter,
+        root_ref_text: String::new(),
+        root_object_kind: app_server_protocol::CadQueryObjectKind::Part,
+        parts: Vec::new(),
+    }
 }
 
 #[derive(Default)]

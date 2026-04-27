@@ -33,6 +33,9 @@ def imported_modules(source: str) -> set[str]:
             modules.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
+            for alias in node.names:
+                if alias.name != "*":
+                    modules.add(f"{node.module}.{alias.name}")
     return modules
 
 
@@ -71,7 +74,9 @@ def build_manifest(project_root: Path, script_path: Path, params: dict, exports:
         "deps_hash": deps_hash,
         "runner_version": __version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "export_hashes": {name: file_hash(Path(path)) for name, path in exports.items()},
+        "export_hashes": {
+            name: file_hash(export_path(root, path)) for name, path in exports.items()
+        },
     }
 
 
@@ -83,3 +88,10 @@ def build_id(manifest: dict) -> str:
             "deps_hash": manifest["deps_hash"],
         }
     )
+
+
+def export_path(project_root: Path, path: str) -> Path:
+    value = Path(path)
+    if value.is_absolute():
+        return value
+    return project_root / value

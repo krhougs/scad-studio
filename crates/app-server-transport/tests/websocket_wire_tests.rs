@@ -1,7 +1,7 @@
 use app_server_protocol::{
     CapabilityHandshakeRequest, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, FileReadCapability, ProtocolVersionRange, RequestId,
-    ProtocolErrorCode, ServerResponseEnvelope, WIRE_MAGIC, WIRE_VERSION,
+    ClientRequestEnvelope, FileReadCapability, ProtocolErrorCode, ProtocolVersionRange, RequestId,
+    ServerResponseEnvelope, WIRE_MAGIC, WIRE_VERSION,
 };
 use app_server_transport::{
     ClientEnvelope, ServerEnvelope, TransportErrorFrame, decode_client_envelope_binary,
@@ -14,7 +14,7 @@ fn client_websocket_wire_roundtrips_binary_handshake_and_request() {
         capabilities: ClientCapabilities {
             client_name: "studio-web".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             file_read: FileReadCapability {
                 denied_extensions: vec![".scad".into(), ".stl".into()],
             },

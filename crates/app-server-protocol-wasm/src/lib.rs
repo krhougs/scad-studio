@@ -129,6 +129,48 @@ pub fn protocol_encode_preview_request(
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn protocol_encode_cadquery_execute_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid cadquery.execute request",
+        ClientCommand::CadQueryExecute,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_cadquery_preview_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid cadquery.preview request",
+        ClientCommand::CadQueryPreview,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_cadquery_result_get_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid cadquery.result.get request",
+        ClientCommand::CadQueryResultGet,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn protocol_encode_slicer_list_request(
     request_id: u64,
     request: JsValue,

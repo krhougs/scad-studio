@@ -7,12 +7,14 @@
 use std::io::{Cursor, Write};
 
 use app_server_protocol::{
-    CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities,
-    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    FileReadContents, PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl,
-    PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultGetRequest, CancelRequest, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
+    ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup, FileReadContents, PathHandle,
+    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
+    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewUnit,
     ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerResponseEnvelope,
-    SessionToken, SubscriptionId, WatchSubscribeRequest, WatchSubscriptionAck,
+    SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest, WatchSubscriptionAck,
     WorkspaceCurrentResponse, WorkspaceId, decode_client_frame, encode_server_frame,
     web_file_read_capability,
 };
@@ -21,10 +23,11 @@ use serde::{Deserialize, Serialize};
 use studio_web_wasm::wasm_bridge::{
     client::{
         ClientHandle, client_begin_handshake, client_cancel, client_create,
-        client_create_with_timeouts, client_destroy, client_dispatch_preview_request,
-        client_dispatch_workspace_current, client_drain_events, client_mark_transport_closed,
-        client_next_outbound, client_receive_inbound, client_snapshot,
-        client_subscribe_directory_watch, client_take_preview_mesh, client_tick,
+        client_create_with_timeouts, client_destroy, client_dispatch_cadquery_result_get,
+        client_dispatch_preview_request, client_dispatch_workspace_current, client_drain_events,
+        client_mark_transport_closed, client_next_outbound, client_receive_inbound,
+        client_snapshot, client_subscribe_directory_watch, client_take_cadquery_mesh,
+        client_take_preview_mesh, client_tick,
     },
     renderer::{renderer_create, renderer_destroy, renderer_resize},
 };
@@ -42,7 +45,7 @@ fn handshake_params() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "wasm-bridge-smoke".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -51,14 +54,17 @@ fn handshake_params() -> CapabilityHandshakeRequest {
 
 fn handshake_ack_bytes() -> Vec<u8> {
     let ack = CapabilityHandshakeResponse {
-        negotiated_version: 1,
+        negotiated_version: 2,
         session_token: SessionToken("test-session".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             supports_session_reclaim: true,
+            cadquery: true,
+            agent: false,
+            selection_sync: false,
         },
     };
     encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")
@@ -97,6 +103,52 @@ fn preview_ready_3mf(bytes: Vec<u8>) -> CommandSuccess {
             media_type: "model/3mf".into(),
         }),
     })
+}
+
+fn cadquery_mesh_success() -> CommandSuccess {
+    CommandSuccess::CadQueryMesh(CadQueryMeshPayload {
+        result_id: "cq_abc".into(),
+        build_id: valid_sha256_build_id(),
+        unit: PreviewUnit::Millimeter,
+        root_ref_text: "@part[top_lid]".into(),
+        root_object_kind: CadQueryObjectKind::Part,
+        parts: vec![cadquery_part_mesh()],
+    })
+}
+
+fn cadquery_part_mesh() -> CadQueryPartMesh {
+    CadQueryPartMesh {
+        name: "top_lid".into(),
+        object_kind: CadQueryObjectKind::Part,
+        ref_text: "@part[top_lid]".into(),
+        instance_path: None,
+        transform: None,
+        faces: vec![FaceGroup {
+            face_idx: 0,
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            features: vec!["top_surface".into()],
+            ambiguous: false,
+        }],
+        edges: vec![EdgeGroup {
+            edge_idx: 0,
+            polyline: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            adjacent_faces: vec![0],
+        }],
+        vertices: vec![VertexPoint {
+            vertex_idx: 0,
+            position: [0.0, 0.0, 0.0],
+            adjacent_edges: vec![0],
+        }],
+        feature_map: vec![CadQueryFeatureFaces {
+            feature: "top_surface".into(),
+            face_indices: vec![0],
+        }],
+    }
+}
+
+fn valid_sha256_build_id() -> String {
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()
 }
 
 fn preview_request() -> PreviewRequest {
@@ -471,6 +523,90 @@ fn preview_3mf_mixed_colors_emit_white_for_sentinel_vertices() {
         colors[12..]
             .chunks_exact(4)
             .all(|chunk| chunk == [1.0, 1.0, 1.0, 1.0])
+    );
+}
+
+#[wasm_bindgen_test]
+fn cadquery_mesh_payload_is_buffered_by_result_id() {
+    let mut handle = client_create();
+    perform_handshake(&mut handle);
+    drain_events(&mut handle);
+
+    let request_id = client_dispatch_cadquery_result_get(
+        &mut handle,
+        to_js(&CadQueryResultGetRequest {
+            result_id: "cq_abc".into(),
+        }),
+    )
+    .expect("dispatch");
+    let outbound = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("request outbound");
+    match decode_outbound(&outbound) {
+        ClientEnvelope::Request(ClientRequestEnvelope {
+            command: ClientCommand::CadQueryResultGet(request),
+            request_id: outbound_id,
+        }) => {
+            assert_eq!(outbound_id.0, request_id);
+            assert_eq!(request.result_id, "cq_abc");
+        }
+        other => panic!("expected cadquery.result.get request, got {:?}", other),
+    }
+    let response = response_bytes(RequestId(request_id), cadquery_mesh_success());
+    client_receive_inbound(&mut handle, &response).expect("cadquery response");
+
+    let events = drain_events(&mut handle);
+    let payload = events
+        .iter()
+        .find_map(|event| match event {
+            DrainedEvent::RequestSucceeded { payload, .. } => Some(payload),
+            _ => None,
+        })
+        .expect("cadquery ready event");
+    assert_eq!(
+        payload.get("type").and_then(|value| value.as_str()),
+        Some("cad_query_result_ready")
+    );
+    assert_eq!(
+        payload
+            .pointer("/payload/result_id")
+            .and_then(|value| value.as_str()),
+        Some("cq_abc")
+    );
+    assert!(payload.pointer("/payload/parts").is_none());
+
+    let mesh = client_take_cadquery_mesh(&mut handle, "cq_abc")
+        .expect("take ok")
+        .expect("mesh exists");
+    assert_eq!(mesh.result_id(), "cq_abc");
+    assert_eq!(mesh.build_id(), valid_sha256_build_id());
+    assert_eq!(mesh.root_ref_text(), "@part[top_lid]");
+    assert_eq!(mesh.root_object_kind(), "part");
+    assert_eq!(mesh.part_count(), 1);
+    assert_eq!(mesh.face_positions(0, 0).expect("positions").len(), 9);
+    assert_eq!(mesh.face_normals(0, 0).expect("normals").len(), 9);
+    assert_eq!(mesh.edge_polyline(0, 0).expect("edge").len(), 6);
+    assert_eq!(
+        mesh.vertex_position(0, 0).expect("vertex"),
+        vec![0.0, 0.0, 0.0]
+    );
+
+    let metadata: serde_json::Value =
+        serde_wasm_bindgen::from_value(mesh.metadata().expect("metadata")).expect("metadata json");
+    assert_eq!(
+        metadata
+            .pointer("/parts/0/feature_map/0/feature")
+            .and_then(|value| value.as_str()),
+        Some("top_surface")
+    );
+    assert!(
+        metadata.pointer("/parts/0/vertices/0/position").is_none(),
+        "metadata must not expand vertex coordinate arrays"
+    );
+    assert!(
+        client_take_cadquery_mesh(&mut handle, "cq_abc")
+            .expect("second take ok")
+            .is_none()
     );
 }
 

@@ -1,3 +1,157 @@
+export class CadQueryMeshHandle {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(CadQueryMeshHandle.prototype);
+        obj.__wbg_ptr = ptr;
+        CadQueryMeshHandleFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        CadQueryMeshHandleFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_cadquerymeshhandle_free(ptr, 0);
+    }
+    /**
+     * @returns {string}
+     */
+    get build_id() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.cadquerymeshhandle_build_id(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} part_index
+     * @param {number} edge_index
+     * @returns {Float32Array}
+     */
+    edge_polyline(part_index, edge_index) {
+        const ret = wasm.cadquerymeshhandle_edge_polyline(this.__wbg_ptr, part_index, edge_index);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @param {number} part_index
+     * @param {number} face_index
+     * @returns {Float32Array}
+     */
+    face_normals(part_index, face_index) {
+        const ret = wasm.cadquerymeshhandle_face_normals(this.__wbg_ptr, part_index, face_index);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @param {number} part_index
+     * @param {number} face_index
+     * @returns {Float32Array}
+     */
+    face_positions(part_index, face_index) {
+        const ret = wasm.cadquerymeshhandle_face_positions(this.__wbg_ptr, part_index, face_index);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {any}
+     */
+    metadata() {
+        const ret = wasm.cadquerymeshhandle_metadata(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @returns {number}
+     */
+    get part_count() {
+        const ret = wasm.cadquerymeshhandle_part_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {string}
+     */
+    get result_id() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.cadquerymeshhandle_result_id(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    get root_object_kind() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.cadquerymeshhandle_root_object_kind(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    get root_ref_text() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.cadquerymeshhandle_root_ref_text(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} part_index
+     * @param {number} vertex_index
+     * @returns {Float32Array}
+     */
+    vertex_position(part_index, vertex_index) {
+        const ret = wasm.cadquerymeshhandle_vertex_position(this.__wbg_ptr, part_index, vertex_index);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) CadQueryMeshHandle.prototype[Symbol.dispose] = CadQueryMeshHandle.prototype.free;
+
 export class ClientHandle {
     static __wrap(ptr) {
         ptr = ptr >>> 0;
@@ -170,6 +324,48 @@ export function client_create_with_timeouts(timeouts) {
 export function client_destroy(handle) {
     _assertClass(handle, ClientHandle);
     wasm.client_destroy(handle.__wbg_ptr);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_cadquery_execute(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_cadquery_execute(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_cadquery_preview(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_cadquery_preview(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_cadquery_result_get(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_cadquery_result_get(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
 }
 
 /**
@@ -378,6 +574,22 @@ export function client_subscribe_directory_watch(handle, params) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {string} result_id
+ * @returns {CadQueryMeshHandle | undefined}
+ */
+export function client_take_cadquery_mesh(handle, result_id) {
+    _assertClass(handle, ClientHandle);
+    const ptr0 = passStringToWasm0(result_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.client_take_cadquery_mesh(handle.__wbg_ptr, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] === 0 ? undefined : CadQueryMeshHandle.__wrap(ret[0]);
 }
 
 /**
@@ -779,6 +991,9 @@ export function __wbindgen_init_externref_table() {
     table.set(offset + 2, true);
     table.set(offset + 3, false);
 }
+const CadQueryMeshHandleFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_cadquerymeshhandle_free(ptr >>> 0, 1));
 const ClientHandleFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_clienthandle_free(ptr >>> 0, 1));

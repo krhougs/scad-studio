@@ -378,7 +378,7 @@ impl DesktopProtocolClient {
                 capabilities: ClientCapabilities {
                     client_name: "studio-app".into(),
                     platform: ClientPlatform::Desktop,
-                    protocol_version: ProtocolVersionRange::new(1, 1),
+                    protocol_version: ProtocolVersionRange::new(2, 2),
                     file_read: app_server_protocol::FileReadCapability {
                         denied_extensions: Vec::new(),
                     },

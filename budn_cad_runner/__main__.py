@@ -7,6 +7,7 @@ from typing import Optional
 
 from .errors import BuildError
 from .executor import run
+from .exporter import export_artifacts, parse_export_formats
 from .loader import load
 from .manifest import build_manifest
 
@@ -34,10 +35,17 @@ def execute(args: argparse.Namespace) -> dict:
     from . import schema
 
     project_root = Path(args.project_root)
+    output_dir = Path(args.output_dir)
     params = parse_params(args.params)
     _, refs, build_fn, script_path = load(project_root, args.script)
     cq_object = run(build_fn, params)
-    exports = {}
+    exports = export_artifacts(
+        cq_object,
+        project_root,
+        output_dir,
+        parse_export_formats(args.exports),
+        script_path.stem,
+    )
     manifest = build_manifest(project_root, script_path, params, exports)
     return schema.success(cq_object, refs, script_path, manifest, exports)
 

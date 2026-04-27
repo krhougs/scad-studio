@@ -1,15 +1,18 @@
 use app_server_core::{
-    FileWatcher, SlicerInstall, current_workspace, detect_slicer_paths, export_model,
-    list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
-    resolve_workspace_path, resolve_workspace_write_path, save_config_dto, send_to_slicer,
+    CadQueryExecuteConfig, CadQueryRunConfig, FileWatcher, SlicerInstall, current_workspace,
+    detect_slicer_paths, execute_cadquery_with_staging, export_model, list_workspace_entries,
+    load_config_dto, preview_ready_response, read_file_response, resolve_workspace_path,
+    resolve_workspace_write_path, run_cadquery_runner, save_config_dto, send_to_slicer,
+    stage_cadquery_project,
 };
 use app_server_protocol::{
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCommand, ClientRequestEnvelope,
-    CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse,
-    FileWriteTextResponse, HostLocalPath, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
-    ProtocolVersionRange, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
-    WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
+    CadQueryMeshPayload, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCommand,
+    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
+    ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
+    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, ServerCapabilities, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionReclaimedResponse, SessionToken,
+    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
+    WorkspaceListResponse,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -27,6 +30,7 @@ pub struct HostRequestDispatcher {
     denied_extensions: Vec<String>,
     next_subscription_id: u64,
     watchers: HashMap<String, FileWatcher>,
+    cadquery_results: HashMap<String, CadQueryMeshPayload>,
     push_sink: ServerPushSink,
     session: HostSession,
 }
@@ -57,6 +61,7 @@ impl HostRequestDispatcher {
             denied_extensions,
             next_subscription_id: 1,
             watchers: HashMap::new(),
+            cadquery_results: HashMap::new(),
             push_sink,
             session: HostSession::new(session_token, server_capabilities()),
         }
@@ -155,6 +160,62 @@ impl HostRequestDispatcher {
                 )
                 .map(CommandSuccess::PreviewReady)
                 .map_err(internal_error)
+            }
+            ClientCommand::CadQueryPreview(request) => {
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let source_path = resolve_workspace_path(&workspace_path, &request.target_path)?;
+                let code = fs::read_to_string(&source_path).map_err(internal_error)?;
+                let script = path_handle_to_relative_path(&request.target_path);
+                let staged = stage_cadquery_project(&workspace_path, &script, &code)
+                    .map_err(internal_error)?;
+                self.session.issue_handle(request.target_path);
+                let result = run_cadquery_runner(&CadQueryRunConfig {
+                    python: cadquery_python_path(),
+                    project_root: staged.root().to_path_buf(),
+                    script: display_relative_path(&script),
+                    output_dir: staged.output_dir(),
+                    export_formats: request.export_formats,
+                    params_json: request.params_json,
+                    timeout: Duration::from_secs(60),
+                })
+                .map_err(internal_error)?;
+                staged.commit_outputs().map_err(internal_error)?;
+                self.cadquery_results
+                    .insert(result.ready.result_id.clone(), result.mesh);
+                Ok(CommandSuccess::CadQueryResultReady(result.ready))
+            }
+            ClientCommand::CadQueryExecute(request) => {
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let _target_path =
+                    resolve_workspace_write_path(&workspace_path, &request.target_path)?;
+                let target = path_handle_to_relative_path(&request.target_path);
+                self.session.issue_handle(request.target_path);
+                let result = execute_cadquery_with_staging(&CadQueryExecuteConfig {
+                    python: cadquery_python_path(),
+                    workspace_root: workspace_path,
+                    target_relative_path: target,
+                    code: request.code,
+                    export_formats: request.export_formats,
+                    params_json: request.params_json,
+                    timeout: Duration::from_secs(60),
+                })
+                .map_err(internal_error)?;
+                self.cadquery_results
+                    .insert(result.ready.result_id.clone(), result.mesh);
+                Ok(CommandSuccess::CadQueryResultReady(result.ready))
+            }
+            ClientCommand::CadQueryResultGet(request) => {
+                let payload = self
+                    .cadquery_results
+                    .get(&request.result_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ProtocolError::new(
+                            ProtocolErrorCode::NotFound,
+                            format!("未找到 CadQuery result: {}", request.result_id),
+                        )
+                    })?;
+                Ok(CommandSuccess::CadQueryMesh(payload))
             }
             ClientCommand::SlicerList(request) => {
                 let configured = request
@@ -332,13 +393,30 @@ fn path_buf_to_host_path(path: PathBuf) -> Result<HostLocalPath, ProtocolError> 
     HostLocalPath::new(value)
 }
 
+fn path_handle_to_relative_path(path: &PathHandle) -> PathBuf {
+    path.path_segments().iter().collect()
+}
+
+fn display_relative_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn cadquery_python_path() -> PathBuf {
+    std::env::var_os("CADQUERY_RUNNER_PYTHON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("python3"))
+}
+
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(1, 1),
+        protocol_version: ProtocolVersionRange::new(2, 2),
         reconnect_window_ms: DEFAULT_SESSION_RECONNECT_WINDOW_MS,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         supports_session_reclaim: true,
+        cadquery: true,
+        agent: false,
+        selection_sync: false,
     }
 }
 

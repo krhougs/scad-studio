@@ -4,6 +4,7 @@
 //! 解码和 renderer 通过 `#[wasm_bindgen]` 暴露给 TypeScript。所有业务状态机
 //! 归 `studio-common`；本模块不持有任何协议状态或 WebSocket 实例。
 
+pub mod cadquery_mesh;
 pub mod client;
 pub mod mesh;
 pub mod params;

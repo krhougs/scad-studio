@@ -1,10 +1,10 @@
 use crate::{
-    AppConfigDto, ClientEnvelope, CommandSuccess, PreviewArtifact, PreviewMeshPayload,
-    ProtocolError, ProtocolErrorCode, ServerEnvelope,
+    AppConfigDto, CadQueryMeshPayload, ClientEnvelope, CommandSuccess, PreviewArtifact,
+    PreviewMeshPayload, PreviewUnit, ProtocolError, ProtocolErrorCode, ServerEnvelope,
 };
 
 pub const WIRE_MAGIC: [u8; 4] = *b"BDNP";
-pub const WIRE_VERSION: u8 = 1;
+pub const WIRE_VERSION: u8 = 2;
 const HEADER_LEN: usize = 5;
 
 pub fn encode_client_frame(envelope: &ClientEnvelope) -> Result<Vec<u8>, ProtocolError> {
@@ -125,6 +125,7 @@ fn validate_command_success(success: &CommandSuccess) -> Result<(), ProtocolErro
             .slicers
             .iter()
             .try_for_each(|slicer| validate_host_local_path(&slicer.path)),
+        CommandSuccess::CadQueryMesh(payload) => validate_cadquery_mesh(payload),
         _ => Ok(()),
     }
 }
@@ -161,6 +162,80 @@ fn validate_mesh(mesh: &PreviewMeshPayload) -> Result<(), ProtocolError> {
         validate_array(color, "vertex_colors")?;
     }
     Ok(())
+}
+
+fn validate_cadquery_mesh(payload: &CadQueryMeshPayload) -> Result<(), ProtocolError> {
+    match payload.unit {
+        PreviewUnit::Millimeter => {}
+    }
+    validate_sha256_build_id(&payload.build_id)?;
+    for part in &payload.parts {
+        if let Some(transform) = part.transform {
+            validate_array(&transform, "cadquery transform")?;
+        }
+        for face in &part.faces {
+            validate_index(face.face_idx, part.faces.len(), "CadQuery face")?;
+            validate_flat_xyz(&face.positions, "cadquery face positions")?;
+            validate_flat_xyz(&face.normals, "cadquery face normals")?;
+            if face.positions.len() != face.normals.len() {
+                return invalid_wire_frame("CadQuery face positions/normals 长度必须一致");
+            }
+        }
+        for edge in &part.edges {
+            validate_index(edge.edge_idx, part.edges.len(), "CadQuery edge")?;
+            validate_flat_xyz(&edge.polyline, "cadquery edge polyline")?;
+            for face_idx in &edge.adjacent_faces {
+                validate_index(*face_idx, part.faces.len(), "CadQuery edge adjacent face")?;
+            }
+        }
+        for vertex in &part.vertices {
+            validate_index(vertex.vertex_idx, part.vertices.len(), "CadQuery vertex")?;
+            validate_array(&vertex.position, "cadquery vertex position")?;
+            for edge_idx in &vertex.adjacent_edges {
+                validate_index(*edge_idx, part.edges.len(), "CadQuery vertex adjacent edge")?;
+            }
+        }
+        for feature in &part.feature_map {
+            for face_idx in &feature.face_indices {
+                validate_index(*face_idx, part.faces.len(), "CadQuery feature face")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_sha256_build_id(value: &str) -> Result<(), ProtocolError> {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return invalid_wire_frame("CadQuery build_id 必须使用 sha256 前缀");
+    };
+    if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    invalid_wire_frame("CadQuery build_id 必须是 64 位十六进制 sha256")
+}
+
+fn validate_flat_xyz(values: &[f32], field: &str) -> Result<(), ProtocolError> {
+    if values.len() % 3 != 0 {
+        return invalid_wire_frame(format!("{field} 长度必须是 3 的倍数"));
+    }
+    for value in values {
+        validate_f32(*value, field)?;
+    }
+    Ok(())
+}
+
+fn validate_index(index: u32, len: usize, field: &str) -> Result<(), ProtocolError> {
+    if (index as usize) < len {
+        return Ok(());
+    }
+    invalid_wire_frame(format!("{field} index 越界"))
+}
+
+fn invalid_wire_frame(message: impl Into<String>) -> Result<(), ProtocolError> {
+    Err(ProtocolError::new(
+        ProtocolErrorCode::InvalidWireFrame,
+        message,
+    ))
 }
 
 fn validate_array<const N: usize>(values: &[f32; N], field: &str) -> Result<(), ProtocolError> {

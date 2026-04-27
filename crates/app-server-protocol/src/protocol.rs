@@ -113,6 +113,9 @@ pub struct ServerCapabilities {
     pub supports_watch: bool,
     pub supported_preview_kinds: Vec<PreviewRequestKind>,
     pub supports_session_reclaim: bool,
+    pub cadquery: bool,
+    pub agent: bool,
+    pub selection_sync: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -384,6 +387,111 @@ pub struct PreviewReadyResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryExecuteRequest {
+    pub target_path: PathHandle,
+    pub target_type: CadQueryObjectKind,
+    pub code: String,
+    pub export_formats: Vec<CadQueryExportFormat>,
+    pub params_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryPreviewRequest {
+    pub target_path: PathHandle,
+    pub export_formats: Vec<CadQueryExportFormat>,
+    pub params_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryResultGetRequest {
+    pub result_id: String,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum CadQueryExportFormat {
+    Step = 0,
+    Stl = 1,
+    ThreeMf = 2,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum CadQueryObjectKind {
+    Part = 0,
+    Component = 1,
+    Assembly = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryResultReady {
+    pub result_id: String,
+    pub build_id: String,
+    pub part_count: u32,
+    pub face_count: u32,
+    pub edge_count: u32,
+    pub vertex_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryMeshPayload {
+    pub result_id: String,
+    pub build_id: String,
+    pub unit: PreviewUnit,
+    pub root_ref_text: String,
+    pub root_object_kind: CadQueryObjectKind,
+    pub parts: Vec<CadQueryPartMesh>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryPartMesh {
+    pub name: String,
+    pub object_kind: CadQueryObjectKind,
+    pub ref_text: String,
+    pub instance_path: Option<String>,
+    pub transform: Option<[f32; 16]>,
+    pub faces: Vec<FaceGroup>,
+    pub edges: Vec<EdgeGroup>,
+    pub vertices: Vec<VertexPoint>,
+    pub feature_map: Vec<CadQueryFeatureFaces>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryFeatureFaces {
+    pub feature: String,
+    pub face_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct FaceGroup {
+    pub face_idx: u32,
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub features: Vec<String>,
+    pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct EdgeGroup {
+    pub edge_idx: u32,
+    pub polyline: Vec<f32>,
+    pub adjacent_faces: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct VertexPoint {
+    pub vertex_idx: u32,
+    pub position: [f32; 3],
+    pub adjacent_edges: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchSubscribeRequest {
     pub directory: Option<PathHandle>,
 }
@@ -457,6 +565,12 @@ pub enum ClientCommand {
     Cancel(CancelRequest) = 11,
     #[serde(rename = "session.reclaim")]
     SessionReclaim(SessionReclaimRequest) = 12,
+    #[serde(rename = "cadquery.execute")]
+    CadQueryExecute(CadQueryExecuteRequest) = 13,
+    #[serde(rename = "cadquery.preview")]
+    CadQueryPreview(CadQueryPreviewRequest) = 14,
+    #[serde(rename = "cadquery.result.get")]
+    CadQueryResultGet(CadQueryResultGetRequest) = 15,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -483,6 +597,8 @@ pub enum CommandSuccess {
     WatchUnsubscribed(WatchSubscriptionAck) = 10,
     CancelAccepted(CancelRequest) = 11,
     SessionReclaimed(SessionReclaimedResponse) = 12,
+    CadQueryResultReady(CadQueryResultReady) = 13,
+    CadQueryMesh(CadQueryMeshPayload) = 14,
 }
 
 #[derive(

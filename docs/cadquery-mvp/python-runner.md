@@ -24,7 +24,7 @@ PYTHONPATH="$PWD" python3.11 -m budn_cad_runner \
 
 `python3` 如果指向系统 Python 3.9，通常无法直接使用当前 CadQuery wheel。开发和验证时应显式使用已安装 CadQuery 的解释器，例如 `python3.11`。
 
-Phase 0b 只验证最小 mesh JSON 输出，`--exports` 暂时保留为 CLI 参数；STEP / STL / 3MF 导出在 Phase 0c 完整 runner 中实现。
+Phase 0c 起 `--exports step,stl,3mf` 会把对应格式写入 `--output-dir`，并在 stdout JSON 的 `exports` 与 `manifest.export_hashes` 中记录导出路径和内容 hash。
 
 ## 输出约定
 

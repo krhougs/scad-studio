@@ -1,5 +1,21 @@
 # 已知问题记录
 
+## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
+
+- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 0c 独立 review。review 确认 `outputs -> /outside` 符号链接逃逸已被修复，但指出 `commit_files()` 在 prepare 阶段完成路径校验后，最终 `atomic_copy_file()` 仍按普通路径执行写入。
+- 原因：
+  - 当前实现会逐级检查 CadQuery output 目标父目录，拒绝符号链接目录，并确认真实路径仍在 canonical workspace root 内。
+  - 但检查与最终 `copy + rename` 之间仍存在很短的时间窗口；本机其它进程如果在该窗口内把已检查目录替换成符号链接，理论上仍可能影响写入目标。
+  - 要彻底消除这类 TOCTOU，需要改为基于目录文件描述符、no-follow 语义和更细粒度原子操作的写入流程；这超出 Phase 0c MVP 本地信任模型。
+- 影响范围：
+  - 在当前 MVP 假设下，workspace 属于本地可信项目目录，且同一时间只允许一个 running agent session，因此该风险不阻断 Phase 0c。
+  - 如果后续把 workspace 当作不可信输入，或支持多 agent / 外部同步工具高并发写入，不能继续依赖当前普通路径写入模型作为强安全边界。
+- 可能的解法：
+  - 为 workspace 写入实现基于目录句柄的安全写入 API，打开父目录时禁止跟随符号链接，后续文件创建和 rename 均相对该目录句柄执行。
+  - 把 CadQuery staging commit、普通文件写入、导出回写统一迁移到同一套 no-follow 写入 API。
+  - 在支持多 running agent session 前，重新评估 staging commit 的锁、事务和回滚语义。
+- 当前处理方式：Phase 0c 保留当前实现，测试覆盖 `outputs` 符号链接逃逸并确认不会写出 workspace；本条作为后续安全边界升级前必须复查的已知问题。
+
 ## 2026-04-26 22:24:20: Web `.scad` 外部刷新用例等不到第二次 preview_ready
 
 - 来源：执行 `bun --cwd packages/studio-web test:e2e tests/playwright/preview-request-dedup.spec.ts -g "scad refresh emits one equivalent preview request"`，连续两次失败；在包含 `canvas-interaction`、`parameters-presets`、`preview-request-dedup` 的组合 Playwright 回归中同样失败。

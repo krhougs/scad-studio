@@ -204,6 +204,9 @@ fn handshake_response() -> CapabilityHandshakeResponse {
                 app_server_protocol::PreviewRequestKind::GeometryArtifact,
             ],
             supports_session_reclaim: true,
+            cadquery: true,
+            agent: false,
+            selection_sync: false,
         },
     }
 }

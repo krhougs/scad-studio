@@ -45,6 +45,8 @@ export type PreviewRequestKind = "geometry_artifact" | "rendered_image";
 export type PreviewResponseFormat = "mesh" | "three_mf" | "rendered_image" | "stl";
 export type PreviewUnit = "millimeter";
 export type ExportFormat = "stl" | "three_mf";
+export type CadQueryExportFormat = "step" | "stl" | "three_mf";
+export type CadQueryObjectKind = "part" | "component" | "assembly";
 export type WorkspaceEntryKind = "directory" | "file";
 export type ProtocolErrorCode =
   | "invalid_command"
@@ -84,6 +86,9 @@ export interface ServerCapabilities {
   supports_watch: boolean;
   supported_preview_kinds: PreviewRequestKind[];
   supports_session_reclaim: boolean;
+  cadquery: boolean;
+  agent: boolean;
+  selection_sync: boolean;
 }
 
 export interface CapabilityHandshakeRequest {
@@ -210,6 +215,98 @@ export interface PreviewReadyResponse {
   artifact: PreviewArtifact;
 }
 
+export interface CadQueryExecuteRequest {
+  target_path: PathHandle;
+  target_type: CadQueryObjectKind;
+  code: string;
+  export_formats: CadQueryExportFormat[];
+  params_json: string;
+}
+
+export interface CadQueryPreviewRequest {
+  target_path: PathHandle;
+  export_formats: CadQueryExportFormat[];
+  params_json: string;
+}
+
+export interface CadQueryResultGetRequest {
+  result_id: string;
+}
+
+export interface CadQueryResultReady {
+  result_id: string;
+  build_id: string;
+  part_count: number;
+  face_count: number;
+  edge_count: number;
+  vertex_count: number;
+}
+
+export interface CadQueryMeshPayload {
+  result_id: string;
+  build_id: string;
+  unit: PreviewUnit;
+  root_ref_text: string;
+  root_object_kind: CadQueryObjectKind;
+  parts: CadQueryPartMesh[];
+}
+
+export interface CadQueryPartMesh {
+  name: string;
+  object_kind: CadQueryObjectKind;
+  ref_text: string;
+  instance_path: string | null;
+  transform: CadQueryTransform | null;
+  faces: FaceGroup[];
+  edges: EdgeGroup[];
+  vertices: VertexPoint[];
+  feature_map: CadQueryFeatureFaces[];
+}
+
+export type CadQueryTransform = [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+export interface FaceGroup {
+  face_idx: number;
+  positions: number[];
+  normals: number[];
+  features: string[];
+  ambiguous: boolean;
+}
+
+export interface EdgeGroup {
+  edge_idx: number;
+  polyline: number[];
+  adjacent_faces: number[];
+}
+
+export interface VertexPoint {
+  vertex_idx: number;
+  position: [number, number, number];
+  adjacent_edges: number[];
+}
+
+export interface CadQueryFeatureFaces {
+  feature: string;
+  face_indices: number[];
+}
+
 export interface WatchSubscribeRequest {
   directory: PathHandle | null;
 }
@@ -258,6 +355,8 @@ export type CommandSuccess =
   | { type: "file_read"; payload: FileReadResponse }
   | { type: "file_written"; payload: FileWriteTextResponse }
   | { type: "preview_ready"; payload: PreviewReadyResponse }
+  | { type: "cad_query_result_ready"; payload: CadQueryResultReady }
+  | { type: "cad_query_mesh"; payload: CadQueryMeshPayload }
   | { type: "slicer_listed"; payload: SlicerListResponse }
   | { type: "export_run"; payload: ExportRunResponse }
   | { type: "watch_subscribed"; payload: WatchSubscriptionAck }

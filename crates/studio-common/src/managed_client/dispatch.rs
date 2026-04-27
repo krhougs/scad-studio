@@ -1,15 +1,16 @@
 use app_server_protocol::{
-    ClientCommand, ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest,
-    PreviewRequest, RequestId, SlicerListRequest, WorkspaceListRequest,
+    CadQueryExecuteRequest, CadQueryPreviewRequest, CadQueryResultGetRequest, ClientCommand,
+    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
+    RequestId, SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
 
+use super::ManagedClient;
 use super::envelopes::{build_request_envelope, build_watch_subscribe_envelope};
 use super::pending::{PendingKind, PendingRequestInfo};
 use super::types::{ClientError, PreviewPhase, PreviewTaskState, TransportStatus, WatchParams};
 use super::watch::{DEFAULT_WATCH_THROTTLE_MS, WatchAccumulator, WatchRegistryEntry};
-use super::ManagedClient;
 
 impl<T: AppServerTransportPort> ManagedClient<T> {
     pub fn dispatch_workspace_current(&mut self) -> Result<RequestId, ClientError> {
@@ -116,6 +117,39 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             ClientCommand::ExportRun(params),
             PendingKind::ExportRun,
             self.timeouts.export_run,
+        )
+    }
+
+    pub fn dispatch_cadquery_execute(
+        &mut self,
+        params: CadQueryExecuteRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::CadQueryExecute(params),
+            PendingKind::CadQuery,
+            self.timeouts.preview_request,
+        )
+    }
+
+    pub fn dispatch_cadquery_preview(
+        &mut self,
+        params: CadQueryPreviewRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::CadQueryPreview(params),
+            PendingKind::CadQuery,
+            self.timeouts.preview_request,
+        )
+    }
+
+    pub fn dispatch_cadquery_result_get(
+        &mut self,
+        params: CadQueryResultGetRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::CadQueryResultGet(params),
+            PendingKind::CadQuery,
+            self.timeouts.file_read,
         )
     }
 

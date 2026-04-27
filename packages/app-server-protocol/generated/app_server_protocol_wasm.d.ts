@@ -5,6 +5,12 @@ export function protocol_decode_client_frame(bytes: Uint8Array): any;
 
 export function protocol_decode_server_frame(bytes: Uint8Array): any;
 
+export function protocol_encode_cadquery_execute_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_cadquery_preview_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_cadquery_result_get_request(request_id: bigint, request: any): Uint8Array;
+
 export function protocol_encode_cancel_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_close_frame(): Uint8Array;
@@ -55,6 +61,9 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly protocol_decode_client_frame: (a: number, b: number) => [number, number, number];
     readonly protocol_decode_server_frame: (a: number, b: number) => [number, number, number];
+    readonly protocol_encode_cadquery_execute_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_cadquery_preview_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_cadquery_result_get_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cancel_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_close_frame: () => [number, number, number, number];
     readonly protocol_encode_config_load_request: (a: bigint) => [number, number, number, number];

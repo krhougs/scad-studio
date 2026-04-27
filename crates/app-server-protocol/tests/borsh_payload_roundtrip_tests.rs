@@ -1,12 +1,13 @@
 use app_server_protocol::{
-    CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities,
-    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    FileReadCapability, FileReadContents, FileReadResponse, PathHandle, PreviewArtifact,
-    PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload, PreviewReadyResponse,
-    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewResponseFormat,
-    PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId,
-    ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope,
+    CommandSuccess, EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse,
+    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
+    PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
+    PreviewResponseFormat, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
+    RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    ServerResponseEnvelope, SessionToken, SubscriptionId, VertexPoint, WatchChangedEvent,
     WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceEntryKind, WorkspaceId, decode_client_frame,
     decode_server_frame, encode_client_frame, encode_server_frame, negotiate_protocol_version,
     web_file_read_capability,
@@ -146,6 +147,9 @@ fn reclaim_and_artifact_variants_roundtrip() {
                 PreviewRequestKind::RenderedImage,
             ],
             supports_session_reclaim: true,
+            cadquery: true,
+            agent: false,
+            selection_sync: false,
         },
     };
     let bytes = borsh::to_vec(&response).unwrap();
@@ -204,4 +208,167 @@ fn reclaim_and_artifact_variants_roundtrip() {
 fn preview_response_format_stl_uses_stable_discriminant() {
     let encoded = borsh::to_vec(&PreviewResponseFormat::Stl).expect("format encodes");
     assert_eq!(encoded, vec![3]);
+}
+
+#[test]
+fn cadquery_payload_roundtrips_and_ready_counts_are_lightweight() {
+    let payload = CadQueryMeshPayload {
+        result_id: "cq_1".into(),
+        build_id: valid_sha256_build_id(),
+        unit: PreviewUnit::Millimeter,
+        root_ref_text: "@assembly[full]".into(),
+        root_object_kind: CadQueryObjectKind::Assembly,
+        parts: vec![CadQueryPartMesh {
+            name: "top_lid".into(),
+            object_kind: CadQueryObjectKind::Part,
+            ref_text: "@part[top_lid]".into(),
+            instance_path: Some("full/top_lid".into()),
+            transform: Some([
+                1.0, 0.0, 0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 0.0, 0.0, 1.0, 4.0, 0.0, 0.0, 0.0, 1.0,
+            ]),
+            faces: vec![FaceGroup {
+                face_idx: 0,
+                positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                features: vec!["top_surface".into()],
+                ambiguous: false,
+            }],
+            edges: vec![EdgeGroup {
+                edge_idx: 0,
+                polyline: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                adjacent_faces: vec![0],
+            }],
+            vertices: vec![VertexPoint {
+                vertex_idx: 0,
+                position: [0.0, 0.0, 0.0],
+                adjacent_edges: vec![0],
+            }],
+            feature_map: vec![CadQueryFeatureFaces {
+                feature: "top_surface".into(),
+                face_indices: vec![0],
+            }],
+        }],
+    };
+    let decoded: CadQueryMeshPayload =
+        borsh::from_slice(&borsh::to_vec(&payload).unwrap()).unwrap();
+    assert_eq!(decoded, payload);
+
+    let ready = CadQueryResultReady {
+        result_id: payload.result_id.clone(),
+        build_id: payload.build_id.clone(),
+        part_count: 1,
+        face_count: 1,
+        edge_count: 1,
+        vertex_count: 1,
+    };
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(42),
+        result: Ok(CommandSuccess::CadQueryResultReady(ready.clone())),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn cadquery_mesh_frame_rejects_non_finite_values_before_encoding() {
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].faces[0].positions[1] = f32::NAN;
+    let frame = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(1),
+        result: Ok(CommandSuccess::CadQueryMesh(payload)),
+    });
+    let error = encode_server_frame(&frame).expect_err("NaN must fail validation");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidNumericValue);
+}
+
+#[test]
+fn cadquery_mesh_frame_rejects_invalid_lengths_and_indices() {
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].faces[0].positions = vec![0.0, 1.0];
+    let error = encode_server_frame(&cadquery_mesh_frame(payload))
+        .expect_err("invalid xyz length must fail validation");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].feature_map[0].face_indices = vec![99];
+    let error = encode_server_frame(&cadquery_mesh_frame(payload))
+        .expect_err("invalid feature face index must fail validation");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+}
+
+#[test]
+fn cadquery_mesh_frame_rejects_out_of_range_topology_ids() {
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].faces[0].face_idx = 9;
+    let error = encode_server_frame(&cadquery_mesh_frame(payload)).expect_err("face_idx must fail");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].edges[0].edge_idx = 9;
+    let error = encode_server_frame(&cadquery_mesh_frame(payload)).expect_err("edge_idx must fail");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+
+    let mut payload = cadquery_sample_payload();
+    payload.parts[0].vertices[0].vertex_idx = 9;
+    let error =
+        encode_server_frame(&cadquery_mesh_frame(payload)).expect_err("vertex_idx must fail");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+}
+
+#[test]
+fn cadquery_mesh_frame_rejects_invalid_build_id_shape() {
+    let mut payload = cadquery_sample_payload();
+    payload.build_id = "build".into();
+    let error = encode_server_frame(&cadquery_mesh_frame(payload))
+        .expect_err("invalid build_id must fail validation");
+    assert_eq!(error.code(), ProtocolErrorCode::InvalidWireFrame);
+}
+
+fn cadquery_sample_payload() -> CadQueryMeshPayload {
+    CadQueryMeshPayload {
+        result_id: "cq_bad".into(),
+        build_id: valid_sha256_build_id(),
+        unit: PreviewUnit::Millimeter,
+        root_ref_text: "@part[top_lid]".into(),
+        root_object_kind: CadQueryObjectKind::Part,
+        parts: vec![CadQueryPartMesh {
+            name: "top_lid".into(),
+            object_kind: CadQueryObjectKind::Part,
+            ref_text: "@part[top_lid]".into(),
+            instance_path: None,
+            transform: None,
+            faces: vec![FaceGroup {
+                face_idx: 0,
+                positions: vec![0.0, 0.0, 0.0],
+                normals: vec![0.0, 0.0, 1.0],
+                features: Vec::new(),
+                ambiguous: false,
+            }],
+            edges: vec![EdgeGroup {
+                edge_idx: 0,
+                polyline: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                adjacent_faces: vec![0],
+            }],
+            vertices: vec![VertexPoint {
+                vertex_idx: 0,
+                position: [0.0, 0.0, 0.0],
+                adjacent_edges: vec![0],
+            }],
+            feature_map: vec![CadQueryFeatureFaces {
+                feature: "top_surface".into(),
+                face_indices: vec![0],
+            }],
+        }],
+    }
+}
+
+fn valid_sha256_build_id() -> String {
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()
+}
+
+fn cadquery_mesh_frame(payload: CadQueryMeshPayload) -> ServerEnvelope {
+    ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(1),
+        result: Ok(CommandSuccess::CadQueryMesh(payload)),
+    })
 }

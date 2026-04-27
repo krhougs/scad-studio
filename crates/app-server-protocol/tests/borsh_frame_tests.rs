@@ -11,7 +11,7 @@ fn handshake() -> ClientEnvelope {
         capabilities: ClientCapabilities {
             client_name: "web".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(1, 1),
+            protocol_version: ProtocolVersionRange::new(2, 2),
             file_read: FileReadCapability {
                 denied_extensions: Vec::new(),
             },
@@ -26,7 +26,7 @@ fn client_frame_roundtrips_with_magic_and_wire_version() {
 
     let encoded = encode_client_frame(&envelope).expect("client frame should encode");
     assert_eq!(&encoded[0..4], b"BDNP");
-    assert_eq!(encoded[4], 1);
+    assert_eq!(encoded[4], app_server_protocol::WIRE_VERSION);
 
     let decoded = decode_client_frame(&encoded).expect("client frame should decode");
     assert_eq!(decoded, envelope);
@@ -89,7 +89,7 @@ fn transport_error_frame_roundtrips() {
 #[test]
 fn golden_client_close_frame_locks_magic_version_and_enum_discriminant() {
     let encoded = encode_client_frame(&ClientEnvelope::Close).unwrap();
-    assert_eq!(encoded, vec![b'B', b'D', b'N', b'P', 1, 3]);
+    assert_eq!(encoded, vec![b'B', b'D', b'N', b'P', 2, 3]);
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn golden_request_frame_locks_core_command_discriminant() {
 
     assert_eq!(
         encoded,
-        vec![b'B', b'D', b'N', b'P', 1, 2, 42, 0, 0, 0, 0, 0, 0, 0, 0]
+        vec![b'B', b'D', b'N', b'P', 2, 2, 42, 0, 0, 0, 0, 0, 0, 0, 0]
     );
 }
 
@@ -118,6 +118,6 @@ fn golden_server_success_frame_locks_response_and_success_discriminants() {
 
     assert_eq!(
         encoded,
-        vec![b'B', b'D', b'N', b'P', 1, 1, 7, 0, 0, 0, 0, 0, 0, 0, 1, 3]
+        vec![b'B', b'D', b'N', b'P', 2, 1, 7, 0, 0, 0, 0, 0, 0, 0, 1, 3]
     );
 }
