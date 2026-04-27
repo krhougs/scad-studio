@@ -9,10 +9,12 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 
 use app_server_protocol::{
-    CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest,
-    CadQueryResultReady, CapabilityHandshakeRequest, CommandSuccess, ConfigSaveRequest,
-    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
-    PreviewRequest, RequestId, SlicerListRequest, WorkspaceListRequest,
+    AgentCancelRequest, AgentInvokeRequest, CadQueryExecuteRequest, CadQueryMeshPayload,
+    CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
+    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatSendRequest, CommandSuccess, ConfigSaveRequest, ExportRunRequest,
+    FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact, PreviewRequest, RequestId,
+    SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
@@ -291,6 +293,118 @@ pub fn client_dispatch_cadquery_result_get(
     handle
         .borrow_mut()?
         .dispatch_cadquery_result_get(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_create(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatCreateRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_create params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_chat_create(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_list(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatListRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_list params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_chat_list(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_send(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatSendRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_send params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_chat_send(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_history(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatHistoryRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_history params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_chat_history(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_archive(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatArchiveRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_archive params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_chat_archive(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_invoke(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentInvokeRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_invoke params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_invoke(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_cancel(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentCancelRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_cancel params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_cancel(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_selection_update(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: SelectionUpdateRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid selection_update params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_selection_update(parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

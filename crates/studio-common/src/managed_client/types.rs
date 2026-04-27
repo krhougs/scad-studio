@@ -1,6 +1,8 @@
 use app_server_protocol::{
-    CommandSuccess, PathHandle, RequestId, ServerCapabilities, SessionToken, SubscriptionId,
-    WatchSubscribeRequest, WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceListResponse,
+    AgentStartedResponse, CadQueryResultReady, ChatMessageRecord, ChatSessionId,
+    ChatSessionSummary, CommandSuccess, PathHandle, RequestId, SelectionUpdateRequest,
+    ServerCapabilities, ServerPushEvent, SessionToken, SubscriptionId, WatchSubscribeRequest,
+    WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceListResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +46,9 @@ pub enum ClientEvent {
     },
     WatchResubscribed {
         request_id: RequestId,
+    },
+    AgentEvent {
+        payload: ServerPushEvent,
     },
     TransportOpen,
     TransportClosed {
@@ -99,6 +104,9 @@ pub struct ClientTimeouts {
     pub config_save: Option<u64>,
     pub slicer_list: Option<u64>,
     pub export_run: Option<u64>,
+    pub chat: Option<u64>,
+    pub agent: Option<u64>,
+    pub selection_update: Option<u64>,
     /// watch 订阅无超时 —— bridge 契约 §6 明文：watch 是长连接订阅，
     /// 握手 ack 也不设 deadline。调用方可显式 `Some(ms)` 覆写。
     pub watch: Option<u64>,
@@ -116,6 +124,9 @@ impl Default for ClientTimeouts {
             config_save: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             slicer_list: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             export_run: None,
+            chat: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
+            agent: None,
+            selection_update: Some(DEFAULT_INTERACTIVE_TIMEOUT_MS),
             watch: None,
         }
     }
@@ -157,6 +168,13 @@ pub struct ClientSnapshot {
     pub workspace_current: Option<WorkspaceCurrentResponse>,
     pub workspace_list: Option<WorkspaceListResponse>,
     pub current_directory_entries: Vec<WorkspaceEntry>,
+    pub chat_sessions: Vec<ChatSessionSummary>,
+    pub current_chat_session: Option<ChatSessionId>,
+    pub current_chat_history: Vec<ChatMessageRecord>,
+    pub agent_run: Option<AgentStartedResponse>,
+    pub agent_events: Vec<ServerPushEvent>,
+    pub current_selection: SelectionUpdateRequest,
+    pub cadquery_results: Vec<CadQueryResultReady>,
     pub preview_tasks: Vec<PreviewTaskState>,
     pub active_preview_target: Option<PathHandle>,
     pub preview_error: Option<PreviewErrorSummary>,

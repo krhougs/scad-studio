@@ -95,6 +95,61 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                     self.preview_tasks.remove(&request_id);
                 }
             }
+            CommandSuccess::CadQueryResultReady(response) => {
+                self.upsert_cadquery_result(response.clone());
+            }
+            CommandSuccess::CadQueryMesh(payload) => {
+                self.upsert_cadquery_result(app_server_protocol::CadQueryResultReady {
+                    result_id: payload.result_id.clone(),
+                    build_id: payload.build_id.clone(),
+                    part_count: payload.parts.len() as u32,
+                    face_count: payload
+                        .parts
+                        .iter()
+                        .map(|part| part.faces.len() as u32)
+                        .sum(),
+                    edge_count: payload
+                        .parts
+                        .iter()
+                        .map(|part| part.edges.len() as u32)
+                        .sum(),
+                    vertex_count: payload
+                        .parts
+                        .iter()
+                        .map(|part| part.vertices.len() as u32)
+                        .sum(),
+                });
+            }
+            CommandSuccess::ChatCreated(response) => {
+                self.current_chat_session = Some(response.session_id.clone());
+            }
+            CommandSuccess::ChatList(response) => {
+                self.chat_sessions = response.sessions.clone();
+            }
+            CommandSuccess::ChatHistory(response) => {
+                self.current_chat_session = Some(response.session_id.clone());
+                self.current_chat_history = response.messages.clone();
+            }
+            CommandSuccess::ChatAck(response) => {
+                self.current_chat_session = Some(response.session_id.clone());
+            }
+            CommandSuccess::ChatArchived(response) => {
+                self.chat_sessions
+                    .retain(|session| session.session_id != response.session_id);
+                if self.current_chat_session.as_ref() == Some(&response.session_id) {
+                    self.current_chat_session = None;
+                    self.current_chat_history.clear();
+                }
+            }
+            CommandSuccess::AgentStarted(response) => {
+                self.agent_run = Some(response.clone());
+            }
+            CommandSuccess::AgentCancelled(_) => {}
+            CommandSuccess::SelectionUpdated(_) => {
+                if let PendingKind::SelectionUpdate { snapshot } = &info.kind {
+                    self.current_selection = snapshot.clone();
+                }
+            }
             _ => {}
         }
         let _ = info;
@@ -199,7 +254,32 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         match push.event {
             ServerPushEvent::WatchChanged(event) => self.handle_watch_changed(event),
             ServerPushEvent::WatchError(event) => self.handle_watch_error(event),
+            event => self.handle_agent_event(event),
         }
+    }
+
+    fn handle_agent_event(&mut self, event: ServerPushEvent) {
+        if let ServerPushEvent::AgentMeshReady(event) = &event {
+            self.upsert_cadquery_result(event.result.clone());
+        }
+        if let ServerPushEvent::AgentDone(event) = &event {
+            if self
+                .agent_run
+                .as_ref()
+                .is_some_and(|run| run.run_id == event.run_id)
+            {
+                self.agent_run = None;
+            }
+        }
+        self.agent_events.push(event.clone());
+        self.events
+            .push_back(ClientEvent::AgentEvent { payload: event });
+    }
+
+    fn upsert_cadquery_result(&mut self, ready: app_server_protocol::CadQueryResultReady) {
+        self.cadquery_results
+            .retain(|existing| existing.result_id != ready.result_id);
+        self.cadquery_results.push(ready);
     }
 
     fn handle_watch_changed(&mut self, event: WatchChangedEvent) {
@@ -249,5 +329,6 @@ fn protocol_error_code_label(code: ProtocolErrorCode) -> &'static str {
         ProtocolErrorCode::UnsupportedWireVersion => "unsupported_wire_version",
         ProtocolErrorCode::InvalidNumericValue => "invalid_numeric_value",
         ProtocolErrorCode::InvalidHostLocalPath => "invalid_host_local_path",
+        ProtocolErrorCode::AgentBusy => "agent_busy",
     }
 }

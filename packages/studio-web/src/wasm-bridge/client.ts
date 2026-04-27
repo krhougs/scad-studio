@@ -27,6 +27,7 @@ export type WasmClientCallbacks = {
   onTransportClosed?: (reason: unknown) => void;
   onWatchEvent?: (requestId: bigint, payload: unknown) => void;
   onWatchResubscribed?: (requestId: bigint) => void;
+  onAgentEvent?: (payload: unknown) => void;
 };
 
 export class WasmClient {
@@ -85,6 +86,7 @@ export class WasmClient {
         onTransportClosed: this.callbacks.onTransportClosed,
         onWatchEvent: this.callbacks.onWatchEvent,
         onWatchResubscribed: this.callbacks.onWatchResubscribed,
+        onAgentEvent: this.callbacks.onAgentEvent,
       });
     }
   }
@@ -139,6 +141,47 @@ export class WasmClient {
 
   dispatchExportRun(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_export_run(h, params));
+  }
+
+  dispatchChatCreate(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_create(h, params));
+  }
+
+  dispatchChatList(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_list(h, params));
+  }
+
+  dispatchChatSend(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_send(h, params));
+  }
+
+  dispatchChatHistory(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_history(h, params));
+  }
+
+  dispatchChatArchive(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_archive(h, params));
+  }
+
+  dispatchAgentInvoke(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_invoke(h, params));
+  }
+
+  dispatchAgentCancel(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
+  }
+
+  dispatchSelectionUpdate(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_selection_update(h, params));
+  }
+
+  dispatchCadQueryResultGet(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_cadquery_result_get(h, params));
+  }
+
+  takeCadQueryMesh(resultId: string): Wasm.CadQueryMeshHandle | null {
+    this.requireHandle();
+    return Wasm.client_take_cadquery_mesh(this.handle!, resultId) ?? null;
   }
 
   subscribeDirectoryWatch(params: unknown): bigint {

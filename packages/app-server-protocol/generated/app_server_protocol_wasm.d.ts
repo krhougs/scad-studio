@@ -5,6 +5,10 @@ export function protocol_decode_client_frame(bytes: Uint8Array): any;
 
 export function protocol_decode_server_frame(bytes: Uint8Array): any;
 
+export function protocol_encode_agent_cancel_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_agent_invoke_request(request_id: bigint, request: any): Uint8Array;
+
 export function protocol_encode_cadquery_execute_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_cadquery_preview_request(request_id: bigint, request: any): Uint8Array;
@@ -12,6 +16,16 @@ export function protocol_encode_cadquery_preview_request(request_id: bigint, req
 export function protocol_encode_cadquery_result_get_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_cancel_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_chat_archive_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_chat_create_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_chat_history_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_chat_list_request(request_id: bigint, request: any): Uint8Array;
+
+export function protocol_encode_chat_send_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_close_frame(): Uint8Array;
 
@@ -30,6 +44,8 @@ export function protocol_encode_handshake_frame(request: any): Uint8Array;
 export function protocol_encode_preview_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_reconnect_frame(request: any): Uint8Array;
+
+export function protocol_encode_selection_update_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_session_reclaim_request(request_id: bigint, request: any): Uint8Array;
 
@@ -61,10 +77,17 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly protocol_decode_client_frame: (a: number, b: number) => [number, number, number];
     readonly protocol_decode_server_frame: (a: number, b: number) => [number, number, number];
+    readonly protocol_encode_agent_cancel_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_agent_invoke_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_execute_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_preview_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_result_get_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cancel_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_chat_archive_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_chat_create_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_chat_history_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_chat_list_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_chat_send_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_close_frame: () => [number, number, number, number];
     readonly protocol_encode_config_load_request: (a: bigint) => [number, number, number, number];
     readonly protocol_encode_config_save_request: (a: bigint, b: any) => [number, number, number, number];
@@ -74,6 +97,7 @@ export interface InitOutput {
     readonly protocol_encode_handshake_frame: (a: any) => [number, number, number, number];
     readonly protocol_encode_preview_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_reconnect_frame: (a: any) => [number, number, number, number];
+    readonly protocol_encode_selection_update_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_session_reclaim_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_slicer_list_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_watch_subscribe_request: (a: bigint, b: any) => [number, number, number, number];

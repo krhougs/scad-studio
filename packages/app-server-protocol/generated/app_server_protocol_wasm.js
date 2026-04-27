@@ -33,6 +33,36 @@ export function protocol_decode_server_frame(bytes) {
  * @param {any} request
  * @returns {Uint8Array}
  */
+export function protocol_encode_agent_cancel_request(request_id, request) {
+    const ret = wasm.protocol_encode_agent_cancel_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_agent_invoke_request(request_id, request) {
+    const ret = wasm.protocol_encode_agent_invoke_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
 export function protocol_encode_cadquery_execute_request(request_id, request) {
     const ret = wasm.protocol_encode_cadquery_execute_request(request_id, request);
     if (ret[3]) {
@@ -80,6 +110,81 @@ export function protocol_encode_cadquery_result_get_request(request_id, request)
  */
 export function protocol_encode_cancel_request(request_id, request) {
     const ret = wasm.protocol_encode_cancel_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_chat_archive_request(request_id, request) {
+    const ret = wasm.protocol_encode_chat_archive_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_chat_create_request(request_id, request) {
+    const ret = wasm.protocol_encode_chat_create_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_chat_history_request(request_id, request) {
+    const ret = wasm.protocol_encode_chat_history_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_chat_list_request(request_id, request) {
+    const ret = wasm.protocol_encode_chat_list_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_chat_send_request(request_id, request) {
+    const ret = wasm.protocol_encode_chat_send_request(request_id, request);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
@@ -210,6 +315,21 @@ export function protocol_encode_preview_request(request_id, request) {
  */
 export function protocol_encode_reconnect_frame(request) {
     const ret = wasm.protocol_encode_reconnect_frame(request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_selection_update_request(request_id, request) {
+    const ret = wasm.protocol_encode_selection_update_request(request_id, request);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }

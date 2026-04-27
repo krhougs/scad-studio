@@ -47,6 +47,29 @@ export type PreviewUnit = "millimeter";
 export type ExportFormat = "stl" | "three_mf";
 export type CadQueryExportFormat = "step" | "stl" | "three_mf";
 export type CadQueryObjectKind = "part" | "component" | "assembly";
+export type ChatRole = "user" | "assistant" | "tool" | "meta";
+export type ChatSessionId = string;
+export type AgentOperationLevel = "inform" | "plan" | "execute";
+export type AgentErrorType =
+  | "llm_error"
+  | "llm_refused"
+  | "permission_denied"
+  | "file_conflict"
+  | "python_import_error"
+  | "cadquery_build_error"
+  | "tessellation_error"
+  | "topology_mapping_error"
+  | "export_error"
+  | "timeout";
+export type SelectionKind =
+  | "component"
+  | "part"
+  | "assembly"
+  | "instance"
+  | "feature"
+  | "face"
+  | "edge"
+  | "vertex";
 export type WorkspaceEntryKind = "directory" | "file";
 export type ProtocolErrorCode =
   | "invalid_command"
@@ -61,7 +84,8 @@ export type ProtocolErrorCode =
   | "invalid_wire_frame"
   | "unsupported_wire_version"
   | "invalid_numeric_value"
-  | "invalid_host_local_path";
+  | "invalid_host_local_path"
+  | "agent_busy";
 
 export interface ProtocolVersionRange {
   min: number;
@@ -307,6 +331,176 @@ export interface CadQueryFeatureFaces {
   face_indices: number[];
 }
 
+export interface ChatCreateRequest {
+  title: string;
+  goal: string | null;
+  related_files: PathHandle[];
+}
+
+export interface ChatCreatedResponse {
+  session_id: ChatSessionId;
+  title: string;
+}
+
+export interface ChatListRequest {
+  include_archived: boolean;
+}
+
+export interface ChatSessionSummary {
+  session_id: ChatSessionId;
+  title: string;
+  archived: boolean;
+  message_count: number;
+  related_files: PathHandle[];
+}
+
+export interface ChatListResponse {
+  sessions: ChatSessionSummary[];
+}
+
+export interface ChatSendRequest {
+  session_id: ChatSessionId;
+  content: string;
+  related_files: PathHandle[];
+}
+
+export interface ChatAckResponse {
+  session_id: ChatSessionId;
+  message_id: string;
+}
+
+export interface ChatHistoryRequest {
+  session_id: ChatSessionId;
+  limit: number | null;
+}
+
+export interface ChatMessageRecord {
+  message_id: string;
+  ts_ms: number;
+  role: ChatRole;
+  content: string;
+  related_files: PathHandle[];
+  tool_call_id: string | null;
+  tool_calls: ChatToolCallRecord[];
+  tool_result: ChatToolResultRecord | null;
+  mesh_result: CadQueryResultReady | null;
+}
+
+export interface ChatToolCallRecord {
+  tool_call_id: string;
+  tool_name: string;
+  args_json: string;
+}
+
+export interface ChatToolResultRecord {
+  tool_call_id: string;
+  tool_name: string;
+  result_json: string;
+}
+
+export interface ChatHistoryResponse {
+  session_id: ChatSessionId;
+  messages: ChatMessageRecord[];
+}
+
+export interface ChatArchiveRequest {
+  session_id: ChatSessionId;
+}
+
+export interface ChatArchivedResponse {
+  session_id: ChatSessionId;
+}
+
+export interface AgentInvokeRequest {
+  session_id: ChatSessionId;
+  prompt: string;
+  operation: AgentOperationLevel;
+  confirmed_cadquery: AgentCadQueryConfirmation | null;
+}
+
+export interface AgentCadQueryConfirmation {
+  request: CadQueryExecuteRequest;
+  plan_ref: PathHandle | null;
+  affected_files: PathHandle[];
+  new_files: PathHandle[];
+  export_targets: PathHandle[];
+}
+
+export interface AgentStartedResponse {
+  session_id: ChatSessionId;
+  run_id: string;
+}
+
+export interface AgentCancelRequest {
+  run_id: string | null;
+}
+
+export interface AgentCancelledResponse {
+  run_id: string | null;
+}
+
+export interface AgentTokenEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  text: string;
+}
+
+export interface AgentToolStartEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  args_json: string;
+}
+
+export interface AgentToolResultEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  result_json: string;
+}
+
+export interface AgentMeshReadyEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  result: CadQueryResultReady;
+}
+
+export interface AgentErrorEvent {
+  session_id: ChatSessionId;
+  run_id: string | null;
+  error_type: AgentErrorType;
+  message: string;
+}
+
+export interface AgentDoneEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  cancelled: boolean;
+}
+
+export interface SelectionRef {
+  kind: SelectionKind;
+  ref_text: string;
+  owner_ref_text: string | null;
+  owner_object_kind: CadQueryObjectKind | null;
+  instance_path: string | null;
+  candidate_feature_ref: string | null;
+  build_id: string | null;
+  result_id: string | null;
+  ambiguous: boolean;
+}
+
+export interface SelectionUpdateRequest {
+  selections: SelectionRef[];
+  active_index: number | null;
+}
+
+export interface SelectionUpdateResponse {
+  accepted_count: number;
+}
+
 export interface WatchSubscribeRequest {
   directory: PathHandle | null;
 }
@@ -357,6 +551,14 @@ export type CommandSuccess =
   | { type: "preview_ready"; payload: PreviewReadyResponse }
   | { type: "cad_query_result_ready"; payload: CadQueryResultReady }
   | { type: "cad_query_mesh"; payload: CadQueryMeshPayload }
+  | { type: "chat_created"; payload: ChatCreatedResponse }
+  | { type: "chat_list"; payload: ChatListResponse }
+  | { type: "chat_ack"; payload: ChatAckResponse }
+  | { type: "chat_history"; payload: ChatHistoryResponse }
+  | { type: "chat_archived"; payload: ChatArchivedResponse }
+  | { type: "agent_started"; payload: AgentStartedResponse }
+  | { type: "agent_cancelled"; payload: AgentCancelledResponse }
+  | { type: "selection_updated"; payload: SelectionUpdateResponse }
   | { type: "slicer_listed"; payload: SlicerListResponse }
   | { type: "export_run"; payload: ExportRunResponse }
   | { type: "watch_subscribed"; payload: WatchSubscriptionAck }
@@ -371,7 +573,13 @@ export interface ServerResponseEnvelope {
 
 export type ServerPushEvent =
   | { event: "watch.changed"; payload: WatchChangedEvent }
-  | { event: "watch.error"; payload: WatchErrorEvent };
+  | { event: "watch.error"; payload: WatchErrorEvent }
+  | { event: "agent.token"; payload: AgentTokenEvent }
+  | { event: "agent.tool_start"; payload: AgentToolStartEvent }
+  | { event: "agent.tool_result"; payload: AgentToolResultEvent }
+  | { event: "agent.mesh_ready"; payload: AgentMeshReadyEvent }
+  | { event: "agent.error"; payload: AgentErrorEvent }
+  | { event: "agent.done"; payload: AgentDoneEvent };
 
 export interface ServerPushEnvelope {
   event: ServerPushEvent;

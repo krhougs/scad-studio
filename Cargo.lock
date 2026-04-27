@@ -164,6 +164,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "serde_json",
  "stl_io",
  "tokio",
  "tokio-tungstenite",

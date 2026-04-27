@@ -3,10 +3,17 @@
 export const memory: WebAssembly.Memory;
 export const protocol_decode_client_frame: (a: number, b: number) => [number, number, number];
 export const protocol_decode_server_frame: (a: number, b: number) => [number, number, number];
+export const protocol_encode_agent_cancel_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_agent_invoke_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_cadquery_execute_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_cadquery_preview_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_cadquery_result_get_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_cancel_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_chat_archive_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_chat_create_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_chat_history_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_chat_list_request: (a: bigint, b: any) => [number, number, number, number];
+export const protocol_encode_chat_send_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_close_frame: () => [number, number, number, number];
 export const protocol_encode_config_load_request: (a: bigint) => [number, number, number, number];
 export const protocol_encode_config_save_request: (a: bigint, b: any) => [number, number, number, number];
@@ -16,6 +23,7 @@ export const protocol_encode_file_write_text_request: (a: bigint, b: any) => [nu
 export const protocol_encode_handshake_frame: (a: any) => [number, number, number, number];
 export const protocol_encode_preview_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_reconnect_frame: (a: any) => [number, number, number, number];
+export const protocol_encode_selection_update_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_session_reclaim_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_slicer_list_request: (a: bigint, b: any) => [number, number, number, number];
 export const protocol_encode_watch_subscribe_request: (a: bigint, b: any) => [number, number, number, number];

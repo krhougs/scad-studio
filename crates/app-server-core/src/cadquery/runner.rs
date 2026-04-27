@@ -12,9 +12,11 @@ use super::{cadquery_result_ready, parse_cadquery_success_json};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CadQueryRunnerErrorKind {
     Build,
+    Cancelled,
     FileConflict,
     InvalidProjectPath,
     Io,
+    PermissionDenied,
     Runner,
     Timeout,
 }
@@ -54,13 +56,20 @@ pub struct CadQueryRunResult {
 pub fn run_cadquery_runner(
     config: &CadQueryRunConfig,
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
+    run_cadquery_runner_with_cancel(config, &|| false)
+}
+
+pub fn run_cadquery_runner_with_cancel(
+    config: &CadQueryRunConfig,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<CadQueryRunResult, CadQueryRunnerError> {
     let child = Command::new(&config.python)
         .args(runner_args(config))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| error_io(format!("启动 CadQuery runner 失败: {error}")))?;
-    let output = wait_with_timeout(child, config.timeout)?;
+    let output = wait_with_timeout(child, config.timeout, is_cancelled)?;
     parse_runner_output(output)
 }
 
@@ -84,9 +93,18 @@ fn runner_args(config: &CadQueryRunConfig) -> Vec<String> {
 fn wait_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> Result<Output, CadQueryRunnerError> {
     let started = Instant::now();
     while started.elapsed() < timeout {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CadQueryRunnerError {
+                kind: CadQueryRunnerErrorKind::Cancelled,
+                message: "CadQuery runner 已取消".into(),
+            });
+        }
         if child
             .try_wait()
             .map_err(|error| error_io(format!("轮询 CadQuery runner 失败: {error}")))?
@@ -181,6 +199,13 @@ pub(super) fn error_io(message: impl Into<String>) -> CadQueryRunnerError {
 pub(super) fn error_invalid_path(message: impl Into<String>) -> CadQueryRunnerError {
     CadQueryRunnerError {
         kind: CadQueryRunnerErrorKind::InvalidProjectPath,
+        message: message.into(),
+    }
+}
+
+pub(super) fn error_permission_denied(message: impl Into<String>) -> CadQueryRunnerError {
+    CadQueryRunnerError {
+        kind: CadQueryRunnerErrorKind::PermissionDenied,
         message: message.into(),
     }
 }

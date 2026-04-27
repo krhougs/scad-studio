@@ -4,12 +4,13 @@ mod staging;
 
 pub use runner::{
     CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
-    run_cadquery_runner,
+    run_cadquery_runner, run_cadquery_runner_with_cancel,
 };
 pub use runner_json::{
     cadquery_result_ready, parse_cadquery_success_json, validate_cadquery_mesh_payload,
 };
 pub use staging::{
-    CadQueryExecuteConfig, StagedCadQueryProject, execute_cadquery_with_staging,
-    stage_cadquery_project,
+    CadQueryCommitScope, CadQueryExecuteConfig, StagedCadQueryProject,
+    execute_cadquery_with_staging, execute_cadquery_with_staging_cancellable,
+    execute_cadquery_with_staging_cancellable_scoped, stage_cadquery_project,
 };

@@ -331,6 +331,34 @@ export function client_destroy(handle) {
  * @param {any} params
  * @returns {bigint}
  */
+export function client_dispatch_agent_cancel(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_cancel(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_invoke(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_invoke(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
 export function client_dispatch_cadquery_execute(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_cadquery_execute(handle.__wbg_ptr, params);
@@ -362,6 +390,76 @@ export function client_dispatch_cadquery_preview(handle, params) {
 export function client_dispatch_cadquery_result_get(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_cadquery_result_get(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_archive(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_chat_archive(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_create(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_chat_create(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_history(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_chat_history(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_list(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_chat_list(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_send(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_chat_send(handle.__wbg_ptr, params);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -445,6 +543,20 @@ export function client_dispatch_file_write_text(handle, params) {
 export function client_dispatch_preview_request(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_preview_request(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_selection_update(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_selection_update(handle.__wbg_ptr, params);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }

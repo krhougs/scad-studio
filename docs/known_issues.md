@@ -1,5 +1,36 @@
 # 已知问题记录
 
+## 2026-04-28 04:57:31: 全仓库 `cargo fmt --check` 受既有无关格式差异阻塞
+
+- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1 验证时，额外运行 `cargo fmt --check`。
+- 原因：
+  - `cargo fmt --check` 报告格式差异位于 `crates/scad-scene/tests/mesh_tests.rs`、`crates/scad-scene/tests/three_mf_tests.rs`、`crates/studio-common/tests/params_tests.rs`、`crates/studio-web-wasm/src/wasm_bridge/params.rs` 和 `crates/studio-web-wasm/src/wasm_bridge/renderer.rs`。
+  - 这些文件不是 Phase 1 本轮 Chat / Agent / CadQuery protocol 变更范围，按精准手术原则不在本轮格式化无关源码。
+- 影响范围：
+  - 在这些既有格式差异修复前，不能把全仓库 `cargo fmt --check` 作为 Phase 1 本轮通过证据。
+  - 后续若 CI 增加全仓库 fmt 检查，当前分支会被这些无关差异阻塞。
+- 可能的解法：
+  - 单独提交 formatting-only 变更，限定为 rustfmt 报告的既有文件。
+  - 若后续任务正好触及这些文件，可在对应任务中同步格式化并纳入 review。
+  - 在 CI 中固定全仓库 fmt 检查，避免格式差异继续累积。
+- 当前处理方式：本轮不修改无关源码；已对 Phase 1 触及的 Rust 文件执行 `rustfmt --edition 2024 --check` 并通过，后续仍需单独处理全仓库 fmt 差异。
+
+## 2026-04-28 04:18:42: Agent 后端暂用本地 CadQuery 代码生成 fallback，尚未接入真实 LLM provider 配置
+
+- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1，按计划评估 Rig 后实现 Agent / Chat / CadQuery tool 主链路。
+- 原因：
+  - Phase 1 已确认 `rig-core` 当前评估版本为 `0.35.0`，其 provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 方向符合后续接入需求。
+  - 当前仓库尚无 LLM provider 配置模型、密钥管理策略、运行时 provider 选择规则和可复现的 provider mock 测试夹具。
+  - 为避免在 Phase 1 中硬编码供应商或凭据，当前实现先提供 `AgentBackend` trait，并使用本地 deterministic fallback 生成最小 CadQuery box 代码，确保 Chat / Agent / confirmation / CadQuery staging / Viewer result 主链路可验证。
+- 影响范围：
+  - 当前 Agent 可以经由 Execute 确认范围生成并执行 CadQuery 代码，但自然语言理解能力非常有限，不能代表真实模型推理能力。
+  - 后续实现 Plan / Execute 的复杂 CAD 修改、基于 selection 的语义编辑和多轮工具调用时，必须接入真实 LLM provider 或 provider mock，不应继续把本地 fallback 当作完整 Agent 能力。
+- 可能的解法：
+  - 在 app server 配置中增加 provider 类型、模型名、base URL、密钥来源和超时等字段，并明确本地开发与生产部署的读取规则。
+  - 基于 `AgentBackend` trait 接入 Rig provider，并为 tool call、streaming、cancel 和 error mapping 补充 mock backend 测试。
+  - 将真实 provider 的不可用、鉴权失败和速率限制映射为协议错误与 Chat tool result，而不是直接暴露底层 SDK 错误。
+- 当前处理方式：Phase 1 保留本地 fallback 作为可测试实现，记录本条为后续 Agent provider 接入前必须处理的问题；该问题不阻断 Phase 1 的 protocol、Chat、ManagedClient、staging 权限边界验收。
+
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 0c 独立 review。review 确认 `outputs -> /outside` 符号链接逃逸已被修复，但指出 `commit_files()` 在 prepare 阶段完成路径校验后，最终 `atomic_copy_file()` 仍按普通路径执行写入。

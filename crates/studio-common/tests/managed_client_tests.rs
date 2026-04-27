@@ -1,13 +1,17 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientCommand,
-    ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle,
-    PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
-    RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
-    encode_server_frame, web_file_read_capability,
+    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest,
+    AgentOperationLevel, AgentStartedResponse, AgentTokenEvent, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
+    ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
+    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
+    decode_client_frame, encode_server_frame, web_file_read_capability,
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
@@ -658,6 +662,170 @@ fn fail_preview_decode_ignores_stale_preview_request() {
 }
 
 #[test]
+fn chat_agent_and_selection_successes_update_snapshot() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let chat_create_id = client
+        .dispatch_chat_create(app_server_protocol::ChatCreateRequest {
+            title: "main".into(),
+            goal: None,
+            related_files: Vec::new(),
+        })
+        .expect("dispatch chat.create");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: chat_create_id,
+            result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+                session_id: ChatSessionId("main".into()),
+                title: "main".into(),
+            })),
+        }))
+        .unwrap();
+
+    let chat_list_id = client
+        .dispatch_chat_list(app_server_protocol::ChatListRequest {
+            include_archived: false,
+        })
+        .expect("dispatch chat.list");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: chat_list_id,
+            result: Ok(CommandSuccess::ChatList(chat_list_response())),
+        }))
+        .unwrap();
+
+    let selection_request = sample_selection_request();
+    let selection_id = client
+        .dispatch_selection_update(selection_request)
+        .expect("dispatch selection.update");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: selection_id,
+            result: Ok(CommandSuccess::SelectionUpdated(SelectionUpdateResponse {
+                accepted_count: 1,
+            })),
+        }))
+        .unwrap();
+
+    let invoke_id = client
+        .dispatch_agent_invoke(AgentInvokeRequest {
+            session_id: ChatSessionId("main".into()),
+            prompt: "inspect".into(),
+            operation: AgentOperationLevel::Inform,
+            confirmed_cadquery: None,
+        })
+        .expect("dispatch agent.invoke");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: invoke_id,
+            result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+                session_id: ChatSessionId("main".into()),
+                run_id: "agent-1".into(),
+            })),
+        }))
+        .unwrap();
+    push_agent_token_and_done(&mut client);
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.chat_sessions.len(), 1);
+    assert_eq!(
+        snapshot.current_chat_session,
+        Some(ChatSessionId("main".into()))
+    );
+    assert_eq!(snapshot.current_selection.selections.len(), 1);
+    assert!(snapshot.agent_run.is_none());
+    assert_eq!(snapshot.agent_events.len(), 2);
+}
+
+#[test]
+fn agent_cancel_ack_keeps_run_until_done_event() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let invoke_id = client
+        .dispatch_agent_invoke(AgentInvokeRequest {
+            session_id: ChatSessionId("main".into()),
+            prompt: "inspect".into(),
+            operation: AgentOperationLevel::Inform,
+            confirmed_cadquery: None,
+        })
+        .expect("dispatch agent.invoke");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: invoke_id,
+            result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+                session_id: ChatSessionId("main".into()),
+                run_id: "agent-1".into(),
+            })),
+        }))
+        .unwrap();
+
+    let cancel_id = client
+        .dispatch_agent_cancel(AgentCancelRequest {
+            run_id: Some("agent-1".into()),
+        })
+        .expect("dispatch agent.cancel");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: cancel_id,
+            result: Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
+                run_id: Some("agent-1".into()),
+            })),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        client.snapshot().agent_run.as_ref().map(|run| &run.run_id),
+        Some(&"agent-1".to_string())
+    );
+
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentDone(AgentDoneEvent {
+                session_id: ChatSessionId("main".into()),
+                run_id: "agent-1".into(),
+                cancelled: true,
+            }),
+        }))
+        .unwrap();
+    assert!(client.snapshot().agent_run.is_none());
+}
+
+#[test]
+fn chat_history_response_replaces_snapshot_history() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let request_id = client
+        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
+            session_id: ChatSessionId("main".into()),
+            limit: Some(50),
+        })
+        .expect("dispatch chat.history");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::ChatHistory(ChatHistoryResponse {
+                session_id: ChatSessionId("main".into()),
+                messages: vec![chat_message("msg-1", ChatRole::User, "make lid taller")],
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.current_chat_history.len(), 1);
+    assert_eq!(snapshot.current_chat_history[0].content, "make lid taller");
+}
+
+#[test]
 fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
     let mut client = ManagedClient::new(FakeTransport::default());
     open_client_with_handshake(&mut client);
@@ -727,6 +895,71 @@ fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
             }
         }
         other => panic!("expected request envelope for cancel, got {other:?}"),
+    }
+}
+
+fn chat_list_response() -> ChatListResponse {
+    ChatListResponse {
+        sessions: vec![ChatSessionSummary {
+            session_id: ChatSessionId("main".into()),
+            title: "main".into(),
+            archived: false,
+            message_count: 1,
+            related_files: Vec::new(),
+        }],
+    }
+}
+
+fn sample_selection_request() -> SelectionUpdateRequest {
+    SelectionUpdateRequest {
+        selections: vec![SelectionRef {
+            kind: SelectionKind::Face,
+            ref_text: "@face[top_lid:f_0]".into(),
+            owner_ref_text: Some("@part[top_lid]".into()),
+            owner_object_kind: Some(app_server_protocol::CadQueryObjectKind::Part),
+            instance_path: None,
+            candidate_feature_ref: Some("@feature[top_lid.top_surface]".into()),
+            build_id: Some("sha256:build".into()),
+            result_id: Some("cq_1".into()),
+            ambiguous: false,
+        }],
+        active_index: Some(0),
+    }
+}
+
+fn push_agent_token_and_done(client: &mut ManagedClient<FakeTransport>) {
+    let session_id = ChatSessionId("main".into());
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentToken(AgentTokenEvent {
+                session_id: session_id.clone(),
+                run_id: "agent-1".into(),
+                text: "received".into(),
+            }),
+        }))
+        .unwrap();
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentDone(AgentDoneEvent {
+                session_id,
+                run_id: "agent-1".into(),
+                cancelled: false,
+            }),
+        }))
+        .unwrap();
+}
+
+fn chat_message(id: &str, role: ChatRole, content: &str) -> ChatMessageRecord {
+    ChatMessageRecord {
+        message_id: id.into(),
+        ts_ms: 1,
+        role,
+        content: content.into(),
+        related_files: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        tool_result: None,
+        mesh_result: None,
     }
 }
 

@@ -91,6 +91,7 @@ export function buildClientCallbacks(params: {
   onTransportOpen?: () => void;
   onTransportClosed?: (reason: unknown) => void;
   onWatchResubscribed?: (requestId: bigint) => void;
+  onAgentEvent?: (payload: unknown) => void;
 }): WasmClientCallbacks {
   return {
     onSnapshotDirty: params.onSnapshotDirty,
@@ -99,5 +100,6 @@ export function buildClientCallbacks(params: {
     onTransportOpen: params.onTransportOpen,
     onTransportClosed: params.onTransportClosed,
     onWatchResubscribed: params.onWatchResubscribed,
+    onAgentEvent: params.onAgentEvent,
   };
 }

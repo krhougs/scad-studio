@@ -26,6 +26,7 @@ import {
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
+import type { ChatSnapshot } from "./chat-zone";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
 import { documentTitleForFile } from "./document-title";
@@ -78,6 +79,11 @@ type Snapshot = {
     directory?: unknown;
     entries?: ProtocolEntry[];
   } | null;
+  chat_sessions?: ChatSnapshot["chat_sessions"];
+  current_chat_session?: ChatSnapshot["current_chat_session"];
+  current_chat_history?: ChatSnapshot["current_chat_history"];
+  agent_run?: ChatSnapshot["agent_run"];
+  agent_events?: ChatSnapshot["agent_events"];
   transport_status?: string;
 } | null;
 
@@ -492,6 +498,10 @@ export function WorkbenchLayout() {
           if (disposed) return;
           logRef.current.append("info", "watch resubscribed");
         },
+        onAgentEvent: (payload) => {
+          if (disposed) return;
+          logRef.current.append("info", `agent event: ${describeAgentEvent(payload)}`);
+        },
       }),
     );
     clientRef.current = client;
@@ -617,6 +627,8 @@ export function WorkbenchLayout() {
         onCollapseDirectory={handleCollapseDirectory}
         logEntries={log.entries}
         client={client}
+        snapshot={snapshot as ChatSnapshot | null}
+        onStatus={setMessage}
         appConfig={appConfig}
         wsUrl={wsUrl}
       />
@@ -677,6 +689,12 @@ export function WorkbenchLayout() {
       <PanelResizeHandle side="right" onPointerDown={beginPanelResize} />
     </div>
   );
+}
+
+function describeAgentEvent(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "unknown";
+  const event = (payload as Record<string, unknown>)["event"];
+  return typeof event === "string" ? event : "unknown";
 }
 
 function PanelResizeHandle({

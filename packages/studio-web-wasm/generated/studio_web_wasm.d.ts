@@ -70,11 +70,25 @@ export function client_create_with_timeouts(timeouts: any): ClientHandle;
 
 export function client_destroy(handle: ClientHandle): void;
 
+export function client_dispatch_agent_cancel(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_invoke(handle: ClientHandle, params: any): bigint;
+
 export function client_dispatch_cadquery_execute(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_cadquery_preview(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_cadquery_result_get(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_archive(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_create(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_history(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_list(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_send(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_config_load(handle: ClientHandle): bigint;
 
@@ -87,6 +101,8 @@ export function client_dispatch_file_read(handle: ClientHandle, params: any): bi
 export function client_dispatch_file_write_text(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_preview_request(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_selection_update(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_slicer_list(handle: ClientHandle, params: any): bigint;
 

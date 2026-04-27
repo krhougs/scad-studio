@@ -7,7 +7,11 @@ mod watch;
 
 use std::collections::{HashMap, VecDeque};
 
-use app_server_protocol::{CapabilityHandshakeRequest, PathHandle, RequestId};
+use app_server_protocol::{
+    AgentStartedResponse, CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord,
+    ChatSessionId, ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest,
+    ServerPushEvent,
+};
 
 use crate::AppServerTransportPort;
 
@@ -38,6 +42,13 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) last_error: Option<ClientError>,
     pub(super) workspace_current: Option<app_server_protocol::WorkspaceCurrentResponse>,
     pub(super) workspace_list: Option<app_server_protocol::WorkspaceListResponse>,
+    pub(super) chat_sessions: Vec<ChatSessionSummary>,
+    pub(super) current_chat_session: Option<ChatSessionId>,
+    pub(super) current_chat_history: Vec<ChatMessageRecord>,
+    pub(super) agent_run: Option<AgentStartedResponse>,
+    pub(super) agent_events: Vec<ServerPushEvent>,
+    pub(super) current_selection: SelectionUpdateRequest,
+    pub(super) cadquery_results: Vec<CadQueryResultReady>,
     pub(super) preview_tasks: HashMap<RequestId, PreviewTaskState>,
     pub(super) active_preview_target: Option<PathHandle>,
     pub(super) preview_error: Option<PreviewErrorSummary>,
@@ -65,6 +76,16 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             last_error: None,
             workspace_current: None,
             workspace_list: None,
+            chat_sessions: Vec::new(),
+            current_chat_session: None,
+            current_chat_history: Vec::new(),
+            agent_run: None,
+            agent_events: Vec::new(),
+            current_selection: SelectionUpdateRequest {
+                selections: Vec::new(),
+                active_index: None,
+            },
+            cadquery_results: Vec::new(),
             preview_tasks: HashMap::new(),
             active_preview_target: None,
             preview_error: None,
@@ -149,6 +170,13 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             workspace_current: self.workspace_current.clone(),
             workspace_list: self.workspace_list.clone(),
             current_directory_entries,
+            chat_sessions: self.chat_sessions.clone(),
+            current_chat_session: self.current_chat_session.clone(),
+            current_chat_history: self.current_chat_history.clone(),
+            agent_run: self.agent_run.clone(),
+            agent_events: self.agent_events.clone(),
+            current_selection: self.current_selection.clone(),
+            cadquery_results: self.cadquery_results.clone(),
             preview_tasks,
             active_preview_target: self.active_preview_target.clone(),
             preview_error: self.preview_error.clone(),

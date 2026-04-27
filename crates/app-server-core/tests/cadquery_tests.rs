@@ -1,15 +1,19 @@
 use std::{
     fs,
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     thread,
     time::Duration,
 };
 
 use app_server_core::{
-    CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunnerErrorKind, cadquery_result_ready,
-    execute_cadquery_with_staging, parse_cadquery_success_json, run_cadquery_runner,
-    stage_cadquery_project,
+    CadQueryCommitScope, CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunnerErrorKind,
+    cadquery_result_ready, execute_cadquery_with_staging,
+    execute_cadquery_with_staging_cancellable_scoped, parse_cadquery_success_json,
+    run_cadquery_runner, run_cadquery_runner_with_cancel, stage_cadquery_project,
 };
 use app_server_protocol::{
     CadQueryExportFormat, CadQueryObjectKind, PreviewUnit, ProtocolErrorCode,
@@ -129,6 +133,122 @@ fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
 
     assert_eq!(result.ready.result_id, "cq_abc");
     assert_eq!(result.mesh.parts[0].ref_text, "@part[top_lid]");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cadquery_runner_cancels_subprocess_before_timeout() {
+    let root = temp_dir("cadquery-cancel");
+    fs::create_dir_all(&root).expect("temp root");
+    let runner = sleeping_runner(&root);
+    let cancelled = Arc::new(AtomicBool::new(true));
+    let error = run_cadquery_runner_with_cancel(
+        &CadQueryRunConfig {
+            python: runner,
+            project_root: root.clone(),
+            script: "parts/top_lid.py".into(),
+            output_dir: root.join("outputs"),
+            export_formats: Vec::new(),
+            params_json: "{}".into(),
+            timeout: Duration::from_secs(5),
+        },
+        &|| cancelled.load(Ordering::SeqCst),
+    )
+    .expect_err("cancelled runner should fail");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cadquery_staging_rejects_cancel_after_runner_before_commit() {
+    let root = workspace_with_part("old = True\n");
+    let marker = root.join("runner-finished");
+    let runner = fake_runner_with_marker(&root, &success_json(), &marker);
+    let marker_seen = AtomicBool::new(false);
+
+    let error = execute_cadquery_with_staging_cancellable_scoped(
+        &CadQueryExecuteConfig {
+            python: runner,
+            workspace_root: root.clone(),
+            target_relative_path: Path::new("parts/top_lid.py").into(),
+            code: "new = True\n".into(),
+            export_formats: Vec::new(),
+            params_json: "{}".into(),
+            timeout: Duration::from_secs(5),
+        },
+        &|| {
+            if marker.exists() {
+                return marker_seen.swap(true, Ordering::SeqCst);
+            }
+            false
+        },
+        &CadQueryCommitScope::ExactOutputs(vec![Path::new("outputs/top_lid.step").into()]),
+    )
+    .expect_err("post-run cancellation should abort commit");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("outputs/top_lid.step").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cadquery_staging_rolls_back_when_cancelled_between_commit_files() {
+    let root = workspace_with_part("old = True\n");
+    let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .expect("stage project");
+    fs::create_dir_all(staged.output_dir()).unwrap();
+    fs::write(staged.output_dir().join("top_lid.step"), "new artifact\n").unwrap();
+    let cancel_checks = AtomicU64::new(0);
+
+    let error = staged
+        .commit_success_with_scope_cancellable(
+            &CadQueryCommitScope::ExactOutputs(vec![Path::new("outputs/top_lid.step").into()]),
+            &|| cancel_checks.fetch_add(1, Ordering::SeqCst) >= 2,
+        )
+        .expect_err("cancellation between commit files should roll back");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("outputs/top_lid.step").exists());
+    assert!(!root.join("outputs").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir() {
+    let root = workspace_with_part("old = True\n");
+    let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .expect("stage project");
+    fs::create_dir_all(staged.output_dir().join("nested")).unwrap();
+    fs::write(
+        staged.output_dir().join("nested/top_lid.step"),
+        "new artifact\n",
+    )
+    .unwrap();
+
+    let error = staged
+        .commit_success_with_scope_cancellable(
+            &CadQueryCommitScope::ExactOutputs(vec![
+                Path::new("outputs/nested/top_lid.step").into(),
+            ]),
+            &|| true,
+        )
+        .expect_err("pre-commit cancellation should not prepare directories");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("outputs").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -334,6 +454,31 @@ fn cadquery_staging_rejects_output_commit_when_original_file_changed() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn cadquery_staging_rejects_unlisted_outputs_when_scope_is_exact() {
+    let root = workspace_with_part("old = True\n");
+    let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .expect("stage project");
+    fs::create_dir_all(staged.output_dir()).unwrap();
+    fs::write(staged.output_dir().join("top_lid.step"), "artifact\n").unwrap();
+    fs::write(staged.output_dir().join("extra.step"), "extra\n").unwrap();
+
+    let error = staged
+        .commit_success_with_scope(&CadQueryCommitScope::ExactOutputs(vec![
+            Path::new("outputs/top_lid.step").into(),
+        ]))
+        .expect_err("unlisted output should be rejected");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::PermissionDenied);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("outputs/top_lid.step").exists());
+    assert!(!root.join("outputs/extra.step").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[test]
 fn cadquery_staging_rejects_output_symlink_escape() {
@@ -393,6 +538,27 @@ fn fake_runner(root: &Path, stdout_json: &str) -> std::path::PathBuf {
         ),
     )
     .expect("write fake runner");
+    make_executable(&runner);
+    runner
+}
+
+fn fake_runner_with_marker(root: &Path, stdout_json: &str, marker: &Path) -> std::path::PathBuf {
+    let runner = root.join("fake-runner-marker.sh");
+    fs::write(
+        &runner,
+        format!(
+            "#!/bin/sh\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output-dir' ]; then\n    shift\n    out=\"$1\"\n  fi\n  shift\ndone\nif [ -n \"$out\" ]; then\n  mkdir -p \"$out\"\n  printf 'artifact\\n' > \"$out/top_lid.step\"\nfi\ncat <<'JSON'\n{stdout_json}\nJSON\nprintf done > '{}'\n",
+            marker.to_string_lossy().replace('\'', "'\\''")
+        ),
+    )
+    .expect("write fake runner");
+    make_executable(&runner);
+    runner
+}
+
+fn sleeping_runner(root: &Path) -> std::path::PathBuf {
+    let runner = root.join("sleep-runner.sh");
+    fs::write(&runner, "#!/bin/sh\nsleep 5\n").expect("write sleep runner");
     make_executable(&runner);
     runner
 }

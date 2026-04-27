@@ -1,6 +1,7 @@
 import type { AppConfigState } from "../config/app-config";
 import type { WasmClient } from "../wasm-bridge";
 import { ChatZone } from "./chat-zone";
+import type { ChatSnapshot } from "./chat-zone";
 import { FilesPanel } from "./files-panel";
 import type { LeftPanelId } from "./left-panel-routing";
 import { LogPanel, type LogEntry } from "./log-panel";
@@ -21,6 +22,8 @@ type LeftPanelProps = {
   onCollapseDirectory: (entry: WorkspaceEntry) => void;
   logEntries: LogEntry[];
   client: WasmClient | null;
+  snapshot: ChatSnapshot | null;
+  onStatus?: (message: string) => void;
   appConfig: AppConfigState;
   wsUrl: string;
 };
@@ -39,6 +42,8 @@ export function LeftPanel(props: LeftPanelProps) {
     onCollapseDirectory,
     logEntries,
     client,
+    snapshot,
+    onStatus,
     appConfig,
     wsUrl,
   } = props;
@@ -49,7 +54,9 @@ export function LeftPanel(props: LeftPanelProps) {
       data-testid="workbench-left-panel"
       aria-label="left panel"
     >
-      {activePanel === "chat" ? <ChatZone /> : null}
+      {activePanel === "chat" ? (
+        <ChatZone client={client} snapshot={snapshot} onStatus={onStatus} />
+      ) : null}
       {activePanel === "files" ? (
         <FilesPanel
           rootName={rootName}

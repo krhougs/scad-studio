@@ -1,12 +1,19 @@
 use app_server_protocol::{
-    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
-    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
+    AgentInvokeRequest, AgentOperationLevel, AgentStartedResponse, AgentTokenEvent,
+    AgentToolResultEvent, AgentToolStartEvent, CadQueryFeatureFaces, CadQueryMeshPayload,
+    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest,
+    ChatArchivedResponse, ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest,
+    ChatHistoryResponse, ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole,
+    ChatSendRequest, ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord,
     ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope,
     CommandSuccess, EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse,
     PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
     PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
     PreviewResponseFormat, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
-    RequestId, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
+    ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
     ServerResponseEnvelope, SessionToken, SubscriptionId, VertexPoint, WatchChangedEvent,
     WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceEntryKind, WorkspaceId, decode_client_frame,
     decode_server_frame, encode_client_frame, encode_server_frame, negotiate_protocol_version,
@@ -371,4 +378,262 @@ fn cadquery_mesh_frame(payload: CadQueryMeshPayload) -> ServerEnvelope {
         request_id: RequestId(1),
         result: Ok(CommandSuccess::CadQueryMesh(payload)),
     })
+}
+
+#[test]
+fn chat_agent_and_selection_payloads_roundtrip() {
+    let session_id = ChatSessionId("main".into());
+    let related_file = PathHandle::new(WorkspaceId::new("ws"), ["parts", "top_lid.py"]).unwrap();
+    let create = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(50),
+        command: ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "main".into(),
+            goal: Some("lid iteration".into()),
+            related_files: vec![related_file.clone()],
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&create).unwrap()).unwrap();
+    assert_eq!(decoded, create);
+
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(50),
+        result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+            session_id: session_id.clone(),
+            title: "main".into(),
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
+
+    let list = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(51),
+        command: ClientCommand::ChatList(ChatListRequest {
+            include_archived: false,
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&list).unwrap()).unwrap();
+    assert_eq!(decoded, list);
+
+    let history = ChatHistoryResponse {
+        session_id: session_id.clone(),
+        messages: vec![ChatMessageRecord {
+            message_id: "msg-1".into(),
+            ts_ms: 1_000,
+            role: ChatRole::User,
+            content: "make it taller".into(),
+            related_files: vec![related_file.clone()],
+            tool_call_id: None,
+            tool_calls: vec![ChatToolCallRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "cadquery".into(),
+                args_json: "{}".into(),
+            }],
+            tool_result: Some(ChatToolResultRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "cadquery".into(),
+                result_json: "{\"ok\":true}".into(),
+            }),
+            mesh_result: None,
+        }],
+    };
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(52),
+        result: Ok(CommandSuccess::ChatHistory(history)),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
+
+    let send = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(53),
+        command: ClientCommand::ChatSend(ChatSendRequest {
+            session_id: session_id.clone(),
+            content: "preview this".into(),
+            related_files: vec![related_file],
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&send).unwrap()).unwrap();
+    assert_eq!(decoded, send);
+
+    let archive = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(54),
+        command: ClientCommand::ChatArchive(ChatArchiveRequest {
+            session_id: session_id.clone(),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&archive).unwrap()).unwrap();
+    assert_eq!(decoded, archive);
+}
+
+#[test]
+fn agent_push_events_and_busy_error_roundtrip() {
+    let session_id = ChatSessionId("main".into());
+    let invoke = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(60),
+        command: ClientCommand::AgentInvoke(AgentInvokeRequest {
+            session_id: session_id.clone(),
+            prompt: "make a taller lid".into(),
+            operation: AgentOperationLevel::Plan,
+            confirmed_cadquery: None,
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&invoke).unwrap()).unwrap();
+    assert_eq!(decoded, invoke);
+
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(60),
+        result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
+
+    let token = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentToken(AgentTokenEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            text: "draft".into(),
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&token).unwrap()).unwrap();
+    assert_eq!(decoded, token);
+
+    let tool_start = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentToolStart(AgentToolStartEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            tool_call_id: "tool-1".into(),
+            tool_name: "cadquery.preview".into(),
+            args_json: "{\"target\":\"parts/top_lid.py\"}".into(),
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&tool_start).unwrap()).unwrap();
+    assert_eq!(decoded, tool_start);
+
+    let done = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentDone(AgentDoneEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            cancelled: false,
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&done).unwrap()).unwrap();
+    assert_eq!(decoded, done);
+
+    let error = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(61),
+        result: Err(ProtocolError::new(ProtocolErrorCode::AgentBusy, "busy")),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&error).unwrap()).unwrap();
+    assert_eq!(decoded, error);
+
+    let cancel = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(62),
+        command: ClientCommand::AgentCancel(AgentCancelRequest {
+            run_id: Some("run-1".into()),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&cancel).unwrap()).unwrap();
+    assert_eq!(decoded, cancel);
+
+    let cancelled = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(62),
+        result: Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
+            run_id: Some("run-1".into()),
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&cancelled).unwrap()).unwrap();
+    assert_eq!(decoded, cancelled);
+
+    let tool_result = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentToolResult(AgentToolResultEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            tool_call_id: "tool-1".into(),
+            tool_name: "cadquery".into(),
+            result_json: "{\"ok\":true}".into(),
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&tool_result).unwrap()).unwrap();
+    assert_eq!(decoded, tool_result);
+
+    let agent_error = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentError(AgentErrorEvent {
+            session_id,
+            run_id: Some("run-1".into()),
+            error_type: AgentErrorType::LlmError,
+            message: "provider failed".into(),
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&agent_error).unwrap()).unwrap();
+    assert_eq!(decoded, agent_error);
+}
+
+#[test]
+fn selection_update_payload_roundtrips() {
+    let selection = SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[top_lid:f_0]".into(),
+        owner_ref_text: Some("@part[top_lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[top_lid.top_surface]".into()),
+        build_id: Some(valid_sha256_build_id()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    };
+    let envelope = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(70),
+        command: ClientCommand::SelectionUpdate(SelectionUpdateRequest {
+            selections: vec![selection],
+            active_index: Some(0),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&envelope).unwrap()).unwrap();
+    assert_eq!(decoded, envelope);
+
+    let response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(70),
+        result: Ok(CommandSuccess::SelectionUpdated(SelectionUpdateResponse {
+            accepted_count: 1,
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
+    assert_eq!(decoded, response);
+
+    let summary = ChatListResponse {
+        sessions: vec![ChatSessionSummary {
+            session_id: ChatSessionId("main".into()),
+            title: "main".into(),
+            archived: false,
+            message_count: 1,
+            related_files: Vec::new(),
+        }],
+    };
+    let bytes = borsh::to_vec(&summary).unwrap();
+    let decoded: ChatListResponse = borsh::from_slice(&bytes).unwrap();
+    assert_eq!(decoded, summary);
+
+    let ack = ChatAckResponse {
+        session_id: ChatSessionId("main".into()),
+        message_id: "msg-1".into(),
+    };
+    let decoded: ChatAckResponse = borsh::from_slice(&borsh::to_vec(&ack).unwrap()).unwrap();
+    assert_eq!(decoded, ack);
+
+    let archived = ChatArchivedResponse {
+        session_id: ChatSessionId("main".into()),
+    };
+    let decoded: ChatArchivedResponse =
+        borsh::from_slice(&borsh::to_vec(&archived).unwrap()).unwrap();
+    assert_eq!(decoded, archived);
+
+    let history_request = ChatHistoryRequest {
+        session_id: ChatSessionId("main".into()),
+        limit: Some(50),
+    };
+    let decoded: ChatHistoryRequest =
+        borsh::from_slice(&borsh::to_vec(&history_request).unwrap()).unwrap();
+    assert_eq!(decoded, history_request);
 }

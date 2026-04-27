@@ -173,3 +173,65 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - `docs/known_issues.md` 新增记录：CadQuery output 回写在本地可信 workspace 假设下仍有普通路径写入 TOCTOU 残余风险；当前不阻断 MVP，后续若要把 workspace 当作不可信输入，需要基于目录句柄和 no-follow 语义重新设计写入 API。
 - `bun run web:build` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
 - CadQuery Python 环境仍按 MVP 策略手动安装；分发与沙盒策略留到产品化阶段。
+
+## Phase 1 — Protocol / ManagedClient / Agent / Chat
+
+### 完成情况
+
+- 评估并记录 `rig-core` 当前兼容版本 `0.35.0`：provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 符合后续接入方向。由于当前仓库没有 provider 配置、密钥管理和 mock provider 测试夹具，本 Phase 先实现 `AgentBackend` trait 和本地 deterministic fallback，不硬编码供应商或凭据。
+- 扩展 `app-server-protocol`：新增 Chat 生命周期命令、Agent invoke / cancel、SelectionUpdate、CadQueryResultGet、Agent push events、`agent_busy` 错误，以及 Chat tool call / tool result / mesh result 记录。
+- 扩展 `studio-common::ManagedClient`：维护 Chat sessions / history、Agent run、current selection、CadQuery result ready 的 snapshot 与事件更新；`AgentCancelled` 只作为取消请求确认，真正清理 running 状态由后续 `AgentDone` 事件完成。
+- 扩展 `studio-web-wasm`、`app-server-protocol-wasm` 和 generated packages：新增 Chat / Agent / Selection dispatch；`cadquery.result.get` 的 JS 可见响应只保留轻量 `CadQueryResultReady`，mesh 大数组通过 `client_take_cadquery_mesh(result_id)` 读取。
+- 实现 `app-server-host` dispatcher 异步 agent registry：`agent.invoke` 立即返回 `AgentStarted`，后续通过 push event 输出 token、tool start、tool result、mesh ready 和 done；已有 running session 时返回 `agent_busy`。
+- 实现 `agent.cancel`：取消请求设置共享取消标记，运行任务负责停止 CadQuery 子进程、清理 staging、释放 registry，并发送 `AgentDone { cancelled: true }`，避免 cancel ack 先释放 running 状态造成第二个 agent 提前进入。
+- 实现 Chat JSONL 存储：支持 create / list / send / history / archive，消息记录可保存 tool call、tool result 和 mesh result；session id 在 path join 前校验，只允许 ASCII 字母数字和 `-`。
+- 收紧 Chat 文件系统边界：workspace root 以下的 `chats`、`chats/archived` 和每个 JSONL 文件均拒绝符号链接；`create`、`history`、`send`、`archive`、`list` 统一通过 no-follow metadata 检查，防止 Chat JSONL 写出 workspace。
+- 实现 Inform / Plan / Execute 权限模型：Execute 必须携带 `AgentCadQueryConfirmation`，目标文件、affected / new 文件和 export targets 均使用 `PathHandle`；Agent 只能写入确认范围内的目标和输出。
+- 修正 CadQuery 执行边界：Agent Execute 使用 backend 生成的 CadQuery 代码，不执行前端传入的原始 prompt 或任意 raw code；Agent Execute、直接 `CadQueryExecute` 和 `CadQueryPreview` 都使用 exact output scope，禁止把 staging 中未确认或非默认的 outputs 回写到真实 workspace；runner 返回后到 commit 前、commit prepare 前、commit 文件写入前都会再次检查 cancel 标记，文件间取消会回滚已写入文件和本轮新建目录，commit 成功后不再把 late cancel 改判为 cancelled done。
+- 实现 Web Chat UI：支持 session 列表、创建 / 切换、Inform / Plan / Execute 模式、发送消息、agent streaming、tool result 展示、mesh result 展示和 done 后刷新 history；Chat archive 已在协议和后端实现，UI 暂未暴露归档入口；Chat / Agent / Selection 业务状态不写入 Zustand。
+
+### Review 与修复记录
+
+- 第一轮独立 review 发现 Chat session id 路径逃逸、Agent 只有 placeholder、Web Execute confirmation 不完整、Chat JSONL 缺少 tool call / result 记录、缺少 CadQuery result get wrapper、Agent done 后未刷新 history。均已修复并补充对应测试。
+- 第二轮独立 review 发现 Agent Execute 仍会执行前端 raw code / prompt，以及 CadQuery staging 会把未确认 outputs 一并回写。已改为 `AgentBackend::generate_cadquery_code()` 生成代码，并新增 exact output scope。
+- 第三轮独立 review 发现 `agent.cancel` 会在 worker 完成前释放 registry 并发送 done，直接 `CadQueryExecute` 也仍可绕过 output scope。已改为 worker 统一释放 registry；直接 execute / preview 均使用默认 exact output scope。
+- 第四轮独立 review 发现 ManagedClient 在 cancel ack 时提前清理 `agent_run`，以及 `CadQueryPreview` 缺少 output scope 回归测试。已修复 ack 语义，并补充 preview exact output scope 测试。
+- 第五轮独立 review 发现 ChatStore 可通过 `chats` 或 `chats/archived` 符号链接写出 workspace，且本文件缺少 Phase 1 结果记录。已补充 symlink 拒绝逻辑、红绿回归测试和本结果记录。
+- 第六轮独立 review 发现三项问题：ChatStore 仍未覆盖中间目录符号链接，Web `dispatchCadQueryResultGet` 会在 Promise 内提前取出 mesh handle，CadQuery runner 完成后到 commit 前收到取消仍可能写入 workspace。已分别修复为 workspace root 以下逐组件 no-follow 检查、`dispatchCadQueryResultGet` 只返回轻量 payload 且调用方显式 `takeCadQueryMesh(result_id)`、runner 后 commit 前再次检查 cancel 标记，并补充对应红绿回归测试。
+- 第七轮独立 review 发现 commit 成功后 dispatcher 仍可能因 late cancel 发送 `AgentDone { cancelled: true }`，并指出 Chat symlink 回归覆盖缺少 `chats/archived` 和 JSONL 文件本身。已将 cancel 检查下沉到 staging commit 的文件写入前，文件间取消会 rollback；dispatcher 在 commit 成功后不再改判为 cancelled done；同时补齐 `archived` 目录 symlink 与 JSONL 文件 symlink 测试。
+- 第八轮独立 review 发现 staging commit 在第一次 cancel 检查前会先执行 prepare 并创建输出父目录。已把 cancel 检查提前到 prepare 前，并记录 prepare 阶段新建目录；任何 prepare 后取消或 commit 错误都会删除本轮新建的空目录。
+- 第九轮独立 review 发现两项风险：文件间取消测试实际在第一轮文件写入前取消，无法证明 rollback；`run_execute_agent`、`useChatController`、`ChatComposer` 超过 50 行项目约束。已调整测试为第一轮文件写入完成、第二轮文件写入前取消，并断言输出文件和本轮创建目录均被回滚；同时拆分 dispatcher helper 和 Web Chat hook / composer 子组件。
+- 第十轮独立 review 未发现 Critical 或 Important。Minor 指出结果记录中 Web Chat UI “归档”表述过宽；已修正为协议和后端支持归档、UI 暂未暴露归档入口。
+
+### 验证记录
+
+- 红灯验证：新增 `chat_store_rejects_chats_symlink_escape` 后，修复前执行 `cargo test -p app-server-core --test chat_tests chat_store_rejects_chats_symlink_escape -- --nocapture` 失败，实际创建了 `escaped-chat`。
+- 红灯验证：新增 `chat_store_rejects_archive_through_chats_symlink_escape` 后，修复前执行 `cargo test -p app-server-core --test chat_tests chat_store_rejects_archive_through_chats_symlink_escape -- --nocapture` 失败，实际把 outside `main.jsonl` 归档到 outside `archived/main.jsonl`。
+- 红灯验证：更新 `wasm-client.test.ts` 要求 result-get Promise 只返回轻量 payload 后，修复前 `bun run --cwd packages/studio-web test:unit tests/unit/wasm-client.test.ts` 失败，实际返回 `{ payload, mesh }`。
+- 红灯验证：新增 `cadquery_staging_rejects_cancel_after_runner_before_commit` 后，修复前执行 `cargo test -p app-server-core --test cadquery_tests cadquery_staging_rejects_cancel_after_runner_before_commit -- --nocapture` 失败，实际完成 commit 并返回 `CadQueryRunResult`。
+- 红灯验证：新增 `cadquery_staging_rolls_back_when_cancelled_between_commit_files` 后，修复前执行 `cargo test -p app-server-core --test cadquery_tests cadquery_staging_rolls_back_when_cancelled_between_commit_files -- --nocapture` 编译失败，缺少 cancellable commit API；补齐后该测试验证文件间取消 rollback。
+- 红灯验证：新增 `cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir` 后，修复前执行 `cargo test -p app-server-core --test cadquery_tests cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir -- --nocapture` 失败，实际仍创建了真实 `outputs/` 目录。
+- 绿色验证：修正文件间取消覆盖后，`cargo test -p app-server-core --test cadquery_tests cadquery_staging_rolls_back_when_cancelled_between_commit_files -- --nocapture` 通过，1 个测试通过。
+- 绿色验证：`rustfmt --edition 2024 crates/app-server-core/src/chat.rs crates/app-server-core/src/cadquery/staging.rs crates/app-server-core/tests/chat_tests.rs crates/app-server-core/tests/cadquery_tests.rs` 后，`cargo test -p app-server-core --test chat_tests -- --nocapture` 通过，5 个测试全部通过。
+- 绿色验证：补充 `chats/archived` 目录 symlink 与 JSONL 文件 symlink 测试后，`cargo test -p app-server-core --test chat_tests -- --nocapture` 通过，7 个测试全部通过。
+- 绿色验证：`cargo test -p app-server-core --test cadquery_tests -- --nocapture` 通过，21 个测试全部通过。
+- 绿色验证：`cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests -- --nocapture` 通过，10 个测试全部通过。
+- 绿色验证：拆分 Web Chat hook / composer 后，`bun run --cwd packages/studio-web test:unit tests/unit/chat-zone.test.tsx` 通过，1 个文件、2 个测试通过。
+- 绿色验证：`bun run --cwd packages/studio-web test:unit tests/unit/wasm-client.test.ts tests/unit/chat-zone.test.tsx` 通过，2 个文件、3 个测试通过。
+- `rustfmt --edition 2024 --check <Phase 1 触及的 Rust 文件>`：通过。
+- `cargo test --workspace`：通过；仅有既有 `app-server-core/src/watch.rs` dead_code warning。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：22 个文件、101 个测试通过。
+- `cargo check -p app-server-protocol-wasm --target wasm32-unknown-unknown`：通过。
+- `cargo check -p studio-web-wasm --target wasm32-unknown-unknown`：通过。
+- `bun run protocol:build`：通过。
+- `bun run check:wasm-bindgen`：通过。
+- `bun scripts/build_studio_web.ts`：构建成功，仍有既有 Vite 大 chunk warning。
+- `git diff --check`：通过。
+
+### 遗留问题
+
+- `docs/known_issues.md` 新增记录：全仓库 `cargo fmt --check` 当前受既有无关格式差异阻塞。本轮不格式化未触及的无关源码，Phase 1 触及的 Rust 文件已通过 `rustfmt --check`。
+- `docs/known_issues.md` 新增记录：Agent 后端当前使用本地 CadQuery 代码生成 fallback，尚未接入真实 LLM provider 配置；这不阻断 Phase 1 的协议、Chat、ManagedClient、权限范围和 CadQuery staging 主链路验收，但后续复杂 Agent 能力必须接入真实 provider 或 provider mock。
+- `bun run protocol:check-generated` 在 Phase 1 提交前会因为 intended generated files 仍处于未提交 diff 状态而失败；本 Phase 使用 `bun run protocol:build` 验证生成流程，提交后再执行 generated check。
+- `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。

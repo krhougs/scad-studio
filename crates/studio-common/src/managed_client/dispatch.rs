@@ -1,7 +1,9 @@
 use app_server_protocol::{
-    CadQueryExecuteRequest, CadQueryPreviewRequest, CadQueryResultGetRequest, ClientCommand,
-    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
-    RequestId, SlicerListRequest, WorkspaceListRequest,
+    AgentCancelRequest, AgentInvokeRequest, CadQueryExecuteRequest, CadQueryPreviewRequest,
+    CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatSendRequest, ClientCommand, ConfigSaveRequest, ExportRunRequest,
+    FileReadRequest, FileWriteTextRequest, PreviewRequest, RequestId, SelectionUpdateRequest,
+    SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
@@ -150,6 +152,94 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             ClientCommand::CadQueryResultGet(params),
             PendingKind::CadQuery,
             self.timeouts.file_read,
+        )
+    }
+
+    pub fn dispatch_chat_create(
+        &mut self,
+        params: ChatCreateRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::ChatCreate(params),
+            PendingKind::Chat,
+            self.timeouts.chat,
+        )
+    }
+
+    pub fn dispatch_chat_list(
+        &mut self,
+        params: ChatListRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::ChatList(params),
+            PendingKind::Chat,
+            self.timeouts.chat,
+        )
+    }
+
+    pub fn dispatch_chat_send(
+        &mut self,
+        params: ChatSendRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::ChatSend(params),
+            PendingKind::Chat,
+            self.timeouts.chat,
+        )
+    }
+
+    pub fn dispatch_chat_history(
+        &mut self,
+        params: ChatHistoryRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::ChatHistory(params),
+            PendingKind::Chat,
+            self.timeouts.chat,
+        )
+    }
+
+    pub fn dispatch_chat_archive(
+        &mut self,
+        params: ChatArchiveRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::ChatArchive(params),
+            PendingKind::Chat,
+            self.timeouts.chat,
+        )
+    }
+
+    pub fn dispatch_agent_invoke(
+        &mut self,
+        params: AgentInvokeRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentInvoke(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_cancel(
+        &mut self,
+        params: AgentCancelRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentCancel(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_selection_update(
+        &mut self,
+        params: SelectionUpdateRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::SelectionUpdate(params.clone()),
+            PendingKind::SelectionUpdate { snapshot: params },
+            self.timeouts.selection_update,
         )
     }
 

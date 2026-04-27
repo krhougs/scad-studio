@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Component, Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -8,7 +9,7 @@ use app_server_protocol::CadQueryExportFormat;
 
 use super::runner::{
     CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
-    error_invalid_path, error_io, run_cadquery_runner,
+    error_invalid_path, error_io, error_permission_denied, run_cadquery_runner_with_cancel,
 };
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,12 @@ pub struct StagedCadQueryProject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CadQueryCommitScope {
+    AllOutputs,
+    ExactOutputs(Vec<PathBuf>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FileBaseline {
     bytes: Option<Vec<u8>>,
 }
@@ -48,24 +55,55 @@ struct CommitBackup {
     previous_bytes: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
+struct CommitPlan {
+    backups: Vec<CommitBackup>,
+    created_dirs: Vec<PathBuf>,
+}
+
 pub fn execute_cadquery_with_staging(
     config: &CadQueryExecuteConfig,
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
+    execute_cadquery_with_staging_cancellable(config, &|| false)
+}
+
+pub fn execute_cadquery_with_staging_cancellable(
+    config: &CadQueryExecuteConfig,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<CadQueryRunResult, CadQueryRunnerError> {
+    execute_cadquery_with_staging_cancellable_scoped(
+        config,
+        is_cancelled,
+        &CadQueryCommitScope::AllOutputs,
+    )
+}
+
+pub fn execute_cadquery_with_staging_cancellable_scoped(
+    config: &CadQueryExecuteConfig,
+    is_cancelled: &dyn Fn() -> bool,
+    commit_scope: &CadQueryCommitScope,
+) -> Result<CadQueryRunResult, CadQueryRunnerError> {
+    ensure_not_cancelled(is_cancelled)?;
     let staged = stage_cadquery_project(
         &config.workspace_root,
         &config.target_relative_path,
         &config.code,
     )?;
-    let result = run_cadquery_runner(&CadQueryRunConfig {
-        python: config.python.clone(),
-        project_root: staged.root().to_path_buf(),
-        script: staged.script_arg(),
-        output_dir: staged.output_dir(),
-        export_formats: config.export_formats.clone(),
-        params_json: config.params_json.clone(),
-        timeout: config.timeout,
-    })?;
-    staged.commit_success()?;
+    ensure_not_cancelled(is_cancelled)?;
+    let result = run_cadquery_runner_with_cancel(
+        &CadQueryRunConfig {
+            python: config.python.clone(),
+            project_root: staged.root().to_path_buf(),
+            script: staged.script_arg(),
+            output_dir: staged.output_dir(),
+            export_formats: config.export_formats.clone(),
+            params_json: config.params_json.clone(),
+            timeout: config.timeout,
+        },
+        is_cancelled,
+    )?;
+    ensure_not_cancelled(is_cancelled)?;
+    staged.commit_success_with_scope_cancellable(commit_scope, is_cancelled)?;
     Ok(result)
 }
 
@@ -113,15 +151,40 @@ impl StagedCadQueryProject {
     }
 
     pub fn commit_success(self) -> Result<(), CadQueryRunnerError> {
+        self.commit_success_with_scope(&CadQueryCommitScope::AllOutputs)
+    }
+
+    pub fn commit_success_with_scope(
+        self,
+        scope: &CadQueryCommitScope,
+    ) -> Result<(), CadQueryRunnerError> {
+        self.commit_success_with_scope_cancellable(scope, &|| false)
+    }
+
+    pub fn commit_success_with_scope_cancellable(
+        self,
+        scope: &CadQueryCommitScope,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), CadQueryRunnerError> {
         self.baseline.ensure_unchanged(&self.original_target_path)?;
-        let mut files = self.output_commit_files()?;
+        let mut files = self.output_commit_files_for_scope(scope)?;
         files.push(self.target_commit_file());
-        commit_files(&self.workspace_root, files)
+        commit_files_cancellable(&self.workspace_root, files, is_cancelled)
     }
 
     pub fn commit_outputs(self) -> Result<(), CadQueryRunnerError> {
+        self.commit_outputs_with_scope(&CadQueryCommitScope::AllOutputs)
+    }
+
+    pub fn commit_outputs_with_scope(
+        self,
+        scope: &CadQueryCommitScope,
+    ) -> Result<(), CadQueryRunnerError> {
         self.baseline.ensure_unchanged(&self.original_target_path)?;
-        commit_files(&self.workspace_root, self.output_commit_files()?)
+        commit_files(
+            &self.workspace_root,
+            self.output_commit_files_for_scope(scope)?,
+        )
     }
 
     fn target_commit_file(&self) -> CommitFile {
@@ -144,6 +207,21 @@ impl StagedCadQueryProject {
         )?;
         files.sort_by(|left, right| left.target.cmp(&right.target));
         Ok(files)
+    }
+
+    fn output_commit_files_for_scope(
+        &self,
+        scope: &CadQueryCommitScope,
+    ) -> Result<Vec<CommitFile>, CadQueryRunnerError> {
+        let files = self.output_commit_files()?;
+        match scope {
+            CadQueryCommitScope::AllOutputs => Ok(files),
+            CadQueryCommitScope::ExactOutputs(paths) => {
+                let allowed = allowed_output_paths(paths)?;
+                validate_output_commit_files(&self.workspace_root, &files, &allowed)?;
+                Ok(files)
+            }
+        }
     }
 }
 
@@ -285,12 +363,65 @@ fn collect_dir_commit_files(
     Ok(())
 }
 
+fn allowed_output_paths(paths: &[PathBuf]) -> Result<HashSet<PathBuf>, CadQueryRunnerError> {
+    let mut allowed = HashSet::with_capacity(paths.len());
+    for path in paths {
+        let normalized = validate_relative_path(path)?;
+        if !normalized.starts_with("outputs") {
+            return Err(error_permission_denied(
+                "CadQuery export target 必须位于 outputs/ 目录",
+            ));
+        }
+        allowed.insert(normalized);
+    }
+    Ok(allowed)
+}
+
+fn validate_output_commit_files(
+    workspace_root: &Path,
+    files: &[CommitFile],
+    allowed: &HashSet<PathBuf>,
+) -> Result<(), CadQueryRunnerError> {
+    for file in files {
+        let relative = file
+            .target
+            .strip_prefix(workspace_root)
+            .map_err(|_| error_invalid_path("CadQuery 输出提交目标不在 workspace 内"))?;
+        let relative = validate_relative_path(relative)?;
+        if !allowed.contains(&relative) {
+            return Err(error_permission_denied(format!(
+                "CadQuery runner 生成了未确认输出: {}",
+                display_relative_path(&relative)
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn commit_files(workspace_root: &Path, files: Vec<CommitFile>) -> Result<(), CadQueryRunnerError> {
-    let backups = prepare_commit_files(workspace_root, files)?;
+    commit_files_cancellable(workspace_root, files, &|| false)
+}
+
+fn commit_files_cancellable(
+    workspace_root: &Path,
+    files: Vec<CommitFile>,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<(), CadQueryRunnerError> {
+    ensure_not_cancelled(is_cancelled)?;
+    let CommitPlan {
+        backups,
+        created_dirs,
+    } = prepare_commit_files(workspace_root, files)?;
     let mut applied = Vec::new();
     for backup in backups {
+        if let Err(error) = ensure_not_cancelled(is_cancelled) {
+            rollback_commit(&applied);
+            rollback_created_dirs(&created_dirs);
+            return Err(error);
+        }
         if let Err(error) = atomic_copy_file(&backup.source, &backup.target) {
             rollback_commit(&applied);
+            rollback_created_dirs(&created_dirs);
             return Err(error_io(format!("提交 CadQuery 文件失败: {error}")));
         }
         applied.push(backup);
@@ -301,34 +432,52 @@ fn commit_files(workspace_root: &Path, files: Vec<CommitFile>) -> Result<(), Cad
 fn prepare_commit_files(
     workspace_root: &Path,
     files: Vec<CommitFile>,
-) -> Result<Vec<CommitBackup>, CadQueryRunnerError> {
+) -> Result<CommitPlan, CadQueryRunnerError> {
     let mut backups = Vec::with_capacity(files.len());
+    let mut created_dirs = Vec::new();
     for file in files {
         if !file.source.is_file() {
+            rollback_created_dirs(&created_dirs);
             return Err(error_io(format!(
                 "CadQuery staging 文件不存在: {}",
                 file.source.display()
             )));
         }
-        let target = resolve_commit_target(workspace_root, &file.target)?;
-        let previous_bytes = capture_regular_file_backup(&target)?;
+        let target = match resolve_commit_target(workspace_root, &file.target, &mut created_dirs) {
+            Ok(target) => target,
+            Err(error) => {
+                rollback_created_dirs(&created_dirs);
+                return Err(error);
+            }
+        };
+        let previous_bytes = match capture_regular_file_backup(&target) {
+            Ok(previous_bytes) => previous_bytes,
+            Err(error) => {
+                rollback_created_dirs(&created_dirs);
+                return Err(error);
+            }
+        };
         backups.push(CommitBackup {
             source: file.source,
             target,
             previous_bytes,
         });
     }
-    Ok(backups)
+    Ok(CommitPlan {
+        backups,
+        created_dirs,
+    })
 }
 
 fn resolve_commit_target(
     workspace_root: &Path,
     target: &Path,
+    created_dirs: &mut Vec<PathBuf>,
 ) -> Result<PathBuf, CadQueryRunnerError> {
     let parent = target
         .parent()
         .ok_or_else(|| error_invalid_path("CadQuery 提交目标缺少父目录"))?;
-    let parent = ensure_commit_parent_inside_workspace(workspace_root, parent)?;
+    let parent = ensure_commit_parent_inside_workspace(workspace_root, parent, created_dirs)?;
     let file_name = target
         .file_name()
         .ok_or_else(|| error_invalid_path("CadQuery 提交目标缺少文件名"))?;
@@ -338,6 +487,7 @@ fn resolve_commit_target(
 fn ensure_commit_parent_inside_workspace(
     workspace_root: &Path,
     parent: &Path,
+    created_dirs: &mut Vec<PathBuf>,
 ) -> Result<PathBuf, CadQueryRunnerError> {
     let canonical_root = workspace_root
         .canonicalize()
@@ -351,7 +501,7 @@ fn ensure_commit_parent_inside_workspace(
             return Err(error_invalid_path("CadQuery 提交目标不能逃逸 workspace"));
         };
         let next = current.join(segment);
-        current = ensure_commit_dir_inside_workspace(&canonical_root, &next)?;
+        current = ensure_commit_dir_inside_workspace(&canonical_root, &next, created_dirs)?;
     }
     Ok(current)
 }
@@ -359,6 +509,7 @@ fn ensure_commit_parent_inside_workspace(
 fn ensure_commit_dir_inside_workspace(
     canonical_root: &Path,
     path: &Path,
+    created_dirs: &mut Vec<PathBuf>,
 ) -> Result<PathBuf, CadQueryRunnerError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -371,6 +522,7 @@ fn ensure_commit_dir_inside_workspace(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir(path)
                 .map_err(|error| error_io(format!("创建 CadQuery 提交目录失败: {error}")))?;
+            created_dirs.push(path.to_path_buf());
         }
         Err(error) => return Err(error_io(format!("读取 CadQuery 提交目录失败: {error}"))),
     }
@@ -409,6 +561,12 @@ fn rollback_commit(applied: &[CommitBackup]) {
                 let _ = fs::remove_file(&backup.target);
             }
         }
+    }
+}
+
+fn rollback_created_dirs(created_dirs: &[PathBuf]) {
+    for dir in created_dirs.iter().rev() {
+        let _ = fs::remove_dir(dir);
     }
 }
 
@@ -457,6 +615,20 @@ fn validate_relative_path(path: &Path) -> Result<PathBuf, CadQueryRunnerError> {
         }
     }
     Ok(normalized)
+}
+
+fn display_relative_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn ensure_not_cancelled(is_cancelled: &dyn Fn() -> bool) -> Result<(), CadQueryRunnerError> {
+    if is_cancelled() {
+        return Err(CadQueryRunnerError {
+            kind: CadQueryRunnerErrorKind::Cancelled,
+            message: "CadQuery runner 已取消".into(),
+        });
+    }
+    Ok(())
 }
 
 fn staging_id() -> String {

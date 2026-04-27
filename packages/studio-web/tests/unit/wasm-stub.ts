@@ -18,7 +18,25 @@ export class MeshHandle {
     return new Uint32Array();
   }
 }
+export class CadQueryMeshHandle {
+  constructor(private readonly data: unknown = null) {}
+  free(): void {}
+  metadata(): unknown {
+    return this.data;
+  }
+}
 export class RendererHandle {}
+
+let queuedEvents: unknown[] = [];
+let cadQueryMesh: CadQueryMeshHandle | undefined;
+
+export function __queueClientEvents(events: unknown[]): void {
+  queuedEvents = events;
+}
+
+export function __setCadQueryMesh(mesh: CadQueryMeshHandle | undefined): void {
+  cadQueryMesh = mesh;
+}
 
 export function client_create(): ClientHandle {
   return new ClientHandle();
@@ -58,8 +76,43 @@ export function client_dispatch_workspace_current(): bigint {
 export function client_dispatch_workspace_list(): bigint {
   return 0n;
 }
+export function client_dispatch_cadquery_execute(): bigint {
+  return 0n;
+}
+export function client_dispatch_cadquery_preview(): bigint {
+  return 0n;
+}
+export function client_dispatch_cadquery_result_get(): bigint {
+  return 77n;
+}
+export function client_dispatch_chat_create(): bigint {
+  return 0n;
+}
+export function client_dispatch_chat_list(): bigint {
+  return 0n;
+}
+export function client_dispatch_chat_send(): bigint {
+  return 0n;
+}
+export function client_dispatch_chat_history(): bigint {
+  return 0n;
+}
+export function client_dispatch_chat_archive(): bigint {
+  return 0n;
+}
+export function client_dispatch_agent_invoke(): bigint {
+  return 0n;
+}
+export function client_dispatch_agent_cancel(): bigint {
+  return 0n;
+}
+export function client_dispatch_selection_update(): bigint {
+  return 0n;
+}
 export function client_drain_events(): unknown[] {
-  return [];
+  const events = queuedEvents;
+  queuedEvents = [];
+  return events;
 }
 export function client_mark_transport_closed(): void {}
 export function client_next_outbound(): Uint8Array | undefined {
@@ -75,6 +128,11 @@ export function client_subscribe_directory_watch(): bigint {
 export function client_tick(): void {}
 export function client_take_preview_mesh(): MeshHandle | undefined {
   return undefined;
+}
+export function client_take_cadquery_mesh(): CadQueryMeshHandle | undefined {
+  const mesh = cadQueryMesh;
+  cadQueryMesh = undefined;
+  return mesh;
 }
 export function mesh_decode(): MeshHandle {
   return new MeshHandle();

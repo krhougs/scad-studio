@@ -24,7 +24,6 @@ export type UiState = {
   activeRail: LeftPanelId;
   sidePanelOpen: boolean;
   isSettingsModalOpen: boolean;
-  inputDraft: string;
 };
 
 export type UiActions = {
@@ -35,7 +34,6 @@ export type UiActions = {
   setActiveRail: (id: LeftPanelId) => void;
   toggleSidePanel: () => void;
   setSettingsModalOpen: (value: boolean) => void;
-  setInputDraft: (value: string) => void;
 };
 
 export type UiStore = UiState & UiActions;
@@ -47,7 +45,6 @@ export const useUiStore = create<UiStore>((set) => ({
   activeRail: "chat",
   sidePanelOpen: true,
   isSettingsModalOpen: false,
-  inputDraft: "",
   setRoute: (route) => set({ route }),
   openTab: (tab) =>
     set((prev) => {
@@ -73,5 +70,4 @@ export const useUiStore = create<UiStore>((set) => ({
   setActiveRail: (id) => set({ activeRail: id }),
   toggleSidePanel: () => set((prev) => ({ sidePanelOpen: !prev.sidePanelOpen })),
   setSettingsModalOpen: (value) => set({ isSettingsModalOpen: value }),
-  setInputDraft: (value) => set({ inputDraft: value }),
 }));

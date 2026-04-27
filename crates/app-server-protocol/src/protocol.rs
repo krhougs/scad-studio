@@ -491,6 +491,266 @@ pub struct VertexPoint {
     pub adjacent_edges: Vec<u32>,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct ChatSessionId(pub String);
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum ChatRole {
+    User = 0,
+    Assistant = 1,
+    Tool = 2,
+    Meta = 3,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatCreateRequest {
+    pub title: String,
+    pub goal: Option<String>,
+    pub related_files: Vec<PathHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatCreatedResponse {
+    pub session_id: ChatSessionId,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatListRequest {
+    pub include_archived: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatSessionSummary {
+    pub session_id: ChatSessionId,
+    pub title: String,
+    pub archived: bool,
+    pub message_count: u32,
+    pub related_files: Vec<PathHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatListResponse {
+    pub sessions: Vec<ChatSessionSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatSendRequest {
+    pub session_id: ChatSessionId,
+    pub content: String,
+    pub related_files: Vec<PathHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatAckResponse {
+    pub session_id: ChatSessionId,
+    pub message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatHistoryRequest {
+    pub session_id: ChatSessionId,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatMessageRecord {
+    pub message_id: String,
+    pub ts_ms: u64,
+    pub role: ChatRole,
+    pub content: String,
+    pub related_files: Vec<PathHandle>,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Vec<ChatToolCallRecord>,
+    pub tool_result: Option<ChatToolResultRecord>,
+    pub mesh_result: Option<CadQueryResultReady>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatToolCallRecord {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub args_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatToolResultRecord {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub result_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatHistoryResponse {
+    pub session_id: ChatSessionId,
+    pub messages: Vec<ChatMessageRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatArchiveRequest {
+    pub session_id: ChatSessionId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatArchivedResponse {
+    pub session_id: ChatSessionId,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentOperationLevel {
+    Inform = 0,
+    Plan = 1,
+    Execute = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentCadQueryConfirmation {
+    pub request: CadQueryExecuteRequest,
+    pub plan_ref: Option<PathHandle>,
+    pub affected_files: Vec<PathHandle>,
+    pub new_files: Vec<PathHandle>,
+    pub export_targets: Vec<PathHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentInvokeRequest {
+    pub session_id: ChatSessionId,
+    pub prompt: String,
+    pub operation: AgentOperationLevel,
+    pub confirmed_cadquery: Option<AgentCadQueryConfirmation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentStartedResponse {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentCancelRequest {
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentCancelledResponse {
+    pub run_id: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentErrorType {
+    LlmError = 0,
+    LlmRefused = 1,
+    PermissionDenied = 2,
+    FileConflict = 3,
+    PythonImportError = 4,
+    CadQueryBuildError = 5,
+    TessellationError = 6,
+    TopologyMappingError = 7,
+    ExportError = 8,
+    Timeout = 9,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentTokenEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentToolStartEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub args_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentToolResultEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub result_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentMeshReadyEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub result: CadQueryResultReady,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentErrorEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: Option<String>,
+    pub error_type: AgentErrorType,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentDoneEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub cancelled: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum SelectionKind {
+    Component = 0,
+    Part = 1,
+    Assembly = 2,
+    Instance = 3,
+    Feature = 4,
+    Face = 5,
+    Edge = 6,
+    Vertex = 7,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct SelectionRef {
+    pub kind: SelectionKind,
+    pub ref_text: String,
+    pub owner_ref_text: Option<String>,
+    pub owner_object_kind: Option<CadQueryObjectKind>,
+    pub instance_path: Option<String>,
+    pub candidate_feature_ref: Option<String>,
+    pub build_id: Option<String>,
+    pub result_id: Option<String>,
+    pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct SelectionUpdateRequest {
+    pub selections: Vec<SelectionRef>,
+    pub active_index: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct SelectionUpdateResponse {
+    pub accepted_count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WatchSubscribeRequest {
     pub directory: Option<PathHandle>,
@@ -571,6 +831,22 @@ pub enum ClientCommand {
     CadQueryPreview(CadQueryPreviewRequest) = 14,
     #[serde(rename = "cadquery.result.get")]
     CadQueryResultGet(CadQueryResultGetRequest) = 15,
+    #[serde(rename = "chat.create")]
+    ChatCreate(ChatCreateRequest) = 16,
+    #[serde(rename = "chat.list")]
+    ChatList(ChatListRequest) = 17,
+    #[serde(rename = "chat.send")]
+    ChatSend(ChatSendRequest) = 18,
+    #[serde(rename = "chat.history")]
+    ChatHistory(ChatHistoryRequest) = 19,
+    #[serde(rename = "chat.archive")]
+    ChatArchive(ChatArchiveRequest) = 20,
+    #[serde(rename = "agent.invoke")]
+    AgentInvoke(AgentInvokeRequest) = 21,
+    #[serde(rename = "agent.cancel")]
+    AgentCancel(AgentCancelRequest) = 22,
+    #[serde(rename = "selection.update")]
+    SelectionUpdate(SelectionUpdateRequest) = 23,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -599,6 +875,14 @@ pub enum CommandSuccess {
     SessionReclaimed(SessionReclaimedResponse) = 12,
     CadQueryResultReady(CadQueryResultReady) = 13,
     CadQueryMesh(CadQueryMeshPayload) = 14,
+    ChatCreated(ChatCreatedResponse) = 15,
+    ChatList(ChatListResponse) = 16,
+    ChatAck(ChatAckResponse) = 17,
+    ChatHistory(ChatHistoryResponse) = 18,
+    ChatArchived(ChatArchivedResponse) = 19,
+    AgentStarted(AgentStartedResponse) = 20,
+    AgentCancelled(AgentCancelledResponse) = 21,
+    SelectionUpdated(SelectionUpdateResponse) = 22,
 }
 
 #[derive(
@@ -620,6 +904,7 @@ pub enum ProtocolErrorCode {
     UnsupportedWireVersion = 10,
     InvalidNumericValue = 11,
     InvalidHostLocalPath = 12,
+    AgentBusy = 13,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -656,6 +941,18 @@ pub enum ServerPushEvent {
     WatchChanged(WatchChangedEvent) = 0,
     #[serde(rename = "watch.error")]
     WatchError(WatchErrorEvent) = 1,
+    #[serde(rename = "agent.token")]
+    AgentToken(AgentTokenEvent) = 2,
+    #[serde(rename = "agent.tool_start")]
+    AgentToolStart(AgentToolStartEvent) = 3,
+    #[serde(rename = "agent.tool_result")]
+    AgentToolResult(AgentToolResultEvent) = 4,
+    #[serde(rename = "agent.mesh_ready")]
+    AgentMeshReady(AgentMeshReadyEvent) = 5,
+    #[serde(rename = "agent.error")]
+    AgentError(AgentErrorEvent) = 6,
+    #[serde(rename = "agent.done")]
+    AgentDone(AgentDoneEvent) = 7,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

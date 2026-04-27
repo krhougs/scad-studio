@@ -23,6 +23,7 @@ export type DispatchContext = {
   onTransportClosed?: (reason: unknown) => void;
   onWatchEvent?: (requestId: bigint, payload: unknown) => void;
   onWatchResubscribed?: (requestId: bigint) => void;
+  onAgentEvent?: (payload: unknown) => void;
 };
 
 export function dispatchClientEvents(
@@ -80,6 +81,10 @@ function dispatchOne(event: ClientEventShape, ctx: DispatchContext): void {
       }
       return;
     }
+    case "agent_event":
+      ctx.onAgentEvent?.(payload["payload"]);
+      ctx.onSnapshotDirty();
+      return;
     case "transport_open":
       ctx.onTransportOpen?.();
       ctx.onSnapshotDirty();

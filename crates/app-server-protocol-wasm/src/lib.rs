@@ -171,6 +171,118 @@ pub fn protocol_encode_cadquery_result_get_request(
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn protocol_encode_chat_create_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid chat.create request",
+        ClientCommand::ChatCreate,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_chat_list_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid chat.list request",
+        ClientCommand::ChatList,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_chat_send_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid chat.send request",
+        ClientCommand::ChatSend,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_chat_history_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid chat.history request",
+        ClientCommand::ChatHistory,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_chat_archive_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid chat.archive request",
+        ClientCommand::ChatArchive,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_agent_invoke_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid agent.invoke request",
+        ClientCommand::AgentInvoke,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_agent_cancel_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid agent.cancel request",
+        ClientCommand::AgentCancel,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_selection_update_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid selection.update request",
+        ClientCommand::SelectionUpdate,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn protocol_encode_slicer_list_request(
     request_id: u64,
     request: JsValue,
@@ -392,6 +504,7 @@ fn protocol_error_code(code: app_server_protocol::ProtocolErrorCode) -> &'static
         }
         app_server_protocol::ProtocolErrorCode::InvalidNumericValue => "invalid_numeric_value",
         app_server_protocol::ProtocolErrorCode::InvalidHostLocalPath => "invalid_host_local_path",
+        app_server_protocol::ProtocolErrorCode::AgentBusy => "agent_busy",
     }
 }
 

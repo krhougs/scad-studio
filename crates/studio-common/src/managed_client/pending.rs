@@ -1,4 +1,4 @@
-use app_server_protocol::{PathHandle, RequestId};
+use app_server_protocol::{PathHandle, RequestId, SelectionUpdateRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingKind {
@@ -12,6 +12,9 @@ pub enum PendingKind {
     SlicerList,
     ExportRun,
     CadQuery,
+    Chat,
+    Agent,
+    SelectionUpdate { snapshot: SelectionUpdateRequest },
     Cancel { target: RequestId },
     WatchSubscribe,
 }

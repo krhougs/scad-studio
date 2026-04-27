@@ -1,4 +1,6 @@
+mod agent;
 pub mod cadquery;
+mod chat;
 mod child_terminator;
 mod config;
 mod export;
@@ -8,12 +10,20 @@ mod preview;
 mod watch;
 mod workspace;
 
-pub use cadquery::{
-    CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
-    CadQueryRunnerErrorKind, StagedCadQueryProject, cadquery_result_ready,
-    execute_cadquery_with_staging, parse_cadquery_success_json, run_cadquery_runner,
-    stage_cadquery_project, validate_cadquery_mesh_payload,
+pub use agent::{
+    AgentBackend, AgentBackendDecision, AgentBackendError, AgentCadQueryCodeInput, AgentTurnDraft,
+    AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend, draft_agent_turn,
+    generate_cadquery_code, rig_backend_decision,
 };
+pub use cadquery::{
+    CadQueryCommitScope, CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult,
+    CadQueryRunnerError, CadQueryRunnerErrorKind, StagedCadQueryProject, cadquery_result_ready,
+    execute_cadquery_with_staging, execute_cadquery_with_staging_cancellable,
+    execute_cadquery_with_staging_cancellable_scoped, parse_cadquery_success_json,
+    run_cadquery_runner, run_cadquery_runner_with_cancel, stage_cadquery_project,
+    validate_cadquery_mesh_payload,
+};
+pub use chat::ChatStore;
 pub use child_terminator::{
     ChildTerminator, DefaultChildTerminator, terminate_child, terminate_child_with,
 };
