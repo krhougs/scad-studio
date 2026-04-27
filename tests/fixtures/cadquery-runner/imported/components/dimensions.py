@@ -1,0 +1,3 @@
+WIDTH = 80
+LENGTH = 60
+HEIGHT = 8
