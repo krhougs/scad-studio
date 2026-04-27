@@ -235,3 +235,43 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - `docs/known_issues.md` 新增记录：Agent 后端当前使用本地 CadQuery 代码生成 fallback，尚未接入真实 LLM provider 配置；这不阻断 Phase 1 的协议、Chat、ManagedClient、权限范围和 CadQuery staging 主链路验收，但后续复杂 Agent 能力必须接入真实 provider 或 provider mock。
 - `bun run protocol:check-generated` 在 Phase 1 提交前会因为 intended generated files 仍处于未提交 diff 状态而失败；本 Phase 使用 `bun run protocol:build` 验证生成流程，提交后再执行 generated check。
 - `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
+
+## Phase 2 — Viewer 增强
+
+### 完成情况
+
+- 新增 CadQuery mesh handle 到 Web scene payload 的转换层，前端通过 `cadquery.result.get` 获取轻量 ready，再显式调用 `takeCadQueryMesh(result_id)` 读取 side buffer handle，大数组不进入 Zustand。
+- 扩展 Three.js viewer：渲染 CadQuery face group、edge `LineSegments` 和 vertex `Points`；支持 face / edge / vertex / part / assembly picking、Shift 多选、hover highlight 和 selected highlight。
+- 实现 `CadQueryViewer`：加载 result、渲染 CadQuery mesh、选择模式 dock、当前 feature/ref 状态展示、歧义确认弹窗和 `selection.update` 分发。
+- Workbench 在 `agent.mesh_ready` 事件后打开 UI-only CadQuery tab；Zustand 只保存 `{ kind: "cadquery", result_id }` 这类 UI descriptor，不保存 mesh 业务状态。
+- SelectionRef 生成符合 MVP 5 层 Ref：整体选择来自 `root_ref_text` / `root_object_kind` 或 part metadata；raw face / edge / vertex 的 `owner_ref_text`、`owner_object_kind`、`instance_path`、`build_id` 和 `result_id` 均来自 payload 元数据，不从文件名、路径或 mesh name 拼接。
+- 重复 Assembly instance 选择已纳入 `instance_path` 作为 key 维度，避免同一 part 的不同实例在 additive multi-select 或 highlight 中被合并。
+- CadQuery transform 使用 runner 当前 row-major 输出顺序，通过 Three.js `Matrix4.set(...)` 传入，保证靠 transform 分离的 Assembly child 可正确渲染与拾取。
+- edge / vertex pick tolerance 当前为 `Line.threshold = 2`、`Points.threshold = 4`；基础浏览器验证已覆盖，真实复杂模型校准风险已记录到 `docs/known_issues.md`。
+
+### Review 与修复记录
+
+- 第一轮独立 review 发现重复 Assembly instance 的 raw selection key 缺少 instance 维度、浏览器测试覆盖不足、未实现 hover highlight、ambiguous 默认色和 dialog 信息不足。已补充红灯测试并修复 key、mode-specific selection keys、hover highlight、ambiguous 默认色恢复和 dialog target 展示。
+- 第二轮独立 review 发现 CadQuery transform row-major / column-major 约定错误，以及 whole-result selection 在根对象为 part/component 时仍返回 `kind: assembly`。已补充 transform-only repeated instance 浏览器红灯测试和 root object kind 单元测试，并修复为 `Matrix4.set(...)` 与 `rootObjectKind`。
+- 第三轮独立 review 发现 hover 离开 canvas 或切换 mode 后可能残留，以及非歧义 face 点击后缺少用户可见 feature/ref 信息。已补充 hover 清理浏览器断言和非歧义 selection status 单元测试，并修复为 `pointerleave` / mode switch 清理 hover、展示当前 selection 的 feature/ref。
+- 最终独立 review 未发现 Critical 或 Important。Minor 要求补充 Phase 2 结果记录和 edge / vertex tolerance 风险记录，已在本节和 `docs/known_issues.md` 中完成。
+
+### 验证记录
+
+- 红灯验证：新增重复 Assembly instance raw selection key 单元测试后，修复前 `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts` 失败，两个 instance 生成相同 key。
+- 红灯验证：扩展 hover 清理断言后，修复前 `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts -g hover` 失败，canvas 离开后仍保留 hover dataset。
+- 红灯验证：新增 root object kind 单元测试后，修复前 `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts` 失败，`@part[top_lid]` 被序列化为 `kind: assembly`。
+- 红灯验证：将 repeated instance 浏览器 fixture 改为只靠 `transform` 分离后，修复前 `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts -g "repeated assembly"` 失败，点击无法命中实例。
+- 红灯验证：新增非歧义 face selection status 单元测试后，修复前 `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-viewer.test.tsx` 失败，页面没有 `cadquery-selection-status`。
+- 绿色验证：`bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts` 通过，4 个测试通过。
+- 绿色验证：`bun run --cwd packages/studio-web test:unit tests/unit/cadquery-viewer.test.tsx` 通过，3 个测试通过。
+- 绿色验证：`bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts` 通过，4 个 Chromium 测试覆盖 face / edge / vertex / part / assembly / repeated instance / hover。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：25 个文件、109 个测试通过。
+- `bun scripts/build_studio_web.ts`：构建成功，仍有既有 Vite large chunk warning。
+- `git diff --check`：通过。
+
+### 遗留问题
+
+- `docs/known_issues.md` 新增记录：CadQuery edge / vertex pick tolerance 当前使用固定阈值，已满足 MVP 基础路径，但仍需后续基于真实复杂 CadQuery 模型、缩放比例、投影模式和高 DPI 设备做校准。
+- `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。

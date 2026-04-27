@@ -12,6 +12,10 @@ import {
   DoubleSide,
   Fog,
   GridHelper,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
+  Matrix4,
   HemisphereLight,
   Mesh,
   MeshStandardMaterial,
@@ -20,7 +24,12 @@ import {
   Plane,
   PlaneGeometry,
   PointLight,
+  Points,
+  PointsMaterial,
+  Raycaster,
   Scene,
+  type Object3D,
+  Vector2,
   Vector3,
   WebGLRenderer,
 } from "three";
@@ -34,10 +43,7 @@ import {
   type MeshViewerOptions,
 } from "./viewer-options";
 import { PRESET_STATES, type CameraPreset } from "../canvas/camera-state";
-import {
-  computeMeshInfo,
-  type MeshInfo,
-} from "./mesh-info";
+import { computeMeshInfo, type MeshInfo } from "./mesh-info";
 import {
   clippingPlanesForBounds,
   meshRenderInputsReady,
@@ -47,6 +53,13 @@ import {
   type MeshRenderViewport,
 } from "./mesh-render-metrics";
 import type { PointLightMode, PointLightPosition } from "./viewer-options";
+import type { CadQueryScenePayload } from "./cadquery-mesh";
+import {
+  cadQuerySelectionKey,
+  selectionRefFromCadQueryPick,
+  type CadQueryPickTarget,
+  type CadQuerySelectionMode,
+} from "./cadquery-selection";
 
 export type MeshPayload = {
   positions: Float32Array;
@@ -69,6 +82,17 @@ export type MeshViewerHandle = {
     payload: MeshPayload | null,
     opts?: { frame?: boolean; preset?: CameraPreset },
   ): MeshInfo | null;
+  setCadQueryMesh(
+    payload: CadQueryScenePayload,
+    opts?: {
+      frame?: boolean;
+      preset?: CameraPreset;
+      onPick?: (pick: CadQueryPickTarget) => void;
+    },
+  ): MeshInfo | null;
+  setCadQuerySelectionMode(mode: CadQuerySelectionMode): void;
+  setCadQuerySelectedKeys(keys: string[]): void;
+  setCadQueryPickHandler(cb: (pick: CadQueryPickTarget) => void): void;
   setCamera(camera: CameraState): void;
   frameCamera(preset: CameraPreset): void;
   setOptions(options: MeshViewerOptions): void;
@@ -156,7 +180,14 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   scene.add(buildPlate);
 
   const perspectiveCamera = new PerspectiveCamera(35, 1, 0.1, 5000);
-  const orthographicCamera = new OrthographicCamera(-100, 100, 100, -100, 0.1, 5000);
+  const orthographicCamera = new OrthographicCamera(
+    -100,
+    100,
+    100,
+    -100,
+    0.1,
+    5000,
+  );
   let camera: PerspectiveCamera | OrthographicCamera = perspectiveCamera;
   camera.position.set(160, 160, 200);
   camera.up.set(0, 0, 1);
@@ -175,6 +206,19 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
 
   let meshObj: Mesh | null = null;
   let meshMaterial: MeshStandardMaterial | null = null;
+  let cadQueryGroup: Group | null = null;
+  let cadQuerySelectionMode: CadQuerySelectionMode = "face";
+  let cadQueryPickHandler: ((pick: CadQueryPickTarget) => void) | null = null;
+  let cadQuerySelectedKeys = new Set<string>();
+  let cadQueryHoveredKey: string | null = null;
+  const cadQueryPickables = {
+    faces: [] as Object3D[],
+    edges: [] as Object3D[],
+    vertices: [] as Object3D[],
+  };
+  const raycaster = new Raycaster();
+  raycaster.params.Line = { threshold: 2 };
+  raycaster.params.Points = { threshold: 4 };
   let stats: { vertices: number; indices: number } | null = null;
   let meshInfo: MeshInfo | null = null;
   let meshHasVertexColors = false;
@@ -187,6 +231,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     mode: "idle" as PointerMode,
     lastX: 0,
     lastY: 0,
+    downX: 0,
+    downY: 0,
+    moved: false,
   };
 
   let cameraCallback: ((c: CameraState) => void) | null = null;
@@ -282,7 +329,11 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function applyCamera(state: CameraState): void {
-    camera.position.set(state.position[0], state.position[1], state.position[2]);
+    camera.position.set(
+      state.position[0],
+      state.position[1],
+      state.position[2],
+    );
     target.set(state.target[0], state.target[1], state.target[2]);
     upVec.set(state.up[0], state.up[1], state.up[2]);
     camera.up.copy(upVec);
@@ -316,7 +367,9 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     if (meshObj && meshMaterial) {
       meshObj.castShadow = options.shadowsEnabled;
       meshObj.receiveShadow = false;
-      meshMaterial.color.set(options.colorMode === "mono" ? 0x9fb8c6 : 0x7f858a);
+      meshMaterial.color.set(
+        options.colorMode === "mono" ? 0x9fb8c6 : 0x7f858a,
+      );
       meshMaterial.vertexColors =
         options.colorMode === "color" && meshHasVertexColors;
       meshMaterial.wireframe = options.renderMode === "wireframe";
@@ -398,9 +451,13 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     canvas.dataset.previewBackground = options.backgroundColor;
     canvas.dataset.gridMajorColor = options.gridMajorColor;
     canvas.dataset.gridMinorColor = options.gridMinorColor;
-    canvas.dataset.gridColorSignature = String(grid.userData["colorSignature"] ?? "");
+    canvas.dataset.gridColorSignature = String(
+      grid.userData["colorSignature"] ?? "",
+    );
     canvas.dataset.lightingIntensity = String(options.lightingIntensity);
-    canvas.dataset.pointLightConfigIntensity = String(options.pointLightIntensity);
+    canvas.dataset.pointLightConfigIntensity = String(
+      options.pointLightIntensity,
+    );
     const pointLightMode = effectivePointLightMode();
     canvas.dataset.pointLightMode = options.pointLightMode;
     canvas.dataset.effectivePointLightMode = pointLightMode;
@@ -443,7 +500,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
 
   function effectivePointLightMode(): PointLightMode {
-    if (options.shadowsEnabled && options.pointLightMode === "off") return "auto";
+    if (options.shadowsEnabled && options.pointLightMode === "off")
+      return "auto";
     return options.pointLightMode;
   }
 
@@ -515,6 +573,309 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     clipPlane.constant = 0;
   }
 
+  function clearStandardMesh(): void {
+    if (!meshObj) return;
+    scene.remove(meshObj);
+    meshObj.geometry.dispose();
+    (meshObj.material as MeshStandardMaterial).dispose();
+    meshObj = null;
+    meshMaterial = null;
+  }
+
+  function clearCadQueryObjects(): void {
+    if (!cadQueryGroup) return;
+    scene.remove(cadQueryGroup);
+    disposeCadQueryGroup(cadQueryGroup);
+    cadQueryGroup = null;
+    cadQueryPickables.faces = [];
+    cadQueryPickables.edges = [];
+    cadQueryPickables.vertices = [];
+    cadQueryHoveredKey = null;
+    syncCadQueryHoverDataset(null, null);
+  }
+
+  function disposeCadQueryGroup(group: Group): void {
+    group.traverse((object) => {
+      const geometry = (object as { geometry?: BufferGeometry }).geometry;
+      if (geometry) geometry.dispose();
+      const material = (object as { material?: unknown }).material;
+      disposeObjectMaterial(material);
+    });
+  }
+
+  function disposeObjectMaterial(material: unknown): void {
+    if (Array.isArray(material)) {
+      for (const item of material) item.dispose?.();
+      return;
+    }
+    (material as { dispose?: () => void } | undefined)?.dispose?.();
+  }
+
+  function setCadQueryScene(payload: CadQueryScenePayload): MeshInfo | null {
+    const group = new Group();
+    const aggregate = cadQueryAggregatePositions(payload);
+    for (const part of payload.parts) addCadQueryPart(group, payload, part);
+    const info = computeMeshInfo(aggregate, null);
+    cadQueryGroup = group;
+    scene.add(group);
+    meshInfo = info;
+    stats = info ? { vertices: info.vertices, indices: info.indices } : null;
+    updateSceneScale(info);
+    applyCadQuerySelectionVisuals();
+    return info;
+  }
+
+  function addCadQueryPart(
+    group: Group,
+    scenePayload: CadQueryScenePayload,
+    part: CadQueryScenePayload["parts"][number],
+  ): void {
+    const matrix = matrixFromCadQueryTransform(part.transform);
+    for (let index = 0; index < part.faces.length; index += 1) {
+      addCadQueryFace(group, scenePayload, part, index, matrix);
+    }
+    for (let index = 0; index < part.edges.length; index += 1) {
+      addCadQueryEdge(group, scenePayload, part, index, matrix);
+    }
+    for (let index = 0; index < part.vertices.length; index += 1) {
+      addCadQueryVertex(group, scenePayload, part, index, matrix);
+    }
+  }
+
+  function addCadQueryFace(
+    group: Group,
+    payload: CadQueryScenePayload,
+    part: CadQueryScenePayload["parts"][number],
+    faceIndex: number,
+    matrix: Matrix4,
+  ): void {
+    const face = part.faces[faceIndex];
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new BufferAttribute(face.positions, 3));
+    geometry.setAttribute("normal", new BufferAttribute(face.normals, 3));
+    const defaultColor = cadQueryFaceColor(face.ambiguous);
+    const material = new MeshStandardMaterial(cadQueryFaceMaterial(defaultColor));
+    const mesh = new Mesh(geometry, material);
+    mesh.applyMatrix4(matrix);
+    mesh.userData["cadQueryDefaultColor"] = defaultColor;
+    tagCadQueryPick(mesh, payload, {
+      kind: "face",
+      partIndex: part.partIndex,
+      faceIndex,
+      additive: false,
+    });
+    cadQueryPickables.faces.push(mesh);
+    group.add(mesh);
+  }
+
+  function addCadQueryEdge(
+    group: Group,
+    payload: CadQueryScenePayload,
+    part: CadQueryScenePayload["parts"][number],
+    edgeIndex: number,
+    matrix: Matrix4,
+  ): void {
+    const edge = part.edges[edgeIndex];
+    const geometry = new BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new BufferAttribute(polylineSegments(edge.polyline), 3),
+    );
+    const line = new LineSegments(
+      geometry,
+      new LineBasicMaterial({ color: 0x475569 }),
+    );
+    line.applyMatrix4(matrix);
+    line.userData["cadQueryDefaultColor"] = 0x475569;
+    tagCadQueryPick(line, payload, {
+      kind: "edge",
+      partIndex: part.partIndex,
+      edgeIndex,
+      additive: false,
+    });
+    cadQueryPickables.edges.push(line);
+    group.add(line);
+  }
+
+  function addCadQueryVertex(
+    group: Group,
+    payload: CadQueryScenePayload,
+    part: CadQueryScenePayload["parts"][number],
+    vertexIndex: number,
+    matrix: Matrix4,
+  ): void {
+    const vertex = part.vertices[vertexIndex];
+    const geometry = new BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new BufferAttribute(new Float32Array(vertex.position), 3),
+    );
+    const point = new Points(
+      geometry,
+      new PointsMaterial({ color: 0x0f766e, size: 5 }),
+    );
+    point.applyMatrix4(matrix);
+    point.userData["cadQueryDefaultColor"] = 0x0f766e;
+    tagCadQueryPick(point, payload, {
+      kind: "vertex",
+      partIndex: part.partIndex,
+      vertexIndex,
+      additive: false,
+    });
+    cadQueryPickables.vertices.push(point);
+    group.add(point);
+  }
+
+  function tagCadQueryPick(
+    object: Object3D,
+    payload: CadQueryScenePayload,
+    pick: CadQueryPickTarget,
+  ): void {
+    const keys = cadQueryModeSelectionKeys(payload, pick);
+    object.userData["cadQueryPick"] = pick;
+    object.userData["cadQuerySelectionKey"] = keys[pick.kind];
+    object.userData["cadQueryModeSelectionKeys"] = keys;
+    object.userData["cadQuerySelectionKeys"] = Object.values(keys);
+  }
+
+  function cadQueryFaceColor(ambiguous: boolean): number {
+    return ambiguous ? 0xc8a15a : 0x86a6b4;
+  }
+
+  function cadQueryFaceMaterial(color: number): {
+    color: number;
+    roughness: number;
+    metalness: number;
+    side: typeof DoubleSide;
+  } {
+    return {
+      color,
+      roughness: 0.62,
+      metalness: 0.04,
+      side: DoubleSide,
+    };
+  }
+
+  function cadQueryModeSelectionKeys(
+    payload: CadQueryScenePayload,
+    pick: CadQueryPickTarget,
+  ): Partial<Record<CadQuerySelectionMode, string>> {
+    const keys: Partial<Record<CadQuerySelectionMode, string>> = {
+      [pick.kind]: cadQueryKeyForPick(payload, pick),
+      assembly: cadQueryKeyForPick(payload, { kind: "assembly", additive: false }),
+    };
+    if ("partIndex" in pick) {
+      keys.part = cadQueryKeyForPick(payload, {
+        kind: "part",
+        partIndex: pick.partIndex,
+        additive: false,
+      });
+    }
+    return keys;
+  }
+
+  function cadQueryKeyForPick(
+    payload: CadQueryScenePayload,
+    pick: CadQueryPickTarget,
+  ): string {
+    return cadQuerySelectionKey(selectionRefFromCadQueryPick(payload, pick));
+  }
+
+  function cadQueryAggregatePositions(
+    payload: CadQueryScenePayload,
+  ): Float32Array {
+    const values: number[] = [];
+    for (const part of payload.parts) {
+      const matrix = matrixFromCadQueryTransform(part.transform);
+      for (const face of part.faces)
+        pushTransformed(values, face.positions, matrix);
+    }
+    return new Float32Array(values);
+  }
+
+  function pushTransformed(
+    values: number[],
+    positions: Float32Array,
+    matrix: Matrix4,
+  ): void {
+    const point = new Vector3();
+    for (let index = 0; index < positions.length; index += 3) {
+      point.set(positions[index], positions[index + 1], positions[index + 2]);
+      point.applyMatrix4(matrix);
+      values.push(point.x, point.y, point.z);
+    }
+  }
+
+  function matrixFromCadQueryTransform(transform: number[] | null): Matrix4 {
+    const matrix = new Matrix4();
+    if (transform && transform.length === 16) {
+      matrix.set(
+        transform[0],
+        transform[1],
+        transform[2],
+        transform[3],
+        transform[4],
+        transform[5],
+        transform[6],
+        transform[7],
+        transform[8],
+        transform[9],
+        transform[10],
+        transform[11],
+        transform[12],
+        transform[13],
+        transform[14],
+        transform[15],
+      );
+    }
+    return matrix;
+  }
+
+  function polylineSegments(polyline: Float32Array): Float32Array {
+    if (polyline.length < 6) return new Float32Array();
+    const out = new Float32Array((polyline.length / 3 - 1) * 6);
+    for (let src = 0, dst = 0; src + 5 < polyline.length; src += 3, dst += 6) {
+      out.set(polyline.subarray(src, src + 3), dst);
+      out.set(polyline.subarray(src + 3, src + 6), dst + 3);
+    }
+    return out;
+  }
+
+  function applyCadQuerySelectionVisuals(): void {
+    const objects = [
+      ...cadQueryPickables.faces,
+      ...cadQueryPickables.edges,
+      ...cadQueryPickables.vertices,
+    ];
+    for (const object of objects) setCadQueryObjectSelected(object);
+    render();
+  }
+
+  function setCadQueryObjectSelected(object: Object3D): void {
+    const keys = cadQueryObjectSelectionKeys(object);
+    const selected = keys.some((key) => cadQuerySelectedKeys.has(key));
+    const hovered = cadQueryHoveredKey !== null && keys.includes(cadQueryHoveredKey);
+    const material = (object as { material?: unknown }).material;
+    const color = selected ? 0xfacc15 : hovered ? 0x38bdf8 : objectDefaultColor(object);
+    if (Array.isArray(material)) return;
+    (material as { color?: Color } | undefined)?.color?.set(color);
+  }
+
+  function objectDefaultColor(object: Object3D): number {
+    const stored = object.userData["cadQueryDefaultColor"];
+    if (typeof stored === "number") return stored;
+    if (object instanceof Mesh) return 0x86a6b4;
+    if (object instanceof Points) return 0x0f766e;
+    return 0x475569;
+  }
+
+  function cadQueryObjectSelectionKeys(object: Object3D): string[] {
+    const keys = object.userData["cadQuerySelectionKeys"];
+    if (Array.isArray(keys)) return keys.filter((key) => typeof key === "string");
+    const key = object.userData["cadQuerySelectionKey"];
+    return typeof key === "string" ? [key] : [];
+  }
+
   function orbit(dx: number, dy: number): void {
     const offset = camera.position.clone().sub(target);
     const radius = offset.length();
@@ -545,13 +906,13 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const offset = camera.position.clone().sub(target);
     const distance = offset.length();
     const factor = distance * 0.002;
-    const right = new Vector3()
-      .crossVectors(camera.up, offset)
-      .normalize();
+    const right = new Vector3().crossVectors(camera.up, offset).normalize();
     const trueUp = new Vector3().crossVectors(offset, right).normalize();
     const shiftX = -dx * factor;
     const shiftY = dy * factor;
-    const delta = right.multiplyScalar(shiftX).add(trueUp.multiplyScalar(shiftY));
+    const delta = right
+      .multiplyScalar(shiftX)
+      .add(trueUp.multiplyScalar(shiftY));
     camera.position.add(delta);
     target.add(delta);
     autoFramePreset = null;
@@ -583,29 +944,43 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       altKey: ev.altKey,
     });
     if (mode === "none") return;
+    setCadQueryHoveredObject(null);
     canvas.setPointerCapture(ev.pointerId);
     pointer.lastX = ev.clientX;
     pointer.lastY = ev.clientY;
+    pointer.downX = ev.clientX;
+    pointer.downY = ev.clientY;
+    pointer.moved = false;
     pointer.mode = mode;
     ev.preventDefault();
   }
   function onPointerMove(ev: PointerEvent): void {
-    if (pointer.mode === "idle") return;
+    if (pointer.mode === "idle") {
+      updateCadQueryHover(ev);
+      return;
+    }
     const dx = ev.clientX - pointer.lastX;
     const dy = ev.clientY - pointer.lastY;
     pointer.lastX = ev.clientX;
     pointer.lastY = ev.clientY;
+    pointer.moved ||= Math.abs(ev.clientX - pointer.downX) > 3;
+    pointer.moved ||= Math.abs(ev.clientY - pointer.downY) > 3;
     if (pointer.mode === "orbit") orbit(dx, dy);
     else pan(dx, dy);
   }
   function onPointerUp(ev: PointerEvent): void {
     if (pointer.mode === "idle") return;
+    const clicked = !pointer.moved && ev.button === 0 && !ev.altKey;
     pointer.mode = "idle";
     try {
       canvas.releasePointerCapture(ev.pointerId);
     } catch {
       /* ignore */
     }
+    if (clicked) pickCadQuery(ev);
+  }
+  function onPointerLeave(): void {
+    setCadQueryHoveredObject(null);
   }
   function onWheel(ev: WheelEvent): void {
     ev.preventDefault();
@@ -613,6 +988,86 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   }
   function onContextMenu(ev: Event): void {
     ev.preventDefault();
+  }
+
+  function pickCadQuery(ev: PointerEvent): void {
+    if (!cadQueryPickHandler || !cadQueryGroup) return;
+    const objects = cadQueryObjectsForMode();
+    if (objects.length === 0) return;
+    const hit = firstCadQueryHit(ev, objects);
+    if (!hit) return;
+    const pick = pickForMode(
+      hit.userData["cadQueryPick"] as CadQueryPickTarget,
+    );
+    cadQueryPickHandler({ ...pick, additive: ev.shiftKey });
+  }
+
+  function updateCadQueryHover(ev: PointerEvent): void {
+    if (!cadQueryGroup) {
+      setCadQueryHoveredObject(null);
+      return;
+    }
+    const hit = firstCadQueryHit(ev, cadQueryObjectsForMode());
+    setCadQueryHoveredObject(hit);
+  }
+
+  function setCadQueryHoveredObject(object: Object3D | null): void {
+    const key = object ? cadQueryHoverKeyForObject(object) : null;
+    if (cadQueryHoveredKey === key) return;
+    cadQueryHoveredKey = key;
+    syncCadQueryHoverDataset(object, key);
+    applyCadQuerySelectionVisuals();
+  }
+
+  function cadQueryHoverKeyForObject(object: Object3D): string | null {
+    const keys = object.userData["cadQueryModeSelectionKeys"];
+    const key = keys?.[cadQuerySelectionMode];
+    return typeof key === "string" ? key : null;
+  }
+
+  function syncCadQueryHoverDataset(
+    object: Object3D | null,
+    key: string | null,
+  ): void {
+    const pick = object
+      ? pickForMode(object.userData["cadQueryPick"] as CadQueryPickTarget)
+      : null;
+    if (key && pick) {
+      canvas.dataset.cadQueryHoverKey = key;
+      canvas.dataset.cadQueryHoverKind = pick.kind;
+      return;
+    }
+    delete canvas.dataset.cadQueryHoverKey;
+    delete canvas.dataset.cadQueryHoverKind;
+  }
+
+  function cadQueryObjectsForMode(): Object3D[] {
+    if (cadQuerySelectionMode === "edge") return cadQueryPickables.edges;
+    if (cadQuerySelectionMode === "vertex") return cadQueryPickables.vertices;
+    return cadQueryPickables.faces;
+  }
+
+  function firstCadQueryHit(
+    ev: PointerEvent,
+    objects: Object3D[],
+  ): Object3D | null {
+    const rect = canvas.getBoundingClientRect();
+    const pointerNdc = new Vector2(
+      ((ev.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1,
+      -(((ev.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1),
+    );
+    raycaster.setFromCamera(pointerNdc, camera);
+    return raycaster.intersectObjects(objects, false)[0]?.object ?? null;
+  }
+
+  function pickForMode(pick: CadQueryPickTarget): CadQueryPickTarget {
+    if (cadQuerySelectionMode === "assembly") {
+      return { kind: "assembly", additive: false };
+    }
+    if (cadQuerySelectionMode === "part" && "partIndex" in pick) {
+      return { kind: "part", partIndex: pick.partIndex, additive: false };
+    }
+    return pick;
   }
 
   function currentViewport(): MeshRenderViewport {
@@ -678,9 +1133,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const horizontalUp = Math.hypot(up.x, up.y);
     if (horizontalUp > 1e-9) {
       const azimuth =
-        offset.z >= 0
-          ? Math.atan2(-up.y, -up.x)
-          : Math.atan2(up.y, up.x);
+        offset.z >= 0 ? Math.atan2(-up.y, -up.x) : Math.atan2(up.y, up.x);
       return {
         azimuth,
         elevation: offset.z >= 0 ? Math.PI / 2 : -Math.PI / 2,
@@ -754,6 +1207,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
+  canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", onContextMenu);
 
@@ -761,18 +1215,13 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
 
   return {
     setMesh(payload, opts) {
-      if (meshObj) {
-        scene.remove(meshObj);
-        meshObj.geometry.dispose();
-        (meshObj.material as MeshStandardMaterial).dispose();
-        meshObj = null;
-        meshMaterial = null;
-        stats = null;
-        meshInfo = null;
-        meshHasVertexColors = false;
-        pendingFrame = null;
-        if (opts?.frame !== false) autoFramePreset = null;
-      }
+      clearCadQueryObjects();
+      clearStandardMesh();
+      stats = null;
+      meshInfo = null;
+      meshHasVertexColors = false;
+      pendingFrame = null;
+      if (opts?.frame !== false) autoFramePreset = null;
       if (!payload || payload.positions.length === 0) {
         updateSceneScale(null);
         clearMetricsDataset();
@@ -795,7 +1244,10 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         "position",
         new BufferAttribute(payload.positions, 3),
       );
-      if (payload.normals && payload.normals.length === payload.positions.length) {
+      if (
+        payload.normals &&
+        payload.normals.length === payload.positions.length
+      ) {
         geometry.setAttribute(
           "normal",
           new BufferAttribute(payload.normals, 3),
@@ -806,7 +1258,11 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       if (payload.vertexColors) {
         // 4-component rgba — store as 3 rgb for MeshStandardMaterial vertex colors.
         const rgb = new Float32Array((payload.vertexColors.length / 4) * 3);
-        for (let i = 0, j = 0; i < payload.vertexColors.length; i += 4, j += 3) {
+        for (
+          let i = 0, j = 0;
+          i < payload.vertexColors.length;
+          i += 4, j += 3
+        ) {
           rgb[j] = payload.vertexColors[i];
           rgb[j + 1] = payload.vertexColors[i + 1];
           rgb[j + 2] = payload.vertexColors[i + 2];
@@ -822,7 +1278,8 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
         metalness: 0.05,
         roughness: 0.58,
         side: DoubleSide,
-        vertexColors: options.colorMode === "color" && payload.vertexColors !== null,
+        vertexColors:
+          options.colorMode === "color" && payload.vertexColors !== null,
       });
       meshMaterial = material;
       meshObj = new Mesh(geometry, material);
@@ -837,6 +1294,38 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       applyOptions();
       render();
       return info;
+    },
+    setCadQueryMesh(payload, opts) {
+      clearStandardMesh();
+      clearCadQueryObjects();
+      if (opts?.onPick) cadQueryPickHandler = opts.onPick;
+      meshMaterial = null;
+      meshHasVertexColors = false;
+      pendingFrame = null;
+      if (opts?.frame !== false) autoFramePreset = null;
+      const info = setCadQueryScene(payload);
+      if (!info) {
+        clearMetricsDataset();
+        syncPointLight();
+        syncCanvasDataset();
+        render();
+        return null;
+      }
+      if (opts?.frame !== false) frameToInfo(info, opts?.preset ?? "iso");
+      applyOptions();
+      render();
+      return info;
+    },
+    setCadQuerySelectionMode(mode) {
+      if (mode !== cadQuerySelectionMode) setCadQueryHoveredObject(null);
+      cadQuerySelectionMode = mode;
+    },
+    setCadQuerySelectedKeys(keys) {
+      cadQuerySelectedKeys = new Set(keys);
+      applyCadQuerySelectionVisuals();
+    },
+    setCadQueryPickHandler(cb) {
+      cadQueryPickHandler = cb;
     },
     setCamera(state) {
       autoFramePreset = null;
@@ -874,9 +1363,16 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       renderer.setSize(w, h, false);
       if (meshInfo) updateSceneScale(meshInfo);
       syncClipPlanes();
-      if (pendingFrame && meshRenderInputsReady(pendingFrame.info, currentViewport())) {
+      if (
+        pendingFrame &&
+        meshRenderInputsReady(pendingFrame.info, currentViewport())
+      ) {
         frameToInfo(pendingFrame.info, pendingFrame.preset);
-      } else if (autoFramePreset && meshInfo && meshRenderInputsReady(meshInfo, currentViewport())) {
+      } else if (
+        autoFramePreset &&
+        meshInfo &&
+        meshRenderInputsReady(meshInfo, currentViewport())
+      ) {
         frameToInfo(meshInfo, autoFramePreset);
       }
       applyOptions();
@@ -890,12 +1386,11 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
-      if (meshObj) {
-        meshObj.geometry.dispose();
-        (meshObj.material as MeshStandardMaterial).dispose();
-      }
+      clearStandardMesh();
+      clearCadQueryObjects();
       grid.geometry.dispose();
       disposeGridMaterial(grid.material);
       axes.dispose();
@@ -917,7 +1412,8 @@ export function payloadFromPreview(payload: unknown): MeshPayload | null {
   const outer = payload as Record<string, unknown>;
   const typed = meshFromTypedPayload(outer);
   if (typed) return typed;
-  const ready = (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
+  const ready =
+    (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
   const artifact = ready["artifact"] as Record<string, unknown> | undefined;
   if (!artifact) return null;
   const format = artifact["format"];
@@ -929,7 +1425,9 @@ export function payloadFromPreview(payload: unknown): MeshPayload | null {
   return null;
 }
 
-function meshFromTypedPayload(inner: Record<string, unknown>): MeshPayload | null {
+function meshFromTypedPayload(
+  inner: Record<string, unknown>,
+): MeshPayload | null {
   const positions = inner["positions"];
   if (!(positions instanceof Float32Array)) return null;
   const normals = inner["normals"];
@@ -937,12 +1435,14 @@ function meshFromTypedPayload(inner: Record<string, unknown>): MeshPayload | nul
   const indices = inner["indices"];
   return {
     positions,
-    normals: normals instanceof Float32Array && normals.length > 0 ? normals : null,
+    normals:
+      normals instanceof Float32Array && normals.length > 0 ? normals : null,
     vertexColors:
       vertexColors instanceof Float32Array && vertexColors.length > 0
         ? vertexColors
         : null,
-    indices: indices instanceof Uint32Array && indices.length > 0 ? indices : null,
+    indices:
+      indices instanceof Uint32Array && indices.length > 0 ? indices : null,
   };
 }
 

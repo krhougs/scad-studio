@@ -15,6 +15,8 @@ import type { WasmClient } from "../wasm-bridge";
 import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
 import type { MeshInfo } from "../viewers/mesh-info";
+import { CadQueryViewer } from "../viewers/cadquery-viewer";
+import type { CadQuerySelectionMode } from "../viewers/cadquery-selection";
 import { MeshViewer } from "../viewers/mesh-viewer";
 import {
   meshSceneMetrics,
@@ -29,10 +31,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PRESET_STATES } from "../canvas/camera-state";
 import { projectViewportGizmoAxes } from "./viewport-gizmo-model";
 import { TabBar } from "./tabbar";
-import {
-  ScadWorkbench,
-  type ScadWorkbenchState,
-} from "./scad-workbench";
+import { ScadWorkbench, type ScadWorkbenchState } from "./scad-workbench";
+import { cadQueryResultIdFromPath } from "./cadquery-result-tab";
 
 type ViewPreset =
   | "iso"
@@ -86,10 +86,14 @@ export function CanvasZone(props: CanvasZoneProps) {
   } = props;
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
-  const isMeshLike = activeTab?.kind === "mesh" || activeTab?.kind === "scad";
+  const isMeshLike =
+    activeTab?.kind === "mesh" ||
+    activeTab?.kind === "scad" ||
+    activeTab?.kind === "cadquery";
   const [viewerOptions, setViewerOptions] = useState<MeshViewerOptions>(
     DEFAULT_MESH_VIEWER_OPTIONS,
   );
+  const [cadQuerySelectionMode] = useState<CadQuerySelectionMode>("face");
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageViewport, setStageViewport] = useState({
     width: 0,
@@ -156,7 +160,11 @@ export function CanvasZone(props: CanvasZoneProps) {
   };
 
   return (
-    <div className="canvas" aria-label="preview canvas" data-testid="workbench-canvas">
+    <div
+      className="canvas"
+      aria-label="preview canvas"
+      data-testid="workbench-canvas"
+    >
       <TabBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -189,6 +197,7 @@ export function CanvasZone(props: CanvasZoneProps) {
                 refreshSignal={refreshSignal}
                 config={config}
                 viewerOptions={effectiveViewerOptions}
+                cadQuerySelectionMode={cadQuerySelectionMode}
                 onMeshInfo={onMeshInfo}
                 cameraOverride={cameraOverride}
                 onCameraChange={onCameraChange}
@@ -232,7 +241,10 @@ export function CanvasZone(props: CanvasZoneProps) {
             ) : null}
             {isMeshLike ? (
               <>
-                <div className="div part-meta__fps-divider" aria-hidden="true" />
+                <div
+                  className="div part-meta__fps-divider"
+                  aria-hidden="true"
+                />
                 <div className="cell part-meta__fps" data-testid="canvas-fps">
                   render
                   <span data-canvas-fps-value="" />
@@ -254,6 +266,7 @@ type ActiveViewerProps = {
   refreshSignal: number;
   config: AppConfigShape | null;
   viewerOptions: MeshViewerOptions;
+  cadQuerySelectionMode: CadQuerySelectionMode;
   onMeshInfo: (info: MeshInfo | null) => void;
   cameraOverride: CameraState | null;
   onCameraChange: (camera: CameraState) => void;
@@ -268,6 +281,7 @@ function ActiveViewer({
   refreshSignal,
   config,
   viewerOptions,
+  cadQuerySelectionMode,
   onMeshInfo,
   cameraOverride,
   onCameraChange,
@@ -318,6 +332,25 @@ function ActiveViewer({
         viewerOptions={viewerOptions}
         refreshSignal={refreshSignal}
         onMeshInfo={onMeshInfo}
+        onCameraChange={onCameraChange}
+      />
+    );
+  }
+  if (tab.kind === "cadquery") {
+    const resultId = cadQueryResultIdFromPath(tab.path);
+    if (!resultId) return <EmptyStagePlaceholder />;
+    return (
+      <CadQueryViewer
+        resultId={resultId}
+        client={client}
+        label={tab.label}
+        selectionMode={cadQuerySelectionMode}
+        refreshSignal={refreshSignal}
+        cameraPreset={viewPresetToCamera(activeView)}
+        cameraOverride={cameraOverride}
+        viewerOptions={viewerOptions}
+        onPreviewStatus={onPreviewStatus}
+        onInfo={onMeshInfo}
         onCameraChange={onCameraChange}
       />
     );
@@ -401,7 +434,12 @@ function ViewportGizmo({
               strokeWidth="2.5"
               strokeLinecap="round"
             />
-            <circle cx={axis.end[0]} cy={axis.end[1]} r="2.8" fill={axis.color} />
+            <circle
+              cx={axis.end[0]}
+              cy={axis.end[1]}
+              r="2.8"
+              fill={axis.color}
+            />
           </g>
         ))}
       </svg>
@@ -458,7 +496,9 @@ function ViewerToolbar({
       <div className="viewer-toolbar__group" aria-label="projection">
         <button
           type="button"
-          className={options.projectionMode === "perspective" ? "active" : undefined}
+          className={
+            options.projectionMode === "perspective" ? "active" : undefined
+          }
           onClick={() => onUpdateOptions({ projectionMode: "perspective" })}
           data-testid="viewer-projection-perspective"
         >
@@ -466,7 +506,9 @@ function ViewerToolbar({
         </button>
         <button
           type="button"
-          className={options.projectionMode === "orthographic" ? "active" : undefined}
+          className={
+            options.projectionMode === "orthographic" ? "active" : undefined
+          }
           onClick={() => onUpdateOptions({ projectionMode: "orthographic" })}
           data-testid="viewer-projection-orthographic"
         >

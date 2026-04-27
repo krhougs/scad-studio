@@ -8,7 +8,12 @@
 import { create } from "zustand";
 import type { LeftPanelId } from "../workbench/left-panel-routing";
 
-export type DocumentTabKind = "markdown" | "image" | "scad" | "mesh";
+export type DocumentTabKind =
+  | "markdown"
+  | "image"
+  | "scad"
+  | "mesh"
+  | "cadquery";
 
 export type DocumentTab = {
   id: string;
@@ -68,6 +73,7 @@ export const useUiStore = create<UiStore>((set) => ({
     }),
   setActiveTab: (id) => set({ activeTabId: id }),
   setActiveRail: (id) => set({ activeRail: id }),
-  toggleSidePanel: () => set((prev) => ({ sidePanelOpen: !prev.sidePanelOpen })),
+  toggleSidePanel: () =>
+    set((prev) => ({ sidePanelOpen: !prev.sidePanelOpen })),
   setSettingsModalOpen: (value) => set({ isSettingsModalOpen: value }),
 }));

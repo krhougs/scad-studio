@@ -1,5 +1,20 @@
 # 已知问题记录
 
+## 2026-04-28 05:38:28: CadQuery edge / vertex pick tolerance 仍需真实模型校准
+
+- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 2，按计划实现 Viewer face / edge / vertex 选择与浏览器验证。
+- 原因：
+  - 当前 Web Viewer 使用 Three.js `Raycaster`，edge picking 配置为 `Line.threshold = 2`，vertex picking 配置为 `Points.threshold = 4`。
+  - 这两个阈值已能覆盖 Phase 2 浏览器测试中的基础选择路径，但还没有基于真实复杂 CadQuery 模型、不同缩放比例、不同投影模式和高 DPI 设备做系统校准。
+- 影响范围：
+  - MVP 中 edge / vertex 选择可用，但在特别小的模型、密集边线、重叠顶点或极端缩放视角下，仍可能出现误选或较难选中的情况。
+  - 后续若把 edge / vertex 选择作为 Agent 精细修改的主要入口，需要补充真实模型样本与误选率验证，不能只依赖当前最小浏览器用例。
+- 可能的解法：
+  - 增加包含小倒角、密集孔位、重复实例和不同单位尺度的 CadQuery fixture，用 Playwright 覆盖 edge / vertex 命中稳定性。
+  - 根据 mesh bounds、camera distance 和 device pixel ratio 动态计算 Raycaster tolerance，而不是固定阈值。
+  - 在 UI 中为 edge / vertex hover 提供更明确的预览反馈，降低误选风险。
+- 当前处理方式：Phase 2 先保留固定阈值并记录本条；基础浏览器验证已覆盖 face / edge / vertex / part / assembly / repeated instance / hover，真实复杂模型校准留到后续 viewer 精度专项处理。
+
 ## 2026-04-28 04:57:31: 全仓库 `cargo fmt --check` 受既有无关格式差异阻塞
 
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1 验证时，额外运行 `cargo fmt --check`。

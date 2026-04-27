@@ -29,13 +29,14 @@ import { CanvasZone, type ViewPreset } from "./canvas-zone";
 import type { ChatSnapshot } from "./chat-zone";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
+import {
+  cadQueryResultTab,
+  extractCadQueryReadyFromAgentEvent,
+} from "./cadquery-result-tab";
 import { documentTitleForFile } from "./document-title";
 import { Inspector } from "./inspector";
 import { LeftPanel } from "./left-panel";
-import {
-  LEFT_PANEL_PARAM,
-  normalizeLeftPanelId,
-} from "./left-panel-routing";
+import { LEFT_PANEL_PARAM, normalizeLeftPanelId } from "./left-panel-routing";
 import { useLogBuffer } from "./use-log-buffer";
 import { pathKey, pathLabel } from "./path-utils";
 import { Rail } from "./rail";
@@ -56,12 +57,7 @@ import {
 import { describeFileReadError } from "../viewers/file-read-decoder";
 import { resolveWorkbenchWsUrl } from "./ws-url";
 
-type Phase =
-  | "idle"
-  | "connecting"
-  | "handshaking"
-  | "ready"
-  | "error";
+type Phase = "idle" | "connecting" | "handshaking" | "ready" | "error";
 
 type ProtocolEntry = {
   name?: unknown;
@@ -102,7 +98,8 @@ function phaseToStatus(phase: Phase): TopbarStatus {
 }
 
 function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
-  const pathError = typeof entry.path_error === "string" ? entry.path_error : null;
+  const pathError =
+    typeof entry.path_error === "string" ? entry.path_error : null;
   const hasPath = entry.path !== null && entry.path !== undefined;
   return {
     label:
@@ -119,7 +116,8 @@ function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
 function extractWorkspaceListEntries(response: unknown): ProtocolEntry[] {
   if (!response || typeof response !== "object") return [];
   const outer = response as Record<string, unknown>;
-  const inner = (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
+  const inner =
+    (outer["payload"] as Record<string, unknown> | undefined) ?? outer;
   const entries = (inner["entries"] as ProtocolEntry[] | undefined) ?? [];
   return Array.isArray(entries) ? entries : [];
 }
@@ -138,7 +136,9 @@ export function WorkbenchLayout() {
   const activeView: ViewPreset = "iso";
   const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
-  const [cameraOverride, setCameraOverride] = useState<CameraState | null>(null);
+  const [cameraOverride, setCameraOverride] = useState<CameraState | null>(
+    null,
+  );
   const [activeDefines, setActiveDefines] = useState<string[]>([]);
   const [panelWidths, setPanelWidths] = useState({
     left: 360,
@@ -175,8 +175,7 @@ export function WorkbenchLayout() {
   const appConfig = useAppConfigState();
   const routePanelValue = searchParams.get(LEFT_PANEL_PARAM);
   const routePanel = normalizeLeftPanelId(routePanelValue);
-  const activeTab =
-    openTabs.find((tab) => tab.id === activeTabId) ?? null;
+  const activeTab = openTabs.find((tab) => tab.id === activeTabId) ?? null;
   const client = clientReady ? clientRef.current : null;
   const scadWorkbenchState = useScadWorkbenchState({
     path: activeTab?.kind === "scad" ? activeTab.path : null,
@@ -249,20 +248,17 @@ export function WorkbenchLayout() {
       setActiveRail(routePanel);
     }
     if (routePanelValue !== routePanel) {
-      setSearchParams((prev) => {
-        prev.set(LEFT_PANEL_PARAM, routePanel);
-        return prev;
-      }, {
-        replace: true,
-      });
+      setSearchParams(
+        (prev) => {
+          prev.set(LEFT_PANEL_PARAM, routePanel);
+          return prev;
+        },
+        {
+          replace: true,
+        },
+      );
     }
-  }, [
-    activeRail,
-    routePanel,
-    routePanelValue,
-    setActiveRail,
-    setSearchParams,
-  ]);
+  }, [activeRail, routePanel, routePanelValue, setActiveRail, setSearchParams]);
 
   useEffect(() => {
     if (activeTab?.kind === "scad") {
@@ -291,7 +287,8 @@ export function WorkbenchLayout() {
     client
       .dispatchWorkspaceList({ directory: null })
       .then((response) => {
-        const entries = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
+        const entries =
+          extractWorkspaceListEntries(response).map(toWorkspaceEntry);
         setRootEntries(entries);
         setRootLoaded(true);
       })
@@ -308,7 +305,8 @@ export function WorkbenchLayout() {
         client
           .dispatchWorkspaceList({ directory: state.path })
           .then((response) => {
-            const entries = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
+            const entries =
+              extractWorkspaceListEntries(response).map(toWorkspaceEntry);
             setExpandedBoth((prev) => {
               const next = new Map(prev);
               next.set(key, { ...state, entries, loading: false, error: null });
@@ -318,7 +316,11 @@ export function WorkbenchLayout() {
           .catch((err) => {
             setExpandedBoth((prev) => {
               const next = new Map(prev);
-              next.set(key, { ...state, loading: false, error: describeError(err) });
+              next.set(key, {
+                ...state,
+                loading: false,
+                error: describeError(err),
+              });
               return next;
             });
           });
@@ -349,7 +351,8 @@ export function WorkbenchLayout() {
       client
         .dispatchWorkspaceList({ directory: entry.path })
         .then((response) => {
-          const children = extractWorkspaceListEntries(response).map(toWorkspaceEntry);
+          const children =
+            extractWorkspaceListEntries(response).map(toWorkspaceEntry);
           setExpandedBoth((prev) => {
             const next = new Map(prev);
             next.set(key, { ...pending, entries: children, loading: false });
@@ -393,7 +396,10 @@ export function WorkbenchLayout() {
         setAppConfigReady(decoded.config, decoded.raw, "load");
         const gaps = describeConfigGaps(decoded.config);
         if (gaps.length > 0) {
-          logRef.current.append("warn", `config incomplete: ${gaps.join(", ")}`);
+          logRef.current.append(
+            "warn",
+            `config incomplete: ${gaps.join(", ")}`,
+          );
         } else {
           logRef.current.append("info", "config loaded");
         }
@@ -500,7 +506,12 @@ export function WorkbenchLayout() {
         },
         onAgentEvent: (payload) => {
           if (disposed) return;
-          logRef.current.append("info", `agent event: ${describeAgentEvent(payload)}`);
+          const ready = extractCadQueryReadyFromAgentEvent(payload);
+          if (ready) openTab(cadQueryResultTab(ready));
+          logRef.current.append(
+            "info",
+            `agent event: ${describeAgentEvent(payload)}`,
+          );
         },
       }),
     );
@@ -579,7 +590,10 @@ export function WorkbenchLayout() {
   const meshSummary = meshInfo
     ? { label: activeTab?.label ?? "mesh", ...meshInfo }
     : null;
-  const showMeshPanels = activeTab?.kind === "mesh" || activeTab?.kind === "scad";
+  const showMeshPanels =
+    activeTab?.kind === "mesh" ||
+    activeTab?.kind === "scad" ||
+    activeTab?.kind === "cadquery";
   const defaultExportFilename = activeTab
     ? deriveExportFilename(activeTab.label)
     : "export.stl";
@@ -602,10 +616,12 @@ export function WorkbenchLayout() {
     <div
       className="app"
       data-testid="workbench-layout"
-      style={{
-        "--left-panel-width": `${panelWidths.left}px`,
-        "--right-panel-width": `${panelWidths.right}px`,
-      } as React.CSSProperties}
+      style={
+        {
+          "--left-panel-width": `${panelWidths.left}px`,
+          "--right-panel-width": `${panelWidths.right}px`,
+        } as React.CSSProperties
+      }
     >
       <Topbar
         workspaceName={rootName}
@@ -745,7 +761,9 @@ function extractChangedPaths(payload: unknown): Set<string> {
     if (!item || typeof item !== "object") continue;
     const segs = (item as Record<string, unknown>)["path_segments"];
     if (!Array.isArray(segs)) continue;
-    const key = segs.filter((s): s is string => typeof s === "string").join("/");
+    const key = segs
+      .filter((s): s is string => typeof s === "string")
+      .join("/");
     if (key.length > 0) out.add(key);
   }
   return out;

@@ -349,8 +349,16 @@
     linear-gradient(to bottom, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
     linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 16px 16px, 16px 16px, 80px 80px, 80px 80px;
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
+  background-size:
+    16px 16px,
+    16px 16px,
+    80px 80px,
+    80px 80px;
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    #000 40%,
+    transparent 90%
+  );
   mask-image: radial-gradient(ellipse at center, #000 40%, transparent 90%);
 }
 
@@ -743,7 +751,8 @@
   border-bottom: 1px solid var(--ink-4s);
   cursor: pointer;
   white-space: nowrap;
-  transition: color var(--dur-fast) var(--ease),
+  transition:
+    color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease);
   background: transparent;
   border-left: 0;
@@ -953,4 +962,90 @@
 .build-card .meta b {
   color: var(--t-1);
   font-weight: 500;
+}
+
+.viewer--cadquery {
+  position: relative;
+}
+
+.cadquery-select-dock {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--ink-4s);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  box-shadow: var(--shadow-panel);
+}
+
+.cadquery-select-dock button,
+.cadquery-ambiguous button {
+  height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--t-3);
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  padding: 0 8px;
+}
+
+.cadquery-select-dock button.active {
+  color: var(--t-1);
+  border-color: var(--ink-4s);
+  background: var(--ink-5s);
+}
+
+.cadquery-selection-status {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  right: 12px;
+  max-width: min(44vw, 420px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--ink-4s);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  box-shadow: var(--shadow-panel);
+  color: var(--t-2);
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+}
+
+.cadquery-selection-status span {
+  color: var(--t-5);
+  text-transform: uppercase;
+}
+
+.cadquery-selection-status code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--t-1);
+}
+
+.cadquery-ambiguous {
+  position: absolute;
+  z-index: 4;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--signal-warn);
+  background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+  color: var(--t-1);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.cadquery-ambiguous button {
+  border-color: var(--ink-4s);
 }
