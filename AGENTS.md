@@ -41,6 +41,7 @@
 - **工具链约束**:
   - 相关工具链、repo-local 启动脚本、静态资源服务与一次性辅助脚本默认优先使用 `bun`。
   - 项目内**禁止新增** `python` / `python3` 调用；已有 python 调用在相关任务中应优先替换，避免继续扩散。
+  - CadQuery Python 子进程是唯一例外：仅允许 `budn_cad_runner` 作为 app server 调用的外部 CAD 工具存在，边界等同 OpenSCAD CLI。该例外不允许扩展为项目内任意 Python 辅助脚本、构建脚本或一次性迁移脚本。
   - 若确实无法绕开非 bun 方案，必须先说明原因与替代方案评估，再由用户拍板。
 - **已知问题记录**:
   - 当任务过程中确认存在当前无法直接解决、无法在本轮拍板、但又会影响后续开发判断的问题时，必须同步更新 `docs/known_issues.md`。
@@ -226,6 +227,15 @@
 - 预览属于跨端共享正式能力。
 - 预览状态机必须统一放在 `studio-common`，不得在 `studio-app` 与 `studio-web` 中各自维护一套独立预览状态。
 - 若历史边界（例如独立 `scad-viewer` 壳）中仍存在共享预览库职责，必须先迁到 `scad-ui`、`scad-scene`、`studio-common` 或对应端壳层，再删除旧壳。
+
+#### 6. CAD Agent / CadQuery 边界
+
+- CadQuery Agent 是 budn' 当前 CAD 协作方向；MVP 期间 CadQuery 替代 OpenSCAD 作为新增建模能力重点，OpenSCAD 保留现有能力但不新增产品投入。
+- CadQuery 必须作为 app server 外部工具能力接入，由 `app-server-core` 统一管理写入、执行、导出、manifest、拓扑 metadata 和错误归类。
+- CadQuery 代码生成必须通过结构化 tool call 完成；`.py` 模型文件不得通过普通文档写入工具直接改写。
+- CadQuery 执行必须使用 staging 目录保障原子性：执行成功且冲突检测通过后才能回写真实 workspace；失败、超时或取消不得污染真实文件。
+- CadQuery mesh、topology、feature map 和 selection 相关数据必须通过 `app-server-protocol` 承载；前端不得绕过 protocol 读取 runner 输出或自行从文件名、路径、instance path 推断 Ref。
+- MVP 用户可见 Ref 仅包含 component / part / assembly、instance、feature、face / edge / vertex 五类；selector 只允许作为 Agent / runner 内部查找手段，subshape 不作为 MVP 用户可见层级。
 
 ### 透明沟通与进度同步
 

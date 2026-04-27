@@ -14,7 +14,7 @@ CadQuery 替代 OpenSCAD。CadQuery Agent 是产品新方向。MVP 期间不删 
 
 ### 3. Agent 运行时
 
-Rust 自建 LLM 抽象层。全部跑在后端，no vendor lock-in。优先评估 Rig (rig-core v0.31)，贴合需求就用；否则退回 SDK 客户端（anthropic-sdk-rust + async-openai）+ 自建薄 provider trait。
+Rust 自建 LLM 抽象层。全部跑在后端，no vendor lock-in。Phase 1 开始时按 crates.io / docs.rs 当前版本评估 Rig 的 tool use、streaming 和自定义 Agent loop 能力；贴合需求就用，否则退回 SDK 客户端（anthropic-sdk-rust + async-openai）+ 自建薄 provider trait。不固定旧版本号。
 
 ### 4. B-rep 拓扑方案
 

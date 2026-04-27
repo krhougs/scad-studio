@@ -53,6 +53,11 @@
    - 用户要求按照 review 结果修正 `plan-00.md`。
    - 修订重点：Ref PRD 同步不实、CadQuery mesh 重载荷不能直接进入 JS `ClientEvent`、缺少 `studio-common` 状态归属、Phase 计划结构不足、CadQuery Python 豁免需前置、架构文档 wire format 过期、Rig 固定版本过期。
 
+9. **连续执行完整计划**
+   - 用户要求按照 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` 和项目规范执行每个 Phase。
+   - 每个 Phase 必须完成实现、独立 review、回归验证、修复、结果记录和 commit。
+   - 执行过程中不得停下来等待用户意见，直到整个 plan 完成；只有真正阻塞且无法自行决策的问题才暂停。
+
 ## 注意事项
 
 - 本 plan 只是设计文档，尚未开始任何代码实施。

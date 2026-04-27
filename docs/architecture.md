@@ -71,7 +71,7 @@
 
 - `ClientTransport` trait（同步签名：`handshake / reconnect / request / subscribe / unsubscribe / cancel / poll_server_event / close`）。
 - `WebSocketClientTransport`（wasm32 专属），`InProcessTransport`（桌面 `tokio::mpsc`）。
-- `websocket_wire.rs`：`encode_client_envelope_text` / `decode_server_envelope_text` 等文本 JSON 编解码。
+- `websocket_wire.rs`：`encode_client_envelope_binary` / `decode_server_envelope_binary` 等 Borsh binary frame 编解码。
 - `studio-common` **不**依赖 `app-server-transport`（架构硬约束）：前者只描述状态机，后者是平台适配。
 
 ### 2.4 `app-server-host`
@@ -231,22 +231,15 @@ viewer 组件 Promise 解析 / React 重渲染
 
 ## 5. 协议线格式
 
-所有 WebSocket 帧都是 UTF-8 JSON，顶层外壳由 `ClientEnvelope` / `ServerEnvelope` 提供：
+所有 WebSocket 帧都是 binary frame。`app-server-protocol` 是唯一线格式来源，`ClientEnvelope` / `ServerEnvelope` 使用 Borsh 序列化后由 `codec.rs` 加上固定 header：
 
-```json
-// client → server
-{ "kind": "handshake", "payload": { "capabilities": { ... } } }
-{ "kind": "request", "payload": { "request_id": 42, "command": { "command": "workspace.list", "payload": { ... } } } }
-{ "kind": "close" }
-
-// server → client
-{ "kind": "handshake_ack", "payload": { "session_token": "...", "server_capabilities": { ... }, "negotiated_version": 1 } }
-{ "kind": "response", "payload": { "request_id": 42, "result": { "type": "workspace_list", "payload": { "entries": [...] } } } }
-{ "kind": "push", "payload": { "event": { "event": "watch.changed", "payload": { "subscription_id": "...", "changed_paths": [...] } } } }
-{ "kind": "closed" }
+```text
+wire frame = WIRE_MAGIC("BDNP") + WIRE_VERSION(u8) + borsh_payload
 ```
 
-`CommandSuccess` / `ClientCommand` 都是 `#[serde(tag = "type"/"command", content = "payload")]` 的 tagged union。
+当前 `WIRE_VERSION = 1`。服务端和客户端收到 frame 后必须先校验 magic 与 version，再按 `ClientEnvelope` 或 `ServerEnvelope` 解码。浏览器端 WebSocket 必须设置 `binaryType = "arraybuffer"`，服务端拒绝文本帧。
+
+`ClientCommand`、`CommandSuccess` 和 `ServerPushEvent` 是固定 Borsh enum。新增协议能力必须追加 enum variant，保持旧 discriminant 不漂移；需要破坏 wire contract 时必须 bump `WIRE_VERSION` 并同步更新协议、host、transport、`studio-common`、`studio-web-wasm`、Web bridge 与 generated package。
 
 ## 6. 内部硬约束回顾
 

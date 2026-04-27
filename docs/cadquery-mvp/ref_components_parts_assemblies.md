@@ -22,7 +22,7 @@ Viewer 选择对象
 1. 文件系统是 source of truth。
 2. .py 负责模型生成。
 3. .md 负责用途、装配、接口、可编辑范围和 Ref Map。
-4. Viewer 选择结果必须能映射回 component / part / assembly / feature / selector。
+4. Viewer 选择结果必须能映射回 component / part / assembly / feature，raw face / edge / vertex 只作为当前 build 内的精细定位。
 5. 优先选择 component / part / assembly / feature。
 6. face / edge / vertex 只作为精细定位和兜底。
 7. Agent 修改模型时只能改源文件，不直接改 artifact。
@@ -315,11 +315,11 @@ Agent 是否允许修改真实尺寸。
 > - component/part/assembly（§7.1-7.3）
 > - instance（§7.4）
 > - feature（§7.5）
-> - face/edge/vertex（§7.7）
+> - face/edge/vertex（§7.6）
 >
 > **MVP 不实现**（后续按需加回）：
-> - ~~selector（§7.6 / §10.5）~~ — Agent 内部用 selector 查找 face，但不暴露为独立 Ref 层
-> - ~~subshape（§7.7 原 subshape 部分）~~ — 与 feature 功能重叠，MVP 用 feature 覆盖
+> - selector 独立 Ref 层 — Agent / runner 内部仍可用 CadQuery selector 查找 face，但不暴露给用户和协议
+> - subshape 独立 Ref 层 — 与 feature 功能重叠，MVP 用 feature 覆盖
 
 ### 7.1 Component Ref
 
@@ -434,54 +434,7 @@ REFS["features"]["top_surface"]
 
 ---
 
-### 7.5 Selector Ref
-
-用于表达 CadQuery selector。
-
-格式：
-
-```text
-@selector[top_lid@faces@>Z]
-@selector[bottom_case@edges@|Z]
-@selector[top_lid@vertices@>X]
-```
-
-语义：
-
-```text
-@selector[对象@选择类型@选择表达式]
-```
-
-对应 CadQuery 概念：
-
-```python
-obj.faces(">Z")
-obj.edges("|Z")
-obj.vertices(">X")
-```
-
----
-
-### 7.6 Subshape Ref
-
-用于命名子形状。
-
-格式：
-
-```text
-@subshape[top_lid.top_surface]
-@subshape[bottom_case.front_edge_group]
-```
-
-用途：
-
-```text
-连接 Viewer 中选中的局部区域和 CadQuery 中命名的子形状。
-```
-
----
-
-### 7.7 Raw Geometry Ref
+### 7.6 Raw Geometry Ref
 
 用于 Viewer 直接选中的底层几何对象。
 
@@ -498,7 +451,7 @@ obj.vertices(">X")
 ```text
 只作为当前 artifact 的精细定位。
 可能随着重新生成失效。
-Agent 应优先尝试映射到 feature / selector / subshape。
+Agent 应优先尝试映射到 feature；若不能稳定映射，保留 raw geometry ref 并要求用户确认风险。
 ```
 
 ---
@@ -510,9 +463,7 @@ Agent 收到 Ref 后按以下优先级处理：
 ```text
 1. @component / @part / @assembly
 2. @feature
-3. @selector
-4. @subshape
-5. @face / @edge / @vertex
+3. @face / @edge / @vertex
 ```
 
 原因：
@@ -520,6 +471,7 @@ Agent 收到 Ref 后按以下优先级处理：
 ```text
 component / part / assembly / feature 最稳定。
 face / edge / vertex 最容易失效。
+selector 只作为 runner 内部查找手段，不作为用户可见 Ref。
 ```
 
 ---
@@ -573,7 +525,7 @@ def build(params=None):
 ```text
 文件名就是 part id。
 build() 返回 CadQuery 对象。
-REFS 描述可选中的 feature / selector。
+REFS 描述可选中的 feature。
 重要 feature 必须有 tag 或 selector 描述。
 ```
 
@@ -674,7 +626,7 @@ def build(params=None):
 
 ```text
 Assembly 负责组合，不负责修改 Part 内部几何。
-Assembly 中每个 child 必须有 name 和 ref metadata。
+Assembly 中每个 child 必须有 name、`ref_text` 和 `object_kind` metadata。若 CadQuery API 只能稳定保存 `ref` 这类短字段，该字段只能作为 Python metadata 输入别名；runner stdout、protocol payload、SelectionRef 一律归一为 `ref_text`。
 ```
 
 ---
@@ -784,35 +736,21 @@ target = obj._getTagged("top_surface")
 
 ---
 
-### 10.5 `@selector[...]`
+### 10.5 内部 selector candidate（非 Ref）
 
-Ref：
+CadQuery selector 是 Agent / runner 内部用于定位几何的执行手段，不作为 MVP 用户可见 Ref 层，也不写入 SelectionRef 的 `ref_text`。
 
-```text
-@selector[top_lid@faces@>Z]
-```
-
-映射：
+示例：
 
 ```python
 from parts.top_lid import build
+
 obj = build()
-target = obj.faces(">Z")
+target_faces = obj.faces(">Z")
+target_edges = obj.edges("|Z")
 ```
 
-Ref：
-
-```text
-@selector[bottom_case@edges@|Z]
-```
-
-映射：
-
-```python
-from parts.bottom_case import build
-obj = build()
-target = obj.edges("|Z")
-```
+raw geometry 选择若能推导出稳定 selector，runner 可以把它作为内部 candidate 附在 feature mapping 结果中；协议层仍返回 feature 或 raw geometry Ref。
 
 ---
 
@@ -830,7 +768,7 @@ Ref：
 1. 查 artifact 中的 face id。
 2. 查该 face 是否绑定 feature。
 3. 若绑定 feature，转成 @feature[...]。
-4. 若不能绑定，生成 selector candidate。
+4. 若不能绑定，生成内部 selector candidate。
 5. 若 selector 不唯一，要求用户确认。
 ```
 
@@ -850,9 +788,9 @@ Ref：
 
 ```text
 1. 查 artifact 中的 edge id。
-2. 查是否属于 named feature / selector group。
-3. 若可以，转成 @selector[...]。
-4. 若不确定，作为临时 geometry ref。
+2. 查是否属于 named feature。
+3. 若可以，转成 @feature[...]。
+4. 若不确定，作为临时 geometry ref，并可携带内部 selector candidate 供 Agent 判断。
 ```
 
 ---
@@ -864,7 +802,7 @@ Ref：
 ```json
 {
   "kind": "component",
-  "ref": "@component[pcb_main]",
+  "ref_text": "@component[pcb_main]",
   "file": "components/pcb_main.py"
 }
 ```
@@ -876,7 +814,7 @@ Ref：
 ```json
 {
   "kind": "part",
-  "ref": "@part[top_lid]",
+  "ref_text": "@part[top_lid]",
   "file": "parts/top_lid.py"
 }
 ```
@@ -888,7 +826,7 @@ Ref：
 ```json
 {
   "kind": "assembly",
-  "ref": "@assembly[full_enclosure]",
+  "ref_text": "@assembly[full_enclosure]",
   "file": "assemblies/full_enclosure.py"
 }
 ```
@@ -900,7 +838,7 @@ Ref：
 ```json
 {
   "kind": "feature",
-  "ref": "@feature[top_lid.top_surface]",
+  "ref_text": "@feature[top_lid.top_surface]",
   "file": "parts/top_lid.py",
   "selector": "faces(\">Z\")"
 }
@@ -913,10 +851,12 @@ Ref：
 ```json
 {
   "kind": "face",
-  "ref": "@face[top_lid:f_123]",
-  "part_ref": "@part[top_lid]",
+  "ref_text": "@face[top_lid:f_123]",
+  "owner_ref_text": "@part[top_lid]",
+  "owner_object_kind": "part",
   "candidate_feature_ref": "@feature[top_lid.top_surface]",
-  "candidate_selector_ref": "@selector[top_lid@faces@>Z]"
+  "build_id": "sha256:source_params_deps",
+  "ambiguous": false
 }
 ```
 
@@ -1039,7 +979,6 @@ Agent 判断：
 ```text
 parts/top_lid.py
 @feature[top_lid.top_surface]
-@selector[top_lid@faces@>Z]
 ```
 
 ---
@@ -1061,15 +1000,11 @@ parts/top_lid.py
 Agent 判断：
 
 ```text
-如果用户明确是一条边，则使用 raw edge 或 nearest selector。
-如果用户想改一组边，则使用 selector group。
+如果用户明确是一条边，则使用 raw edge，必要时辅以内部联系的 selector candidate。
+如果用户想改一组边，则优先查 named feature；没有稳定 feature 时再使用内部 selector candidate 辅助判断。
 ```
 
-可能映射到：
-
-```text
-@selector[top_lid@edges@|Z]
-```
+若该边属于 named feature，应优先映射到对应 `@feature[...]`；否则保留 raw edge，并在 Plan 中说明 selector candidate 只是内部查找依据。
 
 ---
 
@@ -1082,7 +1017,7 @@ Agent 判断：
 用户选择了什么。
 
 ## Resolved Target
-该 ref 对应哪个文件、哪个 feature、哪个 selector。
+该 ref 对应哪个文件、哪个 feature，以及是否需要内部 selector candidate 辅助定位。
 
 ## Modification Strategy
 准备用 CadQuery 如何修改。
@@ -1110,17 +1045,16 @@ MVP 必须满足：
 1. Viewer 选择 component 后，Agent 能定位到 component .py 和 .md。
 2. Viewer 选择 part 后，Agent 能定位到 part .py 和 .md。
 3. Viewer 选择 assembly 后，Agent 能定位到 assembly .py 和 .md。
-4. Viewer 选择 face 后，系统能给出 candidate feature / selector。
-5. Viewer 选择 edge 后，系统能给出 candidate selector。
+4. Viewer 选择 face 后，系统能给出 candidate feature；需要 selector 时只作为内部 candidate，不作为 Ref。
+5. Viewer 选择 edge 后，系统能给出 raw edge 或 candidate feature；需要 selector 时只作为内部 candidate，不作为 Ref。
 6. Agent 能把 @component[...] 映射到 components/<id>.py。
 7. Agent 能把 @part[...] 映射到 parts/<id>.py。
 8. Agent 能把 @assembly[...] 映射到 assemblies/<id>.py。
 9. Agent 能把 @feature[...] 映射到 REFS 条目。
-10. Agent 能把 @selector[...] 映射到 CadQuery selector 概念。
-11. Agent 不应长期依赖 raw face / edge id。
-12. 每个 .md 必须有 Ref Map。
-13. 每个 .py 必须有 REFS。
-14. 执行后必须更新对应 .md 的 Ref Map 或说明文档。
+10. Agent 不应长期依赖 raw face / edge id。
+11. 每个 .md 必须有 Ref Map。
+12. 每个 .py 必须有 REFS。
+13. 执行后必须更新对应 .md 的 Ref Map 或说明文档。
 ```
 
 ---
