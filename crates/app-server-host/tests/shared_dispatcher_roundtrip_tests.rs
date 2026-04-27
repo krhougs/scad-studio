@@ -324,6 +324,96 @@ fn dispatcher_execute_agent_generates_cadquery_code_from_prompt() {
 }
 
 #[test]
+fn dispatcher_execute_agent_generates_assembly_code_for_instance_move() {
+    let workspace = temp_workspace("dispatcher-agent-generate-assembly-code");
+    std::fs::create_dir_all(workspace.join("assemblies")).unwrap();
+    std::fs::write(workspace.join("assemblies/full_enclosure.py"), "old code\n").unwrap();
+    let captured = workspace.join("captured-agent-code.py");
+    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
+    update_instance_selection(&mut dispatcher);
+    let target_path = path_handle(["assemblies", "full_enclosure.py"]);
+    let mut request = confirmed_cadquery_request(target_path.clone());
+    request.target_type = CadQueryObjectKind::Assembly;
+    let confirmation = AgentCadQueryConfirmation {
+        request,
+        plan_ref: None,
+        affected_files: vec![target_path],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
+    };
+    let started = invoke_agent_with_confirmation_and_prompt(
+        &mut dispatcher,
+        41,
+        &session_id,
+        "move this screw 5mm right",
+        confirmation,
+    );
+
+    wait_for_done(&pushes, &started.run_id);
+    let captured_code = std::fs::read_to_string(captured).expect("captured agent code");
+    assert!(captured_code.contains("cq.Assembly"));
+    assert!(!captured_code.contains("return cq.Workplane(\"XY\").box"));
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("assemblies/full_enclosure.py")).unwrap(),
+        captured_code
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_execute_agent_generates_assembly_code_for_instance_replacement() {
+    let workspace = temp_workspace("dispatcher-agent-replace-instance");
+    std::fs::create_dir_all(workspace.join("assemblies")).unwrap();
+    std::fs::create_dir_all(workspace.join("components")).unwrap();
+    std::fs::write(
+        workspace.join("assemblies/full_enclosure.py"),
+        "old assembly\n",
+    )
+    .unwrap();
+    std::fs::write(workspace.join("components/screw.py"), "old component\n").unwrap();
+    let captured = workspace.join("captured-agent-code.py");
+    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
+    update_instance_selection(&mut dispatcher);
+    let target_path = path_handle(["assemblies", "full_enclosure.py"]);
+    let component_path = path_handle(["components", "screw.py"]);
+    let mut request = confirmed_cadquery_request(target_path.clone());
+    request.target_type = CadQueryObjectKind::Assembly;
+    let confirmation = AgentCadQueryConfirmation {
+        request,
+        plan_ref: None,
+        affected_files: vec![target_path.clone(), component_path],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
+    };
+    let started = invoke_agent_with_confirmation_and_prompt(
+        &mut dispatcher,
+        42,
+        &session_id,
+        "replace this screw with a countersunk version",
+        confirmation,
+    );
+
+    wait_for_done(&pushes, &started.run_id);
+    let captured_code = std::fs::read_to_string(captured).expect("captured agent code");
+    assert!(captured_code.contains("cq.Assembly"));
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("assemblies/full_enclosure.py")).unwrap(),
+        captured_code
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("components/screw.py")).unwrap(),
+        "old component\n"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[test]
 fn dispatcher_rejects_execute_outputs_outside_confirmed_scope() {
     let workspace = temp_workspace("dispatcher-agent-unconfirmed-output");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
@@ -535,6 +625,36 @@ fn update_selection(
     match dispatch(
         dispatcher,
         24,
+        ClientCommand::SelectionUpdate(SelectionUpdateRequest {
+            selections: vec![selection],
+            active_index: Some(0),
+        }),
+    )
+    .result
+    .expect("selection.update succeeds")
+    {
+        CommandSuccess::SelectionUpdated(response) => response,
+        other => panic!("unexpected selection.update response: {other:?}"),
+    }
+}
+
+fn update_instance_selection(
+    dispatcher: &mut HostRequestDispatcher,
+) -> app_server_protocol::SelectionUpdateResponse {
+    let selection = SelectionRef {
+        kind: SelectionKind::Instance,
+        ref_text: "@instance[full_enclosure/screw_1]".into(),
+        owner_ref_text: Some("@component[screw]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Component),
+        instance_path: Some("full_enclosure/screw_1".into()),
+        candidate_feature_ref: None,
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    };
+    match dispatch(
+        dispatcher,
+        26,
         ClientCommand::SelectionUpdate(SelectionUpdateRequest {
             selections: vec![selection],
             active_index: Some(0),

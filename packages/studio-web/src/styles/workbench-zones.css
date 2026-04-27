@@ -246,6 +246,23 @@
 .chat-input textarea::placeholder {
   color: var(--t-5);
 }
+.chat-selection-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin-top: 4px;
+  color: var(--t-5);
+  font-size: var(--fs-xxs);
+}
+.chat-selection-context code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--t-2);
+  font-family: var(--mono);
+}
 .chat-input .tools {
   display: flex;
   justify-content: space-between;

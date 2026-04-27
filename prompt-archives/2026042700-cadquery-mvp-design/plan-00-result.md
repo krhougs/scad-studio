@@ -275,3 +275,51 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 
 - `docs/known_issues.md` 新增记录：CadQuery edge / vertex pick tolerance 当前使用固定阈值，已满足 MVP 基础路径，但仍需后续基于真实复杂 CadQuery 模型、缩放比例、投影模式和高 DPI 设备做校准。
 - `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
+
+## Phase 3 — 端到端集成
+
+### 完成情况
+
+- 打通 Viewer selection → Chat → Agent Plan / Execute 的选择上下文：Web Chat 从 ManagedClient snapshot 读取 `current_selection`，显示当前 CadQuery ref，并在 Execute confirmation 中按当前 prompt 与 active selection 生成结构化范围。
+- 后端 Agent Plan 使用 active selection、history 和 prompt 生成 Markdown CAD Plan，声明 selection target、target path、edit goal、`affected_files` 和 export target。
+- Agent Execute 不执行前端 raw code；dispatcher 把 active selection 与确认的 `target_type` 传给后端 Agent，由后端生成 CadQuery 代码，再走 Phase 0c 的 staging 执行与 exact output scope。
+- 实现 Ref 业务规则核心路径：
+  - part face 有 feature 映射时，上升为 `@feature[...]` 并只使用 feature selector 生成局部修改代码。
+  - raw face / edge / vertex 没有 feature 映射时，不生成 selector-based cut / fillet，避免把临时拓扑 id 当长期修改目标。
+  - instance move 以 assembly 文件为主写入目标。
+  - instance replacement 以 assembly 文件为主写入目标，owner component 文件仅作为受影响文件参与确认，避免误改所有同源 component 实例。
+  - component body edit 与普通 instance body edit 归类为 component geometry。
+  - ambiguous selection 保留 raw ref，并在 Plan 中标记需要确认。
+- Web 侧新增 `cadquery-agent-scope.ts`，统一 Execute confirmation 的 target path、target type、affected files 和 export target 推导；Chat UI 不新增 Zustand 业务状态。
+- `docs/known_issues.md` 新增记录：`AgentCadQueryConfirmation.plan_ref` 目前仍为 `null`，尚未持久绑定 CAD Plan 文件；当前不扩大写入权限，影响的是 Plan / Execute 长期追溯能力。
+
+### Review 与修复记录
+
+- 第一轮独立 review 发现非 part Execute 会生成 part 代码、selection 未影响实际 CadQuery 生成、active selection 未生效、ambiguous selection 被错误上升为 feature、`plan_ref` 未绑定。已补充 active selection 与 target type 传递，按 target type 生成 part / component / assembly 代码，ambiguous 保留 raw ref；`plan_ref` 问题记录到 `docs/known_issues.md`。
+- 第二轮独立 review 发现 selection geometry 仍固定为 `faces(">Z")`，且 replacement 多文件范围声明不足。已改为只根据 feature name 映射 selector，并补充 replacement affected files。
+- 第三轮独立 review 发现 raw face / edge / vertex 在无 feature 映射时仍回退到通用 selector，且 component edit goal 文案不准确。已移除 raw geometry selector 回退，并把 component / instance body edit 标为 component geometry。
+- 第四轮独立 review 发现 instance replacement 主写入目标错误：写 component 会影响所有同源实例。已改为 assembly 主写入目标、component 仅作为 affected file；同时补充普通 instance body edit 的回归测试。
+- 最终独立 review 未发现 Critical、Important 或 Minor finding，确认 instance move / replacement / component replacement / instance body edit 的 target path、target type、affected files、edit goal 规则一致。
+
+### 验证记录
+
+- 红灯验证：新增 `local_agent_backend_does_not_modify_raw_face_without_feature_mapping` 后，修复前 `cargo test -p app-server-core --test agent_tests` 失败，实际仍生成 `.workplane().rect` 和 `cutThruAll`。
+- 红灯验证：更新 instance replacement 测试要求 assembly 主写入目标后，修复前 `cargo test -p app-server-core --test agent_tests plan_turn_declares_instance_replacement_multi_file_scope -- --exact` 失败，Plan 仍声明 component replacement / component target。
+- 红灯验证：新增 `plan_turn_labels_instance_body_edit_as_component_geometry` 后，修复前 `cargo test -p app-server-core --test agent_tests plan_turn_labels_instance_body_edit_as_component_geometry -- --exact` 失败，Plan 仍显示 assembly coordination。
+- 红灯验证：更新 Web replacement confirmation 测试后，修复前 `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-agent-scope.test.ts` 失败，`replace` 被确认成 component target。
+- 绿色验证：`cargo test -p app-server-core --test agent_tests` 通过，12 个测试通过。
+- 绿色验证：`cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests` 通过，12 个测试通过。
+- 绿色验证：`bun run --cwd packages/studio-web test:unit tests/unit/cadquery-agent-scope.test.ts tests/unit/chat-zone.test.tsx` 通过，2 个文件、10 个测试通过。
+- `cargo test --workspace`：通过；仅有既有 `app-server-core/src/watch.rs` dead_code warning。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：26 个文件、117 个测试通过。
+- `rustfmt --edition 2024 --check crates/app-server-core/src/agent.rs crates/app-server-core/tests/agent_tests.rs crates/app-server-host/src/dispatcher.rs crates/app-server-host/tests/shared_dispatcher_roundtrip_tests.rs`：通过。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：4 个 Chromium 测试通过。
+- `bun scripts/build_studio_web.ts`：构建成功，仍有既有 Vite large chunk warning。
+- `git diff --check`：通过。
+- `rg "@selector\\[|@subshape\\[|candidate_selector_ref" crates packages docs/cadquery-mvp docs/architecture.md`：无命中。
+
+### 遗留问题
+
+- `docs/known_issues.md` 新增记录：CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件。当前 Execute 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 约束，不阻断 Phase 3；后续需要增加 Plan 文件持久化和 confirmation `plan_ref` 校验。
+- `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。

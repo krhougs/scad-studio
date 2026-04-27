@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Cube, Paperclip, Ruler, Stop } from "@phosphor-icons/react";
+import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
+import {
+  DEFAULT_CADQUERY_TARGET_PATH,
+  buildCadQueryConfirmation,
+  cadQuerySelectionSummary,
+} from "./cadquery-agent-scope";
 
 type ChatZoneProps = {
   client: WasmClient | null;
@@ -15,6 +21,7 @@ export type ChatSnapshot = {
   current_chat_history?: ChatMessageRecord[];
   agent_run?: AgentRun | null;
   agent_events?: AgentEvent[];
+  current_selection?: SelectionUpdateRequest | null;
 };
 
 type ChatSessionSummary = {
@@ -68,6 +75,7 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
         disabled={controller.composerDisabled}
         operation={controller.operation}
         targetPath={controller.targetPath}
+        selectionSummary={controller.selectionSummary}
         onChange={controller.setDraft}
         onOperationChange={controller.setOperation}
         onTargetPathChange={controller.setTargetPath}
@@ -80,7 +88,7 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
 function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const [draft, setDraft] = useState("");
   const [operation, setOperation] = useState<AgentOperation>("inform");
-  const [targetPath, setTargetPath] = useState("parts/agent_model.py");
+  const [targetPath, setTargetPath] = useState(DEFAULT_CADQUERY_TARGET_PATH);
   const [busy, setBusy] = useState(false);
   const sessions = snapshot?.chat_sessions ?? [];
   const currentSessionId =
@@ -90,6 +98,10 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const agentEvents = useMemo(
     () => recentAgentEvents(snapshot?.agent_events ?? []),
     [snapshot?.agent_events],
+  );
+  const selectionSummary = useMemo(
+    () => cadQuerySelectionSummary(snapshot),
+    [snapshot?.current_selection],
   );
 
   useInitialChatList(client, onStatus);
@@ -121,6 +133,7 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     messages,
     agentRun,
     agentEvents,
+    selectionSummary,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
     ...actions,
@@ -294,6 +307,7 @@ function ChatComposer(props: {
   disabled: boolean;
   operation: AgentOperation;
   targetPath: string;
+  selectionSummary: string | null;
   onChange: (value: string) => void;
   onOperationChange: (value: AgentOperation) => void;
   onTargetPathChange: (value: string) => void;
@@ -307,6 +321,7 @@ function ChatComposer(props: {
           onChange={props.onChange}
           onSend={props.onSend}
         />
+        <ChatSelectionContext selectionSummary={props.selectionSummary} />
         <ChatComposerTools
           disabled={props.disabled}
           operation={props.operation}
@@ -320,6 +335,16 @@ function ChatComposer(props: {
         />
       </div>
     </footer>
+  );
+}
+
+function ChatSelectionContext(props: { selectionSummary: string | null }) {
+  if (!props.selectionSummary) return null;
+  return (
+    <div className="chat-selection-context" data-testid="chat-selection-context">
+      <span>ref</span>
+      <code>{props.selectionSummary}</code>
+    </div>
   );
 }
 
@@ -545,7 +570,7 @@ async function sendChatMessageInner(
   params.setDraft("");
   const confirmed =
     params.operation === "execute"
-      ? buildCadQueryConfirmation(params.snapshot, params.targetPath)
+      ? buildCadQueryConfirmation(params.snapshot, params.targetPath, content)
       : null;
   await client.dispatchAgentInvoke({
     session_id: sessionId,
@@ -574,67 +599,6 @@ function lastAgentDoneKey(events: AgentEvent[]): string | null {
     return runId || `done-${index}`;
   }
   return null;
-}
-
-function buildCadQueryConfirmation(
-  snapshot: ChatSnapshot | null,
-  targetPath: string,
-) {
-  const target = pathHandleFromWorkspace(snapshot, targetPath);
-  return {
-    request: {
-      target_path: target,
-      target_type: "part",
-      code: "",
-      export_formats: ["step"],
-      params_json: "{}",
-    },
-    plan_ref: null,
-    affected_files: [target],
-    new_files: [],
-    export_targets: [exportTargetFor(target)],
-  };
-}
-
-function pathHandleFromWorkspace(snapshot: ChatSnapshot | null, path: string) {
-  const workspaceId = workspaceIdString(
-    snapshot?.workspace_current?.workspace_id,
-  );
-  if (!workspaceId) throw new Error("workspace id missing for Execute");
-  const path_segments = path
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  if (path_segments.length === 0 || path_segments.some(isInvalidSegment)) {
-    throw new Error("CadQuery target path 无效");
-  }
-  return { workspace_id: workspaceId, path_segments };
-}
-
-function workspaceIdString(value: unknown): string | null {
-  if (typeof value === "string" && value.length > 0) return value;
-  if (value && typeof value === "object") {
-    const inner = (value as Record<string, unknown>)["0"];
-    if (typeof inner === "string" && inner.length > 0) return inner;
-  }
-  return null;
-}
-
-function isInvalidSegment(value: string): boolean {
-  return value === "." || value === ".." || value.includes("\\");
-}
-
-function exportTargetFor(target: {
-  workspace_id: string;
-  path_segments: string[];
-}) {
-  const last =
-    target.path_segments[target.path_segments.length - 1] ?? "agent_model.py";
-  const stem = last.replace(/\.[^.]*$/, "") || "agent_model";
-  return {
-    workspace_id: target.workspace_id,
-    path_segments: ["outputs", `${stem}.step`],
-  };
 }
 
 function agentEventDetail(event: AgentEvent): string {

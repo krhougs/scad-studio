@@ -603,6 +603,7 @@ fn agent_response_text(worker: &AgentWorker) -> String {
         prompt: worker.prompt.clone(),
         history,
         selections: worker.selection_snapshot.selections.clone(),
+        active_selection_index: worker.selection_snapshot.active_index,
         confirmed_target_path,
     })
     .text
@@ -758,7 +759,9 @@ fn generate_agent_cadquery(
         prompt: worker.prompt.clone(),
         history,
         selections: worker.selection_snapshot.selections.clone(),
+        active_selection_index: worker.selection_snapshot.active_index,
         target_display_path: confirmation.request.target_path.display_path(),
+        target_type: confirmation.request.target_type,
     })
 }
 
