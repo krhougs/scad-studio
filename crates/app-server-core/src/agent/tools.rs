@@ -1,3 +1,4 @@
+mod readonly;
 mod registry;
 
 use std::path::PathBuf;
@@ -13,9 +14,6 @@ pub use registry::{
 };
 
 const MAX_TOOL_ROUNDS: usize = 10;
-const MAX_FILE_READ_BYTES: usize = 64 * 1024;
-const MAX_DIR_ENTRIES: usize = 500;
-
 pub trait ToolExecutor: Send + Sync {
     fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String;
 }
@@ -102,98 +100,17 @@ impl WorkspaceToolExecutor {
     pub fn new(workspace_root: PathBuf) -> Self {
         Self { workspace_root }
     }
-
-    fn resolve_safe(&self, relative: &str) -> Result<PathBuf, String> {
-        let cleaned = relative.replace('\\', "/");
-        let cleaned = cleaned.trim_matches('/');
-        if cleaned.split('/').any(|seg| seg == "..") {
-            return Err("path must not contain '..'".into());
-        }
-        let resolved = self.workspace_root.join(cleaned);
-        // For existing paths, canonicalize to resolve symlinks and verify containment
-        if let Ok(canonical) = resolved.canonicalize() {
-            let ws_canonical = self
-                .workspace_root
-                .canonicalize()
-                .unwrap_or_else(|_| self.workspace_root.clone());
-            if !canonical.starts_with(&ws_canonical) {
-                return Err("path resolves outside workspace".into());
-            }
-            return Ok(canonical);
-        }
-        // Non-existent paths: component check + starts_with is sufficient
-        // (read/list will report "file not found" error)
-        if !resolved.starts_with(&self.workspace_root) {
-            return Err("path is outside workspace".into());
-        }
-        Ok(resolved)
-    }
-
-    fn read_file(&self, args: &str) -> String {
-        let path = match parse_path_arg(args) {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
-        let resolved = match self.resolve_safe(&path) {
-            Ok(p) => p,
-            Err(e) => return format!("Error: {e}"),
-        };
-        match std::fs::read(&resolved) {
-            Ok(bytes) if bytes.len() > MAX_FILE_READ_BYTES => {
-                let truncated = String::from_utf8_lossy(&bytes[..MAX_FILE_READ_BYTES]);
-                format!("{truncated}\n\n[truncated at {MAX_FILE_READ_BYTES} bytes]")
-            }
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            Err(e) => format!("Error reading file: {e}"),
-        }
-    }
-
-    fn list_directory(&self, args: &str) -> String {
-        let path = match parse_path_arg(args) {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
-        let resolved = match self.resolve_safe(&path) {
-            Ok(p) => p,
-            Err(e) => return format!("Error: {e}"),
-        };
-        match std::fs::read_dir(&resolved) {
-            Ok(entries) => {
-                let mut items: Vec<String> = entries
-                    .filter_map(|e| e.ok())
-                    .take(MAX_DIR_ENTRIES + 1)
-                    .map(|e| {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                        if is_dir { format!("{name}/") } else { name }
-                    })
-                    .collect();
-                items.sort();
-                let truncated = items.len() > MAX_DIR_ENTRIES;
-                if truncated {
-                    items.truncate(MAX_DIR_ENTRIES);
-                }
-                if items.is_empty() {
-                    "(empty directory)".into()
-                } else if truncated {
-                    format!(
-                        "{}\n\n[truncated at {MAX_DIR_ENTRIES} entries]",
-                        items.join("\n")
-                    )
-                } else {
-                    items.join("\n")
-                }
-            }
-            Err(e) => format!("Error listing directory: {e}"),
-        }
-    }
 }
 
 impl ToolExecutor for WorkspaceToolExecutor {
-    fn execute(&self, call: &LlmToolCall, _context: &AgentToolRunContext) -> String {
+    fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
         match call.function_name.as_str() {
-            "read_file" => self.read_file(&call.arguments),
-            "list_directory" => self.list_directory(&call.arguments),
+            "read_file" => readonly::read_file(&self.workspace_root, call),
+            "list_directory" => readonly::list_directory(&self.workspace_root, call),
+            "search_files" => readonly::search_files(&self.workspace_root, call),
+            "get_project_context" => readonly::get_project_context(&self.workspace_root, call),
+            "get_selection" => readonly::get_selection(call, context),
+            "resolve_ref" => readonly::resolve_ref(&self.workspace_root, call, context),
             _ => tool_error_json(
                 call,
                 "tool is registered but not implemented by this executor",
@@ -478,13 +395,17 @@ fn normalize_workspace_path(path: &str) -> Result<String, ToolPolicyError> {
             "path must be workspace-relative",
         ));
     }
-    let cleaned = cleaned.trim_matches('/').to_owned();
+    let cleaned = cleaned.trim_matches('/');
     if cleaned.split('/').any(|segment| segment == "..") {
         return Err(ToolPolicyError::permission_denied(
             "path must not contain '..'",
         ));
     }
-    Ok(cleaned)
+    Ok(cleaned
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/"))
 }
 
 fn normalize_scope_paths(paths: Vec<String>) -> Vec<String> {
@@ -510,14 +431,4 @@ fn tool_error_json(call: &LlmToolCall, message: &str, error_type: &str) -> Strin
         "retry_allowed": false
     })
     .to_string()
-}
-
-fn parse_path_arg(json_args: &str) -> Result<String, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(json_args).map_err(|e| format!("Error parsing arguments: {e}"))?;
-    parsed
-        .get("path")
-        .and_then(|p| p.as_str())
-        .map(|s| s.to_owned())
-        .ok_or_else(|| "Error: missing 'path' argument".into())
 }

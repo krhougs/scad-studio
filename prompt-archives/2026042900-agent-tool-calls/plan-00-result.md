@@ -8,13 +8,15 @@ Phase 0 已完成实现、聚焦验证和最终独立复审。Phase 0 固化了 
 
 Phase 1 已完成实现、两轮独立 review 收敛和聚焦回归。Phase 1 将 LLM tool loop 切换到 registry 驱动的统一执行入口，并补齐 operation 过滤、执行前权限校验、confirmation scope 校验、通用 tool push event 与 Chat JSONL 记录。
 
+Phase 2 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phase 2 将只读上下文工具接入统一执行入口，补齐结构化读取、目录列举、文本搜索、项目上下文、当前选择和 Ref 解析能力，并保护 Phase 1 已建立的 registry 权限边界。
+
 ## Phase 结果记录
 
 | Phase | 状态 | 结果 |
 |---|---|---|
 | Phase 0 — Tool 能力盘点与权限合同 | 已完成 | 已新增 registry/schema/path policy，补充 `docs/cadquery-mvp/agent-tool-contract.md`，同步 system prompt；聚焦测试与独立复审通过 |
 | Phase 1 — Tool Registry 与统一执行入口 | 已完成 | 已接入 registry tool loop、统一运行上下文、执行前权限与路径校验、通用 tool 事件和 Chat 记录；两轮独立 review 与聚焦回归通过 |
-| Phase 2 — 只读上下文工具补齐 | 未开始 | 等待执行 |
+| Phase 2 — 只读上下文工具补齐 | 已完成 | 已接入 `read_file`、`list_directory`、`search_files`、`get_project_context`、`get_selection`、`resolve_ref`；多轮独立 review 与完整聚焦回归通过 |
 | Phase 3 — CAD Plan 与 Chat 语义持久化工具 | 未开始 | 等待执行 |
 | Phase 4 — 受限文件写入工具 | 未开始 | 等待执行 |
 | Phase 5 — CadQuery 专用工具与执行边界 | 未开始 | 等待执行 |
@@ -89,3 +91,44 @@ Phase 1 已完成实现、两轮独立 review 收敛和聚焦回归。Phase 1 �
 - 第一轮 review 还指出 Auto 判定过宽、旧公开 API 可绕过 registry、未实现工具返回非结构化结果；已收紧 Auto 判定、移除旧公开 re-export，并统一返回 `unsupported_tool`。
 - 第二轮 review 未发现 block；指出 `export_targets` 类型校验不严，已新增非字符串 `export_targets` 红绿用例并修复。
 - 最终回归通过，Phase 1 无遗留 block。
+
+### Phase 2 — 只读上下文工具补齐
+
+前序目标保护：
+
+- 保持 Phase 1 的 registry 驱动入口，所有只读工具仍通过 `WorkspaceToolExecutor`、operation 权限表、path policy 和统一 tool 事件执行。
+- 保持 Auto 判定前只能访问只读上下文工具的边界，不向 Plan / Execute 写入能力扩散。
+- 保持 `chats/`、`outputs/`、`.budn_staging` 和 denied roots 的读取边界，避免只读工具通过符号链接或路径变形暴露受保护内容。
+
+完成情况：
+
+- 新增只读工具实现并接入统一执行入口：`read_file`、`list_directory`、`search_files`、`get_project_context`、`get_selection`、`resolve_ref`。
+- `read_file()` 返回结构化 JSON，包含 `status`、`tool`、`path`、`text`、`offset`、`bytes_read`、`file_size`、`truncated`、`hash`；支持 `offset` / `max_bytes`，并将单次读取限制在 64 KiB。
+- `read_file()` 拒绝 workspace escape、denied roots、指向 denied roots 的符号链接、无效 UTF-8 和二进制特征内容。
+- `list_directory()` 支持递归、substring pattern、kind filter 和 `max_entries`，并在截断前完成过滤；目录列举会跳过或拒绝不安全符号链接。
+- `search_files()` 在安全文本文件内递归搜索，跳过 denied roots、二进制文件、过大文件和不安全符号链接，`max_results` 限制为 50。
+- `get_project_context()` 汇总 components、parts、assemblies、plans、chats，并拒绝把受保护目录符号链接当作有效项目内容。
+- `get_selection()` 返回当前选择快照、激活索引和上下文 Ref。
+- `resolve_ref()` 支持对象 Ref、真实 `REFS.features` feature Ref、raw selection 和 selection candidate；对 path-like ref、符号链接逃逸、没有稳定 feature 定义的几何选择返回结构化不稳定结果。
+- `resolve_ref()` 的 REFS 解析会跳过字符串、注释和非 dict `REFS` 赋值，避免把普通文本误判为稳定 feature map。
+- 更新 canonical schema：为只读工具补齐上限字段、substring 语义说明，以及 `resolve_ref` 成功结果中的 `owner_doc_path`、`raw_ref_text` 字段。
+
+验证命令：
+
+- `cargo test -p app-server-core --test agent_tool_tests --test agent_tool_registry_tests --test agent_tests --test chat_tests`
+  - 结果：`agent_tests` 13 passed；`agent_tool_registry_tests` 5 passed；`agent_tool_tests` 55 passed；`chat_tests` 8 passed。
+  - 备注：仍有既有 `watch.rs` dead_code warning，未在本 Phase 处理。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`
+  - 结果：`shared_dispatcher_roundtrip_tests` 10 passed。
+  - 备注：仍有既有未使用 helper warning，未在本 Phase 处理。
+- `git diff --check`
+  - 结果：通过。
+- 新增文件与函数规模检查
+  - 结果：通过；新增只读工具文件均小于 500 行，新增函数均小于 50 行。
+
+独立 review：
+
+- 第一轮 review 指出：`resolve_ref` 存在字符串 / 注释误判、selection candidate 未校验 feature 是否真实存在、若干只读工具对符号链接和 denied roots 覆盖不足；已补充红绿用例并修复。
+- 第二轮 review 指出：`get_project_context` 对 paired `.md` 符号链接、目录列举中符号链接子项、Ref owner source 符号链接逃逸仍需强化；已补充测试并修复。
+- 最终 review 未发现 block / important 问题。
+- 遗留 minor：`source_has_refs_feature` 当前 lexical scanner 不区分 top-level `REFS` 与函数局部或属性赋值形式的 `REFS`。该问题不影响本 Phase 已定义的验收口径，后续若需要严格限定 top-level `REFS`，应单独补充 parser 规则和测试。

@@ -18,6 +18,19 @@ fn tool_context(
     context
 }
 
+fn call(name: &str, arguments: &str) -> LlmToolCall {
+    LlmToolCall {
+        id: format!("call_{name}"),
+        function_name: name.into(),
+        arguments: arguments.into(),
+    }
+}
+
+fn tool_json(executor: &WorkspaceToolExecutor, call: &LlmToolCall) -> serde_json::Value {
+    serde_json::from_str(&executor.execute(call, &tool_context(AgentOperationLevel::Inform, None)))
+        .expect("tool result should be json")
+}
+
 #[test]
 fn agent_tool_definitions_returns_expected_tools() {
     let defs = agent_tool_definitions_for_operation(AgentOperationLevel::Inform);
@@ -42,42 +55,138 @@ fn agent_tool_definitions_have_valid_parameters() {
 fn workspace_tool_executor_read_file() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("test.py");
-    std::fs::write(&file_path, "import cadquery").unwrap();
+    std::fs::write(&file_path, "import cadquery\nbox = 1\n").unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "read_file".into(),
-        arguments: "{\"path\": \"test.py\"}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert_eq!(result, "import cadquery");
+    let result = tool_json(
+        &executor,
+        &call(
+            "read_file",
+            "{\"path\":\"test.py\",\"offset\":7,\"max_bytes\":8}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["tool"], "read_file");
+    assert_eq!(result["path"], "test.py");
+    assert_eq!(result["text"], "cadquery");
+    assert_eq!(result["offset"], 7);
+    assert_eq!(result["bytes_read"], 8);
+    assert_eq!(result["file_size"], 24);
+    assert_eq!(result["truncated"], true);
+    assert!(result["hash"].as_str().unwrap().starts_with("sha256:"));
 }
 
 #[test]
 fn workspace_tool_executor_read_file_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "read_file".into(),
-        arguments: "{\"path\": \"nonexistent.py\"}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert!(result.starts_with("Error reading file:"));
+    let result = tool_json(
+        &executor,
+        &call("read_file", "{\"path\":\"nonexistent.py\"}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "not_found");
 }
 
 #[test]
 fn workspace_tool_executor_rejects_path_traversal() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "read_file".into(),
-        arguments: "{\"path\": \"../etc/passwd\"}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert!(result.contains("must not contain"));
+    let result = tool_json(
+        &executor,
+        &call("read_file", "{\"path\":\"../etc/passwd\"}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(result["message"].as_str().unwrap().contains(".."));
+}
+
+#[test]
+fn workspace_tool_executor_denies_dotted_denied_root_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("outputs/model.step"), "solid model").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("read_file", "{\"path\":\"./outputs/model.step\"}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(result["message"].as_str().unwrap().contains("outputs"));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_denies_symlink_to_denied_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("outputs/model.step"), "solid model").unwrap();
+    std::os::unix::fs::symlink("../outputs/model.step", dir.path().join("parts/model.step"))
+        .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("read_file", "{\"path\":\"parts/model.step\"}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(result["message"].as_str().unwrap().contains("outputs"));
+}
+
+#[test]
+fn workspace_tool_executor_read_file_rejects_binary_content() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("mesh.bin"), [0xff, 0xfe]).unwrap();
+    std::fs::write(dir.path().join("mesh.txt"), b"solid\0mesh").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("read_file", "{\"path\":\"mesh.bin\"}"));
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(result["message"].as_str().unwrap().contains("UTF-8"));
+
+    let result = tool_json(&executor, &call("read_file", "{\"path\":\"mesh.txt\"}"));
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(result["message"].as_str().unwrap().contains("binary"));
+}
+
+#[test]
+fn workspace_tool_executor_read_file_clamps_max_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "a".repeat(70 * 1024);
+    std::fs::write(dir.path().join("large.txt"), text).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call(
+            "read_file",
+            "{\"path\":\"large.txt\",\"max_bytes\":1000000}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["bytes_read"], 64 * 1024);
+    assert_eq!(result["truncated"], true);
+}
+
+#[test]
+fn workspace_tool_executor_read_file_rejects_non_boundary_offset() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("unicode.txt"), "盖子").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("read_file", "{\"path\":\"unicode.txt\",\"offset\":1}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(result["message"].as_str().unwrap().contains("offset"));
 }
 
 #[test]
@@ -85,44 +194,111 @@ fn workspace_tool_executor_list_directory() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a.py"), "").unwrap();
     std::fs::create_dir(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "").unwrap();
     std::fs::write(dir.path().join("b.md"), "").unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "list_directory".into(),
-        arguments: "{\"path\": \"\"}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert!(result.contains("a.py"));
-    assert!(result.contains("b.md"));
-    assert!(result.contains("parts/"));
+    let result = tool_json(
+        &executor,
+        &call(
+            "list_directory",
+            "{\"path\":\"\",\"recursive\":true,\"pattern\":\".py\",\"kind\":\"file\"}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    let entries = result["entries"].as_array().unwrap();
+    let paths = entries
+        .iter()
+        .map(|entry| entry["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec!["a.py", "parts/lid.py"]);
+    assert_eq!(result["entry_count"], 2);
+    assert_eq!(result["truncated"], false);
 }
 
 #[test]
 fn workspace_tool_executor_list_empty_directory() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "list_directory".into(),
-        arguments: "{\"path\": \"\"}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert_eq!(result, "(empty directory)");
+    let result = tool_json(&executor, &call("list_directory", "{\"path\":\"\"}"));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(result["entry_count"], 0);
+}
+
+#[test]
+fn workspace_tool_executor_list_directory_rejects_file_path() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.py"), "").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("list_directory", "{\"path\":\"a.py\"}"));
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(result["message"].as_str().unwrap().contains("directory"));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_list_directory_rejects_symlink_child_to_denied_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("outputs/model.step"), "solid model").unwrap();
+    std::os::unix::fs::symlink("../outputs/model.step", dir.path().join("parts/model.step"))
+        .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("list_directory", "{\"path\":\"parts\"}"));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["entries"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn workspace_tool_executor_list_directory_filters_before_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..505 {
+        std::fs::write(dir.path().join(format!("file_{index:03}.txt")), "").unwrap();
+    }
+    std::fs::write(dir.path().join("target.py"), "").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call(
+            "list_directory",
+            "{\"path\":\"\",\"pattern\":\".py\",\"kind\":\"file\",\"max_entries\":500}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    let entries = result["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["path"], "target.py");
+    assert_eq!(result["truncated"], false);
+}
+
+#[test]
+fn workspace_tool_executor_list_directory_clamps_max_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..505 {
+        std::fs::write(dir.path().join(format!("file_{index:03}.txt")), "").unwrap();
+    }
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("list_directory", "{\"path\":\"\",\"max_entries\":1000}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["entry_count"], 500);
+    assert_eq!(result["truncated"], true);
 }
 
 #[test]
 fn workspace_tool_executor_unknown_tool() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "delete_everything".into(),
-        arguments: "{}".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let parsed = tool_json(&executor, &call("delete_everything", "{}"));
     assert_eq!(parsed["status"], "error");
     assert_eq!(parsed["error_type"], "unsupported_tool");
 }
@@ -131,13 +307,569 @@ fn workspace_tool_executor_unknown_tool() {
 fn workspace_tool_executor_invalid_json_args() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let call = LlmToolCall {
-        id: "call_1".into(),
-        function_name: "read_file".into(),
-        arguments: "not json".into(),
-    };
-    let result = executor.execute(&call, &tool_context(AgentOperationLevel::Inform, None));
-    assert!(result.starts_with("Error parsing"));
+    let result = tool_json(&executor, &call("read_file", "not json"));
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+}
+
+#[test]
+fn workspace_tool_executor_search_files_excludes_outputs_and_returns_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "def build():\n    return lid\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("parts/cache.py"), b"return\0cached").unwrap();
+    std::fs::write(dir.path().join("outputs/lid.txt"), "return lid\n").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call(
+            "search_files",
+            "{\"query\":\"return\",\"path\":\"\",\"pattern\":\".py\",\"max_results\":10}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    let matches = result["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["path"], "parts/lid.py");
+    assert_eq!(matches[0]["line_number"], 2);
+}
+
+#[test]
+fn workspace_tool_executor_search_files_clamps_max_results() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    for index in 0..55 {
+        std::fs::write(
+            dir.path().join(format!("parts/file_{index:03}.py")),
+            "def build():\n    return hit\n",
+        )
+        .unwrap();
+    }
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call(
+            "search_files",
+            "{\"query\":\"return\",\"path\":\"parts\",\"max_results\":1000}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["matches"].as_array().unwrap().len(), 50);
+    assert_eq!(result["truncated"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_search_files_rejects_symlink_child_to_denied_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("outputs/model.py"), "return leaked\n").unwrap();
+    std::os::unix::fs::symlink("../outputs/model.py", dir.path().join("parts/model.py")).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call(
+            "search_files",
+            "{\"query\":\"return\",\"path\":\"parts\",\"max_results\":10}",
+        ),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["matches"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn workspace_tool_executor_get_project_context_summarizes_cadquery_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "def build(): pass\n").unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# lid\n").unwrap();
+    std::fs::write(dir.path().join("plans/lid-plan.md"), "# plan\n").unwrap();
+    std::fs::write(dir.path().join("chats/main.jsonl"), "{}\n").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("get_project_context", "{}"));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["objects"][0]["object_type"], "part");
+    assert_eq!(result["objects"][0]["source_path"], "parts/lid.py");
+    assert_eq!(result["objects"][0]["paired_doc_path"], "parts/lid.md");
+    assert_eq!(result["plans"][0]["path"], "plans/lid-plan.md");
+    assert_eq!(result["chats"][0]["path"], "chats/main.jsonl");
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_get_project_context_rejects_symlinked_project_root_to_denied_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("outputs/lid.py"), "def build(): pass\n").unwrap();
+    std::os::unix::fs::symlink("outputs", dir.path().join("parts")).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("get_project_context", "{}"));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["objects"].as_array().unwrap().len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_get_project_context_rejects_symlinked_paired_doc_to_denied_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "def build(): pass\n").unwrap();
+    std::fs::write(dir.path().join("outputs/lid.md"), "# leaked\n").unwrap();
+    std::os::unix::fs::symlink("../outputs/lid.md", dir.path().join("parts/lid.md")).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("get_project_context", "{}"));
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["objects"][0]["source_path"], "parts/lid.py");
+    assert_eq!(
+        result["objects"][0]["paired_doc_path"],
+        serde_json::Value::Null
+    );
+    assert_eq!(result["objects"][0]["has_paired_doc"], false);
+}
+
+#[test]
+fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.active_selection_index = Some(0);
+    context.context_refs = vec!["@part[lid]".into()];
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[lid:f_1]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    }];
+
+    let result: serde_json::Value =
+        serde_json::from_str(&executor.execute(&call("get_selection", "{}"), &context)).unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["active_index"], 0);
+    assert_eq!(result["context_refs"][0], "@part[lid]");
+    assert_eq!(result["selections"][0]["ref_text"], "@face[lid:f_1]");
+    assert_eq!(
+        result["selections"][0]["candidate_feature_ref"],
+        "@feature[lid.top]"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = {\"features\": {\"top\": {\"kind\": \"feature\"}}}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# lid\n").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let object = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@part[lid]\"}"),
+    );
+    assert_eq!(object["status"], "ok");
+    assert_eq!(object["owner_path"], "parts/lid.py");
+    assert_eq!(object["owner_doc_path"], "parts/lid.md");
+    assert_eq!(object["stable_ref"], "@part[lid]");
+
+    let feature = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(feature["status"], "ok");
+    assert_eq!(feature["owner_path"], "parts/lid.py");
+    assert_eq!(feature["owner_doc_path"], "parts/lid.md");
+    assert_eq!(feature["stable_ref"], "@feature[lid.top]");
+    assert_eq!(feature["ambiguous"], false);
+
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[lid:f_1]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    }];
+    let raw: serde_json::Value = serde_json::from_str(&executor.execute(
+        &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_1]\"}"),
+        &context,
+    ))
+    .unwrap();
+    assert_eq!(raw["status"], "ok");
+    assert_eq!(raw["raw_ref_text"], "@face[lid:f_1]");
+    assert_eq!(raw["owner_ref_text"], "@part[lid]");
+    assert_eq!(raw["candidate_feature_ref"], "@feature[lid.top]");
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_prefers_object_mapping_over_selection_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = {\"features\": {}}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# lid\n").unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Part,
+        ref_text: "@part[lid]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: None,
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    }];
+
+    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+        &call("resolve_ref", "{\"ref_text\":\"@part[lid]\"}"),
+        &context,
+    ))
+    .unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["stable_ref"], "@part[lid]");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["owner_doc_path"], "parts/lid.md");
+    assert_eq!(result["ambiguous"], false);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_selection_requires_safe_owner_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[lid:f_missing]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    }];
+
+    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+        &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_missing]\"}"),
+        &context,
+    ))
+    .unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], serde_json::Value::Null);
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+    assert!(!result["risks"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_reports_unstable_raw_geometry() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@edge[lid:e_1]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["raw_ref_text"], "@edge[lid:e_1]");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+    assert!(!result["risks"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_resolve_ref_rejects_symlink_escape_owner_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        outside.path().join("lid.py"),
+        "REFS = {\"features\": {\"top\": {}}}\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("lid.py"),
+        dir.path().join("parts/lid.py"),
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], serde_json::Value::Null);
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_resolve_ref_rejects_symlink_denied_root_owner_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
+    std::fs::write(
+        dir.path().join("outputs/lid.py"),
+        "REFS = {\"features\": {\"top\": {}}}\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../outputs/lid.py", dir.path().join("parts/lid.py")).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], serde_json::Value::Null);
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_requires_refs_feature_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "# top appears in a comment only\nREFS = {\"features\": {\"side\": {}}}\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+    assert!(!result["risks"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_rejects_path_like_ref_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@part[../outputs/lid]\"}"),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+
+    let result = tool_json(
+        &executor,
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[../.budn_staging/lid.top]\"}",
+        ),
+    );
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_ignores_refs_inside_string_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "note = 'REFS = {\"features\": {\"top\": {}}}'\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_ignores_refs_dict_inside_refs_string_assignment() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = '{\"features\": {\"top\": {}}}'\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_ignores_refs_dict_inside_refs_assignment_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = None  # {\"features\": {\"top\": {}}}\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_ignores_refs_dict_after_non_dict_refs_assignment() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = None\nOTHER = {\"features\": {\"top\": {}}}\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_ignores_refs_feature_inside_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = {\n    # \"features\": {\"top\": {}}\n}\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(
+        &executor,
+        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_path"], "parts/lid.py");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_selection_rejects_unsafe_candidate_feature() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "REFS = {\"features\": {\"top/../bad\": {}}}\n",
+    )
+    .unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[lid:f_unsafe]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[lid.top/../bad]".into()),
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: false,
+    }];
+
+    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+        &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_unsafe]\"}"),
+        &context,
+    ))
+    .unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+}
+
+#[test]
+fn workspace_tool_executor_resolve_ref_keeps_ambiguous_selection_unstable() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = tool_context(AgentOperationLevel::Inform, None);
+    context.selections = vec![SelectionRef {
+        kind: SelectionKind::Face,
+        ref_text: "@face[lid:f_2]".into(),
+        owner_ref_text: Some("@part[lid]".into()),
+        owner_object_kind: Some(CadQueryObjectKind::Part),
+        instance_path: None,
+        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        build_id: Some("sha256:build".into()),
+        result_id: Some("cq_1".into()),
+        ambiguous: true,
+    }];
+
+    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+        &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_2]\"}"),
+        &context,
+    ))
+    .unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["raw_ref_text"], "@face[lid:f_2]");
+    assert_eq!(result["stable_ref"], serde_json::Value::Null);
+    assert_eq!(result["ambiguous"], true);
+    assert!(!result["risks"].as_array().unwrap().is_empty());
 }
 
 struct MockProvider {
@@ -429,6 +1161,43 @@ fn registry_tool_loop_enforces_denied_path_roots_before_executing() {
 }
 
 #[test]
+fn registry_tool_loop_enforces_dotted_denied_path_roots_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_outputs".into(),
+                function_name: "read_file".into(),
+                arguments: "{\"path\":\"./outputs/model.step\"}".into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "read outputs")],
+        tool_context(AgentOperationLevel::Inform, None),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["tool_call_id"], "call_outputs");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(parsed["message"].as_str().unwrap().contains("outputs"));
+}
+
+#[test]
 fn registry_tool_loop_enforces_staging_path_denial_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
@@ -679,7 +1448,10 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
         vec!["outputs/lid.step".into()],
     );
     run_tool_loop_with_registry(
-        vec![LlmMessage::new("user", "execute with invalid export target")],
+        vec![LlmMessage::new(
+            "user",
+            "execute with invalid export target",
+        )],
         tool_context(AgentOperationLevel::Execute, Some(scope)),
         &provider,
         &executor,

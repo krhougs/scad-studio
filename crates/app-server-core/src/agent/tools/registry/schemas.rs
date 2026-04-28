@@ -12,7 +12,7 @@ pub fn read_file_input_schema() -> Value {
         json!({
             "path": string_schema("Workspace-relative file path."),
             "offset": {"type": "integer", "minimum": 0},
-            "max_bytes": {"type": "integer", "minimum": 1}
+            "max_bytes": {"type": "integer", "minimum": 1, "maximum": 65536}
         }),
         &["path"],
     )
@@ -23,8 +23,8 @@ pub fn list_directory_input_schema() -> Value {
         json!({
             "path": string_schema("Workspace-relative directory path."),
             "recursive": {"type": "boolean"},
-            "max_entries": {"type": "integer", "minimum": 1},
-            "pattern": string_schema("Optional substring or glob-like file filter."),
+            "max_entries": {"type": "integer", "minimum": 1, "maximum": 500},
+            "pattern": string_schema("Optional substring file filter."),
             "kind": {"type": "string", "enum": ["any", "file", "directory"]}
         }),
         &["path"],
@@ -36,8 +36,8 @@ pub fn search_files_input_schema() -> Value {
         json!({
             "query": string_schema("Text query."),
             "path": string_schema("Optional workspace-relative search root."),
-            "pattern": string_schema("Optional file name filter."),
-            "max_results": {"type": "integer", "minimum": 1}
+            "pattern": string_schema("Optional substring file name filter."),
+            "max_results": {"type": "integer", "minimum": 1, "maximum": 50}
         }),
         &["query"],
     )
@@ -194,6 +194,8 @@ pub fn resolve_ref_success_schema() -> Value {
         json!({
             "owner_ref_text": nullable_string_schema(),
             "owner_path": nullable_string_schema(),
+            "owner_doc_path": nullable_string_schema(),
+            "raw_ref_text": nullable_string_schema(),
             "candidate_feature_ref": nullable_string_schema(),
             "stable_ref": nullable_string_schema(),
             "ambiguous": {"type": "boolean"},
@@ -202,6 +204,8 @@ pub fn resolve_ref_success_schema() -> Value {
         &[
             "owner_ref_text",
             "owner_path",
+            "owner_doc_path",
+            "raw_ref_text",
             "stable_ref",
             "ambiguous",
             "risks",
