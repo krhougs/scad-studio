@@ -84,6 +84,10 @@ fn registry_declares_path_scope_contracts() {
         Some(AgentSemanticStore::CadPlan)
     );
     assert_eq!(save_plan.path_policy.allowed_roots, vec!["plans"]);
+    assert_eq!(
+        save_plan.path_policy.output_paths,
+        OutputPathPolicy::DeclaredOutputsOnly
+    );
 
     let chat_summary = spec_by_name("update_chat_summary");
     assert_eq!(
@@ -154,7 +158,34 @@ fn registry_uses_specific_canonical_schemas() {
     );
     assert_required(
         "save_cad_plan",
-        &["title", "resolved_target", "affected_files"],
+        &[
+            "title",
+            "target_ref",
+            "resolved_target",
+            "affected_files",
+            "export_targets",
+        ],
+    );
+    assert_success_required(
+        "save_cad_plan",
+        &[
+            "plan_ref",
+            "display_path",
+            "hash",
+            "summary",
+            "target_ref",
+            "target_path",
+            "affected_files",
+            "new_files",
+            "export_targets",
+            "execution_boundary",
+            "run_id",
+        ],
+    );
+    assert_required("update_chat_summary", &["summary", "goal"]);
+    assert_success_required(
+        "update_chat_summary",
+        &["session_id", "message_id", "updated_fields"],
     );
     assert_success_required("read_file", &["path", "text", "hash", "truncated"]);
     assert_success_required(

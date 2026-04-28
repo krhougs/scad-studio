@@ -166,7 +166,7 @@ fn handshake_request() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "studio-common-tests".into(),
             platform: ClientPlatform::Desktop,
-            protocol_version: ProtocolVersionRange::new(2, 2),
+            protocol_version: ProtocolVersionRange::new(3, 3),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -178,7 +178,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
         negotiated_version: 2,
         session_token: SessionToken("session-1".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(2, 2),
+            protocol_version: ProtocolVersionRange::new(3, 3),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],

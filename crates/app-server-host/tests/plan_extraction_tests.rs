@@ -1,10 +1,12 @@
 use app_server_host::{
     export_handle_for, extract_object_name, extract_plan_from_json_block,
-    extract_plan_from_selection, extract_plan_proposal,
+    extract_plan_from_selection, extract_plan_proposal, latest_saved_cad_plan,
+    validate_saved_plan_confirmation,
 };
 use app_server_protocol::{
-    CadQueryObjectKind, PathHandle, SelectionKind, SelectionRef, SelectionUpdateRequest,
-    WorkspaceId,
+    AgentCadQueryConfirmation, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
+    ChatMessageRecord, ChatRole, ChatToolResultRecord, PathHandle, SelectionKind, SelectionRef,
+    SelectionUpdateRequest, WorkspaceId,
 };
 
 #[test]
@@ -93,6 +95,88 @@ I will modify the part."#;
 }
 
 #[test]
+fn latest_saved_cad_plan_extracts_plan_ref_and_confirm_scope() {
+    let messages = vec![
+        tool_result_message(
+            "old",
+            r#"{"status":"ok","tool":"save_cad_plan","run_id":"run-old","plan_ref":"plans/old.md","target_path":"parts/old.py"}"#,
+        ),
+        tool_result_message(
+            "new",
+            r#"{
+                "status":"ok",
+                "tool":"save_cad_plan",
+                "run_id":"run-2",
+                "plan_ref":"plans/add-lid-vents.md",
+                "target_ref":"@part[top_lid]",
+                "target_path":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "new_files":["plans/add-lid-vents-notes.md"],
+                "export_targets":["outputs/top_lid.step"],
+                "summary":"Cut three rounded vent slots into the top face.",
+                "execution_boundary":"Only CadQuery Execute may modify parts/top_lid.py."
+            }"#,
+        ),
+    ];
+
+    let saved = latest_saved_cad_plan(&messages, "run-2").expect("saved plan should parse");
+
+    assert_eq!(saved.plan_ref, "plans/add-lid-vents.md");
+    assert_eq!(saved.target_path, "parts/top_lid.py");
+    assert_eq!(saved.target_type, CadQueryObjectKind::Part);
+    assert_eq!(saved.affected_paths, vec!["parts/top_lid.py"]);
+    assert_eq!(saved.new_paths, vec!["plans/add-lid-vents-notes.md"]);
+    assert_eq!(saved.export_targets, vec!["outputs/top_lid.step"]);
+    assert_eq!(
+        saved.description,
+        "Cut three rounded vent slots into the top face."
+    );
+}
+
+#[test]
+fn latest_saved_cad_plan_ignores_failed_or_wrong_run_results() {
+    let messages = vec![
+        tool_result_message(
+            "wrong-run",
+            r#"{"status":"ok","tool":"save_cad_plan","run_id":"run-1","plan_ref":"plans/old.md","target_path":"parts/old.py"}"#,
+        ),
+        tool_result_message(
+            "failed",
+            r#"{"status":"error","tool":"save_cad_plan","run_id":"run-2","plan_ref":"plans/bad.md","target_path":"parts/bad.py"}"#,
+        ),
+    ];
+
+    assert!(latest_saved_cad_plan(&messages, "run-2").is_none());
+}
+
+#[test]
+fn saved_plan_confirmation_requires_same_plan_ref_and_scope() {
+    let plan = saved_plan();
+    let confirmation = plan_confirmation(Some(path_handle(["plans", "add-lid-vents.md"])));
+
+    assert!(validate_saved_plan_confirmation(&confirmation, &plan).is_ok());
+}
+
+#[test]
+fn saved_plan_confirmation_rejects_missing_or_mismatched_plan_ref() {
+    let plan = saved_plan();
+    let missing_ref = plan_confirmation(None);
+    let wrong_ref = plan_confirmation(Some(path_handle(["plans", "other.md"])));
+
+    assert!(validate_saved_plan_confirmation(&missing_ref, &plan).is_err());
+    assert!(validate_saved_plan_confirmation(&wrong_ref, &plan).is_err());
+}
+
+#[test]
+fn saved_plan_confirmation_rejects_scope_mismatch() {
+    let plan = saved_plan();
+    let mut confirmation = plan_confirmation(Some(path_handle(["plans", "add-lid-vents.md"])));
+    confirmation.export_targets = vec![path_handle(["outputs", "other.step"])];
+
+    assert!(validate_saved_plan_confirmation(&confirmation, &plan).is_err());
+}
+
+#[test]
 fn extract_object_name_from_part_ref() {
     assert_eq!(
         extract_object_name("@part[top_lid]"),
@@ -134,6 +218,56 @@ fn export_handle_uses_model_for_unknown_extension() {
     .unwrap();
     let export = export_handle_for(&target);
     assert_eq!(export.path_segments(), &["outputs", "model.step"]);
+}
+
+fn tool_result_message(tool_call_id: &str, result_json: &str) -> ChatMessageRecord {
+    ChatMessageRecord {
+        message_id: format!("msg-{tool_call_id}"),
+        ts_ms: 1,
+        role: ChatRole::Tool,
+        content: "agent tool completed".into(),
+        related_files: Vec::new(),
+        tool_call_id: Some(tool_call_id.into()),
+        tool_calls: Vec::new(),
+        tool_result: Some(ChatToolResultRecord {
+            tool_call_id: tool_call_id.into(),
+            tool_name: "save_cad_plan".into(),
+            result_json: result_json.into(),
+        }),
+        mesh_result: None,
+    }
+}
+
+fn saved_plan() -> app_server_host::plan_extraction::SavedCadPlan {
+    app_server_host::plan_extraction::SavedCadPlan {
+        plan_ref: "plans/add-lid-vents.md".into(),
+        target_path: "parts/top_lid.py".into(),
+        target_type: CadQueryObjectKind::Part,
+        affected_paths: vec!["parts/top_lid.py".into()],
+        new_paths: Vec::new(),
+        export_targets: vec!["outputs/top_lid.step".into()],
+        description: "Add vents".into(),
+    }
+}
+
+fn plan_confirmation(plan_ref: Option<PathHandle>) -> AgentCadQueryConfirmation {
+    AgentCadQueryConfirmation {
+        request: CadQueryExecuteRequest {
+            target_path: path_handle(["parts", "top_lid.py"]),
+            target_type: CadQueryObjectKind::Part,
+            code: String::new(),
+            export_formats: vec![CadQueryExportFormat::Step],
+            params_json: "{}".into(),
+        },
+        plan_ref,
+        affected_files: vec![path_handle(["parts", "top_lid.py"])],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
+    }
+}
+
+fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {
+    PathHandle::new(WorkspaceId::new("workspace"), segments).expect("path handle")
 }
 
 fn selection_with_face() -> SelectionUpdateRequest {

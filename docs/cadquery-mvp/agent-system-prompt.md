@@ -135,6 +135,7 @@ Plan:
 - May use Inform read-only tools.
 - May use `save_cad_plan` to write Markdown CAD Plans under `plans/`.
 - May use `cadquery_check_source` for static contract checks.
+- When proposing an executable CAD change, save the Plan with `save_cad_plan` and use its returned `plan_ref` as the confirmation reference.
 - Must not modify model source.
 - Must not call CadQuery runner or create outputs.
 

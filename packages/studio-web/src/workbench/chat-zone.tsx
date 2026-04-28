@@ -122,8 +122,11 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const agentRun = snapshot?.agent_run ?? null;
   const rawEvents = snapshot?.agent_events ?? [];
   const agentEvents = useMemo(
-    () => recentNonTokenEvents(rawEvents),
-    [rawEvents],
+    () =>
+      recentNonTokenEvents(rawEvents).filter((event) =>
+        eventBelongsToCurrentSession(event, currentSessionId),
+      ),
+    [rawEvents, currentSessionId],
   );
 
   useStreamAccumulator(rawEvents, setStreamText);
@@ -193,6 +196,16 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   };
 }
 
+function eventBelongsToCurrentSession(
+  event: AgentEvent,
+  currentSessionId: string | null,
+): boolean {
+  if (!currentSessionId) return true;
+  const sessionId = event.payload?.["session_id"];
+  if (typeof sessionId !== "string") return true;
+  return sessionId === currentSessionId;
+}
+
 function buildContextPills(
   selections: SelectionRef[],
   removedRefs: Set<string>,
@@ -212,10 +225,16 @@ function usePlanProposedTracker(
 ) {
   const trackedRef = useRef<string | null>(null);
   useEffect(() => {
+    let sawDone = false;
     for (let i = agentEvents.length - 1; i >= 0; i--) {
       const ev = agentEvents[i] as AgentEvent | undefined;
       if (!ev) continue;
       if (ev.event === "agent.plan_proposed" && ev.payload) {
+        if (!ev.payload["plan_ref"]) {
+          trackedRef.current = null;
+          setPendingPlan(null);
+          return;
+        }
         const runId = ev.payload["run_id"] as string | undefined;
         if (runId && trackedRef.current !== runId) {
           trackedRef.current = runId;
@@ -224,10 +243,12 @@ function usePlanProposedTracker(
         return;
       }
       if (ev.event === "agent.done") {
-        trackedRef.current = null;
-        setPendingPlan(null);
-        return;
+        sawDone = true;
       }
+    }
+    if (sawDone) {
+      trackedRef.current = null;
+      setPendingPlan(null);
     }
   }, [agentEvents, setPendingPlan]);
 }

@@ -58,7 +58,11 @@ pub fn save_cad_plan_input_schema() -> Value {
             "resolved_target": string_schema("Workspace target path."),
             "affected_files": string_array_schema(),
             "new_files": string_array_schema(),
-            "export_targets": string_array_schema(),
+            "export_targets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Runner output paths: outputs/{resolved_target stem}.step, .stl, or .3mf."
+            },
             "strategy": string_schema("CadQuery strategy."),
             "risks": string_array_schema(),
             "acceptance": string_array_schema(),
@@ -66,8 +70,10 @@ pub fn save_cad_plan_input_schema() -> Value {
         }),
         &[
             "title",
+            "target_ref",
             "resolved_target",
             "affected_files",
+            "export_targets",
             "strategy",
             "execution_boundary",
         ],
@@ -82,7 +88,7 @@ pub fn update_chat_summary_input_schema() -> Value {
             "related_files": string_array_schema(),
             "open_questions": string_array_schema()
         }),
-        &[],
+        &["summary", "goal"],
     )
 }
 
@@ -219,9 +225,28 @@ pub fn save_cad_plan_success_schema() -> Value {
             "plan_ref": string_schema("Plan path under plans/."),
             "display_path": string_schema("User-visible path."),
             "hash": string_schema("Stable content hash."),
-            "summary": string_schema("Short plan summary.")
+            "summary": string_schema("Short plan summary."),
+            "target_ref": string_schema("Visible target ref."),
+            "target_path": string_schema("Resolved CadQuery target path."),
+            "affected_files": string_array_schema(),
+            "new_files": string_array_schema(),
+            "export_targets": string_array_schema(),
+            "execution_boundary": string_schema("Confirmed execution boundary."),
+            "run_id": nullable_string_schema()
         }),
-        &["plan_ref", "display_path", "hash", "summary"],
+        &[
+            "plan_ref",
+            "display_path",
+            "hash",
+            "summary",
+            "target_ref",
+            "target_path",
+            "affected_files",
+            "new_files",
+            "export_targets",
+            "execution_boundary",
+            "run_id",
+        ],
     )
 }
 
@@ -229,9 +254,10 @@ pub fn update_chat_summary_success_schema() -> Value {
     success_schema(
         json!({
             "session_id": string_schema("Chat session id."),
+            "message_id": string_schema("Meta message id."),
             "updated_fields": string_array_schema()
         }),
-        &["session_id", "updated_fields"],
+        &["session_id", "message_id", "updated_fields"],
     )
 }
 

@@ -14,7 +14,7 @@ fn client_websocket_wire_roundtrips_binary_handshake_and_request() {
         capabilities: ClientCapabilities {
             client_name: "studio-web".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(2, 2),
+            protocol_version: ProtocolVersionRange::new(3, 3),
             file_read: FileReadCapability {
                 denied_extensions: vec![".scad".into(), ".stl".into()],
             },

@@ -1,16 +1,18 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
+use app_server_core::ChatStore;
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentOperationLevel, AgentToolResultEvent, CadQueryExecuteRequest,
-    CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest,
-    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole, ChatSendRequest,
-    ChatSessionId, ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope,
-    CommandSuccess, ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact,
-    PreviewRequest, PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId,
-    SelectionKind, SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent,
-    SessionToken, WorkspaceId, WorkspaceListRequest, web_file_read_capability,
+    AgentInvokeRequest, AgentOperationLevel, AgentPlanConfirmRequest, AgentToolResultEvent,
+    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest,
+    ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole,
+    ChatSendRequest, ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest,
+    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind,
+    ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
+    SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId,
+    WorkspaceListRequest, web_file_read_capability,
 };
 
 #[test]
@@ -30,8 +32,11 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         push_sink,
     );
 
-    let handshake = dispatcher.handshake(handshake_request());
+    let handshake = dispatcher
+        .handshake(handshake_request())
+        .expect("handshake should negotiate");
     assert_eq!(handshake.session_token.0, "session-1");
+    assert_eq!(handshake.negotiated_version, 3);
 
     let current = dispatcher.dispatch_envelope(ClientRequestEnvelope {
         request_id: RequestId(1),
@@ -116,6 +121,21 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     }
 
     assert!(pushes.lock().expect("push buffer lock").is_empty());
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn shared_dispatcher_rejects_unsupported_protocol_version() {
+    let workspace = temp_workspace("shared-dispatcher-protocol-version");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatcher
+        .handshake(handshake_request_with_version(ProtocolVersionRange::new(
+            2, 2,
+        )))
+        .expect_err("protocol version without overlap should reject");
+
+    assert_eq!(error.code, ProtocolErrorCode::UnsupportedProtocolVersion);
     cleanup_workspace(&workspace);
 }
 
@@ -226,8 +246,8 @@ fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
 }
 
 #[test]
-fn dispatcher_rejects_execute_target_outside_confirmed_scope() {
-    let workspace = temp_workspace("dispatcher-agent-confirm-scope");
+fn dispatcher_rejects_direct_execute_agent_confirmation_without_plan_confirm() {
+    let workspace = temp_workspace("dispatcher-agent-direct-confirmation");
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
     let request = confirmed_cadquery_request(path_handle(["parts", "top_lid.py"]));
@@ -238,11 +258,11 @@ fn dispatcher_rejects_execute_target_outside_confirmed_scope() {
         new_files: Vec::new(),
         export_targets: Vec::new(),
     };
-    let started = invoke_agent_with_confirmation(&mut dispatcher, 35, &session_id, confirmation);
+    let error =
+        invoke_agent_with_confirmation_error(&mut dispatcher, 35, &session_id, confirmation);
 
-    wait_for_done(&pushes, &started.run_id);
-    let error = find_error_event(&pushes, &started.run_id).expect("permission error");
-    assert_eq!(error.error_type, AgentErrorType::PermissionDenied);
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(pushes.lock().expect("push buffer lock").is_empty());
     cleanup_workspace(&workspace);
 }
 
@@ -256,15 +276,30 @@ fn dispatcher_execute_agent_requires_llm_codegen_backend_before_running_cadquery
     let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
+    append_saved_plan_result(&workspace, &session_id, "plan-run-1");
     let target_path = path_handle(["parts", "top_lid.py"]);
     let confirmation = AgentCadQueryConfirmation {
         request: confirmed_cadquery_request(target_path.clone()),
-        plan_ref: None,
+        plan_ref: Some(path_handle(["plans", "add-lid-vents.md"])),
         affected_files: vec![target_path],
         new_files: Vec::new(),
         export_targets: vec![path_handle(["outputs", "top_lid.step"])],
     };
-    let started = invoke_agent_with_confirmation(&mut dispatcher, 36, &session_id, confirmation);
+    let started = match dispatch(
+        &mut dispatcher,
+        36,
+        ClientCommand::AgentPlanConfirm(AgentPlanConfirmRequest {
+            session_id,
+            run_id: "plan-run-1".into(),
+            confirmed_cadquery: confirmation,
+        }),
+    )
+    .result
+    .expect("agent.plan.confirm succeeds")
+    {
+        CommandSuccess::AgentPlanConfirmed(response) => response,
+        other => panic!("unexpected agent.plan.confirm response: {other:?}"),
+    };
 
     wait_for_done(&pushes, &started.run_id);
     let error = find_error_event(&pushes, &started.run_id).expect("llm error");
@@ -341,6 +376,68 @@ fn dispatcher_cadquery_preview_rejects_export_formats_without_writing_outputs() 
     assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
     assert!(!captured.exists());
     assert!(!workspace.join("outputs/top_lid.step").exists());
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_plan_confirm_rejects_missing_saved_plan_ref() {
+    let workspace = temp_workspace("dispatcher-plan-confirm-ref");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
+    append_saved_plan_result(&workspace, &session_id, "plan-run-1");
+    let target_path = path_handle(["parts", "top_lid.py"]);
+    let confirmation = AgentCadQueryConfirmation {
+        request: confirmed_cadquery_request(target_path.clone()),
+        plan_ref: None,
+        affected_files: vec![target_path],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
+    };
+
+    let response = dispatch(
+        &mut dispatcher,
+        45,
+        ClientCommand::AgentPlanConfirm(AgentPlanConfirmRequest {
+            session_id,
+            run_id: "plan-run-1".into(),
+            confirmed_cadquery: confirmation,
+        }),
+    );
+
+    let error = response.result.expect_err("missing plan_ref should reject");
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(pushes.lock().expect("push buffer lock").is_empty());
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_plan_confirm_rejects_saved_plan_scope_mismatch() {
+    let workspace = temp_workspace("dispatcher-plan-confirm-scope");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
+    append_saved_plan_result(&workspace, &session_id, "plan-run-1");
+    let target_path = path_handle(["parts", "top_lid.py"]);
+    let confirmation = AgentCadQueryConfirmation {
+        request: confirmed_cadquery_request(target_path.clone()),
+        plan_ref: Some(path_handle(["plans", "add-lid-vents.md"])),
+        affected_files: vec![target_path],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "other.step"])],
+    };
+
+    let response = dispatch(
+        &mut dispatcher,
+        46,
+        ClientCommand::AgentPlanConfirm(AgentPlanConfirmRequest {
+            session_id,
+            run_id: "plan-run-1".into(),
+            confirmed_cadquery: confirmation,
+        }),
+    );
+
+    let error = response.result.expect_err("scope mismatch should reject");
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(pushes.lock().expect("push buffer lock").is_empty());
     cleanup_workspace(&workspace);
 }
 
@@ -612,6 +709,35 @@ fn archive_chat(dispatcher: &mut HostRequestDispatcher, session_id: &ChatSession
     }
 }
 
+fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessionId, run_id: &str) {
+    let result_json = format!(
+        concat!(
+            "{{\"status\":\"ok\",",
+            "\"tool\":\"save_cad_plan\",",
+            "\"run_id\":\"{}\",",
+            "\"plan_ref\":\"plans/add-lid-vents.md\",",
+            "\"target_path\":\"parts/top_lid.py\",",
+            "\"affected_files\":[\"parts/top_lid.py\"],",
+            "\"new_files\":[],",
+            "\"export_targets\":[\"outputs/top_lid.step\"],",
+            "\"summary\":\"Add lid vents\"}}"
+        ),
+        run_id
+    );
+    ChatStore::new(workspace.to_path_buf())
+        .append_tool_result(
+            session_id,
+            "agent tool completed",
+            ChatToolResultRecord {
+                tool_call_id: "call-save-plan".into(),
+                tool_name: "save_cad_plan".into(),
+                result_json,
+            },
+            None,
+        )
+        .expect("saved plan tool result");
+}
+
 fn invoke_agent(
     dispatcher: &mut HostRequestDispatcher,
     request_id: u64,
@@ -636,45 +762,25 @@ fn invoke_agent(
     }
 }
 
-fn invoke_agent_with_confirmation(
+fn invoke_agent_with_confirmation_error(
     dispatcher: &mut HostRequestDispatcher,
     request_id: u64,
     session_id: &ChatSessionId,
     confirmation: AgentCadQueryConfirmation,
-) -> app_server_protocol::AgentStartedResponse {
-    invoke_agent_with_confirmation_and_prompt(
-        dispatcher,
-        request_id,
-        session_id,
-        "execute confirmed cadquery",
-        confirmation,
-    )
-}
-
-fn invoke_agent_with_confirmation_and_prompt(
-    dispatcher: &mut HostRequestDispatcher,
-    request_id: u64,
-    session_id: &ChatSessionId,
-    prompt: &str,
-    confirmation: AgentCadQueryConfirmation,
-) -> app_server_protocol::AgentStartedResponse {
-    match dispatch(
+) -> app_server_protocol::ProtocolError {
+    dispatch(
         dispatcher,
         request_id,
         ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
-            prompt: prompt.into(),
+            prompt: "execute confirmed cadquery".into(),
             operation: AgentOperationLevel::Execute,
             confirmed_cadquery: Some(confirmation),
             context_refs: Vec::new(),
         }),
     )
     .result
-    .expect("agent.invoke succeeds")
-    {
-        CommandSuccess::AgentStarted(response) => response,
-        other => panic!("unexpected agent.invoke response: {other:?}"),
-    }
+    .expect_err("agent.invoke with direct confirmation should fail")
 }
 
 fn invoke_agent_error(
@@ -798,11 +904,17 @@ fn find_tool_result_event(
 }
 
 fn handshake_request() -> CapabilityHandshakeRequest {
+    handshake_request_with_version(ProtocolVersionRange::new(3, 3))
+}
+
+fn handshake_request_with_version(
+    protocol_version: ProtocolVersionRange,
+) -> CapabilityHandshakeRequest {
     CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "dispatcher-test".into(),
             platform: ClientPlatform::Desktop,
-            protocol_version: ProtocolVersionRange::new(2, 2),
+            protocol_version,
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },

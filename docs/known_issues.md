@@ -21,18 +21,21 @@
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
+- 状态：已在 `prompt-archives/2026042900-agent-tool-calls/plan-00.md` Phase 3 中处理。
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 3 第二轮独立 review。
 - 原因：
-  - 当前协议已有 `AgentCadQueryConfirmation.plan_ref` 字段，但 Web Chat 侧尚未实现 CAD Plan 文件持久化、计划选择和确认绑定流程。
-  - Phase 3 当前实现会在 Execute 前根据当前 prompt、selection snapshot 和目标路径生成结构化确认范围，并由 app server 校验 `target_path`、`affected_files` / `new_files` 与 `export_targets`，但 `plan_ref` 仍为 `null`。
+  - 原记录中，协议已有 `AgentCadQueryConfirmation.plan_ref` 字段，但 Web Chat 侧尚未实现 CAD Plan 文件持久化、计划选择和确认绑定流程。
+  - 原记录中，Execute 前只校验 `target_path`、`affected_files` / `new_files` 与 `export_targets`，但 `plan_ref` 仍为 `null`。
 - 影响范围：
-  - 当前不会扩大 Agent 写入权限；Execute 仍被确认范围和 CadQuery staging exact outputs 限制。
-  - Plan 与 Execute 的长期追溯关系还不完整；如果用户在 Plan 后切换选择或重写 prompt，系统目前不能通过持久计划文件证明 Execute 一定对应先前展示的那份 CAD Plan。
+  - 已新增 `save_cad_plan`，将 CAD Plan 作为 Markdown 文件持久化到 `plans/`，并通过 Chat tool result 记录 `plan_ref`、target、affected files、new files 和 export targets。
+  - `agent.plan_proposed` 已携带 `plan_ref` 和 `new_files`，服务端在 `AgentPlanConfirm` 时会读取同一 run 的 saved Plan 并校验 confirmation scope 是否一致。
+  - 协议 payload 因 `AgentPlanProposedEvent` 新增字段升级到 protocol version 3，避免旧 Borsh 客户端继续以 2.2 协商后解码失败。
 - 可能的解法：
-  - 为 Agent Plan 增加 `plans/` 下的 Markdown 持久化文件，并把 plan path 写入 Chat tool result 或 session metadata。
-  - Web Execute 确认时读取当前选中的 plan path，填充 `AgentCadQueryConfirmation.plan_ref`，后端同时校验 `plan_ref` 位于 workspace 内并记录到 tool call。
-  - 后续如果引入多 Plan 版本，需要在 Chat UI 中明确用户当前确认的是哪一版计划。
-- 当前处理方式：Phase 3 先保留结构化确认范围和 staging 权限边界作为写入安全控制；本条记录为 Plan / Execute 追溯能力的后续改进项。
+  - 已采用产品语义工具 `save_cad_plan`，而不是普通 `write_file`，保存计划。
+  - 已采用服务端校验同一 run 的 saved Plan 与 confirmation 的 `plan_ref`、target、affected files、new files 和 export targets。
+  - `agent.invoke` 不再接受直接携带的 CadQuery confirmation，确认执行必须走 `agent.plan.confirm`。
+  - 后续如果引入多 Plan 版本，仍需要在 Chat UI 中明确用户当前确认的是哪一版计划。
+- 当前处理方式：本条作为历史已处理问题保留；后续剩余风险仅限多 Plan 版本 UI 选择与展示策略。
 
 ## 2026-04-28 05:38:28: CadQuery edge / vertex pick tolerance 仍需真实模型校准
 

@@ -1,11 +1,12 @@
 use app_server_core::llm::{LlmError, LlmMessage, LlmResponse, LlmToolCall, LlmToolDefinition};
 use app_server_core::{
-    AgentToolConfirmationScope, AgentToolRunContext, NoopToolLoopObserver, ToolExecutor,
+    AgentToolConfirmationScope, AgentToolRunContext, ChatStore, NoopToolLoopObserver, ToolExecutor,
     ToolLoopObserver, WorkspaceToolExecutor, agent_tool_definitions_for_operation,
     run_tool_loop_with_registry,
 };
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatSessionId, SelectionKind, SelectionRef,
+    AgentOperationLevel, CadQueryObjectKind, ChatSessionId, PathHandle, SelectionKind,
+    SelectionRef, WorkspaceId,
 };
 use std::sync::Mutex;
 
@@ -29,6 +30,18 @@ fn call(name: &str, arguments: &str) -> LlmToolCall {
 fn tool_json(executor: &WorkspaceToolExecutor, call: &LlmToolCall) -> serde_json::Value {
     serde_json::from_str(&executor.execute(call, &tool_context(AgentOperationLevel::Inform, None)))
         .expect("tool result should be json")
+}
+
+fn tool_json_with_context(
+    executor: &WorkspaceToolExecutor,
+    call: &LlmToolCall,
+    context: &AgentToolRunContext,
+) -> serde_json::Value {
+    serde_json::from_str(&executor.execute(call, context)).expect("tool result should be json")
+}
+
+fn test_path_handle(path: impl IntoIterator<Item = impl Into<String>>) -> PathHandle {
+    PathHandle::new(WorkspaceId::new("ws"), path).expect("valid test path")
 }
 
 #[test]
@@ -187,6 +200,446 @@ fn workspace_tool_executor_read_file_rejects_non_boundary_offset() {
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "invalid_arguments");
     assert!(result["message"].as_str().unwrap().contains("offset"));
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_writes_structured_markdown_under_plans() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+    context.run_id = Some("run-42".into());
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Add lid vents",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "new_files":["plans/add-lid-vents-notes.md"],
+                "export_targets":["outputs/top_lid.step"],
+                "strategy":"Cut three rounded vent slots into the top face.",
+                "risks":["Maintain wall thickness"],
+                "acceptance":["STEP export builds"],
+                "execution_boundary":"Only CadQuery Execute may modify parts/top_lid.py."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["tool"], "save_cad_plan");
+    assert_eq!(result["target_ref"], "@part[top_lid]");
+    assert_eq!(result["target_path"], "parts/top_lid.py");
+    assert_eq!(
+        result["affected_files"],
+        serde_json::json!(["parts/top_lid.py"])
+    );
+    assert_eq!(
+        result["export_targets"],
+        serde_json::json!(["outputs/top_lid.step"])
+    );
+    assert_eq!(result["run_id"], "run-42");
+    assert!(result["hash"].as_str().unwrap().starts_with("sha256:"));
+
+    let plan_ref = result["plan_ref"].as_str().unwrap();
+    assert!(plan_ref.starts_with("plans/add-lid-vents"));
+    assert!(plan_ref.ends_with(".md"));
+    let markdown = std::fs::read_to_string(dir.path().join(plan_ref)).unwrap();
+    assert!(markdown.contains("# Add lid vents"));
+    assert!(markdown.contains("Target Ref"));
+    assert!(markdown.contains("@part[top_lid]"));
+    assert!(markdown.contains("parts/top_lid.py"));
+    assert!(markdown.contains("outputs/top_lid.step"));
+    assert!(markdown.contains("Only CadQuery Execute may modify parts/top_lid.py."));
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_rejects_unsafe_scope_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Unsafe plan",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["../secret.py"],
+                "export_targets":["outputs/top_lid.step"],
+                "strategy":"No write should happen.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_requires_export_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Missing export",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("export_targets")
+    );
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_requires_target_in_confirmed_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Wrong scope",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/base.py"],
+                "export_targets":["outputs/top_lid.step"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("resolved_target")
+    );
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_rejects_unknown_export_target_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Unknown export",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "export_targets":["outputs/top_lid.obj"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("export_targets")
+    );
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_requires_runner_export_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Add lid vents",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "export_targets":["outputs/custom.step"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("export_targets")
+    );
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_save_cad_plan_does_not_write_through_symlink_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("plans")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("escaped.md"),
+        dir.path().join("plans/add-lid-vents.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Add lid vents",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "export_targets":["outputs/top_lid.step"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["plan_ref"], "plans/add-lid-vents-2.md");
+    assert!(!outside.path().join("escaped.md").exists());
+    assert!(dir.path().join("plans/add-lid-vents-2.md").is_file());
+}
+
+#[test]
+fn workspace_tool_executor_direct_call_denies_save_plan_outside_plan_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Inform);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "save_cad_plan",
+            r#"{
+                "title":"Add lid vents",
+                "target_ref":"@part[top_lid]",
+                "resolved_target":"parts/top_lid.py",
+                "affected_files":["parts/top_lid.py"],
+                "strategy":"Cut three rounded vent slots.",
+                "execution_boundary":"Plan only."
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_direct_call_denies_chat_summary_in_auto_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ChatStore::new(dir.path().to_path_buf());
+    let created = store
+        .create("agent tools", Some("old goal".into()), Vec::new())
+        .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Auto);
+    context.session_id = Some(created.session_id.clone());
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "update_chat_summary",
+            r#"{
+                "summary":"bad",
+                "goal":"bad",
+                "related_files":[],
+                "open_questions":[]
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        store
+            .history(&created.session_id, None)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ChatStore::new(dir.path().to_path_buf());
+    let created = store
+        .create("agent tools", Some("old goal".into()), Vec::new())
+        .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Inform);
+    context.session_id = Some(created.session_id.clone());
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "update_chat_summary",
+            r#"{
+                "summary":"Discussed vent placement.",
+                "goal":"Prepare a CadQuery execution plan.",
+                "related_files":["parts/top_lid.py","plans/add-lid-vents.md"],
+                "open_questions":["Confirm slot count"]
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["tool"], "update_chat_summary");
+    assert_eq!(result["session_id"], created.session_id.0);
+    assert_eq!(
+        result["updated_fields"],
+        serde_json::json!(["summary", "goal", "related_files", "open_questions"])
+    );
+
+    let history = store.history(&created.session_id, None).unwrap();
+    let latest = history.messages.last().unwrap();
+    assert_eq!(latest.role, app_server_protocol::ChatRole::Meta);
+    assert!(latest.content.contains("\"type\":\"chat_summary\""));
+    assert!(latest.content.contains("Discussed vent placement."));
+    assert_eq!(latest.related_files[0].display_path(), "parts/top_lid.py");
+
+    let sessions = store.list(false).unwrap();
+    assert_eq!(
+        sessions.sessions[0].related_files[0].display_path(),
+        "parts/top_lid.py"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_update_chat_summary_can_clear_related_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ChatStore::new(dir.path().to_path_buf());
+    let initial_related = test_path_handle(["parts", "top_lid.py"]);
+    let created = store
+        .create(
+            "agent tools",
+            Some("old goal".into()),
+            vec![initial_related],
+        )
+        .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Inform);
+    context.session_id = Some(created.session_id.clone());
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "update_chat_summary",
+            r#"{
+                "summary":"No active file scope.",
+                "goal":"Continue discussion.",
+                "related_files":[],
+                "open_questions":[]
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    let sessions = store.list(false).unwrap();
+    assert!(sessions.sessions[0].related_files.is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_update_chat_summary_rejects_arbitrary_chat_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ChatStore::new(dir.path().to_path_buf());
+    let created = store
+        .create("agent tools", Some("old goal".into()), Vec::new())
+        .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Inform);
+    context.session_id = Some(created.session_id.clone());
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "update_chat_summary",
+            r#"{
+                "summary":"bad",
+                "goal":"bad",
+                "related_files":["chats/agent-tools.jsonl"],
+                "open_questions":[]
+            }"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        store
+            .history(&created.session_id, None)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1471,6 +1924,57 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
             .unwrap()
             .contains("export_targets")
     );
+}
+
+#[test]
+fn registry_tool_loop_allows_save_cad_plan_declared_export_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_save_plan".into(),
+                function_name: "save_cad_plan".into(),
+                arguments: concat!(
+                    "{\"title\":\"Add lid vents\",",
+                    "\"target_ref\":\"@part[top_lid]\",",
+                    "\"resolved_target\":\"parts/top_lid.py\",",
+                    "\"affected_files\":[\"parts/top_lid.py\"],",
+                    "\"export_targets\":[\"outputs/top_lid.step\"],",
+                    "\"strategy\":\"Cut three rounded vent slots.\",",
+                    "\"execution_boundary\":\"Plan only.\"}"
+                )
+                .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let observer = RecordingObserver::default();
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+    context.run_id = Some("run-1".into());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "save plan")],
+        context,
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(
+        parsed["export_targets"],
+        serde_json::json!(["outputs/top_lid.step"])
+    );
+    assert!(dir.path().join("plans/add-lid-vents.md").is_file());
 }
 
 #[test]

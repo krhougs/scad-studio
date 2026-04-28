@@ -1,5 +1,5 @@
-use app_server_protocol::SessionToken;
-use app_server_transport::{ClientEnvelope, ServerEnvelope};
+use app_server_protocol::{ProtocolError, SessionToken};
+use app_server_transport::{ClientEnvelope, ServerEnvelope, TransportErrorFrame};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,8 +44,20 @@ async fn host_loop(
 
         match harness.pop_client_message() {
             Some(ClientEnvelope::Handshake(request)) | Some(ClientEnvelope::Reconnect(request)) => {
-                let response = dispatcher.handshake(request);
-                let _ = harness.push_server_message(ServerEnvelope::HandshakeAck(response));
+                match dispatcher.handshake(request) {
+                    Ok(response) => {
+                        let _ = harness.push_server_message(ServerEnvelope::HandshakeAck(response));
+                    }
+                    Err(error) => {
+                        let _ = harness.push_server_message(ServerEnvelope::TransportError(
+                            TransportErrorFrame {
+                                message: handshake_error_message(&error),
+                            },
+                        ));
+                        dispatcher.disconnect();
+                        break;
+                    }
+                }
             }
             Some(ClientEnvelope::Request(envelope)) => {
                 let response = dispatcher.dispatch_envelope(envelope);
@@ -58,4 +70,8 @@ async fn host_loop(
             None => tokio::time::sleep(Duration::from_millis(10)).await,
         }
     }
+}
+
+fn handshake_error_message(error: &ProtocolError) -> String {
+    format!("handshake failed: {:?}: {}", error.code, error.message)
 }

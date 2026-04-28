@@ -3,6 +3,7 @@ import {
   initProtocolWasm,
   protocol_decode_server_frame,
   type AppConfigDto,
+  type AgentPlanProposedEvent,
   type CadQueryMeshPayload,
   type CadQueryResultReady,
   type CommandSuccess,
@@ -34,7 +35,7 @@ describe("protocol package import", () => {
 
   it("exposes CadQuery protocol types from the package entrypoint", () => {
     const capabilities: ServerCapabilities = {
-      protocol_version: { min: 2, max: 2 },
+      protocol_version: { min: 3, max: 3 },
       reconnect_window_ms: 30_000,
       supports_watch: true,
       supported_preview_kinds: ["geometry_artifact"],
@@ -64,9 +65,36 @@ describe("protocol package import", () => {
       type: "cad_query_result_ready",
       payload: ready,
     };
+    const proposedPlan: AgentPlanProposedEvent = {
+      session_id: "chat-1",
+      run_id: "run-1",
+      plan_ref: {
+        workspace_id: "ws",
+        path_segments: ["plans", "add-lid-vents.md"],
+      },
+      target_path: {
+        workspace_id: "ws",
+        path_segments: ["parts", "top_lid.py"],
+      },
+      target_type: "part",
+      affected_files: [
+        { workspace_id: "ws", path_segments: ["parts", "top_lid.py"] },
+      ],
+      new_files: [
+        { workspace_id: "ws", path_segments: ["parts", "top_lid.md"] },
+      ],
+      change_description: "Add lid vents",
+      export_targets: [
+        { workspace_id: "ws", path_segments: ["outputs", "top_lid.step"] },
+      ],
+    };
 
     expect(capabilities.cadquery).toBe(true);
     expect(mesh.root_object_kind).toBe("part");
     expect(success.payload.result_id).toBe("cq_1");
+    expect(proposedPlan.plan_ref?.path_segments).toEqual([
+      "plans",
+      "add-lid-vents.md",
+    ]);
   });
 });

@@ -137,7 +137,17 @@ where
             return;
         }
     };
-    let response = ServerEnvelope::HandshakeAck(dispatcher.handshake(request));
+    let response = match dispatcher.handshake(request) {
+        Ok(response) => ServerEnvelope::HandshakeAck(response),
+        Err(error) => {
+            let _ = send_transport_error(
+                &mut sink,
+                format!("handshake failed: {:?}: {}", error.code, error.message),
+            )
+            .await;
+            return;
+        }
+    };
     if send_server_message(&mut sink, response).await.is_err() {
         return;
     }

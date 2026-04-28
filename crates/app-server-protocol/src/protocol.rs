@@ -3,6 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 3;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -719,9 +720,13 @@ pub struct AgentDoneEvent {
 pub struct AgentPlanProposedEvent {
     pub session_id: ChatSessionId,
     pub run_id: String,
+    #[serde(default)]
+    pub plan_ref: Option<PathHandle>,
     pub target_path: PathHandle,
     pub target_type: CadQueryObjectKind,
     pub affected_files: Vec<PathHandle>,
+    #[serde(default)]
+    pub new_files: Vec<PathHandle>,
     pub change_description: String,
     pub export_targets: Vec<PathHandle>,
 }

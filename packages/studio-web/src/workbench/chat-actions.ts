@@ -1,9 +1,9 @@
 import type {
+  CadQueryExportFormat,
   AgentOperationLevel,
   AgentPlanProposedEvent,
 } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
-import { buildCadQueryConfirmation } from "./cadquery-agent-scope";
 import type { ChatSnapshot, ContextPill, AgentRun, ChatSessionSummary } from "./chat-zone";
 
 export async function createChatSession(
@@ -139,16 +139,23 @@ export async function previewPlan(
 export async function confirmPlan(
   client: WasmClient | null,
   plan: AgentPlanProposedEvent,
-  snapshot: ChatSnapshot,
+  _snapshot: ChatSnapshot,
   onStatus?: (message: string) => void,
 ): Promise<void> {
   if (!client) return;
-  const confirmation = buildCadQueryConfirmation(
-    snapshot,
-    plan.target_path.path_segments.join("/"),
-    plan.change_description,
-  );
-  confirmation.request.target_type = plan.target_type;
+  const confirmation = {
+    request: {
+      target_path: plan.target_path,
+      target_type: plan.target_type,
+      code: "",
+      export_formats: exportFormatsForTargets(plan.export_targets),
+      params_json: "{}",
+    },
+    plan_ref: plan.plan_ref,
+    affected_files: plan.affected_files,
+    new_files: plan.new_files ?? [],
+    export_targets: plan.export_targets,
+  };
   await client
     .dispatchAgentPlanConfirm({
       session_id: plan.session_id,
@@ -156,6 +163,26 @@ export async function confirmPlan(
       confirmed_cadquery: confirmation,
     })
     .catch(reportError(onStatus));
+}
+
+function exportFormatsForTargets(
+  targets: AgentPlanProposedEvent["export_targets"],
+): CadQueryExportFormat[] {
+  const formats = targets
+    .map((target) => target.path_segments.at(-1) ?? "")
+    .map(exportFormatFromFilename)
+    .filter((format): format is CadQueryExportFormat => Boolean(format));
+  return Array.from(new Set(formats));
+}
+
+function exportFormatFromFilename(
+  filename: string,
+): CadQueryExportFormat | null {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".step")) return "step";
+  if (lower.endsWith(".stl")) return "stl";
+  if (lower.endsWith(".3mf")) return "three_mf";
+  return null;
 }
 
 export async function rejectPlan(

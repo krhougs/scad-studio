@@ -134,6 +134,7 @@ describe("ChatZone", () => {
               payload: {
                 session_id: "main",
                 run_id: "run-1",
+                plan_ref: { workspace_id: "ws", path_segments: ["plans", "lid.md"] },
                 target_path: { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
                 target_type: "part",
                 affected_files: [{ workspace_id: "ws", path_segments: ["parts", "lid.py"] }],
@@ -156,6 +157,127 @@ describe("ChatZone", () => {
         export_formats: [],
       }),
     );
+  });
+
+  it("keeps proposed plan visible after the proposing run is done", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_events: [
+            {
+              event: "agent.plan_proposed",
+              payload: {
+                session_id: "main",
+                run_id: "run-1",
+                plan_ref: {
+                  workspace_id: "ws",
+                  path_segments: ["plans", "lid.md"],
+                },
+                target_path: {
+                  workspace_id: "ws",
+                  path_segments: ["parts", "lid.py"],
+                },
+                target_type: "part",
+                affected_files: [
+                  { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
+                ],
+                new_files: [],
+                export_targets: [
+                  { workspace_id: "ws", path_segments: ["outputs", "lid.step"] },
+                ],
+                change_description: "increase height",
+              },
+            },
+            {
+              event: "agent.done",
+              payload: { run_id: "run-1", cancelled: false },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("plan-confirm-btn")).toBeTruthy());
+  });
+
+  it("does not show confirmation controls for plan proposals without plan_ref", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_events: [
+            {
+              event: "agent.plan_proposed",
+              payload: {
+                session_id: "main",
+                run_id: "run-1",
+                plan_ref: null,
+                target_path: {
+                  workspace_id: "ws",
+                  path_segments: ["parts", "lid.py"],
+                },
+                target_type: "part",
+                affected_files: [
+                  { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
+                ],
+                new_files: [],
+                export_targets: [
+                  { workspace_id: "ws", path_segments: ["outputs", "lid.step"] },
+                ],
+                change_description: "increase height",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("plan-confirm-btn")).toBeNull());
+  });
+
+  it("ignores plan proposals from a different chat session", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_events: [
+            {
+              event: "agent.plan_proposed",
+              payload: {
+                session_id: "other",
+                run_id: "run-1",
+                plan_ref: {
+                  workspace_id: "ws",
+                  path_segments: ["plans", "other.md"],
+                },
+                target_path: {
+                  workspace_id: "ws",
+                  path_segments: ["parts", "other.py"],
+                },
+                target_type: "part",
+                affected_files: [
+                  { workspace_id: "ws", path_segments: ["parts", "other.py"] },
+                ],
+                new_files: [],
+                export_targets: [
+                  { workspace_id: "ws", path_segments: ["outputs", "other.step"] },
+                ],
+                change_description: "change other chat",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("plan-confirm-btn")).toBeNull());
   });
 
   it("shows welcome empty state when no messages or events", () => {

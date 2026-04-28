@@ -11,7 +11,7 @@
 | 文件搜索 | 无 LLM 工具 | `search_files` 只搜索安全文本范围，默认排除 `outputs/`、staging、二进制和过大文件 |
 | 项目概览 | 无 LLM 工具 | `get_project_context` 汇总 components / parts / assemblies / plans / chats |
 | Viewer selection | 已有 `selection.update` command | `get_selection` 读取当前 selection snapshot；`resolve_ref` / `cadquery_resolve_selection` 解析 Ref |
-| Plan 持久化 | 目前 Plan proposal 从回复文本提取 | `save_cad_plan` 写 `plans/` 下的 Markdown CAD Plan 并返回 `plan_ref` |
+| Plan 持久化 | 旧链路曾从回复文本提取 Plan proposal | `save_cad_plan` 写 `plans/` 下的 Markdown CAD Plan 并返回 `plan_ref` |
 | Chat summary | Chat JSONL 已存在 | `update_chat_summary` 通过 ChatStore API 更新 session meta，不允许直接写 `chats/*.jsonl` |
 | 普通文件写入 | 已有 `file.write_text` command | `write_file` / `patch_file` / `copy_file` 只在 Execute + confirmation 范围内可用 |
 | CadQuery preview | 已有 `cadquery.preview` command | 预览已有文件仍是只读产品动作；试运行拟议代码必须走 `cadquery_dry_run` staging 语义 |
@@ -46,6 +46,10 @@
 
 `save_cad_plan` 不是普通 `write_file`：它写入的是产品语义对象，必须返回 `plan_ref`、展示路径、hash、目标 Ref、影响范围和 execution boundary。Plan 模式保存计划只能走该工具。
 
+`agent.plan_proposed` 必须使用 `save_cad_plan` 的结构化结果生成确认数据：`plan_ref`、target、affected files、new files 和 export targets 都应来自同一次 tool result，不能由前端或回复文本重新猜测。
+
+`AgentPlanConfirm` 必须由服务端校验同一 run 的 saved Plan：`plan_ref`、target、affected files、new files 和 export targets 必须与 `save_cad_plan` tool result 一致，否则不得进入 Execute。
+
 `update_chat_summary` 不是普通 JSONL 文件写入：它只能通过 ChatStore API 更新 session summary、goal、related files 和 open questions 等 meta 数据，不能让 LLM 构造任意 `chats/*.jsonl` 内容。
 
 `write_file` / `patch_file` 不能直接修改 CadQuery `.py` 模型：`.py` 模型生成和修改必须走 `cadquery_execute` 的 confirmation + staging + runner + exact output scope 边界。普通文本写入只服务说明文档、Ref Map、执行记录和确认范围内的非模型文件。
@@ -62,7 +66,7 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `list_directory` / `get_project_context` | workspace 安全目录 | `.git`、`target`、`node_modules`、`outputs`、`.budn_staging` | 只读 | 只列安全摘要 |
 | `get_selection` | 不访问文件系统 | 不适用 | 禁止 | 禁止 |
 | `resolve_ref` | owner `.py` / `.md` 及 Ref Map 文本 | workspace 外、内部构建目录 | 只读 | 禁止 |
-| `save_cad_plan` | `plans/` | `chats/`、`outputs/` | 禁止 | 禁止 |
+| `save_cad_plan` | `plans/` | `chats/` | 禁止 | 仅声明当前 runner 会生成的 `outputs/{resolved_target 文件名 stem}.step/.stl/.3mf`，不写入 |
 | `update_chat_summary` | ChatStore meta API | 直接写 `chats/*.jsonl` | 禁止 | 禁止 |
 | `write_file` / `patch_file` | confirmation 范围内的 `components/`、`parts/`、`assemblies/`、`plans/`、`refs/`、`docs/` 文本文件 | `chats/`、`outputs/`、workspace 外 | 禁止普通写入 `.py` 模型 | 禁止 |
 | `copy_file` | confirmation 范围内的同上路径 | `chats/`、`outputs/`、workspace 外 | 仅允许 byte-for-byte 复制到 confirmed `new_files` | 禁止 |
@@ -96,8 +100,8 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `get_project_context` | `objects`、`plans`、`chats`、`warnings` |
 | `get_selection` | `selections`、`active_index`、`context_refs` |
 | `resolve_ref` / `cadquery_resolve_selection` | `owner_ref_text`、`owner_path`、`candidate_feature_ref`、`stable_ref`、`ambiguous`、`risks` |
-| `save_cad_plan` | `plan_ref`、`display_path`、`hash`、`summary` |
-| `update_chat_summary` | `session_id`、`updated_fields` |
+| `save_cad_plan` | `plan_ref`、`display_path`、`hash`、`summary`、`target_ref`、`target_path`、`affected_files`、`new_files`、`export_targets`、`execution_boundary`、`run_id` |
+| `update_chat_summary` | `session_id`、`message_id`、`updated_fields` |
 | `write_file` / `patch_file` / `copy_file` | `path`、`hash`、`created`、`conflict` |
 | `cadquery_analyze_source` | `target_path`、`target_type`、`has_build_function`、`has_refs`、`paired_doc_path`、`local_dependencies`、`ref_keys`、`warnings` |
 | `cadquery_check_source` | `contract.target_type_matches`、`contract.has_build_function`、`contract.has_refs`、`contract.unsafe_calls`、`warnings` |
@@ -116,8 +120,8 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `get_project_context` | 无 | `status`、`tool`、`objects`、`plans`、`chats`、`warnings` |
 | `get_selection` | 无 | `status`、`tool`、`selections`、`active_index`、`context_refs` |
 | `resolve_ref` | `ref_text` | `status`、`tool`、`owner_ref_text`、`owner_path`、`stable_ref`、`ambiguous`、`risks` |
-| `save_cad_plan` | `title`、`resolved_target`、`affected_files`、`strategy`、`execution_boundary` | `status`、`tool`、`plan_ref`、`display_path`、`hash`、`summary` |
-| `update_chat_summary` | 无 | `status`、`tool`、`session_id`、`updated_fields` |
+| `save_cad_plan` | `title`、`target_ref`、`resolved_target`、`affected_files`、`export_targets`、`strategy`、`execution_boundary` | `status`、`tool`、`plan_ref`、`display_path`、`hash`、`summary`、`target_ref`、`target_path`、`affected_files`、`new_files`、`export_targets`、`execution_boundary`、`run_id` |
+| `update_chat_summary` | `summary`、`goal`；可选 `related_files`、`open_questions` | `status`、`tool`、`session_id`、`message_id`、`updated_fields` |
 | `write_file` | `path`、`contents` | `status`、`tool`、`path`、`hash`、`created`、`conflict` |
 | `patch_file` | `path`、`expected_hash`、`search`、`replace` | `status`、`tool`、`path`、`hash`、`created`、`conflict` |
 | `copy_file` | `source_path`、`target_path` | `status`、`tool`、`path`、`hash`、`created`、`conflict` |

@@ -17,6 +17,14 @@ pub struct ChatStore {
     workspace_root: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatSummaryUpdate {
+    pub summary: String,
+    pub goal: String,
+    pub related_files: Vec<PathHandle>,
+    pub open_questions: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JsonlMessage {
     message_id: String,
@@ -115,6 +123,21 @@ impl ChatStore {
         message.tool_result = Some(tool_result);
         message.mesh_result = mesh_result;
         self.append_record(session_id, message)
+    }
+
+    pub fn update_summary(
+        &self,
+        session_id: &ChatSessionId,
+        update: ChatSummaryUpdate,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        let content = summary_update_content(&update)?;
+        self.append_message(
+            session_id,
+            ChatRole::Meta,
+            &content,
+            update.related_files,
+            None,
+        )
     }
 
     pub fn history(
@@ -304,10 +327,7 @@ fn summary_from_path(
         .and_then(|value| value.to_str())
         .ok_or_else(|| internal_error("Chat session 文件名无效"))?
         .to_owned();
-    let related_files = messages
-        .first()
-        .map(|message| message.related_files.clone())
-        .unwrap_or_default();
+    let related_files = latest_related_files(&messages);
     Ok(ChatSessionSummary {
         session_id: ChatSessionId(session_id.clone()),
         title: session_id,
@@ -315,6 +335,59 @@ fn summary_from_path(
         message_count: messages.len() as u32,
         related_files,
     })
+}
+
+fn latest_related_files(messages: &[JsonlMessage]) -> Vec<PathHandle> {
+    if let Some(message) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ChatRole::Meta && is_chat_summary_meta(message))
+    {
+        return message.related_files.clone();
+    }
+    messages
+        .iter()
+        .find(|message| !message.related_files.is_empty())
+        .map(|message| message.related_files.clone())
+        .unwrap_or_default()
+}
+
+fn is_chat_summary_meta(message: &JsonlMessage) -> bool {
+    serde_json::from_str::<serde_json::Value>(&message.content)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(|meta_type| meta_type == "chat_summary")
+        })
+        .unwrap_or(false)
+}
+
+#[derive(Serialize)]
+struct ChatSummaryMeta<'a> {
+    #[serde(rename = "type")]
+    meta_type: &'static str,
+    summary: &'a str,
+    goal: &'a str,
+    related_files: Vec<String>,
+    open_questions: &'a [String],
+}
+
+fn summary_update_content(update: &ChatSummaryUpdate) -> Result<String, ProtocolError> {
+    let related_files = update
+        .related_files
+        .iter()
+        .map(|path| path.display_path().to_owned())
+        .collect::<Vec<_>>();
+    serde_json::to_string(&ChatSummaryMeta {
+        meta_type: "chat_summary",
+        summary: update.summary.as_str(),
+        goal: update.goal.as_str(),
+        related_files,
+        open_questions: update.open_questions.as_slice(),
+    })
+    .map_err(|error| internal_error(format!("序列化 Chat summary 失败: {error}")))
 }
 
 fn append_jsonl(

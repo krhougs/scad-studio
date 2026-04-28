@@ -31,6 +31,7 @@ pub enum CadQueryModelFilePolicy {
 pub enum OutputPathPolicy {
     Denied,
     ReadOnly,
+    DeclaredOutputsOnly,
     TemporaryResultCacheOnly,
     ConfirmationOutputsOnly,
 }
@@ -388,7 +389,7 @@ fn cad_plan_policy() -> AgentToolPathPolicy {
         text_only: true,
         requires_confirmation_scope: false,
         cadquery_model_file: CadQueryModelFilePolicy::Denied,
-        output_paths: OutputPathPolicy::Denied,
+        output_paths: OutputPathPolicy::DeclaredOutputsOnly,
         semantic_store: Some(AgentSemanticStore::CadPlan),
     }
 }

@@ -485,9 +485,11 @@ export interface AgentDoneEvent {
 export interface AgentPlanProposedEvent {
   session_id: ChatSessionId;
   run_id: string;
+  plan_ref: PathHandle | null;
   target_path: PathHandle;
   target_type: CadQueryObjectKind;
   affected_files: PathHandle[];
+  new_files: PathHandle[];
   change_description: string;
   export_targets: PathHandle[];
 }

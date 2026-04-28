@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use app_server_host::{ClientTransport, InProcessHost, spawn_in_process_mpsc_host};
 use app_server_protocol::{
-    CapabilityHandshakeRequest, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, ConfigSaveRequest, DisplayUnitDto,
-    ExportRunRequest, ExportRunResponse, FileReadContents, FileReadRequest, FileWriteTextRequest,
-    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolError,
-    ProtocolVersionRange, RequestId, SlicerConfigDto, SlicerInstallRecord, SlicerListRequest,
-    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscribeRequest,
-    WatchSubscriptionAck, WatchUnsubscribeRequest,
+    CURRENT_PROTOCOL_VERSION, CapabilityHandshakeRequest, ClientCapabilities, ClientCommand,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, ConfigSaveRequest,
+    DisplayUnitDto, ExportRunRequest, ExportRunResponse, FileReadContents, FileReadRequest,
+    FileWriteTextRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
+    PreviewRequestKind, ProtocolError, ProtocolVersionRange, RequestId, SlicerConfigDto,
+    SlicerInstallRecord, SlicerListRequest, SubscriptionId, WatchChangedEvent, WatchErrorEvent,
+    WatchSubscribeRequest, WatchSubscriptionAck, WatchUnsubscribeRequest,
 };
 use app_server_transport::ServerEnvelope;
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
@@ -378,7 +378,10 @@ impl DesktopProtocolClient {
                 capabilities: ClientCapabilities {
                     client_name: "studio-app".into(),
                     platform: ClientPlatform::Desktop,
-                    protocol_version: ProtocolVersionRange::new(2, 2),
+                    protocol_version: ProtocolVersionRange::new(
+                        CURRENT_PROTOCOL_VERSION,
+                        CURRENT_PROTOCOL_VERSION,
+                    ),
                     file_read: app_server_protocol::FileReadCapability {
                         denied_extensions: Vec::new(),
                     },

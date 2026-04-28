@@ -96,6 +96,54 @@ fn export_targets_outside_outputs_dir() {
 }
 
 #[test]
+fn export_targets_without_export_formats_rejects() {
+    let c = make_confirmation(
+        &["parts", "lid.py"],
+        &[&["parts", "lid.py"]],
+        &[],
+        vec![],
+        &[&["outputs", "lid.step"]],
+    );
+    assert!(validate_cadquery_confirmation(&c).is_err());
+}
+
+#[test]
+fn export_formats_must_match_export_target_extensions() {
+    let c = make_confirmation(
+        &["parts", "lid.py"],
+        &[&["parts", "lid.py"]],
+        &[],
+        vec![CadQueryExportFormat::Step],
+        &[&["outputs", "lid.stl"]],
+    );
+    assert!(validate_cadquery_confirmation(&c).is_err());
+}
+
+#[test]
+fn export_target_extension_must_be_supported() {
+    let c = make_confirmation(
+        &["parts", "lid.py"],
+        &[&["parts", "lid.py"]],
+        &[],
+        vec![CadQueryExportFormat::Step],
+        &[&["outputs", "lid.obj"]],
+    );
+    assert!(validate_cadquery_confirmation(&c).is_err());
+}
+
+#[test]
+fn export_target_filename_must_match_runner_output() {
+    let c = make_confirmation(
+        &["parts", "lid.py"],
+        &[&["parts", "lid.py"]],
+        &[],
+        vec![CadQueryExportFormat::Step],
+        &[&["outputs", "custom.step"]],
+    );
+    assert!(validate_cadquery_confirmation(&c).is_err());
+}
+
+#[test]
 fn valid_export_targets_in_outputs_dir() {
     let c = make_confirmation(
         &["parts", "lid.py"],

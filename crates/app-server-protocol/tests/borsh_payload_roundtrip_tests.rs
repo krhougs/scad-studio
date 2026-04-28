@@ -1,8 +1,8 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentOperationLevel, AgentStartedResponse, AgentTokenEvent,
-    AgentToolResultEvent, AgentToolStartEvent, CadQueryFeatureFaces, CadQueryMeshPayload,
-    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
+    AgentInvokeRequest, AgentOperationLevel, AgentPlanProposedEvent, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CadQueryFeatureFaces,
+    CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
     CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest,
     ChatArchivedResponse, ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest,
     ChatHistoryResponse, ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole,
@@ -560,6 +560,22 @@ fn agent_push_events_and_busy_error_roundtrip() {
     let decoded = decode_server_frame(&encode_server_frame(&tool_result).unwrap()).unwrap();
     assert_eq!(decoded, tool_result);
 
+    let proposed = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentPlanProposed(AgentPlanProposedEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            plan_ref: Some(workspace_path(["plans", "add-lid-vents.md"])),
+            target_path: workspace_path(["parts", "top_lid.py"]),
+            target_type: CadQueryObjectKind::Part,
+            affected_files: vec![workspace_path(["parts", "top_lid.py"])],
+            new_files: Vec::new(),
+            change_description: "Add vents".into(),
+            export_targets: vec![workspace_path(["outputs", "top_lid.step"])],
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&proposed).unwrap()).unwrap();
+    assert_eq!(decoded, proposed);
+
     let agent_error = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::AgentError(AgentErrorEvent {
             session_id,
@@ -570,6 +586,10 @@ fn agent_push_events_and_busy_error_roundtrip() {
     });
     let decoded = decode_server_frame(&encode_server_frame(&agent_error).unwrap()).unwrap();
     assert_eq!(decoded, agent_error);
+}
+
+fn workspace_path<const N: usize>(segments: [&str; N]) -> PathHandle {
+    PathHandle::new(WorkspaceId::new("workspace"), segments).expect("workspace path")
 }
 
 #[test]

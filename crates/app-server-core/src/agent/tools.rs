@@ -1,5 +1,8 @@
 mod readonly;
 mod registry;
+mod semantic;
+mod semantic_chat;
+mod semantic_export;
 
 use std::path::PathBuf;
 
@@ -104,6 +107,9 @@ impl WorkspaceToolExecutor {
 
 impl ToolExecutor for WorkspaceToolExecutor {
     fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
+        if let Some(result) = validate_direct_executor_permission(call, context) {
+            return result;
+        }
         match call.function_name.as_str() {
             "read_file" => readonly::read_file(&self.workspace_root, call),
             "list_directory" => readonly::list_directory(&self.workspace_root, call),
@@ -111,6 +117,10 @@ impl ToolExecutor for WorkspaceToolExecutor {
             "get_project_context" => readonly::get_project_context(&self.workspace_root, call),
             "get_selection" => readonly::get_selection(call, context),
             "resolve_ref" => readonly::resolve_ref(&self.workspace_root, call, context),
+            "save_cad_plan" => semantic::save_cad_plan(&self.workspace_root, call, context),
+            "update_chat_summary" => {
+                semantic_chat::update_chat_summary(&self.workspace_root, call, context)
+            }
             _ => tool_error_json(
                 call,
                 "tool is registered but not implemented by this executor",
@@ -118,6 +128,24 @@ impl ToolExecutor for WorkspaceToolExecutor {
             ),
         }
     }
+}
+
+fn validate_direct_executor_permission(
+    call: &LlmToolCall,
+    context: &AgentToolRunContext,
+) -> Option<String> {
+    let known = agent_tool_specs()
+        .into_iter()
+        .any(|spec| spec.definition.name == call.function_name);
+    if !known {
+        return None;
+    }
+    let permission = agent_tool_permission(
+        &call.function_name,
+        context.operation,
+        context.confirmation_scope.is_some(),
+    );
+    (!permission.allowed).then(|| tool_error_json(call, permission.reason, "permission_denied"))
 }
 
 pub fn run_tool_loop_with_registry(
@@ -357,6 +385,14 @@ fn validate_export_target_scope(
     if policy.output_paths == OutputPathPolicy::Denied {
         return Err(ToolPolicyError::permission_denied(
             "export_targets are not allowed for this tool",
+        ));
+    }
+    if policy.output_paths == OutputPathPolicy::DeclaredOutputsOnly {
+        if first_path_segment(path) == "outputs" {
+            return Ok(());
+        }
+        return Err(ToolPolicyError::permission_denied(
+            "export target must be under outputs/",
         ));
     }
     if policy.output_paths != OutputPathPolicy::ConfirmationOutputsOnly {

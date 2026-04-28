@@ -11,7 +11,7 @@ fn handshake() -> ClientEnvelope {
         capabilities: ClientCapabilities {
             client_name: "web".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(2, 2),
+            protocol_version: ProtocolVersionRange::new(3, 3),
             file_read: FileReadCapability {
                 denied_extensions: Vec::new(),
             },

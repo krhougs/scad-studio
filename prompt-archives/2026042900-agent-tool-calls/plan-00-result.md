@@ -10,6 +10,8 @@ Phase 1 已完成实现、两轮独立 review 收敛和聚焦回归。Phase 1 �
 
 Phase 2 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phase 2 将只读上下文工具接入统一执行入口，补齐结构化读取、目录列举、文本搜索、项目上下文、当前选择和 Ref 解析能力，并保护 Phase 1 已建立的 registry 权限边界。
 
+Phase 3 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phase 3 新增 CAD Plan 与 Chat summary 语义工具，将 Plan proposal、Plan confirmation、protocol version 和 Web 确认流绑定到同一份 saved Plan 结构化结果。
+
 ## Phase 结果记录
 
 | Phase | 状态 | 结果 |
@@ -17,7 +19,7 @@ Phase 2 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 | Phase 0 — Tool 能力盘点与权限合同 | 已完成 | 已新增 registry/schema/path policy，补充 `docs/cadquery-mvp/agent-tool-contract.md`，同步 system prompt；聚焦测试与独立复审通过 |
 | Phase 1 — Tool Registry 与统一执行入口 | 已完成 | 已接入 registry tool loop、统一运行上下文、执行前权限与路径校验、通用 tool 事件和 Chat 记录；两轮独立 review 与聚焦回归通过 |
 | Phase 2 — 只读上下文工具补齐 | 已完成 | 已接入 `read_file`、`list_directory`、`search_files`、`get_project_context`、`get_selection`、`resolve_ref`；多轮独立 review 与完整聚焦回归通过 |
-| Phase 3 — CAD Plan 与 Chat 语义持久化工具 | 未开始 | 等待执行 |
+| Phase 3 — CAD Plan 与 Chat 语义持久化工具 | 已完成 | 已接入 `save_cad_plan`、`update_chat_summary`、同 run `plan_ref` 确认校验、protocol v3 和 Web Plan 确认范围；多轮独立 review 与完整聚焦回归通过 |
 | Phase 4 — 受限文件写入工具 | 未开始 | 等待执行 |
 | Phase 5 — CadQuery 专用工具与执行边界 | 未开始 | 等待执行 |
 | Phase 6 — 前端确认流与协议补强 | 未开始 | 等待执行 |
@@ -132,3 +134,89 @@ Phase 2 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 - 第二轮 review 指出：`get_project_context` 对 paired `.md` 符号链接、目录列举中符号链接子项、Ref owner source 符号链接逃逸仍需强化；已补充测试并修复。
 - 最终 review 未发现 block / important 问题。
 - 遗留 minor：`source_has_refs_feature` 当前 lexical scanner 不区分 top-level `REFS` 与函数局部或属性赋值形式的 `REFS`。该问题不影响本 Phase 已定义的验收口径，后续若需要严格限定 top-level `REFS`，应单独补充 parser 规则和测试。
+
+### Phase 3 — CAD Plan 与 Chat 语义持久化工具
+
+前序目标保护：
+
+- 保持 Phase 1 的 registry 驱动入口，`save_cad_plan` 仅在 Plan operation 可用，`update_chat_summary` 仅在 Inform / Plan / Execute 可用，Auto 直接调用会被拒绝。
+- 保持 Phase 2 的只读工具无副作用边界，Plan 持久化只写 `plans/`，不允许借由 Plan 工具修改 `components/`、`parts/`、`assemblies/` 下的 `.py` 或对象说明 `.md`。
+- 保持 CadQuery 执行必须经过 confirmation + staging 的边界，普通 Agent invoke 不再接受直接携带的 CadQuery confirmation。
+
+完成情况：
+
+- 新增 `save_cad_plan()` 语义工具：
+  - 只在 workspace `plans/` 下创建 Markdown CAD Plan。
+  - 输入包含 `title`、`target_ref`、`resolved_target`、`affected_files`、`new_files`、`export_targets`、`strategy`、`risks`、`acceptance`、`execution_boundary`。
+  - 输出包含 `plan_ref`、`display_path`、`hash`、`summary`、`target_ref`、`target_path`、`affected_files`、`new_files`、`export_targets`、`execution_boundary`、`run_id`。
+  - 校验 `resolved_target` 必须在 `affected_files` 或 `new_files` 中，避免 saved Plan 与后续 confirmation 范围脱节。
+  - 校验 `export_targets` 必须位于 `outputs/`，扩展名只允许当前 runner 会生成的 `.step`、`.stl`、`.3mf`，文件名必须匹配 `outputs/{resolved_target 文件名 stem}.{extension}`。
+  - 对 `plans/` 目录和目标文件使用 symlink 安全检查，避免已存在 symlink 文件被写穿。
+- 新增 `update_chat_summary()` 语义工具：
+  - 通过 `ChatStore::update_summary()` 写入 Chat meta 记录，不暴露 `chats/*.jsonl` 任意写入能力。
+  - `related_files` 仅允许安全 workspace path root。
+  - 显式空 `related_files` 会覆盖旧 session 摘要中的相关文件列表。
+  - 成功结果包含 `message_id`，便于 Chat history 追溯。
+- Plan proposal 与 confirmation 绑定：
+  - `agent.plan_proposed` 只从同一 run 的 `save_cad_plan` tool result 产生 confirmable proposal，不再把文本 JSON fallback 作为可确认计划。
+  - `AgentPlanConfirm` 读取同一 session 内同一 plan run 保存的 CAD Plan，并校验 `plan_ref`、target、affected files、new files、export targets 与 confirmation 一致。
+  - `agent.invoke` 若直接携带 `confirmed_cadquery` 会返回 `InvalidCommand`，确认执行必须走 `agent.plan.confirm`。
+  - `validate_cadquery_confirmation()` 增加 export target 扩展名、格式一致性和 runner 默认输出文件名校验。
+- Protocol / transport / client 同步：
+  - `AgentPlanProposedEvent` 新增 `plan_ref` 和 `new_files` 字段，并用 serde default 保持反序列化兼容。
+  - `CURRENT_PROTOCOL_VERSION` 升级到 3，server capability 调整为 3..3，host handshake 使用协议协商并在失败时输出 transport error。
+  - studio-app、studio-common、studio-web-wasm 和 Web protocol package 测试同步 protocol version 3。
+- Web 确认流同步：
+  - `ChatZone` 只对当前 Chat session 的 Agent event 生成 pending Plan，避免跨 session 误确认。
+  - 无 `plan_ref` 的 `agent.plan_proposed` 不再展示确认按钮。
+  - `agent.done` 不会清除刚生成的 Plan 卡片。
+  - `confirmPlan()` 使用后端 proposal 的 `plan_ref`、affected files、new files、export targets，不再从 prompt 或 selection 重新构造范围。
+  - `export_formats` 从 proposal 的 export target 扩展名推导，当前与 runner 默认输出格式保持一致。
+- 文档同步：
+  - 更新 `docs/cadquery-mvp/agent-system-prompt.md`，明确 Plan 阶段需要保存 CAD Plan。
+  - 更新 `docs/cadquery-mvp/agent-tool-contract.md`，记录 `save_cad_plan`、`update_chat_summary`、protocol v3、Plan confirmation 和 export target 约束。
+  - 更新 `docs/known_issues.md`，记录 `plan_ref` 持久绑定已处理，并补充 direct `agent.invoke` confirmation route 已被拒绝。
+
+验证命令：
+
+- `cargo test -p app-server-core --test agent_tool_tests --test agent_tool_registry_tests --test agent_tests --test chat_tests`
+  - 结果：`agent_tests` 13 passed；`agent_tool_registry_tests` 5 passed；`agent_tool_tests` 68 passed；`chat_tests` 8 passed。
+  - 备注：仍有既有 `watch.rs` dead_code warning，未在本 Phase 处理。
+- `cargo test -p app-server-host --test plan_extraction_tests --test shared_dispatcher_roundtrip_tests --test dispatcher_pure_fn_tests --test mpsc_transport_tests --test in_process_roundtrip_tests --test websocket_smoke_roundtrip --test session_tests --test session_lifecycle_tests`
+  - 结果：`dispatcher_pure_fn_tests` 17 passed；`in_process_roundtrip_tests` 1 passed；`mpsc_transport_tests` 5 passed；`plan_extraction_tests` 19 passed；`session_lifecycle_tests` 5 passed；`session_tests` 3 passed；`shared_dispatcher_roundtrip_tests` 13 passed；`websocket_smoke_roundtrip` 6 passed。
+  - 备注：`shared_dispatcher_roundtrip_tests` 中仍有既有未使用 helper warning，未在本 Phase 处理。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests --test borsh_frame_tests`
+  - 结果：`borsh_frame_tests` 7 passed；`borsh_payload_roundtrip_tests` 15 passed。
+- `cargo test -p studio-common --test managed_client_tests --test app_server_client_tests`
+  - 结果：`app_server_client_tests` 2 passed；`managed_client_tests` 20 passed。
+- `cargo test -p app-server-transport --test websocket_wire_tests`
+  - 结果：4 passed。
+- `cargo check -p studio-app`
+  - 结果：通过。
+- `cargo test -p studio-web-wasm --test wasm_bridge_smoke`
+  - 结果：0 tests，命令通过。
+- `bun --filter @budn/studio-web test:unit -- chat-zone.test.tsx chat-actions.test.ts workbench-wiring.test.ts protocol-package-import.test.ts`
+  - 结果：22 passed。
+- `bun --filter @budn/studio-web typecheck`
+  - 结果：通过。
+- `git diff --check`
+  - 结果：通过。
+- 新增文件规模检查：
+  - `semantic.rs` 464 行，`semantic_chat.rs` 86 行，`semantic_export.rs` 56 行；均小于 500 行。
+
+独立 review：
+
+- 第一轮 review 指出 `save_cad_plan.export_targets` 未被 registry 允许、direct executor 未做 operation 权限校验、saved Plan 查找范围过窄、`update_chat_summary` schema 与实现不一致；已通过测试与实现修复。
+- 第二轮 review 指出 protocol version 兼容、confirmation 未绑定同 run saved Plan、`message_id` 成功 schema 缺口；已升级 protocol v3 并修复。
+- 第三轮 review 指出 Web 仍使用旧协议和旧确认范围、host handshake 未协商、fallback 文本 Plan 仍可能产生不可确认提案、文档 schema 不一致；已修复。
+- 第四轮 review 指出 Web 会在 `agent.done` 后清除 Plan 卡片、`save_cad_plan` export targets 语义与 confirmation 不一致、Web 固定 `step` 格式；已修复。
+- 第五轮 review 指出 `resolved_target` 未要求进入确认范围、export target 扩展名和 export format 不一致、Web 仍展示 `plan_ref: null` proposal；已修复。
+- 第六轮 review 指出 direct `agent.invoke` 可绕过 `AgentPlanConfirm`、Chat summary 显式空相关文件无法清空、文档 outputs 策略不准确；已修复。
+- 第七轮 review 指出 Web pending Plan 未按 session 过滤、export target 可保存 runner 不会生成的文件名；已修复。
+- 最终 review 未发现 block / important 问题。
+
+遗留 minor：
+
+- `useStreamAccumulator()` 仍消费未按当前 Chat session 过滤的 raw events，可能短暂显示其他 session token，但不会导致跨 session Plan 被确认。
+- `recentNonTokenEvents()` 先取全局最近 10 条再过滤 session；如果其他 session event 很多，当前 session 较早 Plan 卡片可能消失。该问题影响展示可靠性，不影响后端确认安全。
+- `save_cad_plan` 在 `symlink_metadata` 判定未占用后写入文件，已避开既有 symlink 文件，但仍存在极小并发替换窗口。当前本地 workspace 威胁模型下未作为 Important 处理，后续若要强化不可信 workspace，可改成原子创建且不跟随 symlink 的写入方式。

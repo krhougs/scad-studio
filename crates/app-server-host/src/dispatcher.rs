@@ -12,8 +12,8 @@ use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentOperationLevel,
     AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CadQueryExecuteRequest,
-    CadQueryExportFormat, CadQueryMeshPayload, CapabilityHandshakeRequest,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
+    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryMeshPayload, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
     ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
     ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
@@ -21,6 +21,7 @@ use app_server_protocol::{
     SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
     ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
     WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
+    negotiate_protocol_version,
 };
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -129,15 +130,19 @@ impl HostRequestDispatcher {
     pub fn handshake(
         &mut self,
         request: CapabilityHandshakeRequest,
-    ) -> CapabilityHandshakeResponse {
+    ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
         let server_capabilities = server_capabilities_for_request(&request);
+        let negotiated_version = negotiate_protocol_version(
+            request.capabilities.protocol_version,
+            server_capabilities.protocol_version,
+        )?;
         self.session
             .replace_capabilities(server_capabilities.clone());
-        CapabilityHandshakeResponse {
-            negotiated_version: server_capabilities.protocol_version.max,
+        Ok(CapabilityHandshakeResponse {
+            negotiated_version,
             session_token: self.session.token().clone(),
             server_capabilities,
-        }
+        })
     }
 
     pub fn dispatch_envelope(&mut self, envelope: ClientRequestEnvelope) -> ServerResponseEnvelope {
@@ -494,6 +499,11 @@ impl HostRequestDispatcher {
         request: AgentInvokeRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
         self.chat_store()?.history(&request.session_id, Some(1))?;
+        if request.confirmed_cadquery.is_some() {
+            return Err(invalid_command(
+                "CadQuery confirmation 必须通过 agent.plan.confirm 提交",
+            ));
+        }
         let run = self
             .agent_runs
             .lock()
@@ -545,7 +555,7 @@ impl HostRequestDispatcher {
         &mut self,
         request: AgentPlanConfirmRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
-        self.chat_store()?.history(&request.session_id, Some(1))?;
+        self.validate_confirmed_plan(&request)?;
         let run = self
             .agent_runs
             .lock()
@@ -570,6 +580,21 @@ impl HostRequestDispatcher {
         };
         thread::spawn(move || run_agent_worker(worker));
         Ok(CommandSuccess::AgentPlanConfirmed(response))
+    }
+
+    fn validate_confirmed_plan(
+        &self,
+        request: &AgentPlanConfirmRequest,
+    ) -> Result<(), ProtocolError> {
+        let history = self.chat_store()?.history(&request.session_id, None)?;
+        let Some(plan) = latest_saved_cad_plan(&history.messages, &request.run_id) else {
+            return Err(invalid_command(
+                "Agent confirmation 缺少同一 run 保存的 CAD Plan",
+            ));
+        };
+        validate_saved_plan_confirmation(&request.confirmed_cadquery, &plan)
+            .map_err(invalid_command)?;
+        validate_cadquery_confirmation(&request.confirmed_cadquery).map_err(invalid_command)
     }
 
     fn reject_agent_plan(
@@ -703,45 +728,82 @@ fn run_text_agent(worker: AgentWorker) {
         finish_agent_worker(worker, true);
         return;
     }
-    if worker.operation == AgentOperationLevel::Auto {
-        try_propose_plan(&worker, &response_text);
+    let saved_plan = if matches!(
+        worker.operation,
+        AgentOperationLevel::Auto | AgentOperationLevel::Plan
+    ) {
+        latest_saved_plan_for_worker(&worker)
+    } else {
+        None
+    };
+    if matches!(
+        worker.operation,
+        AgentOperationLevel::Auto | AgentOperationLevel::Plan
+    ) {
+        try_propose_plan(&worker, saved_plan.as_ref());
     }
     append_agent_message(&worker.workspace_root, &worker.run, &response_text);
     finish_agent_worker(worker, false);
 }
 
-fn try_propose_plan(worker: &AgentWorker, response_text: &str) {
-    let Some(plan) = extract_plan_proposal(response_text, &worker.selection_snapshot) else {
+fn latest_saved_plan_for_worker(worker: &AgentWorker) -> Option<SavedCadPlan> {
+    let history = ChatStore::new(worker.workspace_root.clone())
+        .history(&worker.run.session_id, None)
+        .ok()?;
+    latest_saved_cad_plan(&history.messages, &worker.run.run_id)
+}
+
+fn try_propose_plan(worker: &AgentWorker, saved_plan: Option<&SavedCadPlan>) {
+    if let Some(plan) = saved_plan
+        && push_saved_plan_proposal(worker, plan)
+    {
         return;
+    }
+}
+
+fn push_saved_plan_proposal(worker: &AgentWorker, plan: &SavedCadPlan) -> bool {
+    let Ok(plan_ref) = plan_target_handle(&worker.workspace_root, &plan.plan_ref) else {
+        return false;
     };
-    let target = match plan_target_handle(&worker.workspace_root, &plan.target_path) {
-        Ok(target) => target,
-        Err(_) => return,
+    let Ok(target) = plan_target_handle(&worker.workspace_root, &plan.target_path) else {
+        return false;
     };
-    let affected = plan
-        .affected_paths
-        .iter()
-        .filter_map(|path| plan_target_handle(&worker.workspace_root, path).ok())
-        .collect::<Vec<_>>();
-    let export_target = export_handle_for(&target);
+    let affected = path_handles_for(&worker.workspace_root, &plan.affected_paths);
+    let new_files = path_handles_for(&worker.workspace_root, &plan.new_paths);
+    let export_targets = path_handles_for(&worker.workspace_root, &plan.export_targets);
+    if export_targets.is_empty() {
+        return false;
+    }
     (worker.push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentPlanProposed(AgentPlanProposedEvent {
             session_id: worker.run.session_id.clone(),
             run_id: worker.run.run_id.clone(),
+            plan_ref: Some(plan_ref),
             target_path: target.clone(),
             target_type: plan.target_type,
             affected_files: if affected.is_empty() {
-                vec![target]
+                vec![target.clone()]
             } else {
                 affected
             },
-            change_description: plan.description,
-            export_targets: vec![export_target],
+            new_files,
+            change_description: plan.description.clone(),
+            export_targets,
         }),
     });
+    true
 }
 
-use crate::plan_extraction::{export_handle_for, extract_plan_proposal, plan_target_handle};
+fn path_handles_for(workspace_root: &Path, paths: &[String]) -> Vec<PathHandle> {
+    paths
+        .iter()
+        .filter_map(|path| plan_target_handle(workspace_root, path).ok())
+        .collect()
+}
+
+use crate::plan_extraction::{
+    SavedCadPlan, latest_saved_cad_plan, plan_target_handle, validate_saved_plan_confirmation,
+};
 
 fn run_text_agent_llm(
     worker: &AgentWorker,
@@ -1028,6 +1090,7 @@ pub fn validate_cadquery_confirmation(
     if !confirmation.request.export_formats.is_empty() && confirmation.export_targets.is_empty() {
         return Err("CadQuery export_formats 非空时必须提供已确认的 export_targets");
     }
+    validate_export_format_targets(confirmation)?;
     if confirmation
         .export_targets
         .iter()
@@ -1036,6 +1099,70 @@ pub fn validate_cadquery_confirmation(
         return Err("CadQuery export_targets 必须位于 outputs/ 目录");
     }
     Ok(())
+}
+
+fn validate_export_format_targets(
+    confirmation: &AgentCadQueryConfirmation,
+) -> Result<(), &'static str> {
+    if confirmation.export_targets.is_empty() {
+        return Ok(());
+    }
+    if confirmation.request.export_formats.is_empty() {
+        return Err("CadQuery export_targets 非空时必须提供匹配的 export_formats");
+    }
+    let mut target_formats = Vec::new();
+    for target in &confirmation.export_targets {
+        let Some(format) = export_format_for_target(target) else {
+            return Err("CadQuery export_targets 扩展名不受支持");
+        };
+        if !export_target_matches_runner_output(&confirmation.request.target_path, target) {
+            return Err("CadQuery export_targets 必须匹配 runner 输出文件名");
+        }
+        if !target_formats.contains(&format) {
+            target_formats.push(format);
+        }
+    }
+    if target_formats
+        .iter()
+        .any(|format| !confirmation.request.export_formats.contains(format))
+        || confirmation
+            .request
+            .export_formats
+            .iter()
+            .any(|format| !target_formats.contains(format))
+    {
+        return Err("CadQuery export_formats 必须与 export_targets 扩展名一致");
+    }
+    Ok(())
+}
+
+fn export_format_for_target(target: &PathHandle) -> Option<CadQueryExportFormat> {
+    let path = path_handle_to_relative_path(target);
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("step") | Some("stp") => Some(CadQueryExportFormat::Step),
+        Some("stl") => Some(CadQueryExportFormat::Stl),
+        Some("3mf") => Some(CadQueryExportFormat::ThreeMf),
+        _ => None,
+    }
+}
+
+fn export_target_matches_runner_output(
+    target_path: &PathHandle,
+    export_target: &PathHandle,
+) -> bool {
+    let Some(format) = export_format_for_target(export_target) else {
+        return false;
+    };
+    let expected = PathBuf::from("outputs").join(cadquery_export_file_name(
+        &cadquery_target_stem(target_path),
+        &format,
+    ));
+    path_handle_to_relative_path(export_target) == expected
 }
 
 fn contains_path(paths: &[PathHandle], target: &PathHandle) -> bool {
@@ -1364,6 +1491,10 @@ fn internal_error(error: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::new(ProtocolErrorCode::Internal, error.to_string())
 }
 
+fn invalid_command(message: impl std::fmt::Display) -> ProtocolError {
+    ProtocolError::new(ProtocolErrorCode::InvalidCommand, message.to_string())
+}
+
 fn path_buf_to_host_path(path: PathBuf) -> Result<HostLocalPath, ProtocolError> {
     let value = path.to_str().ok_or_else(|| {
         ProtocolError::new(
@@ -1390,7 +1521,10 @@ fn cadquery_python_path() -> PathBuf {
 
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(2, 2),
+        protocol_version: ProtocolVersionRange::new(
+            CURRENT_PROTOCOL_VERSION,
+            CURRENT_PROTOCOL_VERSION,
+        ),
         reconnect_window_ms: DEFAULT_SESSION_RECONNECT_WINDOW_MS,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
@@ -1398,7 +1532,10 @@ fn server_capabilities() -> ServerCapabilities {
         cadquery: true,
         agent: true,
         selection_sync: true,
-        llm_configured: app_server_core::llm::load_llm_config().ok().flatten().is_some(),
+        llm_configured: app_server_core::llm::load_llm_config()
+            .ok()
+            .flatten()
+            .is_some(),
     }
 }
 
