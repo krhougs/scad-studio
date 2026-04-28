@@ -8,6 +8,7 @@ use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatSessionId, PathHandle, SelectionKind,
     SelectionRef, WorkspaceId,
 };
+use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
 fn tool_context(
@@ -42,6 +43,10 @@ fn tool_json_with_context(
 
 fn test_path_handle(path: impl IntoIterator<Item = impl Into<String>>) -> PathHandle {
     PathHandle::new(WorkspaceId::new("ws"), path).expect("valid test path")
+}
+
+fn test_hash(text: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
 }
 
 #[test]
@@ -481,6 +486,946 @@ fn workspace_tool_executor_direct_call_denies_save_plan_outside_plan_operation()
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "permission_denied");
     assert!(!dir.path().join("plans").exists());
+}
+
+#[test]
+fn workspace_tool_executor_write_file_creates_confirmed_text_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r##"{"path":"docs/notes.md","contents":"# Notes\n"}"##,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["tool"], "write_file");
+    assert_eq!(result["path"], "docs/notes.md");
+    assert_eq!(result["created"], true);
+    assert_eq!(result["conflict"], false);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "# Notes\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_write_file_allows_empty_text_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/empty.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call("write_file", r#"{"path":"docs/empty.md","contents":""}"#),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["created"], true);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/empty.md")).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn workspace_tool_executor_write_file_overwrites_with_matching_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","contents":"new\n","expected_hash":"{}"}}"#,
+                test_hash("old\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["created"], false);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "new\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_write_file_rejects_existing_file_without_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r#"{"path":"docs/notes.md","contents":"new\n"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "old\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_write_file_rejects_path_traversal() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r#"{"path":"../escape.md","contents":"escape\n"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("../escape.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_write_file_rejects_symlink_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("notes.md"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","contents":"new\n","expected_hash":"{}"}}"#,
+                test_hash("")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!outside.path().join("notes.md").exists());
+}
+
+#[test]
+fn workspace_tool_executor_write_file_rejects_nul_text() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            "{\"path\":\"docs/notes.md\",\"contents\":\"bad\\u0000text\"}",
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(!dir.path().join("docs/notes.md").exists());
+}
+
+#[test]
+fn workspace_tool_executor_write_file_rejects_plans_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["plans/manual.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r##"{"path":"plans/manual.md","contents":"# Manual plan\n"}"##,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("plans/manual.md").exists());
+}
+
+#[test]
+fn workspace_tool_executor_patch_file_replaces_expected_hash_content() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["created"], false);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "alpha\ngamma\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_patch_file_allows_empty_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":""}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "alpha\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_patch_file_rejects_hard_link_alias_to_model_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "alpha\nbeta\n").unwrap();
+    std::fs::hard_link(
+        dir.path().join("parts/lid.py"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("parts/lid.py")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_patch_file_rejects_symlink_target_to_model_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "alpha\nbeta\n").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("parts/lid.py"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("parts/lid.py")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_patch_file_rejects_symlink_target_to_chat_log() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("chats/session.jsonl"), "alpha\nbeta\n").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("chats/session.jsonl"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("chats/session.jsonl")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_patch_file_rejects_symlink_target_to_unconfirmed_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/real.md"), "alpha\nbeta\n").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("docs/real.md"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/real.md")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_patch_file_rejects_hash_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            r#"{"path":"docs/notes.md","expected_hash":"sha256:bad","search":"beta\n","replace":"gamma\n"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_patch_file_rejects_ambiguous_search_text() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "item\nitem\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"item\n","replace":"done\n"}}"#,
+                test_hash("item\nitem\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "item\nitem\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_write_file_rejects_existing_file_confirmed_as_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","contents":"new\n","expected_hash":"{}"}}"#,
+                test_hash("old\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "old\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_write_file_rejects_hard_link_alias_to_chat_log() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("chats/session.jsonl"), "old\n").unwrap();
+    std::fs::hard_link(
+        dir.path().join("chats/session.jsonl"),
+        dir.path().join("docs/notes.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","contents":"new\n","expected_hash":"{}"}}"#,
+                test_hash("old\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("chats/session.jsonl")).unwrap(),
+        "old\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_patch_file_rejects_existing_file_confirmed_as_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "patch_file",
+            &format!(
+                r#"{{"path":"docs/notes.md","expected_hash":"{}","search":"beta\n","replace":"gamma\n"}}"#,
+                test_hash("alpha\nbeta\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+        "alpha\nbeta\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_direct_write_file_rejects_cadquery_model_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/lid.py".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r#"{"path":"parts/lid.py","contents":"def build(params=None): pass\n"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("parts/lid.py").exists());
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_copies_confirmed_text_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            &format!(
+                r#"{{"source_path":"docs/source.md","target_path":"docs/copy.md","expected_source_hash":"{}"}}"#,
+                test_hash("source\n")
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["path"], "docs/copy.md");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/copy.md")).unwrap(),
+        "source\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_rejects_binary_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), b"bad\0text").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(!dir.path().join("docs/copy.md").exists());
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_rejects_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
+    std::fs::write(dir.path().join("docs/copy.md"), "existing\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/copy.md")).unwrap(),
+        "existing\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_copy_file_rejects_symlink_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("copy.md"),
+        dir.path().join("docs/copy.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!outside.path().join("copy.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_copy_file_rejects_hard_link_alias_target() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
+    std::fs::write(dir.path().join("docs/other.md"), "other\n").unwrap();
+    std::fs::hard_link(
+        dir.path().join("docs/other.md"),
+        dir.path().join("docs/copy.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/other.md")).unwrap(),
+        "other\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_rejects_source_hash_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md","expected_source_hash":"sha256:bad"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "file_conflict");
+    assert!(!dir.path().join("docs/copy.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_copy_file_rejects_hard_link_alias_source_to_chat_log() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("chats/session.jsonl"), "secret\n").unwrap();
+    std::fs::hard_link(
+        dir.path().join("chats/session.jsonl"),
+        dir.path().join("docs/source.md"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"docs/copy.md"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("docs/copy.md").exists());
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_allows_model_source_to_confirmed_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        "def build(params=None):\n    pass\n",
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope = AgentToolConfirmationScope::new(
+        Vec::new(),
+        vec!["parts/lid_variant.py".into()],
+        Vec::new(),
+    );
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"parts/lid.py","target_path":"parts/lid_variant.py"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("parts/lid_variant.py")).unwrap(),
+        "def build(params=None):\n    pass\n"
+    );
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_rejects_model_target_not_in_new_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "def build(): pass\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope = AgentToolConfirmationScope::new(
+        vec!["parts/lid_variant.py".into()],
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"parts/lid.py","target_path":"parts/lid_variant.py"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("parts/lid_variant.py").exists());
+}
+
+#[test]
+fn workspace_tool_executor_copy_file_rejects_text_source_to_model_target() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("docs/source.md"), "def build(): pass\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "copy_file",
+            r#"{"source_path":"docs/source.md","target_path":"parts/new.py"}"#,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(!dir.path().join("parts/new.py").exists());
 }
 
 #[test]
@@ -1726,6 +2671,219 @@ fn registry_tool_loop_enforces_confirmed_file_scope_before_executing() {
     assert_eq!(parsed["status"], "error");
     assert_eq!(parsed["error_type"], "permission_denied");
     assert!(parsed["message"].as_str().unwrap().contains("outside"));
+}
+
+#[test]
+fn registry_tool_loop_requires_patch_target_in_affected_files_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_patch_new_file".into(),
+                function_name: "patch_file".into(),
+                arguments: concat!(
+                    "{\"path\":\"docs/new.md\",",
+                    "\"expected_hash\":\"sha256:abc\",",
+                    "\"search\":\"old\",",
+                    "\"replace\":\"new\"}"
+                )
+                .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    let scope = AgentToolConfirmationScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "patch new file")],
+        tool_context(AgentOperationLevel::Execute, Some(scope)),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("affected_files")
+    );
+}
+
+#[test]
+fn registry_tool_loop_requires_copy_target_in_new_files_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_copy_affected".into(),
+                function_name: "copy_file".into(),
+                arguments: "{\"source_path\":\"docs/source.md\",\"target_path\":\"docs/copy.md\"}"
+                    .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/copy.md".into()], Vec::new(), Vec::new());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "copy into affected")],
+        tool_context(AgentOperationLevel::Execute, Some(scope)),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(parsed["message"].as_str().unwrap().contains("new_files"));
+}
+
+#[test]
+fn registry_tool_loop_rejects_text_source_to_model_copy_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_text_to_model".into(),
+                function_name: "copy_file".into(),
+                arguments: "{\"source_path\":\"docs/source.md\",\"target_path\":\"parts/new.py\"}"
+                    .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    let scope =
+        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "copy text to model")],
+        tool_context(AgentOperationLevel::Execute, Some(scope)),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(parsed["message"].as_str().unwrap().contains("CadQuery"));
+}
+
+#[test]
+fn registry_tool_loop_rejects_write_file_new_file_with_expected_hash_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_new_with_hash".into(),
+                function_name: "write_file".into(),
+                arguments:
+                    "{\"path\":\"docs/new.md\",\"contents\":\"x\",\"expected_hash\":\"sha256:abc\"}"
+                        .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    let scope = AgentToolConfirmationScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "create with hash")],
+        tool_context(AgentOperationLevel::Execute, Some(scope)),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(parsed["message"].as_str().unwrap().contains("new_files"));
+}
+
+#[test]
+fn registry_tool_loop_rejects_write_file_affected_without_hash_before_executing() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_affected_without_hash".into(),
+                function_name: "write_file".into(),
+                arguments: "{\"path\":\"docs/existing.md\",\"contents\":\"x\"}".into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let executor = CountingExecutor::new();
+    let observer = RecordingObserver::default();
+    let scope =
+        AgentToolConfirmationScope::new(vec!["docs/existing.md".into()], Vec::new(), Vec::new());
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "overwrite without hash")],
+        tool_context(AgentOperationLevel::Execute, Some(scope)),
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert!(executor.calls().is_empty());
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["error_type"], "permission_denied");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected_hash")
+    );
 }
 
 #[test]

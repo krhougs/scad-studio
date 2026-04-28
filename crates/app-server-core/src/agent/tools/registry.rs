@@ -404,7 +404,7 @@ fn chat_summary_policy() -> AgentToolPathPolicy {
 
 fn confirmed_text_write_policy(model_policy: CadQueryModelFilePolicy) -> AgentToolPathPolicy {
     AgentToolPathPolicy {
-        allowed_roots: vec!["components", "parts", "assemblies", "plans", "refs", "docs"],
+        allowed_roots: vec!["components", "parts", "assemblies", "refs", "docs"],
         denied_roots: vec!["chats", "outputs"],
         text_only: true,
         requires_confirmation_scope: true,

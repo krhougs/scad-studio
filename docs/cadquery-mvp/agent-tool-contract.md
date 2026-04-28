@@ -68,12 +68,18 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `resolve_ref` | owner `.py` / `.md` 及 Ref Map 文本 | workspace 外、内部构建目录 | 只读 | 禁止 |
 | `save_cad_plan` | `plans/` | `chats/` | 禁止 | 仅声明当前 runner 会生成的 `outputs/{resolved_target 文件名 stem}.step/.stl/.3mf`，不写入 |
 | `update_chat_summary` | ChatStore meta API | 直接写 `chats/*.jsonl` | 禁止 | 禁止 |
-| `write_file` / `patch_file` | confirmation 范围内的 `components/`、`parts/`、`assemblies/`、`plans/`、`refs/`、`docs/` 文本文件 | `chats/`、`outputs/`、workspace 外 | 禁止普通写入 `.py` 模型 | 禁止 |
-| `copy_file` | confirmation 范围内的同上路径 | `chats/`、`outputs/`、workspace 外 | 仅允许 byte-for-byte 复制到 confirmed `new_files` | 禁止 |
+| `write_file` / `patch_file` | confirmation 范围内的 `components/`、`parts/`、`assemblies/`、`refs/`、`docs/` 文本文件 | `plans/`、`chats/`、`outputs/`、workspace 外 | 禁止普通写入 `.py` 模型 | 禁止 |
+| `copy_file` | confirmation 范围内的同上路径 | `plans/`、`chats/`、`outputs/`、workspace 外 | 仅允许 byte-for-byte 复制到 confirmed `new_files` | 禁止 |
 | `cadquery_analyze_source` / `cadquery_check_source` | `components/`、`parts/`、`assemblies/` | workspace 外、`outputs/` | 只读或静态检查 | 禁止 |
 | `cadquery_dry_run` | staging 中的拟议 `.py` | 真实 workspace 回写、正式 `outputs/` | staging 临时代码 | 仅临时 result cache |
 | `cadquery_execute` | confirmation 范围内的 `components/`、`parts/`、`assemblies/` target | confirmation 外、`chats/`、workspace 外 | 只能通过 CadQuery tool + staging commit | confirmed `outputs/` only |
 | `cadquery_get_result` / `cadquery_resolve_selection` | result cache | 完整 mesh 大数组、workspace 任意文件 | 禁止 | 仅轻量摘要 |
+
+普通文件工具的 confirmation 语义必须区分 `affected_files` 与 `new_files`：
+
+- `write_file` 创建文件时目标必须在 `new_files`；覆盖既有文件时目标必须在 `affected_files`，并提供匹配的 `expected_hash`。
+- `patch_file` 只允许修改 `affected_files` 中的既有文本文件。
+- `copy_file` 的 `target_path` 只允许位于 `new_files`；`source_path` 不消耗 confirmation 范围，但仍受安全路径、文本文件、symlink 和 hard link alias 校验约束。
 
 ## Canonical Tool Result
 

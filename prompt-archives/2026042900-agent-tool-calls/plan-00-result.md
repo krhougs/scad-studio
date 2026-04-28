@@ -12,6 +12,8 @@ Phase 2 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 
 Phase 3 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phase 3 新增 CAD Plan 与 Chat summary 语义工具，将 Plan proposal、Plan confirmation、protocol version 和 Web 确认流绑定到同一份 saved Plan 结构化结果。
 
+Phase 4 已完成实现、独立 review 和完整聚焦回归。Phase 4 新增受限普通文件写入工具，按 confirmation 范围区分 `affected_files` 与 `new_files`，并保持 CAD Plan、Chat JSONL、CadQuery `.py` 模型源的专用工具边界。
+
 ## Phase 结果记录
 
 | Phase | 状态 | 结果 |
@@ -20,7 +22,7 @@ Phase 3 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 | Phase 1 — Tool Registry 与统一执行入口 | 已完成 | 已接入 registry tool loop、统一运行上下文、执行前权限与路径校验、通用 tool 事件和 Chat 记录；两轮独立 review 与聚焦回归通过 |
 | Phase 2 — 只读上下文工具补齐 | 已完成 | 已接入 `read_file`、`list_directory`、`search_files`、`get_project_context`、`get_selection`、`resolve_ref`；多轮独立 review 与完整聚焦回归通过 |
 | Phase 3 — CAD Plan 与 Chat 语义持久化工具 | 已完成 | 已接入 `save_cad_plan`、`update_chat_summary`、同 run `plan_ref` 确认校验、protocol v3 和 Web Plan 确认范围；多轮独立 review 与完整聚焦回归通过 |
-| Phase 4 — 受限文件写入工具 | 未开始 | 等待执行 |
+| Phase 4 — 受限文件写入工具 | 已完成 | 已接入 `write_file`、`patch_file`、`copy_file`，补齐 registry 与 executor 双层防护、普通写入范围、hash 冲突检测、symlink / hard link alias 拒绝和 CadQuery `.py` copy 边界；独立 review 与完整聚焦回归通过 |
 | Phase 5 — CadQuery 专用工具与执行边界 | 未开始 | 等待执行 |
 | Phase 6 — 前端确认流与协议补强 | 未开始 | 等待执行 |
 | Phase 7 — 权限模型回归、文档同步与端到端验证 | 未开始 | 等待执行 |
@@ -220,3 +222,67 @@ Phase 3 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 - `useStreamAccumulator()` 仍消费未按当前 Chat session 过滤的 raw events，可能短暂显示其他 session token，但不会导致跨 session Plan 被确认。
 - `recentNonTokenEvents()` 先取全局最近 10 条再过滤 session；如果其他 session event 很多，当前 session 较早 Plan 卡片可能消失。该问题影响展示可靠性，不影响后端确认安全。
 - `save_cad_plan` 在 `symlink_metadata` 判定未占用后写入文件，已避开既有 symlink 文件，但仍存在极小并发替换窗口。当前本地 workspace 威胁模型下未作为 Important 处理，后续若要强化不可信 workspace，可改成原子创建且不跟随 symlink 的写入方式。
+
+### Phase 4 — 受限文件写入工具
+
+前序目标保护：
+
+- 保持 Phase 3 的 Plan / Chat 语义工具边界：普通 `write_file`、`patch_file`、`copy_file` 不能写 `plans/`，不能直接写 `chats/*.jsonl`，不能替代 `save_cad_plan()` 或 `update_chat_summary()`。
+- 保持 CadQuery `.py` 模型源只能通过 CadQuery tool 修改的边界：`write_file` 与 `patch_file` 均拒绝 CadQuery `.py`；`copy_file` 只允许将 CadQuery `.py` 源 byte-for-byte 复制到 confirmed `new_files` 目标。
+- 保持 Phase 1 的 registry 执行入口与 direct executor 双层防御：LLM tool loop 在执行前拒绝越权调用，直接调用 executor 时仍执行同等路径和权限检查。
+
+完成情况：
+
+- 新增 `write_file()`：
+  - 只允许 Execute + confirmation。
+  - 只写 UTF-8 文本，拒绝 NUL / binary 内容，允许空文本。
+  - 新建文件必须位于 confirmed `new_files`，且不得带 `expected_hash`。
+  - 覆盖既有文件必须位于 confirmed `affected_files`，且 `expected_hash` 必须匹配当前内容。
+  - 拒绝 `plans/`、`chats/`、`outputs/`、`.budn_staging`、workspace escape、CadQuery `.py`、symlink 和 Unix hard link alias。
+- 新增 `patch_file()`：
+  - 只允许 Execute + confirmation。
+  - 只修改 confirmed `affected_files` 中的既有文本文件。
+  - 使用 `expected_hash` 和唯一 `search` 匹配做冲突检测，允许空 `replace`。
+  - 拒绝 CadQuery `.py`、`plans/`、`chats/`、`outputs/`、workspace escape、symlink 和 Unix hard link alias。
+- 新增 `copy_file()`：
+  - 只允许 Execute + confirmation。
+  - `target_path` 必须位于 confirmed `new_files` 且目标不存在。
+  - 源文件必须是安全 workspace 文本文件，拒绝 symlink 和 Unix hard link alias。
+  - CadQuery `.py` 目标必须从 CadQuery `.py` 源复制，禁止从普通文本源复制到模型目标。
+  - 复制只做 byte-for-byte 写入，不提供内容修改能力。
+- 将 registry 路径策略拆到 `tool_path_policy.rs`，把普通文件工具的 path policy 与 registry intent 校验分开：
+  - path policy 负责 roots、CadQuery 模型文件、confirmed scope 和 export target。
+  - registry intent 负责 `write_file` 创建 / 覆盖意图，避免 LLM tool loop 把 `new_files` 与 `affected_files` 混用。
+- 将普通文件写入 executor 拆到 `file_write.rs` 与 `file_write/path_policy.rs`，集中处理文本校验、hash、symlink、hard link alias、scope 和 copy model 边界。
+- 更新 `docs/cadquery-mvp/agent-tool-contract.md`，移除普通写入对 `plans/` 的许可，并明确 `affected_files` / `new_files` 语义。
+
+验证命令：
+
+- `cargo test -p app-server-core --test agent_tool_tests workspace_tool_executor_write_file_overwrites_with_matching_hash -- --nocapture`
+  - 结果：1 passed。
+- `cargo test -p app-server-core --test agent_tool_tests workspace_tool_executor_copy_file_rejects_symlink_target -- --nocapture`
+  - 结果：1 passed。
+- `cargo test -p app-server-core --test agent_tool_tests workspace_tool_executor_copy_file_rejects_hard_link_alias_target -- --nocapture`
+  - 结果：1 passed。
+- `cargo test -p app-server-core --test agent_tool_tests --test agent_tool_registry_tests --test chat_tests`
+  - 结果：`agent_tool_registry_tests` 5 passed；`agent_tool_tests` 103 passed；`chat_tests` 8 passed。
+  - 备注：仍有既有 `watch.rs` dead_code warning，未在本 Phase 处理。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests --test dispatcher_pure_fn_tests`
+  - 结果：`dispatcher_pure_fn_tests` 17 passed；`shared_dispatcher_roundtrip_tests` 13 passed。
+  - 备注：`shared_dispatcher_roundtrip_tests` 中仍有既有未使用 helper warning，未在本 Phase 处理。
+- `git diff --check`
+  - 结果：通过。
+- 新增文件规模检查：
+  - `tools.rs` 257 行，`tool_path_policy.rs` 369 行，`file_write.rs` 382 行，`file_write/path_policy.rs` 344 行；均小于 500 行。
+
+独立 review：
+
+- 第一轮 review 指出 `patch_file` symlink 写穿风险、`new_files` / `affected_files` 混用风险；已补充测试并修复 executor 与 registry 校验。
+- 第二轮 review 指出 `plans/` 仍可被普通写入工具写入、hard link alias 风险和空内容 / 空 replace 覆盖不足；已移除普通写入 `plans/` root，并补充测试。
+- 第三轮 review 指出 registry 对 `patch_file` / `copy_file` 的确认范围语义仍不够精确，文档中普通写入 root 描述未同步；已修复。
+- 第四轮 review 指出 `copy_file` 可从普通文本复制到 CadQuery `.py` 新目标，以及 registry 未提前校验 `write_file` 的创建 / 覆盖意图；已补充红绿用例并修复。
+- 最终独立 review 未发现 blocker 或 important 问题；建议补充 `write_file` 覆盖成功、copy 目标 symlink 和 copy 目标 hard link alias 测试，已补齐并通过回归。
+
+遗留问题：
+
+- 未发现需要写入 `docs/known_issues.md` 的新问题。

@@ -105,6 +105,7 @@ fn registry_declares_path_scope_contracts() {
         );
         assert!(spec.path_policy.denied_roots.contains(&"outputs"));
         assert!(spec.path_policy.denied_roots.contains(&"chats"));
+        assert!(!spec.path_policy.allowed_roots.contains(&"plans"));
     }
 
     let copy_file = spec_by_name("copy_file");
@@ -112,6 +113,7 @@ fn registry_declares_path_scope_contracts() {
         copy_file.path_policy.cadquery_model_file,
         CadQueryModelFilePolicy::CopyOnly
     );
+    assert!(!copy_file.path_policy.allowed_roots.contains(&"plans"));
 
     let cadquery_execute = spec_by_name("cadquery_execute");
     assert!(cadquery_execute.path_policy.requires_confirmation_scope);

@@ -1,8 +1,10 @@
+mod file_write;
 mod readonly;
 mod registry;
 mod semantic;
 mod semantic_chat;
 mod semantic_export;
+mod tool_path_policy;
 
 use std::path::PathBuf;
 
@@ -14,6 +16,9 @@ pub use registry::{
     AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission, AgentToolSpec,
     CadQueryModelFilePolicy, OutputPathPolicy, agent_tool_definitions_for_operation,
     agent_tool_permission, agent_tool_specs,
+};
+use tool_path_policy::{
+    normalize_scope_paths, validate_registry_tool_intent, validate_tool_path_policy,
 };
 
 const MAX_TOOL_ROUNDS: usize = 10;
@@ -46,11 +51,14 @@ impl AgentToolConfirmationScope {
         }
     }
 
-    fn contains_confirmed_file(&self, path: &str) -> bool {
+    pub(super) fn contains_affected_file(&self, path: &str) -> bool {
         self.affected_files
             .iter()
             .any(|confirmed| confirmed == path)
-            || self.new_files.iter().any(|confirmed| confirmed == path)
+    }
+
+    pub(super) fn contains_new_file(&self, path: &str) -> bool {
+        self.new_files.iter().any(|confirmed| confirmed == path)
     }
 
     fn contains_export_target(&self, path: &str) -> bool {
@@ -121,6 +129,9 @@ impl ToolExecutor for WorkspaceToolExecutor {
             "update_chat_summary" => {
                 semantic_chat::update_chat_summary(&self.workspace_root, call, context)
             }
+            "write_file" => file_write::write_file(&self.workspace_root, call, context),
+            "patch_file" => file_write::patch_file(&self.workspace_root, call, context),
+            "copy_file" => file_write::copy_file(&self.workspace_root, call, context),
             _ => tool_error_json(
                 call,
                 "tool is registered but not implemented by this executor",
@@ -134,18 +145,29 @@ fn validate_direct_executor_permission(
     call: &LlmToolCall,
     context: &AgentToolRunContext,
 ) -> Option<String> {
-    let known = agent_tool_specs()
+    let spec = agent_tool_specs()
         .into_iter()
-        .any(|spec| spec.definition.name == call.function_name);
-    if !known {
-        return None;
-    }
+        .find(|spec| spec.definition.name == call.function_name)?;
     let permission = agent_tool_permission(
         &call.function_name,
         context.operation,
         context.confirmation_scope.is_some(),
     );
-    (!permission.allowed).then(|| tool_error_json(call, permission.reason, "permission_denied"))
+    if !permission.allowed {
+        return Some(tool_error_json(
+            call,
+            permission.reason,
+            "permission_denied",
+        ));
+    }
+    validate_tool_path_policy(
+        &call.function_name,
+        &call.arguments,
+        &spec.path_policy,
+        context.confirmation_scope.as_ref(),
+    )
+    .err()
+    .map(|error| tool_error_json(call, &error.message, error.error_type))
 }
 
 pub fn run_tool_loop_with_registry(
@@ -204,6 +226,7 @@ fn execute_registry_tool(
     }
     if let Some(spec) = spec
         && let Err(error) = validate_tool_path_policy(
+            &call.function_name,
             &call.arguments,
             &spec.path_policy,
             context.confirmation_scope.as_ref(),
@@ -211,250 +234,14 @@ fn execute_registry_tool(
     {
         return tool_error_json(call, &error.message, error.error_type);
     }
+    if let Err(error) = validate_registry_tool_intent(
+        &call.function_name,
+        &call.arguments,
+        context.confirmation_scope.as_ref(),
+    ) {
+        return tool_error_json(call, &error.message, error.error_type);
+    }
     executor.execute(call, context)
-}
-
-struct ToolPolicyError {
-    message: String,
-    error_type: &'static str,
-}
-
-impl ToolPolicyError {
-    fn invalid_arguments(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            error_type: "invalid_arguments",
-        }
-    }
-
-    fn permission_denied(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            error_type: "permission_denied",
-        }
-    }
-}
-
-fn validate_tool_path_policy(
-    args: &str,
-    policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
-) -> Result<(), ToolPolicyError> {
-    let parsed: serde_json::Value = serde_json::from_str(args).map_err(|error| {
-        ToolPolicyError::invalid_arguments(format!("invalid tool arguments: {error}"))
-    })?;
-    let paths = collect_workspace_path_args(&parsed);
-    for (field, path) in paths {
-        let normalized = validate_one_tool_path(&path, policy)?;
-        validate_cadquery_model_file_policy(&field, &normalized, policy)?;
-        validate_confirmation_file_scope(&field, &normalized, policy, confirmation_scope)?;
-    }
-    let export_targets = parsed
-        .get("export_targets")
-        .map(parse_export_targets)
-        .transpose()?;
-    if export_formats_requested(&parsed)
-        && policy.output_paths == OutputPathPolicy::ConfirmationOutputsOnly
-        && export_targets.as_ref().is_none_or(Vec::is_empty)
-    {
-        return Err(ToolPolicyError::permission_denied(
-            "export_formats require confirmed export_targets",
-        ));
-    }
-    if let Some(exports) = export_targets {
-        for export in exports {
-            validate_export_target_scope(&export, policy, confirmation_scope)?;
-        }
-    }
-    Ok(())
-}
-
-fn collect_workspace_path_args(parsed: &serde_json::Value) -> Vec<(&'static str, String)> {
-    let Some(object) = parsed.as_object() else {
-        return Vec::new();
-    };
-    ["path", "source_path", "target_path"]
-        .iter()
-        .filter_map(|field| {
-            object
-                .get(*field)
-                .and_then(|value| value.as_str())
-                .map(|value| (*field, value.to_owned()))
-        })
-        .collect()
-}
-
-fn validate_one_tool_path(
-    path: &str,
-    policy: &AgentToolPathPolicy,
-) -> Result<String, ToolPolicyError> {
-    let cleaned = normalize_workspace_path(path)?;
-    let root = first_path_segment(&cleaned);
-    if policy.denied_roots.iter().any(|denied| *denied == root) {
-        return Err(ToolPolicyError::permission_denied(format!(
-            "path root '{root}' is denied for this tool"
-        )));
-    }
-    if !policy.allowed_roots.is_empty()
-        && !policy
-            .allowed_roots
-            .iter()
-            .any(|allowed| *allowed == "" || *allowed == root)
-    {
-        return Err(ToolPolicyError::permission_denied(format!(
-            "path root '{root}' is not allowed for this tool"
-        )));
-    }
-    Ok(cleaned)
-}
-
-fn validate_cadquery_model_file_policy(
-    field: &str,
-    path: &str,
-    policy: &AgentToolPathPolicy,
-) -> Result<(), ToolPolicyError> {
-    if !is_cadquery_model_path(path) {
-        return Ok(());
-    }
-    match policy.cadquery_model_file {
-        CadQueryModelFilePolicy::ReadOnly | CadQueryModelFilePolicy::CadQueryToolOnly => Ok(()),
-        CadQueryModelFilePolicy::Denied => Err(ToolPolicyError::permission_denied(
-            "CadQuery model .py files must be modified through CadQuery tools",
-        )),
-        CadQueryModelFilePolicy::CopyOnly if field == "source_path" => Ok(()),
-        CadQueryModelFilePolicy::CopyOnly => Err(ToolPolicyError::permission_denied(
-            "CadQuery model .py files cannot be the target of copy_file",
-        )),
-    }
-}
-
-fn validate_confirmation_file_scope(
-    field: &str,
-    path: &str,
-    policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
-) -> Result<(), ToolPolicyError> {
-    if !policy.requires_confirmation_scope || field == "source_path" {
-        return Ok(());
-    }
-    let Some(scope) = confirmation_scope else {
-        return Err(ToolPolicyError::permission_denied(
-            "tool requires confirmed execution scope",
-        ));
-    };
-    if scope.contains_confirmed_file(path) {
-        Ok(())
-    } else {
-        Err(ToolPolicyError::permission_denied(format!(
-            "path '{path}' is outside confirmed affected_files / new_files"
-        )))
-    }
-}
-
-fn export_formats_requested(parsed: &serde_json::Value) -> bool {
-    parsed
-        .get("export_formats")
-        .and_then(|value| value.as_array())
-        .is_some_and(|formats| !formats.is_empty())
-}
-
-fn parse_export_targets(value: &serde_json::Value) -> Result<Vec<String>, ToolPolicyError> {
-    let Some(targets) = value.as_array() else {
-        return Err(ToolPolicyError::invalid_arguments(
-            "export_targets must be an array of workspace-relative strings",
-        ));
-    };
-    targets
-        .iter()
-        .map(|target| {
-            let Some(path) = target.as_str() else {
-                return Err(ToolPolicyError::invalid_arguments(
-                    "export_targets must be an array of workspace-relative strings",
-                ));
-            };
-            normalize_workspace_path(path)
-        })
-        .collect()
-}
-
-fn validate_export_target_scope(
-    path: &str,
-    policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
-) -> Result<(), ToolPolicyError> {
-    if policy.output_paths == OutputPathPolicy::Denied {
-        return Err(ToolPolicyError::permission_denied(
-            "export_targets are not allowed for this tool",
-        ));
-    }
-    if policy.output_paths == OutputPathPolicy::DeclaredOutputsOnly {
-        if first_path_segment(path) == "outputs" {
-            return Ok(());
-        }
-        return Err(ToolPolicyError::permission_denied(
-            "export target must be under outputs/",
-        ));
-    }
-    if policy.output_paths != OutputPathPolicy::ConfirmationOutputsOnly {
-        return Ok(());
-    }
-    if first_path_segment(path) != "outputs" {
-        return Err(ToolPolicyError::permission_denied(
-            "export target must be under outputs/",
-        ));
-    }
-    let Some(scope) = confirmation_scope else {
-        return Err(ToolPolicyError::permission_denied(
-            "export target requires confirmed execution scope",
-        ));
-    };
-    if scope.contains_export_target(path) {
-        Ok(())
-    } else {
-        Err(ToolPolicyError::permission_denied(format!(
-            "export target '{path}' is outside confirmed export_targets"
-        )))
-    }
-}
-
-fn is_cadquery_model_path(path: &str) -> bool {
-    matches!(
-        first_path_segment(path),
-        "components" | "parts" | "assemblies"
-    ) && path.ends_with(".py")
-}
-
-fn normalize_workspace_path(path: &str) -> Result<String, ToolPolicyError> {
-    let cleaned = path.replace('\\', "/");
-    if cleaned.starts_with('/') || cleaned.contains(':') {
-        return Err(ToolPolicyError::permission_denied(
-            "path must be workspace-relative",
-        ));
-    }
-    let cleaned = cleaned.trim_matches('/');
-    if cleaned.split('/').any(|segment| segment == "..") {
-        return Err(ToolPolicyError::permission_denied(
-            "path must not contain '..'",
-        ));
-    }
-    Ok(cleaned
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect::<Vec<_>>()
-        .join("/"))
-}
-
-fn normalize_scope_paths(paths: Vec<String>) -> Vec<String> {
-    paths
-        .into_iter()
-        .filter_map(|path| normalize_workspace_path(&path).ok())
-        .collect()
-}
-
-fn first_path_segment(path: &str) -> &str {
-    path.split('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or("")
 }
 
 fn tool_error_json(call: &LlmToolCall, message: &str, error_type: &str) -> String {
