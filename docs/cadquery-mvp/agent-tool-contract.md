@@ -56,6 +56,10 @@
 
 Plan 卡片“预览已有文件”和 `cadquery_dry_run` 必须分离：前者读取 workspace 现有 `.py` 并走只读预览产品动作；后者在 staging 中执行拟议完整源码，只能由 Execute tool loop 或用户显式产品动作触发，不提交真实 workspace。
 
+`cadquery_execute` 成功后即消耗本次 Execute run 的单次成功 commit 额度。若配对 `.md` 执行记录在真实 commit 后追加失败，tool result 仍可返回 `status: ok`，并通过 `warnings` 暴露该失败；此时不得在同一 run 内把该 warning 当作 retryable build failure 继续调用 `cadquery_execute`。
+
+CadQuery 失败结果会带 `diagnostics` object。当前 `diagnostics.traceback` 字段存在，但 runner traceback 仍可能主要包含在 `message` 中；调用方必须兼容 `diagnostics.traceback: null`，不能凭空生成 traceback 内容。
+
 ## 路径范围合同
 
 Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical source。Phase 0 固化如下路径范围，后续 executor 必须先按 registry 校验，再执行工具。
@@ -110,11 +114,12 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `update_chat_summary` | `session_id`、`message_id`、`updated_fields` |
 | `write_file` / `patch_file` / `copy_file` | `path`、`hash`、`created`、`conflict` |
 | `cadquery_analyze_source` | `target_path`、`target_type`、`has_build_function`、`has_refs`、`paired_doc_path`、`local_dependencies`、`ref_keys`、`warnings` |
-| `cadquery_check_source` | `contract.target_type_matches`、`contract.has_build_function`、`contract.has_refs`、`contract.unsafe_calls`、`warnings` |
-| `cadquery_dry_run` / `cadquery_execute` | `result_id`、`build_id`、`root_object_kind`、`summary.part_count`、`summary.face_count`、`summary.edge_count`、`summary.vertex_count`、`summary.features`、`exports`、`warnings` |
+| `cadquery_check_source` | `contract.target_type_matches`、`contract.has_build_function`、`contract.has_refs`、`contract.unsafe_calls`、`contract.invalid_imports`、`warnings` |
+| `cadquery_dry_run` | `result_id`、`build_id`、`root_object_kind`、`summary.part_count`、`summary.face_count`、`summary.edge_count`、`summary.vertex_count`、`summary.features`、`warnings` |
+| `cadquery_execute` | `result_id`、`build_id`、`committed_files`、`exports`、`summary.part_count`、`summary.face_count`、`summary.edge_count`、`summary.vertex_count`、`summary.features`、`warnings` |
 | `cadquery_get_result` | `result_id`、`build_id`、`root_ref_text`、`root_object_kind`、`parts`、`exports` |
 
-错误结果必须保留 `tool_call_id` 的调用关联，并同时进入 `agent.tool_result` push event 与 Chat history。permission denied 也必须记录为 tool result，不能静默丢弃。
+错误结果必须保留 `tool_call_id` 的调用关联，并同时进入 `agent.tool_result` push event 与 Chat history。permission denied 也必须记录为 tool result，不能静默丢弃。CadQuery runtime error result 应包含 `diagnostics` object；当前至少包含可为 `null` 的 `diagnostics.traceback` 字段。
 
 ## Canonical Schema 摘要
 
@@ -134,8 +139,8 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `cadquery_analyze_source` | `target_path` | `status`、`tool`、`target_path`、`target_type`、`has_build_function`、`has_refs`、`warnings` |
 | `cadquery_check_source` | `target_path`、`target_type`、`code` | `status`、`tool`、`contract`、`warnings` |
 | `cadquery_dry_run` | `target_path`、`target_type`、`code` | `status`、`tool`、`result_id`、`build_id`、`root_object_kind`、`summary`、`warnings` |
-| `cadquery_execute` | `target_path`、`target_type`、`code` | `status`、`tool`、`result_id`、`build_id`、`committed_files`、`exports`、`summary` |
+| `cadquery_execute` | `target_path`、`target_type`、`code` | `status`、`tool`、`result_id`、`build_id`、`committed_files`、`exports`、`summary`、`warnings` |
 | `cadquery_get_result` | `result_id` | `status`、`tool`、`result_id`、`build_id`、`root_ref_text`、`root_object_kind`、`parts` |
 | `cadquery_resolve_selection` | `result_id`、`selection_ref` | `status`、`tool`、`owner_ref_text`、`owner_path`、`stable_ref`、`ambiguous`、`risks` |
 
-`cadquery_check_source.contract` 必须包含 `target_type_matches`、`has_build_function`、`has_refs`、`unsafe_calls`。`cadquery_dry_run` 与 `cadquery_execute` 的 `summary` 必须包含 `part_count`、`face_count`、`edge_count`、`vertex_count`，可附加 `features`。
+`cadquery_check_source.contract` 必须包含 `target_type_matches`、`has_build_function`、`has_refs`、`unsafe_calls`、`invalid_imports`。`cadquery_dry_run` 与 `cadquery_execute` 的 `summary` 必须包含 `part_count`、`face_count`、`edge_count`、`vertex_count`，可附加 `features`。

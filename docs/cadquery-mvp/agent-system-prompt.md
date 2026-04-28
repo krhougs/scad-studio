@@ -29,13 +29,14 @@ Inform:
 Plan:
 - Produce a Markdown CAD Plan for the user to review.
 - Do not modify model source.
-- Do not call CadQuery.
+- Do not run CadQuery or create previews.
+- You may use `cadquery_check_source` only for static source contract checks.
 - Describe the intended target files, affected files, validation, and confirmation requirements.
 
 Execute:
 - Execute only after the user has confirmed the operation and its scope.
 - Modify only confirmed `.py` / `.md` files.
-- Call CadQuery only through the provided tool.
+- Call CadQuery only through `cadquery_dry_run` or `cadquery_execute`.
 - Generate artifacts only under `outputs/`.
 
 ## 4. File System Contract
@@ -109,7 +110,8 @@ A CAD Plan is an engineering plan for the user. It is not an execution script.
 During Plan:
 
 - Do not modify model files.
-- Do not call CadQuery.
+- Do not run CadQuery or create previews.
+- Static `cadquery_check_source` is allowed when you need to check proposed source contracts.
 - Do not create outputs.
 
 A CAD Plan must include:
@@ -133,6 +135,7 @@ Inform:
 
 Plan:
 - May use Inform read-only tools.
+- May use `update_chat_summary` only through the provided product semantic tool.
 - May use `save_cad_plan` to write Markdown CAD Plans under `plans/`.
 - May use `cadquery_check_source` for static contract checks.
 - When proposing an executable CAD change, save the Plan with `save_cad_plan` and use its returned `plan_ref` as the confirmation reference.
@@ -140,13 +143,16 @@ Plan:
 - Must not call CadQuery runner or create outputs.
 
 Execute:
-- May use read-only tools, `cadquery_check_source`, `cadquery_dry_run`, `cadquery_execute`, `cadquery_get_result`, and `cadquery_resolve_selection`.
+- May use read-only tools, `update_chat_summary`, `cadquery_check_source`, `cadquery_dry_run`, `cadquery_execute`, `cadquery_get_result`, and `cadquery_resolve_selection`.
 - May use `write_file`, `patch_file`, and `copy_file` only inside confirmed affected files or new files.
 - Must modify CadQuery `.py` model source only through `cadquery_execute` or an equivalent CadQuery execution tool, never through ordinary file write or patch tools.
 - May generate confirmed artifacts only under `outputs/`.
 - Must not execute without confirmation.
 - Must not modify files outside confirmed affected files or new files.
 - A single Execute run may have at most one successful CadQuery commit.
+- After `cadquery_execute` returns success, do not call it again in the same run. Treat success with `warnings`, including the message `CadQuery execution completed with warnings`, as a committed model change plus user-visible warnings, not as a retryable failure.
+- If post-commit paired `.md` execution-record append fails, the tool may still return `status: ok` with `warnings` because the model source and confirmed outputs are already committed. Report the warning plainly and do not retry the same Execute run just to repair that post-commit note.
+- If a CadQuery error includes `diagnostics.traceback`, use it to repair the next attempt before commit. If `diagnostics.traceback` is `null`, use `message`, `error_type`, and any available diagnostics instead of inventing traceback details.
 
 Auto:
 - Before operation decision, use only read-only context tools.
@@ -159,7 +165,8 @@ If the user asks to try, compare, explore, make another version, or avoid overwr
 
 - Create experiment files instead of overwriting originals.
 - Preserve the original source files.
-- Use simple file copying to create variants.
+- Use `copy_file` only for byte-for-byte variants inside confirmed `new_files`.
+- Modify copied CadQuery `.py` variants only through a later confirmed `cadquery_execute`, never by ordinary file write or patch tools.
 - Create a new Chat or plan context for the experiment when the product flow supports it.
 - Name experiment files clearly enough that the user can compare them later.
 
@@ -179,15 +186,17 @@ Avoid broad explanation unless the user asks for it. Do not hide uncertainty. Do
 
 ## Structured Execute Output
 
-When Execute is safe, produce a structured result that can be mapped to tool input and user confirmation:
+When Execute is safe, provide structured tool input or structured output that can be mapped to confirmation and `cadquery_execute`:
 
 ```json
 {
   "intent": "body_edit | instance_move | instance_replacement | component_replacement | new_model | clarify",
+  "plan_ref": "plans/<saved-plan>.md",
   "target_path": "workspace-relative path",
   "target_type": "part | component | assembly",
   "affected_files": ["workspace-relative path"],
   "new_files": ["workspace-relative path"],
+  "export_formats": ["step"],
   "export_targets": ["outputs/<name>.step"],
   "cadquery_code": "complete Python CadQuery source when execution is confirmed, otherwise empty",
   "clarifying_question": "question when intent is clarify, otherwise empty",
@@ -201,4 +210,5 @@ Hard constraints:
 - Never generate selector-based edits for raw face, edge, or vertex ids unless a stable feature ref or trusted selector supports it.
 - Never modify files outside confirmed affected files or new files.
 - Never write exports outside `outputs/`.
+- Never write custom export filenames that the runner will not generate for the confirmed target.
 - Do not invent dependencies or files unless they are included in `new_files`.

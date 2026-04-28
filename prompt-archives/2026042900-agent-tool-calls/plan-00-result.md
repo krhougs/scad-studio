@@ -18,6 +18,8 @@ Phase 5 已完成实现、多轮独立 review 和完整聚焦回归。Phase 5 �
 
 Phase 6 已完成实现、独立 review 和聚焦回归。Phase 6 复核并保护 Web Plan 确认流的结构化数据来源，补齐 Chat event 按当前 session 展示与 token 累积隔离，避免跨 Chat event 影响当前 Plan 卡片和 streaming 文本。
 
+Phase 7 已完成实现、独立 review 收敛和最终回归。Phase 7 已同步 system prompt、工具合同和 known issues，完成 Rust / Web 聚焦回归与 Playwright 验收；独立 review 最终确认无 Blocker。
+
 ## Phase 结果记录
 
 | Phase | 状态 | 结果 |
@@ -29,7 +31,7 @@ Phase 6 已完成实现、独立 review 和聚焦回归。Phase 6 复核并保�
 | Phase 4 — 受限文件写入工具 | 已完成 | 已接入 `write_file`、`patch_file`、`copy_file`，补齐 registry 与 executor 双层防护、普通写入范围、hash 冲突检测、symlink / hard link alias 拒绝和 CadQuery `.py` copy 边界；独立 review 与完整聚焦回归通过 |
 | Phase 5 — CadQuery 专用工具与执行边界 | 已完成 | 已接入 `cadquery_analyze_source`、`cadquery_check_source`、`cadquery_dry_run`、`cadquery_execute`、`cadquery_get_result`、`cadquery_resolve_selection`，复用 staging / exact output scope / result cache，并禁用旧 direct 写入入口；多轮独立 review 与完整聚焦回归通过 |
 | Phase 6 — 前端确认流与协议补强 | 已完成 | 已复核 Web Plan confirmation、preview、execute 调用与 tool event 展示；补齐当前 Chat session event 过滤和 streaming 文本重置；独立 review 与聚焦回归通过 |
-| Phase 7 — 权限模型回归、文档同步与端到端验证 | 未开始 | 等待执行 |
+| Phase 7 — 权限模型回归、文档同步与端到端验证 | 已完成 | 已同步 system prompt、工具合同和 known issues，完成 Rust / Web 聚焦回归与 Playwright 验收；独立 review 收敛后无 Blocker |
 
 ## 执行记录
 
@@ -387,3 +389,63 @@ Phase 6 已完成实现、独立 review 和聚焦回归。Phase 6 复核并保�
 遗留问题：
 
 - 未发现需要写入 `docs/known_issues.md` 的新问题。
+
+### Phase 7 — 权限模型回归、文档同步与端到端验证
+
+前序目标保护：
+
+- 保持 Phase 0-6 已建立的权限、追溯、confirmation、staging、单次 CadQuery commit 边界。
+- 禁止为了通过文档或端到端检查放宽 `write_file` / `patch_file` 对 CadQuery `.py` 的限制。
+- 禁止恢复 prompt 关键词或 selection 临时推断确认范围。
+
+完成情况：
+
+- 同步 `docs/cadquery-mvp/agent-system-prompt.md`：
+  - 明确 Execute 只能通过 `cadquery_dry_run` 或 `cadquery_execute` 调用 CadQuery 能力。
+  - 明确 Plan 不运行 CadQuery、不创建 preview，但允许 `cadquery_check_source` 做静态合同检查。
+  - 明确 `update_chat_summary` 在 Inform / Plan / Execute 中都只能通过产品语义工具使用。
+  - 明确 `cadquery_execute` 成功后同一 run 不得再次执行，带 warnings 的成功结果代表模型和确认 outputs 已提交。
+  - 明确 `diagnostics.traceback` 可为 `null`，不得凭空生成 traceback。
+- 同步 `docs/cadquery-mvp/agent-tool-contract.md`：
+  - 补充 post-commit `.md` 执行记录追加失败以 warnings 呈现的语义。
+  - 补充 `cadquery_check_source.contract.invalid_imports` 和 `cadquery_execute.warnings` 成功结果字段。
+  - 补充 runtime error `diagnostics.traceback` 字段说明。
+- 更新 `docs/known_issues.md`：
+  - 顶部 CadQuery diagnostics 记录已从“等待文档同步”改为“runner traceback 仍需结构化拆分”。
+  - `plan_ref` 持久绑定记录保持已处理状态。
+- 补强 `crates/app-server-core/tests/agent_tests.rs`：
+  - `cadquery_agent_system_prompt_covers_runtime_contract` 增加 warning、diagnostics、byte-for-byte variant、Plan `cadquery_check_source`、Plan / Execute `update_chat_summary` 的断言。
+
+验证命令：
+
+- `cargo test -p app-server-core --test agent_tool_registry_tests --test agent_tool_tests --test agent_tests --test chat_tests --test cadquery_tests --test cadquery_staging_tests --test llm_tests`
+  - 结果：通过；`agent_tool_registry_tests` 5 passed，`agent_tool_tests` 118 passed，`agent_tests` 13 passed，`chat_tests` 8 passed，`cadquery_tests` 10 passed，`cadquery_staging_tests` 12 passed，`llm_tests` 34 passed。
+  - 备注：仍有既有 `watch.rs` dead_code warning，未在本 Phase 处理。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests --test dispatcher_pure_fn_tests --test plan_extraction_tests --test in_process_roundtrip_tests --test mpsc_transport_tests --test websocket_smoke_roundtrip --test session_tests --test session_lifecycle_tests`
+  - 结果：通过；`dispatcher_pure_fn_tests` 17 passed，`in_process_roundtrip_tests` 1 passed，`mpsc_transport_tests` 5 passed，`plan_extraction_tests` 19 passed，`session_lifecycle_tests` 5 passed，`session_tests` 3 passed，`shared_dispatcher_roundtrip_tests` 13 passed，`websocket_smoke_roundtrip` 6 passed。
+  - 备注：`shared_dispatcher_roundtrip_tests` 仍有既有未使用 helper warning，未在本 Phase 处理。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests --test borsh_frame_tests --test wire_payload_contract_tests --test path_handle_borsh_tests --test path_handle_tests`
+  - 结果：通过；`borsh_payload_roundtrip_tests` 15 passed，`borsh_frame_tests` 7 passed，`wire_payload_contract_tests` 1 passed，`path_handle_borsh_tests` 2 passed，`path_handle_tests` 10 passed。
+- `cargo test -p studio-common --test managed_client_tests --test app_server_client_tests`
+  - 结果：通过；`managed_client_tests` 20 passed，`app_server_client_tests` 2 passed。
+- `cargo test -p studio-web-wasm --test wasm_bridge_smoke --test mesh_decode_tests`
+  - 结果：native target 通过；`mesh_decode_tests` 4 passed，`wasm_bridge_smoke` 0 tests。
+- `bun --filter @budn/studio-web test:unit -- chat-zone.test.tsx chat-actions.test.ts cadquery-agent-scope.test.ts chat-messages.test.ts protocol-package-import.test.ts workbench-wiring.test.ts && bun --filter @budn/studio-web typecheck`
+  - 结果：Web unit 6 个测试文件通过，43 个测试通过；typecheck 通过。
+- `bun --filter @budn/studio-web test:e2e -- tests/playwright/agent-chat-interaction.spec.ts tests/playwright/cadquery-viewer-selection.spec.ts`
+  - 结果：13 passed。
+- `git diff --check`
+  - 结果：通过。
+- `rg -n "selector|subshape" docs/cadquery-mvp docs/known_issues.md prompt-archives/2026042900-agent-tool-calls/plan-00-result.md`
+  - 结果：命中均为内部 selector / 非 Ref 或拒绝用户可见输出语境，未发现把 selector / subshape 表述为 MVP 用户可见 Ref 的内容。
+
+独立 review：
+
+- 第一轮 review 指出 system prompt 权限段落未把 `update_chat_summary` 写入 Plan / Execute，Plan 段落“Do not call CadQuery”与 `cadquery_check_source` 静态检查权限不一致；已修复。
+- 第一轮 review 指出 Phase 7 结果尚未写入本文件；已补充。
+- 最终 review 确认无 Blocker；其指出的结果归档状态文案和 Plan 权限测试截取范围已修正。
+
+遗留问题：
+
+- `docs/known_issues.md` 继续保留真实 LLM provider 尚未接入、CadQuery edit intent 尚未由 LLM 结构化输出接管、runner traceback 尚未结构化拆分等既有问题。
+- 由于真实 LLM provider 尚未接入，本 Phase 的端到端验证覆盖了 Agent Chat protocol、Plan / confirmation 前端流、CadQuery viewer selection 和工具权限回归，未执行真实 LLM 生成 CadQuery 并成功提交 workspace 的完整产品链路。

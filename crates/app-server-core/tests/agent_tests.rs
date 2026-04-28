@@ -55,6 +55,33 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
     assert!(prompt.contains("Raw face / edge / vertex refs are not long-term truth"));
     assert!(prompt.contains("Do not expose selector refs as MVP protocol selections"));
     assert!(prompt.contains("confirmed"));
+    assert!(prompt.contains("CadQuery execution completed with warnings"));
+    assert!(prompt.contains("diagnostics.traceback"));
+    assert!(prompt.contains("byte-for-byte variants"));
+    assert!(prompt.contains("Static `cadquery_check_source` is allowed"));
+    let tool_rules = prompt
+        .split("## 8. Tool Permission Rules")
+        .nth(1)
+        .expect("tool permission section exists");
+    let plan_and_after = tool_rules
+        .split("Plan:")
+        .nth(1)
+        .expect("plan permission block exists");
+    let plan_rules = plan_and_after
+        .split("Execute:")
+        .next()
+        .expect("plan permission block exists");
+    assert!(plan_rules.contains("May use `update_chat_summary`"));
+    assert!(plan_rules.contains("May use `cadquery_check_source`"));
+    assert!(!plan_rules.contains("Do not call CadQuery."));
+    let execute_rules = tool_rules
+        .split("Execute:")
+        .nth(1)
+        .and_then(|section| section.split("Auto:").next())
+        .expect("execute permission block exists");
+    assert!(execute_rules.contains("`update_chat_summary`"));
+    assert!(execute_rules.contains("`cadquery_dry_run`"));
+    assert!(execute_rules.contains("`cadquery_execute`"));
     assert!(!prompt.contains("keyword matching"));
 }
 

@@ -1,18 +1,18 @@
 # 已知问题记录
 
-## 2026-04-29 23:20:00: CadQuery tool result diagnostics 与 post-commit 文档 warning 策略仍需文档同步
+## 2026-04-29 23:20:00: CadQuery runner traceback 仍需结构化拆分
 
 - 来源：执行 `prompt-archives/2026042900-agent-tool-calls/plan-00.md` Phase 5 独立 review。
 - 原因：
   - `cadquery_execute` 在真实 commit 后追加配对 `.md` 执行记录；若追加失败，当前返回 `status: ok` 并在 warnings 中提示，而不是返回 `status: error`。这是为了避免真实 commit 已发生后同一 Execute run 继续重试并破坏“单次成功 commit”边界。
   - `CadQueryToolRuntimeError` 当前仍主要通过 `message` 携带 runner 错误文本；tool error result 已提供 `diagnostics.traceback` 字段，但 traceback 还未从 runner stderr/message 中结构化拆分。
 - 影响范围：
-  - LLM 和 UI 可以看到 warnings，但最终工具合同文档仍需要明确“post-commit 文档追加失败以 warning 呈现”这一策略，避免后续实现误认为必须返回 error。
+  - LLM 和 UI 可以看到 warnings；工具合同和 system prompt 已明确“post-commit 文档追加失败以 warning 呈现”这一策略，避免后续实现误认为必须返回 error。
   - 后续若要让 LLM 更稳定地基于 Python traceback 修复 CadQuery build error，需要把 runner traceback / diagnostics 从 message 中结构化拆出来。
 - 可能的解法：
-  - Phase 7 更新 `docs/cadquery-mvp/agent-tool-contract.md` 和 system prompt，明确 commit 后文档追加失败的 warning 语义。
+  - 保持 `docs/cadquery-mvp/agent-tool-contract.md` 和 system prompt 中的 warning 语义与运行时一致。
   - 扩展 `CadQueryToolRuntimeError`，增加 `traceback` 与 `diagnostics` 字段，并在 `cadquery_tool_error()` 中从 runner stderr / message 填充。
-- 当前处理方式：Phase 5 先保证安全边界：commit 前完成 topology 与 doc update preflight，commit 后文档追加失败进入 warnings，`cadquery_execute` 成功后仍会设置单次 commit guard；结构化 diagnostics 留给后续文档同步和错误模型增强。
+- 当前处理方式：Phase 7 已同步文档语义；运行时继续保证安全边界：commit 前完成 topology 与 doc update preflight，commit 后文档追加失败进入 warnings，`cadquery_execute` 成功后仍会设置单次 commit guard。剩余问题只保留 runner traceback / diagnostics 的结构化拆分。
 
 ## 2026-04-28 09:22:00: CadQuery edit intent 尚未由 LLM 结构化输出接管
 
