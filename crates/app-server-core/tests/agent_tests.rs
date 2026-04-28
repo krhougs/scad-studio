@@ -105,6 +105,7 @@ fn draft_agent_turn_uses_prompt_history_selection_and_execute_target() {
         selections: vec![selection("@face[top_lid:f_0]")],
         active_selection_index: Some(0),
         confirmed_target_path: Some("parts/top_lid.py".into()),
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("Execute"));
@@ -123,6 +124,7 @@ fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
         selections: vec![selection("@face[top_lid:f_0]")],
         active_selection_index: Some(0),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("## CAD Plan"));
@@ -172,6 +174,7 @@ fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -189,6 +192,7 @@ fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -206,6 +210,7 @@ fn plan_turn_labels_component_body_edit_as_component_geometry() {
         selections: vec![component_selection()],
         active_selection_index: Some(0),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -222,6 +227,7 @@ fn plan_turn_labels_instance_body_edit_as_component_geometry() {
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -238,6 +244,7 @@ fn plan_turn_uses_active_selection_and_keeps_ambiguous_raw_ref() {
         selections: vec![selection("@face[top_lid:f_0]"), ambiguous_selection()],
         active_selection_index: Some(1),
         confirmed_target_path: None,
+        context_refs: Vec::new(),
     });
 
     assert!(draft.text.contains("@face[top_lid:f_1]"));

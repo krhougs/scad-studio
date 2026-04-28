@@ -27,6 +27,19 @@ type PathHandleLike = {
   path_segments: string[];
 };
 
+export function preferredRefText(selection: SelectionRef): string {
+  if (selection.ambiguous) return selection.ref_text;
+  const candidate = selection.candidate_feature_ref?.trim();
+  return candidate || selection.ref_text;
+}
+
+export function cadQuerySelectionSummary(
+  snapshot: ChatSnapshotLike | null,
+): string | null {
+  const selection = activeSelection(snapshot);
+  return selection ? preferredRefText(selection) : null;
+}
+
 export function buildCadQueryConfirmation(
   snapshot: ChatSnapshotLike | null,
   targetPath: string,
@@ -53,13 +66,6 @@ export function buildCadQueryConfirmation(
   };
 }
 
-export function cadQuerySelectionSummary(
-  snapshot: ChatSnapshotLike | null,
-): string | null {
-  const selection = activeSelection(snapshot);
-  return selection ? preferredSelectionRef(selection) : null;
-}
-
 function activeSelection(snapshot: ChatSnapshotLike | null): SelectionRef | null {
   const current = snapshot?.current_selection;
   const selections = current?.selections ?? [];
@@ -74,12 +80,6 @@ function scopeFromSelection(selection: SelectionRef | null): TargetScope | null 
   if (!selection) return null;
   const kind = selection.owner_object_kind ?? objectKindFromSelection(selection.kind);
   return pathScopeFromRef(selection.owner_ref_text ?? selection.ref_text, kind);
-}
-
-function preferredSelectionRef(selection: SelectionRef): string {
-  if (selection.ambiguous) return selection.ref_text;
-  const candidate = selection.candidate_feature_ref?.trim();
-  return candidate || selection.ref_text;
 }
 
 function pathScopeFromRef(

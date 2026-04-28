@@ -18,6 +18,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         let was_reconnecting = self.transport_status == TransportStatus::Reconnecting;
         self.transport_status = TransportStatus::Open;
         self.pending_handshake = None;
+        self.llm_configured = ack.server_capabilities.llm_configured;
         self.events.push_back(ClientEvent::HandshakeAccepted {
             session_token: ack.session_token.clone(),
             server_capabilities: ack.server_capabilities.clone(),
@@ -144,7 +145,10 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             CommandSuccess::AgentStarted(response) => {
                 self.agent_run = Some(response.clone());
             }
-            CommandSuccess::AgentCancelled(_) => {}
+            CommandSuccess::AgentPlanConfirmed(response) => {
+                self.agent_run = Some(response.clone());
+            }
+            CommandSuccess::AgentCancelled(_) | CommandSuccess::AgentPlanRejected => {}
             CommandSuccess::SelectionUpdated(_) => {
                 if let PendingKind::SelectionUpdate { snapshot } = &info.kind {
                     self.current_selection = snapshot.clone();

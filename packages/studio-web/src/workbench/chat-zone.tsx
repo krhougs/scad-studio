@@ -1,12 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Cube, Paperclip, Ruler, Stop } from "@phosphor-icons/react";
-import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
+import { Stop } from "@phosphor-icons/react";
+import type {
+  AgentPlanProposedEvent,
+  SelectionRef,
+  SelectionUpdateRequest,
+} from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
+import { preferredRefText } from "./cadquery-agent-scope";
+import { ChatBody } from "./chat-messages";
+import { ChatComposer } from "./chat-composer";
 import {
-  DEFAULT_CADQUERY_TARGET_PATH,
-  buildCadQueryConfirmation,
-  cadQuerySelectionSummary,
-} from "./cadquery-agent-scope";
+  cancelAgentRun,
+  confirmPlan,
+  createChatSession,
+  rejectPlan,
+  previewPlan,
+  reportError,
+  selectChatSession,
+  sendChatMessage,
+} from "./chat-actions";
 
 type ChatZoneProps = {
   client: WasmClient | null;
@@ -22,16 +34,17 @@ export type ChatSnapshot = {
   agent_run?: AgentRun | null;
   agent_events?: AgentEvent[];
   current_selection?: SelectionUpdateRequest | null;
+  llm_configured?: boolean;
 };
 
-type ChatSessionSummary = {
+export type ChatSessionSummary = {
   session_id: string;
   title: string;
   archived: boolean;
   message_count: number;
 };
 
-type ChatMessageRecord = {
+export type ChatMessageRecord = {
   message_id: string;
   ts_ms: number;
   role: "user" | "assistant" | "tool" | "meta";
@@ -41,17 +54,22 @@ type ChatMessageRecord = {
   mesh_result?: unknown | null;
 };
 
-type AgentRun = {
+export type AgentRun = {
   session_id: string;
   run_id: string;
 };
 
-type AgentEvent = {
+export type AgentEvent = {
   event: string;
   payload?: Record<string, unknown>;
 };
 
-type AgentOperation = "inform" | "plan" | "execute";
+export type ContextPill = {
+  ref_text: string;
+  display: string;
+};
+
+const MAX_CONTEXT_PILLS = 3;
 
 export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
   const controller = useChatController({ client, snapshot, onStatus });
@@ -62,6 +80,7 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
         currentSessionId={controller.currentSessionId}
         disabled={controller.headerDisabled}
         agentRun={controller.agentRun}
+        llmConfigured={snapshot?.llm_configured ?? true}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
@@ -69,16 +88,20 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
       <ChatBody
         messages={controller.messages}
         agentEvents={controller.agentEvents}
+        pendingPlan={controller.pendingPlan}
+        llmConfigured={snapshot?.llm_configured ?? true}
+        streaming={Boolean(controller.agentRun)}
+        streamText={controller.streamText}
+        onPreviewPlan={controller.previewPlan}
+        onConfirmPlan={controller.confirmPlan}
+        onRejectPlan={controller.rejectPlan}
       />
       <ChatComposer
         value={controller.draft}
         disabled={controller.composerDisabled}
-        operation={controller.operation}
-        targetPath={controller.targetPath}
-        selectionSummary={controller.selectionSummary}
+        contextPills={controller.contextPills}
         onChange={controller.setDraft}
-        onOperationChange={controller.setOperation}
-        onTargetPathChange={controller.setTargetPath}
+        onRemovePill={controller.removePill}
         onSend={controller.send}
       />
     </section>
@@ -87,25 +110,41 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
 
 function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const [draft, setDraft] = useState("");
-  const [operation, setOperation] = useState<AgentOperation>("inform");
-  const [targetPath, setTargetPath] = useState(DEFAULT_CADQUERY_TARGET_PATH);
   const [busy, setBusy] = useState(false);
+  const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
+  const [pendingPlan, setPendingPlan] =
+    useState<AgentPlanProposedEvent | null>(null);
+  const [streamText, setStreamText] = useState("");
   const sessions = snapshot?.chat_sessions ?? [];
   const currentSessionId =
     snapshot?.current_chat_session ?? sessions[0]?.session_id ?? null;
   const messages = snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
+  const rawEvents = snapshot?.agent_events ?? [];
   const agentEvents = useMemo(
-    () => recentAgentEvents(snapshot?.agent_events ?? []),
-    [snapshot?.agent_events],
-  );
-  const selectionSummary = useMemo(
-    () => cadQuerySelectionSummary(snapshot),
-    [snapshot?.current_selection],
+    () => recentNonTokenEvents(rawEvents),
+    [rawEvents],
   );
 
+  useStreamAccumulator(rawEvents, setStreamText);
+
+  const contextPills = useMemo(() => {
+    const selections = snapshot?.current_selection?.selections ?? [];
+    return buildContextPills(selections, removedRefs);
+  }, [snapshot?.current_selection, removedRefs]);
+
+  const prevSelectionRef = useRef(snapshot?.current_selection);
+  useEffect(() => {
+    if (prevSelectionRef.current !== snapshot?.current_selection) {
+      prevSelectionRef.current = snapshot?.current_selection;
+      setRemovedRefs(new Set());
+    }
+  }, [snapshot?.current_selection]);
+
+  usePlanProposedTracker(agentEvents, setPendingPlan);
   useInitialChatList(client, onStatus);
   useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
+
   const actions = useChatActions({
     client,
     sessions,
@@ -113,9 +152,7 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     agentRun,
     busy,
     draft,
-    operation,
-    targetPath,
-    snapshot,
+    contextPills,
     onStatus,
     setBusy,
     setDraft,
@@ -124,20 +161,75 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   return {
     draft,
     setDraft,
-    operation,
-    setOperation,
-    targetPath,
-    setTargetPath,
     sessions,
     currentSessionId,
     messages,
     agentRun,
     agentEvents,
-    selectionSummary,
+    streamText,
+    contextPills,
+    pendingPlan,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
+    removePill: (refText: string) => {
+      setRemovedRefs((prev) => new Set(prev).add(refText));
+    },
+    previewPlan: () => {
+      if (!pendingPlan) return;
+      void previewPlan(client, pendingPlan, onStatus);
+    },
+    confirmPlan: () => {
+      if (!pendingPlan || !snapshot) return;
+      setPendingPlan(null);
+      void confirmPlan(client, pendingPlan, snapshot, onStatus);
+    },
+    rejectPlan: () => {
+      if (!pendingPlan || !currentSessionId) return;
+      const runId = pendingPlan.run_id;
+      setPendingPlan(null);
+      void rejectPlan(client, currentSessionId, runId, onStatus);
+    },
     ...actions,
   };
+}
+
+function buildContextPills(
+  selections: SelectionRef[],
+  removedRefs: Set<string>,
+): ContextPill[] {
+  return selections
+    .filter((sel) => !removedRefs.has(sel.ref_text))
+    .slice(-MAX_CONTEXT_PILLS)
+    .map((sel) => ({
+      ref_text: sel.ref_text,
+      display: preferredRefText(sel),
+    }));
+}
+
+function usePlanProposedTracker(
+  agentEvents: AgentEvent[],
+  setPendingPlan: (plan: AgentPlanProposedEvent | null) => void,
+) {
+  const trackedRef = useRef<string | null>(null);
+  useEffect(() => {
+    for (let i = agentEvents.length - 1; i >= 0; i--) {
+      const ev = agentEvents[i] as AgentEvent | undefined;
+      if (!ev) continue;
+      if (ev.event === "agent.plan_proposed" && ev.payload) {
+        const runId = ev.payload["run_id"] as string | undefined;
+        if (runId && trackedRef.current !== runId) {
+          trackedRef.current = runId;
+          setPendingPlan(ev.payload as unknown as AgentPlanProposedEvent);
+        }
+        return;
+      }
+      if (ev.event === "agent.done") {
+        trackedRef.current = null;
+        setPendingPlan(null);
+        return;
+      }
+    }
+  }, [agentEvents, setPendingPlan]);
 }
 
 function useInitialChatList(
@@ -177,9 +269,7 @@ function useChatActions(input: {
   agentRun: AgentRun | null;
   busy: boolean;
   draft: string;
-  operation: AgentOperation;
-  targetPath: string;
-  snapshot: ChatSnapshot | null;
+  contextPills: ContextPill[];
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
   setDraft: (value: string) => void;
@@ -200,31 +290,12 @@ function useChatActions(input: {
   };
 }
 
-function ChatBody(props: {
-  messages: ChatMessageRecord[];
-  agentEvents: AgentEvent[];
-}) {
-  return (
-    <div className="chat-body" data-testid="chat-body">
-      {props.messages.length === 0 ? (
-        <p className="chat-empty">No active chat.</p>
-      ) : (
-        props.messages.map((message) => (
-          <ChatMessage key={message.message_id} message={message} />
-        ))
-      )}
-      {props.agentEvents.map((event, index) => (
-        <AgentEventRow key={`${event.event}-${index}`} event={event} />
-      ))}
-    </div>
-  );
-}
-
 function ChatHeader(props: {
   sessions: ChatSessionSummary[];
   currentSessionId: string | null;
   disabled: boolean;
   agentRun: AgentRun | null;
+  llmConfigured: boolean;
   onNew: () => void;
   onSelect: (id: string) => void;
   onCancel: () => void;
@@ -235,7 +306,13 @@ function ChatHeader(props: {
   return (
     <header className="chat-head">
       <div>
-        <div className="title">budn&apos; agent</div>
+        <div className="title">
+          budn&apos; agent{" "}
+          <span
+            className={props.llmConfigured ? "llm-dot llm-dot--ok" : "llm-dot llm-dot--off"}
+            title={props.llmConfigured ? "AI connected" : "AI not configured"}
+          />
+        </div>
         <div className="sub">{active?.title ?? "no session"}</div>
       </div>
       <div className="chat-session-actions">
@@ -243,7 +320,7 @@ function ChatHeader(props: {
           aria-label="chat session"
           value={props.currentSessionId ?? ""}
           disabled={props.disabled || props.sessions.length === 0}
-          onChange={(event) => props.onSelect(event.target.value)}
+          onChange={(event) => props.onSelect((event.target as HTMLSelectElement).value)}
         >
           {props.sessions.map((session) => (
             <option key={session.session_id} value={session.session_id}>
@@ -273,364 +350,45 @@ function ChatHeader(props: {
   );
 }
 
-function ChatMessage({ message }: { message: ChatMessageRecord }) {
-  if (message.role === "meta") return null;
-  const role = message.role === "user" ? "user" : "agent";
-  return (
-    <article className={`msg ${role}`}>
-      <div className="who">
-        <b>{message.role}</b>
-        <time>{formatTime(message.ts_ms)}</time>
-      </div>
-      <div className="bubble">{message.content}</div>
-    </article>
-  );
+function recentNonTokenEvents(events: AgentEvent[]): AgentEvent[] {
+  return events
+    .filter((event) => event.event.startsWith("agent.") && event.event !== "agent.token")
+    .slice(-10);
 }
 
-function AgentEventRow({ event }: { event: AgentEvent }) {
-  const label = event.event.replace("agent.", "");
-  const detail = agentEventDetail(event);
-  return (
-    <div className="agent-op">
-      <div className="op-head">
-        <span className={event.event === "agent.done" ? "ok" : undefined}>
-          {label}
-        </span>
-      </div>
-      <div className="op-detail">{detail}</div>
-    </div>
-  );
-}
-
-function ChatComposer(props: {
-  value: string;
-  disabled: boolean;
-  operation: AgentOperation;
-  targetPath: string;
-  selectionSummary: string | null;
-  onChange: (value: string) => void;
-  onOperationChange: (value: AgentOperation) => void;
-  onTargetPathChange: (value: string) => void;
-  onSend: () => void;
-}) {
-  return (
-    <footer className="chat-input">
-      <div className="wrap">
-        <ChatTextarea
-          value={props.value}
-          onChange={props.onChange}
-          onSend={props.onSend}
-        />
-        <ChatSelectionContext selectionSummary={props.selectionSummary} />
-        <ChatComposerTools
-          disabled={props.disabled}
-          operation={props.operation}
-          onOperationChange={props.onOperationChange}
-          onSend={props.onSend}
-        />
-        <ExecuteTargetInput
-          operation={props.operation}
-          targetPath={props.targetPath}
-          onTargetPathChange={props.onTargetPathChange}
-        />
-      </div>
-    </footer>
-  );
-}
-
-function ChatSelectionContext(props: { selectionSummary: string | null }) {
-  if (!props.selectionSummary) return null;
-  return (
-    <div className="chat-selection-context" data-testid="chat-selection-context">
-      <span>ref</span>
-      <code>{props.selectionSummary}</code>
-    </div>
-  );
-}
-
-function ChatTextarea(props: {
-  value: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
-}) {
-  return (
-    <textarea
-      placeholder="Describe a change, add a feature, or ask for alternatives..."
-      value={props.value}
-      onChange={(ev) => props.onChange(ev.target.value)}
-      onKeyDown={(ev) => {
-        if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) props.onSend();
-      }}
-      data-testid="chat-input"
-    />
-  );
-}
-
-function ChatComposerTools(props: {
-  disabled: boolean;
-  operation: AgentOperation;
-  onOperationChange: (value: AgentOperation) => void;
-  onSend: () => void;
-}) {
-  return (
-    <div className="tools">
-      <div className="tools-left">
-        <OperationSelector
-          operation={props.operation}
-          onOperationChange={props.onOperationChange}
-        />
-        <DisabledToolButtons />
-      </div>
-      <button
-        type="button"
-        className="send"
-        disabled={props.disabled}
-        onClick={props.onSend}
-      >
-        send <ArrowUp size={12} weight="bold" aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
-function OperationSelector(props: {
-  operation: AgentOperation;
-  onOperationChange: (value: AgentOperation) => void;
-}) {
-  return (
-    <>
-      {(["inform", "plan", "execute"] as const).map((operation) => (
-        <OperationButton
-          key={operation}
-          active={props.operation === operation}
-          label={operationLabel(operation)}
-          onClick={() => props.onOperationChange(operation)}
-        />
-      ))}
-    </>
-  );
-}
-
-function DisabledToolButtons() {
-  return (
-    <>
-      <button type="button" title="attach sketch" disabled>
-        <Paperclip size={14} weight="bold" aria-hidden="true" />
-      </button>
-      <button type="button" title="reference part" disabled>
-        <Cube size={14} weight="bold" aria-hidden="true" />
-      </button>
-      <button type="button" title="dimension pick" disabled>
-        <Ruler size={14} weight="bold" aria-hidden="true" />
-      </button>
-    </>
-  );
-}
-
-function ExecuteTargetInput(props: {
-  operation: AgentOperation;
-  targetPath: string;
-  onTargetPathChange: (value: string) => void;
-}) {
-  if (props.operation !== "execute") return null;
-  return (
-    <input
-      aria-label="cadquery target"
-      className="chat-target-path"
-      value={props.targetPath}
-      onChange={(event) => props.onTargetPathChange(event.target.value)}
-    />
-  );
-}
-
-function OperationButton(props: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={props.active ? "mode is-active" : "mode"}
-      onClick={props.onClick}
-    >
-      {props.label}
-    </button>
-  );
-}
-
-function operationLabel(operation: AgentOperation): string {
-  return operation[0].toUpperCase() + operation.slice(1);
-}
-
-async function createChatSession(
-  client: WasmClient | null,
-  sessions: ChatSessionSummary[],
-  onStatus: ((message: string) => void) | undefined,
-  setBusy: (value: boolean) => void,
-): Promise<string | null> {
-  if (!client) return null;
-  setBusy(true);
-  try {
-    const response = await client.dispatchChatCreate({
-      title: sessions.length === 0 ? "main" : `chat ${sessions.length + 1}`,
-      goal: null,
-      related_files: [],
-    });
-    await client.dispatchChatList({ include_archived: false });
-    const created = unwrapPayload(response) as { session_id?: string };
-    return created.session_id ?? null;
-  } catch (err) {
-    reportError(onStatus)(err);
-    return null;
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function selectChatSession(
-  client: WasmClient | null,
-  sessionId: string,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  await client
-    .dispatchChatHistory({ session_id: sessionId, limit: 100 })
-    .catch(reportError(onStatus));
-}
-
-async function cancelAgentRun(
-  client: WasmClient | null,
-  agentRun: AgentRun | null,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client || !agentRun) return;
-  await client
-    .dispatchAgentCancel({ run_id: agentRun.run_id })
-    .catch(reportError(onStatus));
-}
-
-async function sendChatMessage(params: {
-  client: WasmClient | null;
-  draft: string;
-  currentSessionId: string | null;
-  sessions: ChatSessionSummary[];
-  agentRun: AgentRun | null;
-  busy: boolean;
-  operation: AgentOperation;
-  targetPath: string;
-  snapshot: ChatSnapshot | null;
-  onStatus?: (message: string) => void;
-  setBusy: (value: boolean) => void;
-  setDraft: (value: string) => void;
-}): Promise<void> {
-  if (!params.client || params.busy || params.agentRun) return;
-  const content = params.draft.trim();
-  if (!content) return;
-  params.setBusy(true);
-  try {
-    await sendChatMessageInner(params, content);
-  } catch (err) {
-    reportError(params.onStatus)(err);
-  } finally {
-    params.setBusy(false);
-  }
-}
-
-async function sendChatMessageInner(
-  params: {
-    client: WasmClient | null;
-    currentSessionId: string | null;
-    sessions: ChatSessionSummary[];
-    operation: AgentOperation;
-    targetPath: string;
-    snapshot: ChatSnapshot | null;
-    onStatus?: (message: string) => void;
-    setBusy: (value: boolean) => void;
-    setDraft: (value: string) => void;
-  },
-  content: string,
-): Promise<void> {
-  const client = params.client;
-  if (!client) return;
-  const sessionId =
-    params.currentSessionId ??
-    (await createChatSession(
-      client,
-      params.sessions,
-      params.onStatus,
-      params.setBusy,
-    ));
-  if (!sessionId) return;
-  await client.dispatchChatSend({
-    session_id: sessionId,
-    content,
-    related_files: [],
-  });
-  params.setDraft("");
-  const confirmed =
-    params.operation === "execute"
-      ? buildCadQueryConfirmation(params.snapshot, params.targetPath, content)
-      : null;
-  await client.dispatchAgentInvoke({
-    session_id: sessionId,
-    prompt: content,
-    operation: params.operation,
-    confirmed_cadquery: confirmed,
-  });
-  await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
-}
-
-function unwrapPayload(response: unknown): unknown {
-  if (!response || typeof response !== "object") return response;
-  const record = response as Record<string, unknown>;
-  return record["payload"] ?? response;
-}
-
-function recentAgentEvents(events: AgentEvent[]): AgentEvent[] {
-  return events.filter((event) => event.event.startsWith("agent.")).slice(-6);
+function useStreamAccumulator(
+  rawEvents: AgentEvent[],
+  setStreamText: (value: string | ((prev: string) => string)) => void,
+) {
+  const countRef = useRef(0);
+  useEffect(() => {
+    const prevCount = countRef.current;
+    countRef.current = rawEvents.length;
+    if (rawEvents.length < prevCount) {
+      setStreamText("");
+      return;
+    }
+    for (let i = prevCount; i < rawEvents.length; i++) {
+      const ev = rawEvents[i];
+      if (!ev) continue;
+      if (ev.event === "agent.token") {
+        const text = ev.payload && typeof ev.payload["text"] === "string" ? ev.payload["text"] : "";
+        if (text) setStreamText((prev) => prev + text);
+      }
+      if (ev.event === "agent.done") {
+        setStreamText("");
+      }
+    }
+  }, [rawEvents, setStreamText]);
 }
 
 function lastAgentDoneKey(events: AgentEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event.event !== "agent.done") continue;
-    const runId = stringField(event.payload ?? {}, "run_id");
+    const event = events[index] as AgentEvent | undefined;
+    if (!event || event.event !== "agent.done") continue;
+    const payload = event.payload ?? {};
+    const runId = typeof payload["run_id"] === "string" ? payload["run_id"] : null;
     return runId || `done-${index}`;
   }
   return null;
-}
-
-function agentEventDetail(event: AgentEvent): string {
-  const payload = event.payload ?? {};
-  if (event.event === "agent.token") return stringField(payload, "text");
-  if (event.event === "agent.error") return stringField(payload, "message");
-  if (event.event === "agent.tool_start")
-    return stringField(payload, "tool_name");
-  if (event.event === "agent.tool_result")
-    return stringField(payload, "result_json");
-  if (event.event === "agent.mesh_ready") return "mesh ready";
-  if (event.event === "agent.done") {
-    return payload["cancelled"] === true ? "cancelled" : "done";
-  }
-  return event.event;
-}
-
-function stringField(payload: Record<string, unknown>, key: string): string {
-  const value = payload[key];
-  return typeof value === "string" ? value : "";
-}
-
-function reportError(onStatus?: (message: string) => void) {
-  return (err: unknown) => {
-    onStatus?.(err instanceof Error ? err.message : String(err));
-  };
-}
-
-function formatTime(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

@@ -1,0 +1,2 @@
+{"message_id":"meta-1","ts_ms":1777369825535,"role":"meta","content":"chat:main","related_files":[],"tool_call_id":null,"tool_calls":[],"tool_result":null,"mesh_result":null}
+{"message_id":"msg-2","ts_ms":1777369825549,"role":"user","content":"design a box","related_files":[],"tool_call_id":null,"tool_calls":[],"tool_result":null,"mesh_result":null}

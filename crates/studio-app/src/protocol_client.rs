@@ -452,7 +452,8 @@ impl DesktopProtocolClient {
                             | app_server_protocol::ServerPushEvent::AgentToolResult(_)
                             | app_server_protocol::ServerPushEvent::AgentMeshReady(_)
                             | app_server_protocol::ServerPushEvent::AgentError(_)
-                            | app_server_protocol::ServerPushEvent::AgentDone(_) => {}
+                            | app_server_protocol::ServerPushEvent::AgentDone(_)
+                            | app_server_protocol::ServerPushEvent::AgentPlanProposed(_) => {}
                         },
                         Ok(Some(ServerEnvelope::TransportError(error))) => {
                             if let Ok(mut waiter) = inner.handshake_waiter.lock()

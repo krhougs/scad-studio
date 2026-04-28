@@ -1,9 +1,9 @@
 use app_server_protocol::{
-    AgentCancelRequest, AgentInvokeRequest, CadQueryExecuteRequest, CadQueryPreviewRequest,
-    CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatSendRequest, ClientCommand, ConfigSaveRequest, ExportRunRequest,
-    FileReadRequest, FileWriteTextRequest, PreviewRequest, RequestId, SelectionUpdateRequest,
-    SlicerListRequest, WorkspaceListRequest,
+    AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
+    CadQueryExecuteRequest, CadQueryPreviewRequest, CadQueryResultGetRequest,
+    ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatSendRequest,
+    ClientCommand, ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest,
+    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
@@ -227,6 +227,28 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
     ) -> Result<RequestId, ClientError> {
         self.enqueue_command(
             ClientCommand::AgentCancel(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_plan_confirm(
+        &mut self,
+        params: AgentPlanConfirmRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentPlanConfirm(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_plan_reject(
+        &mut self,
+        params: AgentPlanRejectRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentPlanReject(params),
             PendingKind::Agent,
             self.timeouts.agent,
         )

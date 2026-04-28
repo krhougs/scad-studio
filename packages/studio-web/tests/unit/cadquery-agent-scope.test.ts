@@ -4,6 +4,7 @@ import {
   DEFAULT_CADQUERY_TARGET_PATH,
   buildCadQueryConfirmation,
   cadQuerySelectionSummary,
+  preferredRefText,
 } from "../../src/workbench/cadquery-agent-scope";
 import type { ChatSnapshot } from "../../src/workbench/chat-zone";
 
@@ -94,6 +95,24 @@ describe("cadquery agent scope", () => {
     const snapshot = chatSnapshot([ambiguousFaceSelection()]);
 
     expect(cadQuerySelectionSummary(snapshot)).toEqual("@face[top_lid:f_1]");
+  });
+
+  it("preferredRefText returns feature ref for non-ambiguous face", () => {
+    expect(preferredRefText(faceSelection())).toBe(
+      "@feature[top_lid.top_surface]",
+    );
+  });
+
+  it("preferredRefText returns raw ref for ambiguous face", () => {
+    expect(preferredRefText(ambiguousFaceSelection())).toBe(
+      "@face[top_lid:f_1]",
+    );
+  });
+
+  it("preferredRefText returns ref_text when no candidate feature", () => {
+    expect(preferredRefText(instanceSelection())).toBe(
+      "@instance[full_enclosure/screw_1]",
+    );
   });
 
   it("keeps explicit execute target instead of replacing it from selection", () => {

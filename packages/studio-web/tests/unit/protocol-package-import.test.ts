@@ -42,6 +42,7 @@ describe("protocol package import", () => {
       cadquery: true,
       agent: false,
       selection_sync: false,
+      llm_configured: false,
     };
     const ready: CadQueryResultReady = {
       result_id: "cq_1",

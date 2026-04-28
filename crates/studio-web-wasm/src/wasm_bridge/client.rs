@@ -9,7 +9,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 
 use app_server_protocol::{
-    AgentCancelRequest, AgentInvokeRequest, CadQueryExecuteRequest, CadQueryMeshPayload,
+    AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
+    CadQueryExecuteRequest, CadQueryMeshPayload,
     CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
     CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
     ChatListRequest, ChatSendRequest, CommandSuccess, ConfigSaveRequest, ExportRunRequest,
@@ -391,6 +392,34 @@ pub fn client_dispatch_agent_cancel(
     handle
         .borrow_mut()?
         .dispatch_agent_cancel(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_plan_confirm(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentPlanConfirmRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_plan_confirm params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_plan_confirm(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_plan_reject(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentPlanRejectRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_plan_reject params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_plan_reject(parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

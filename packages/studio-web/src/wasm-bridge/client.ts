@@ -171,8 +171,20 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
   }
 
+  dispatchAgentPlanConfirm(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_confirm(h, params));
+  }
+
+  dispatchAgentPlanReject(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_reject(h, params));
+  }
+
   dispatchSelectionUpdate(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_selection_update(h, params));
+  }
+
+  dispatchCadQueryPreview(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_cadquery_preview(h, params));
   }
 
   dispatchCadQueryResultGet(params: unknown): Promise<unknown> {

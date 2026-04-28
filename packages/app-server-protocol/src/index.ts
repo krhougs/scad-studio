@@ -49,7 +49,7 @@ export type CadQueryExportFormat = "step" | "stl" | "three_mf";
 export type CadQueryObjectKind = "part" | "component" | "assembly";
 export type ChatRole = "user" | "assistant" | "tool" | "meta";
 export type ChatSessionId = string;
-export type AgentOperationLevel = "inform" | "plan" | "execute";
+export type AgentOperationLevel = "inform" | "plan" | "execute" | "auto";
 export type AgentErrorType =
   | "llm_error"
   | "llm_refused"
@@ -113,6 +113,7 @@ export interface ServerCapabilities {
   cadquery: boolean;
   agent: boolean;
   selection_sync: boolean;
+  llm_configured: boolean;
 }
 
 export interface CapabilityHandshakeRequest {
@@ -416,6 +417,7 @@ export interface AgentInvokeRequest {
   prompt: string;
   operation: AgentOperationLevel;
   confirmed_cadquery: AgentCadQueryConfirmation | null;
+  context_refs?: string[];
 }
 
 export interface AgentCadQueryConfirmation {
@@ -478,6 +480,27 @@ export interface AgentDoneEvent {
   session_id: ChatSessionId;
   run_id: string;
   cancelled: boolean;
+}
+
+export interface AgentPlanProposedEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  target_path: PathHandle;
+  target_type: CadQueryObjectKind;
+  affected_files: PathHandle[];
+  change_description: string;
+  export_targets: PathHandle[];
+}
+
+export interface AgentPlanConfirmRequest {
+  session_id: ChatSessionId;
+  run_id: string;
+  confirmed_cadquery: AgentCadQueryConfirmation;
+}
+
+export interface AgentPlanRejectRequest {
+  session_id: ChatSessionId;
+  run_id: string;
 }
 
 export interface SelectionRef {
@@ -558,6 +581,8 @@ export type CommandSuccess =
   | { type: "chat_archived"; payload: ChatArchivedResponse }
   | { type: "agent_started"; payload: AgentStartedResponse }
   | { type: "agent_cancelled"; payload: AgentCancelledResponse }
+  | { type: "agent_plan_confirmed"; payload: AgentStartedResponse }
+  | { type: "agent_plan_rejected" }
   | { type: "selection_updated"; payload: SelectionUpdateResponse }
   | { type: "slicer_listed"; payload: SlicerListResponse }
   | { type: "export_run"; payload: ExportRunResponse }
@@ -579,7 +604,8 @@ export type ServerPushEvent =
   | { event: "agent.tool_result"; payload: AgentToolResultEvent }
   | { event: "agent.mesh_ready"; payload: AgentMeshReadyEvent }
   | { event: "agent.error"; payload: AgentErrorEvent }
-  | { event: "agent.done"; payload: AgentDoneEvent };
+  | { event: "agent.done"; payload: AgentDoneEvent }
+  | { event: "agent.plan_proposed"; payload: AgentPlanProposedEvent };
 
 export interface ServerPushEnvelope {
   event: ServerPushEvent;

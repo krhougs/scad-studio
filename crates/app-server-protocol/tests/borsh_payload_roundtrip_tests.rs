@@ -157,6 +157,7 @@ fn reclaim_and_artifact_variants_roundtrip() {
             cadquery: true,
             agent: false,
             selection_sync: false,
+            llm_configured: false,
         },
     };
     let bytes = borsh::to_vec(&response).unwrap();
@@ -474,6 +475,7 @@ fn agent_push_events_and_busy_error_roundtrip() {
             prompt: "make a taller lid".into(),
             operation: AgentOperationLevel::Plan,
             confirmed_cadquery: None,
+            context_refs: Vec::new(),
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&invoke).unwrap()).unwrap();

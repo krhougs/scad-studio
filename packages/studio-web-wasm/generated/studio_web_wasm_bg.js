@@ -359,6 +359,34 @@ export function client_dispatch_agent_invoke(handle, params) {
  * @param {any} params
  * @returns {bigint}
  */
+export function client_dispatch_agent_plan_confirm(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_plan_confirm(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_plan_reject(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_plan_reject(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
 export function client_dispatch_cadquery_execute(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_cadquery_execute(handle.__wbg_ptr, params);

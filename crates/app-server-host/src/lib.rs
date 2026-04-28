@@ -1,12 +1,19 @@
 mod dispatcher;
 mod in_process;
 mod mpsc_transport;
+pub mod plan_extraction;
 mod runtime;
 mod session;
 mod websocket;
 
 pub use app_server_transport::ClientTransport;
-pub use dispatcher::{HostRequestDispatcher, ServerPushSink};
+pub use dispatcher::{
+    HostRequestDispatcher, ServerPushSink, agent_error_type, validate_cadquery_confirmation,
+};
+pub use plan_extraction::{
+    ExtractedPlan, export_handle_for, extract_object_name, extract_plan_from_json_block,
+    extract_plan_from_selection, extract_plan_proposal,
+};
 pub use in_process::{
     AbortDecision, AbortStrategy, GUI_SHUTDOWN_TIMEOUT, InProcessHost, JoinThenAbort,
     evaluate_shutdown,

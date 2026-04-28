@@ -186,6 +186,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
             cadquery: true,
             agent: false,
             selection_sync: false,
+            llm_configured: false,
         },
     }
 }

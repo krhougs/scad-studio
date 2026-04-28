@@ -181,4 +181,5 @@ pub struct ClientSnapshot {
     pub watch_lifecycle: WatchLifecycleSummary,
     pub last_error: Option<ClientError>,
     pub transport_status: TransportStatus,
+    pub llm_configured: bool,
 }

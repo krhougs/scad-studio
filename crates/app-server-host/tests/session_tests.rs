@@ -63,6 +63,7 @@ fn build_session() -> HostSession {
             cadquery: true,
             agent: false,
             selection_sync: false,
+            llm_configured: false,
         },
     )
 }

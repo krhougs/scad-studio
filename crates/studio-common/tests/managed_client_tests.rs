@@ -103,6 +103,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
             cadquery: true,
             agent: false,
             selection_sync: false,
+            llm_configured: false,
         },
     }
 }
@@ -717,6 +718,7 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             prompt: "inspect".into(),
             operation: AgentOperationLevel::Inform,
             confirmed_cadquery: None,
+            context_refs: Vec::new(),
         })
         .expect("dispatch agent.invoke");
     let _ = drain_outbound(&mut client);
@@ -753,6 +755,7 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
             prompt: "inspect".into(),
             operation: AgentOperationLevel::Inform,
             confirmed_cadquery: None,
+            context_refs: Vec::new(),
         })
         .expect("dispatch agent.invoke");
     let _ = drain_outbound(&mut client);

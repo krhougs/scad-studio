@@ -55,6 +55,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) watch_last_event_at_ms: Option<u64>,
     pub(super) watch_resubscribe_count: u32,
     pub(super) pending_handshake: Option<Vec<u8>>,
+    pub(super) llm_configured: bool,
 }
 
 impl<T: AppServerTransportPort> ManagedClient<T> {
@@ -92,6 +93,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             watch_last_event_at_ms: None,
             watch_resubscribe_count: 0,
             pending_handshake: None,
+            llm_configured: false,
         }
     }
 
@@ -187,6 +189,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             },
             last_error: self.last_error.clone(),
             transport_status: self.transport_status,
+            llm_configured: self.llm_configured,
         }
     }
 

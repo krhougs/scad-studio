@@ -1,8 +1,8 @@
 use app_server_core::{
-    AgentCadQueryCodeInput, AgentTurnInput, CadQueryCommitScope, CadQueryExecuteConfig,
+    AgentTurnInput, CadQueryCommitScope, CadQueryExecuteConfig,
     CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind, ChatStore,
-    FileWatcher, SlicerInstall, current_workspace, detect_slicer_paths, draft_agent_turn,
-    execute_cadquery_with_staging_cancellable_scoped, export_model, generate_cadquery_code,
+    FileWatcher, SlicerInstall, current_workspace, detect_slicer_paths,
+    execute_cadquery_with_staging_cancellable_scoped, export_model,
     list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
     resolve_workspace_path, resolve_workspace_write_path, run_cadquery_runner, save_config_dto,
     send_to_slicer, stage_cadquery_project,
@@ -10,8 +10,9 @@ use app_server_core::{
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentOperationLevel,
-    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
-    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryMeshPayload, CapabilityHandshakeRequest,
+    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CadQueryExecuteRequest,
+    CadQueryExportFormat, CadQueryMeshPayload, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
     ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
     ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
@@ -314,6 +315,8 @@ impl HostRequestDispatcher {
                 .map(CommandSuccess::ChatArchived),
             ClientCommand::AgentInvoke(request) => self.start_agent(request),
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
+            ClientCommand::AgentPlanConfirm(request) => self.confirm_agent_plan(request),
+            ClientCommand::AgentPlanReject(request) => self.reject_agent_plan(request),
             ClientCommand::SelectionUpdate(request) => self
                 .update_selection_snapshot(request)
                 .map(CommandSuccess::SelectionUpdated),
@@ -504,6 +507,7 @@ impl HostRequestDispatcher {
             prompt: request.prompt,
             operation: request.operation,
             confirmed_cadquery: request.confirmed_cadquery,
+            context_refs: request.context_refs,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
             python: cadquery_python_path(),
@@ -533,6 +537,45 @@ impl HostRequestDispatcher {
                 run_id: None,
             }))
         }
+    }
+
+    // request.run_id identifies the plan-proposing run; confirm creates a new Execute run.
+    fn confirm_agent_plan(
+        &mut self,
+        request: AgentPlanConfirmRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        self.chat_store()?.history(&request.session_id, Some(1))?;
+        let run = self
+            .agent_runs
+            .lock()
+            .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .try_start(request.session_id.clone())?;
+        let response = AgentStartedResponse {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+        };
+        let worker = AgentWorker {
+            run,
+            prompt: String::new(),
+            operation: AgentOperationLevel::Execute,
+            confirmed_cadquery: Some(request.confirmed_cadquery),
+            context_refs: Vec::new(),
+            selection_snapshot: self.selection_snapshot.clone(),
+            workspace_root: self.workspace_root()?.to_path_buf(),
+            python: cadquery_python_path(),
+            cadquery_results: Arc::clone(&self.cadquery_results),
+            agent_runs: Arc::clone(&self.agent_runs),
+            push_sink: Arc::clone(&self.push_sink),
+        };
+        thread::spawn(move || run_agent_worker(worker));
+        Ok(CommandSuccess::AgentPlanConfirmed(response))
+    }
+
+    fn reject_agent_plan(
+        &mut self,
+        _request: AgentPlanRejectRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        Ok(CommandSuccess::AgentPlanRejected)
     }
 }
 
@@ -597,6 +640,7 @@ struct AgentWorker {
     prompt: String,
     operation: AgentOperationLevel,
     confirmed_cadquery: Option<AgentCadQueryConfirmation>,
+    context_refs: Vec<String>,
     selection_snapshot: SelectionUpdateRequest,
     workspace_root: PathBuf,
     python: PathBuf,
@@ -608,23 +652,82 @@ struct AgentWorker {
 fn run_agent_worker(worker: AgentWorker) {
     match worker.operation {
         AgentOperationLevel::Execute => run_execute_agent(worker),
-        AgentOperationLevel::Inform | AgentOperationLevel::Plan => run_text_agent(worker),
+        AgentOperationLevel::Inform
+        | AgentOperationLevel::Plan
+        | AgentOperationLevel::Auto => run_text_agent(worker),
     }
 }
 
 fn run_text_agent(worker: AgentWorker) {
-    let response_text = agent_response_text(&worker);
-    push_agent_token(&worker.push_sink, &worker.run, &response_text);
+    let provider = match app_server_core::llm::create_provider() {
+        Ok(p) => p,
+        Err(error) => {
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                error.message,
+            );
+            finish_agent_worker(worker, false);
+            return;
+        }
+    };
+    let response_text = match run_text_agent_llm(&worker, provider.as_ref()) {
+        Some(text) => text,
+        None => {
+            finish_agent_worker(worker, false);
+            return;
+        }
+    };
     thread::sleep(Duration::from_millis(120));
     if worker.run.cancelled.load(Ordering::SeqCst) {
         finish_agent_worker(worker, true);
         return;
     }
+    if worker.operation == AgentOperationLevel::Auto {
+        try_propose_plan(&worker, &response_text);
+    }
     append_agent_message(&worker.workspace_root, &worker.run, &response_text);
     finish_agent_worker(worker, false);
 }
 
-fn agent_response_text(worker: &AgentWorker) -> String {
+fn try_propose_plan(worker: &AgentWorker, response_text: &str) {
+    let Some(plan) = extract_plan_proposal(response_text, &worker.selection_snapshot) else {
+        return;
+    };
+    let target = match plan_target_handle(&worker.workspace_root, &plan.target_path) {
+        Ok(target) => target,
+        Err(_) => return,
+    };
+    let affected = plan
+        .affected_paths
+        .iter()
+        .filter_map(|path| plan_target_handle(&worker.workspace_root, path).ok())
+        .collect::<Vec<_>>();
+    let export_target = export_handle_for(&target);
+    (worker.push_sink)(ServerPushEnvelope {
+        event: ServerPushEvent::AgentPlanProposed(AgentPlanProposedEvent {
+            session_id: worker.run.session_id.clone(),
+            run_id: worker.run.run_id.clone(),
+            target_path: target.clone(),
+            target_type: plan.target_type,
+            affected_files: if affected.is_empty() {
+                vec![target]
+            } else {
+                affected
+            },
+            change_description: plan.description,
+            export_targets: vec![export_target],
+        }),
+    });
+}
+
+use crate::plan_extraction::{export_handle_for, extract_plan_proposal, plan_target_handle};
+
+fn run_text_agent_llm(
+    worker: &AgentWorker,
+    provider: &dyn app_server_core::llm::LlmProvider,
+) -> Option<String> {
     let store = ChatStore::new(worker.workspace_root.clone());
     let history = store
         .history(&worker.run.session_id, Some(8))
@@ -634,15 +737,43 @@ fn agent_response_text(worker: &AgentWorker) -> String {
         .confirmed_cadquery
         .as_ref()
         .map(|confirmation| confirmation.request.target_path.display_path().to_owned());
-    draft_agent_turn(AgentTurnInput {
+    let input = AgentTurnInput {
         operation: worker.operation,
         prompt: worker.prompt.clone(),
         history,
         selections: worker.selection_snapshot.selections.clone(),
         active_selection_index: worker.selection_snapshot.active_index,
         confirmed_target_path,
-    })
-    .text
+        context_refs: worker.context_refs.clone(),
+    };
+    let tool_executor =
+        app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone());
+    let push_sink = Arc::clone(&worker.push_sink);
+    let run = worker.run.clone();
+    let cancelled = Arc::clone(&worker.run.cancelled);
+    match app_server_core::stream_agent_turn_with_tools(
+        input,
+        provider,
+        &tool_executor,
+        &|token| {
+            if cancelled.load(Ordering::SeqCst) {
+                return false;
+            }
+            push_agent_token(&push_sink, &run, token);
+            true
+        },
+    ) {
+        Ok(draft) => Some(draft.text),
+        Err(error) => {
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                error.message,
+            );
+            None
+        }
+    }
 }
 
 fn run_execute_agent(worker: AgentWorker) {
@@ -691,21 +822,32 @@ fn execute_confirmation_or_report(worker: &AgentWorker) -> Option<AgentCadQueryC
 }
 
 fn report_execute_permission_error(worker: &AgentWorker, message: &str) {
-    let response_text = agent_response_text(worker);
     push_agent_error(
         &worker.push_sink,
         &worker.run,
         AgentErrorType::PermissionDenied,
         message,
     );
-    append_agent_message(&worker.workspace_root, &worker.run, &response_text);
+    append_agent_message(&worker.workspace_root, &worker.run, message);
 }
 
 fn generate_cadquery_or_report(
     worker: &AgentWorker,
     confirmation: &AgentCadQueryConfirmation,
 ) -> Option<app_server_core::GeneratedCadQueryCode> {
-    match generate_agent_cadquery(worker, confirmation) {
+    let provider = match app_server_core::llm::create_provider() {
+        Ok(p) => p,
+        Err(error) => {
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                error.message,
+            );
+            return None;
+        }
+    };
+    match generate_agent_cadquery_llm(worker, confirmation, provider.as_ref()) {
         Ok(generated) => Some(generated),
         Err(error) => {
             push_agent_error(
@@ -717,6 +859,36 @@ fn generate_cadquery_or_report(
             None
         }
     }
+}
+
+fn generate_agent_cadquery_llm(
+    worker: &AgentWorker,
+    confirmation: &AgentCadQueryConfirmation,
+    provider: &dyn app_server_core::llm::LlmProvider,
+) -> Result<app_server_core::GeneratedCadQueryCode, app_server_core::AgentBackendError> {
+    let store = ChatStore::new(worker.workspace_root.clone());
+    let history = store
+        .history(&worker.run.session_id, Some(8))
+        .map(|response| response.messages)
+        .unwrap_or_default();
+    let input = app_server_core::AgentCadQueryCodeInput {
+        prompt: worker.prompt.clone(),
+        history,
+        selections: worker.selection_snapshot.selections.clone(),
+        active_selection_index: worker.selection_snapshot.active_index,
+        target_display_path: confirmation.request.target_path.display_path(),
+        target_type: confirmation.request.target_type,
+    };
+    let push_sink = Arc::clone(&worker.push_sink);
+    let run = worker.run.clone();
+    let cancelled = Arc::clone(&worker.run.cancelled);
+    app_server_core::llm_generate_cadquery_code(input, provider, &|token| {
+        if cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        push_agent_token(&push_sink, &run, token);
+        true
+    })
 }
 
 fn push_execute_intro_or_cancelled(worker: &AgentWorker, response_text: &str) -> bool {
@@ -782,26 +954,7 @@ fn execute_confirmed_cadquery(
     )
 }
 
-fn generate_agent_cadquery(
-    worker: &AgentWorker,
-    confirmation: &AgentCadQueryConfirmation,
-) -> Result<app_server_core::GeneratedCadQueryCode, app_server_core::AgentBackendError> {
-    let store = ChatStore::new(worker.workspace_root.clone());
-    let history = store
-        .history(&worker.run.session_id, Some(8))
-        .map(|response| response.messages)
-        .unwrap_or_default();
-    generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: worker.prompt.clone(),
-        history,
-        selections: worker.selection_snapshot.selections.clone(),
-        active_selection_index: worker.selection_snapshot.active_index,
-        target_display_path: confirmation.request.target_path.display_path(),
-        target_type: confirmation.request.target_type,
-    })
-}
-
-fn validate_cadquery_confirmation(
+pub fn validate_cadquery_confirmation(
     confirmation: &AgentCadQueryConfirmation,
 ) -> Result<(), &'static str> {
     let target = &confirmation.request.target_path;
@@ -988,11 +1141,13 @@ fn tool_call_id(run: &AgentRunHandle) -> String {
     format!("{}-cadquery-1", run.run_id)
 }
 
-fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
+pub fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
     match kind {
         CadQueryRunnerErrorKind::Build => AgentErrorType::CadQueryBuildError,
         CadQueryRunnerErrorKind::FileConflict => AgentErrorType::FileConflict,
         CadQueryRunnerErrorKind::Timeout => AgentErrorType::Timeout,
+        // Cancelled is handled separately in handle_execute_result (returns early with cancelled=true),
+        // so this arm is unreachable in practice. Map to Timeout as the closest semantic fallback.
         CadQueryRunnerErrorKind::Cancelled => AgentErrorType::Timeout,
         CadQueryRunnerErrorKind::PermissionDenied => AgentErrorType::PermissionDenied,
         CadQueryRunnerErrorKind::PythonImport => AgentErrorType::PythonImportError,
@@ -1122,6 +1277,7 @@ fn server_capabilities() -> ServerCapabilities {
         cadquery: true,
         agent: true,
         selection_sync: true,
+        llm_configured: app_server_core::llm::load_llm_config().ok().flatten().is_some(),
     }
 }
 

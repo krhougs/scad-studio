@@ -12,7 +12,7 @@ import type { WasmClient } from "../../src/wasm-bridge";
 describe("ChatZone", () => {
   afterEach(cleanup);
 
-  it("sends execute invokes with structured cadquery confirmation", async () => {
+  it("sends auto invoke without confirmed_cadquery", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -21,7 +21,6 @@ describe("ChatZone", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
     fireEvent.change(screen.getByTestId("chat-input"), {
       target: { value: "make the lid taller" },
     });
@@ -30,22 +29,9 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "execute",
-        confirmed_cadquery: expect.objectContaining({
-          request: expect.objectContaining({
-            target_path: {
-              workspace_id: "ws",
-              path_segments: ["parts", "agent_model.py"],
-            },
-            code: "",
-          }),
-          affected_files: [
-            {
-              workspace_id: "ws",
-              path_segments: ["parts", "agent_model.py"],
-            },
-          ],
-        }),
+        operation: "auto",
+        confirmed_cadquery: null,
+        context_refs: [],
       }),
     );
   });
@@ -75,7 +61,7 @@ describe("ChatZone", () => {
     });
   });
 
-  it("shows current cadquery ref and sends selection derived execute scope", async () => {
+  it("shows context pills from viewer selection and includes refs in invoke", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -87,10 +73,11 @@ describe("ChatZone", () => {
       />,
     );
 
-    expect(screen.getByTestId("chat-selection-context").textContent).toContain(
+    expect(screen.getByTestId("context-pill-bar")).toBeTruthy();
+    expect(screen.getByTestId("context-pill-bar").textContent).toContain(
       "@feature[top_lid.top_surface]",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
+
     fireEvent.change(screen.getByTestId("chat-input"), {
       target: { value: "open a slot on this face" },
     });
@@ -99,20 +86,86 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        confirmed_cadquery: expect.objectContaining({
-          request: expect.objectContaining({
-            target_type: "part",
-            target_path: {
-              workspace_id: "ws",
-              path_segments: ["parts", "top_lid.py"],
-            },
-          }),
-          affected_files: [
-            { workspace_id: "ws", path_segments: ["parts", "top_lid.py"] },
-          ],
-        }),
+        operation: "auto",
+        confirmed_cadquery: null,
+        context_refs: ["@face[top_lid:f_0]"],
       }),
     );
+  });
+
+  it("sends explicit operation when using slash command", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={chatSnapshot()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("chat-input"), {
+      target: { value: "/plan design a sliding lid" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "plan",
+        prompt: "design a sliding lid",
+      }),
+    );
+    expect(client.dispatchChatSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "design a sliding lid",
+      }),
+    );
+  });
+
+  it("dispatches cadquery preview when clicking plan preview button", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_events: [
+            {
+              event: "agent.plan_proposed",
+              payload: {
+                session_id: "main",
+                run_id: "run-1",
+                target_path: { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
+                target_type: "part",
+                affected_files: [{ workspace_id: "ws", path_segments: ["parts", "lid.py"] }],
+                export_targets: [{ workspace_id: "ws", path_segments: ["outputs", "lid.step"] }],
+                change_description: "increase height",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("plan-preview-btn")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-preview-btn"));
+
+    await waitFor(() => expect(client.dispatchCadQueryPreview).toHaveBeenCalled());
+    expect(client.dispatchCadQueryPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target_path: { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
+        export_formats: [],
+      }),
+    );
+  });
+
+  it("shows welcome empty state when no messages or events", () => {
+    render(
+      <ChatZone
+        client={null}
+        snapshot={chatSnapshot()}
+      />,
+    );
+    expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
   });
 });
 
@@ -159,6 +212,9 @@ function fakeClient(): Pick<
   | "dispatchAgentInvoke"
   | "dispatchChatHistory"
   | "dispatchAgentCancel"
+  | "dispatchAgentPlanConfirm"
+  | "dispatchAgentPlanReject"
+  | "dispatchCadQueryPreview"
 > {
   return {
     dispatchChatList: vi.fn().mockResolvedValue({}),
@@ -167,5 +223,8 @@ function fakeClient(): Pick<
     dispatchAgentInvoke: vi.fn().mockResolvedValue({}),
     dispatchChatHistory: vi.fn().mockResolvedValue({}),
     dispatchAgentCancel: vi.fn().mockResolvedValue({}),
+    dispatchAgentPlanConfirm: vi.fn().mockResolvedValue({}),
+    dispatchAgentPlanReject: vi.fn().mockResolvedValue({}),
+    dispatchCadQueryPreview: vi.fn().mockResolvedValue({}),
   };
 }

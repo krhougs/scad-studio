@@ -1,9 +1,12 @@
 mod selection;
+pub mod tools;
 
 use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
     SelectionRef,
 };
+
+use crate::llm::{LlmMessage, LlmProvider};
 
 use self::selection::{
     affected_paths_text, export_target_path, preferred_selection_ref, selection_target_decision,
@@ -25,6 +28,7 @@ pub struct AgentTurnInput {
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
     pub confirmed_target_path: Option<String>,
+    pub context_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +193,7 @@ fn operation_label(operation: AgentOperationLevel) -> &'static str {
         AgentOperationLevel::Inform => "Inform",
         AgentOperationLevel::Plan => "Plan",
         AgentOperationLevel::Execute => "Execute",
+        AgentOperationLevel::Auto => "Auto",
     }
 }
 
@@ -310,4 +315,158 @@ fn selection_context(selections: &[SelectionRef]) -> String {
 
 fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     if value.is_empty() { fallback } else { value }
+}
+
+pub fn stream_agent_turn(
+    input: AgentTurnInput,
+    provider: &dyn LlmProvider,
+    on_token: &dyn Fn(&str) -> bool,
+) -> Result<AgentTurnDraft, AgentBackendError> {
+    let messages = build_turn_messages(&input);
+    let response = provider
+        .stream_chat(messages, &[], on_token)
+        .map_err(|err| AgentBackendError {
+            message: err.message,
+        })?;
+    Ok(AgentTurnDraft {
+        text: response.content,
+    })
+}
+
+pub fn stream_agent_turn_with_tools(
+    input: AgentTurnInput,
+    provider: &dyn LlmProvider,
+    tool_executor: &dyn tools::ToolExecutor,
+    on_token: &dyn Fn(&str) -> bool,
+) -> Result<AgentTurnDraft, AgentBackendError> {
+    let messages = build_turn_messages(&input);
+    let tool_defs = tools::agent_tool_definitions();
+    let response =
+        tools::run_tool_loop(messages, &tool_defs, provider, tool_executor, on_token)
+            .map_err(|err| AgentBackendError {
+                message: err.message,
+            })?;
+    Ok(AgentTurnDraft {
+        text: response.content,
+    })
+}
+
+pub fn llm_generate_cadquery_code(
+    input: AgentCadQueryCodeInput,
+    provider: &dyn LlmProvider,
+    on_token: &dyn Fn(&str) -> bool,
+) -> Result<GeneratedCadQueryCode, AgentBackendError> {
+    let messages = build_execute_messages(&input);
+    let response = provider
+        .stream_chat(messages, &[], on_token)
+        .map_err(|err| AgentBackendError {
+            message: err.message,
+        })?;
+    let code = extract_cadquery_code(&response.content);
+    Ok(GeneratedCadQueryCode {
+        code,
+        response_text: response.content,
+    })
+}
+
+pub fn build_turn_messages(input: &AgentTurnInput) -> Vec<LlmMessage> {
+    let system_prompt = cadquery_agent_system_prompt();
+    let mut messages = vec![LlmMessage::new("system", system_prompt)];
+    append_history_messages(&mut messages, &input.history);
+    let context = build_turn_context(input);
+    let user_content = if context.is_empty() {
+        input.prompt.clone()
+    } else {
+        format!("{context}\n\n{}", input.prompt)
+    };
+    messages.push(LlmMessage::new("user", user_content));
+    messages
+}
+
+pub fn build_execute_messages(input: &AgentCadQueryCodeInput) -> Vec<LlmMessage> {
+    let system_prompt = cadquery_agent_system_prompt();
+    let mut messages = vec![LlmMessage::new("system", system_prompt)];
+    append_history_messages(&mut messages, &input.history);
+    let context = cadquery_execute_context_for_llm(input);
+    messages.push(LlmMessage::new("user", context));
+    messages
+}
+
+fn append_history_messages(messages: &mut Vec<LlmMessage>, history: &[ChatMessageRecord]) {
+    for msg in history {
+        let role = match msg.role {
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+            ChatRole::Tool | ChatRole::Meta => continue,
+        };
+        let content = msg.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        messages.push(LlmMessage::new(role, content));
+    }
+}
+
+pub fn build_turn_context(input: &AgentTurnInput) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("Operation level: {}", operation_label(input.operation)));
+    if !input.context_refs.is_empty() {
+        parts.push(format!(
+            "User-attached context refs: {}",
+            input.context_refs.join(", ")
+        ));
+    }
+    if !input.selections.is_empty() {
+        parts.push(format!(
+            "Current Viewer selection:\n{}",
+            selection_context(&input.selections)
+        ));
+    }
+    if let Some(target) = &input.confirmed_target_path {
+        parts.push(format!("Confirmed target: {target}"));
+    }
+    parts.join("\n")
+}
+
+fn cadquery_execute_context_for_llm(input: &AgentCadQueryCodeInput) -> String {
+    let selections = selection_context(&input.selections);
+    format!(
+        "Operation: Execute\n\
+         User request: {}\n\
+         Target path: {}\n\
+         Target type: {}\n\
+         Active selection index: {}\n\
+         Selections:\n{selections}\n\n\
+         You must respond with a complete CadQuery Python script that implements the user's request. \
+         Include the REFS dict and build() function. \
+         Wrap the code in a ```python code block.",
+        non_empty(input.prompt.trim(), "未提供具体问题"),
+        input.target_display_path,
+        object_kind_label(input.target_type),
+        input
+            .active_selection_index
+            .map(|index| index.to_string())
+            .unwrap_or_else(|| "none".into())
+    )
+}
+
+pub fn extract_cadquery_code(response: &str) -> String {
+    if let Some(start) = response.find("```python") {
+        let code_start = start + "```python".len();
+        if let Some(end) = response[code_start..].find("```") {
+            return response[code_start..code_start + end].trim().to_owned();
+        }
+    }
+    if let Some(start) = response.find("```") {
+        let code_start = start + 3;
+        let after_lang = if response[code_start..].starts_with('\n') {
+            code_start + 1
+        } else {
+            code_start
+        };
+        if let Some(end) = response[after_lang..].find("```") {
+            return response[after_lang..after_lang + end].trim().to_owned();
+        }
+    }
+    response.to_owned()
 }

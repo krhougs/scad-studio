@@ -65,6 +65,7 @@ fn handshake_ack_bytes() -> Vec<u8> {
             cadquery: true,
             agent: false,
             selection_sync: false,
+            llm_configured: false,
         },
     };
     encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")

@@ -1,0 +1,3 @@
+{"message_id":"meta-1","ts_ms":1777369824850,"role":"meta","content":"chat:main","related_files":[],"tool_call_id":null,"tool_calls":[],"tool_result":null,"mesh_result":null}
+{"message_id":"msg-2","ts_ms":1777369824866,"role":"user","content":"explain CadQuery fillet","related_files":[],"tool_call_id":null,"tool_calls":[],"tool_result":null,"mesh_result":null}
+{"message_id":"msg-3","ts_ms":1777369825105,"role":"assistant","content":"Inform turn\nPrompt: explain CadQuery fillet\nContext: explain CadQuery fillet\nSelection: 无当前选择\nTarget: 未确认 CadQuery 目标文件","related_files":[],"tool_call_id":null,"tool_calls":[],"tool_result":null,"mesh_result":null}

@@ -116,6 +116,7 @@ pub struct ServerCapabilities {
     pub cadquery: bool,
     pub agent: bool,
     pub selection_sync: bool,
+    pub llm_configured: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -611,6 +612,7 @@ pub enum AgentOperationLevel {
     Inform = 0,
     Plan = 1,
     Execute = 2,
+    Auto = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -628,6 +630,8 @@ pub struct AgentInvokeRequest {
     pub prompt: String,
     pub operation: AgentOperationLevel,
     pub confirmed_cadquery: Option<AgentCadQueryConfirmation>,
+    #[serde(default)]
+    pub context_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -709,6 +713,30 @@ pub struct AgentDoneEvent {
     pub session_id: ChatSessionId,
     pub run_id: String,
     pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentPlanProposedEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub target_path: PathHandle,
+    pub target_type: CadQueryObjectKind,
+    pub affected_files: Vec<PathHandle>,
+    pub change_description: String,
+    pub export_targets: Vec<PathHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentPlanConfirmRequest {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub confirmed_cadquery: AgentCadQueryConfirmation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentPlanRejectRequest {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
 }
 
 #[derive(
@@ -847,6 +875,10 @@ pub enum ClientCommand {
     AgentCancel(AgentCancelRequest) = 22,
     #[serde(rename = "selection.update")]
     SelectionUpdate(SelectionUpdateRequest) = 23,
+    #[serde(rename = "agent.plan.confirm")]
+    AgentPlanConfirm(AgentPlanConfirmRequest) = 24,
+    #[serde(rename = "agent.plan.reject")]
+    AgentPlanReject(AgentPlanRejectRequest) = 25,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -883,6 +915,8 @@ pub enum CommandSuccess {
     AgentStarted(AgentStartedResponse) = 20,
     AgentCancelled(AgentCancelledResponse) = 21,
     SelectionUpdated(SelectionUpdateResponse) = 22,
+    AgentPlanConfirmed(AgentStartedResponse) = 23,
+    AgentPlanRejected = 24,
 }
 
 #[derive(
@@ -953,6 +987,8 @@ pub enum ServerPushEvent {
     AgentError(AgentErrorEvent) = 6,
     #[serde(rename = "agent.done")]
     AgentDone(AgentDoneEvent) = 7,
+    #[serde(rename = "agent.plan_proposed")]
+    AgentPlanProposed(AgentPlanProposedEvent) = 8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

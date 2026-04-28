@@ -18,7 +18,8 @@ pub use presets::PresetFile;
 pub use protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentOperationLevel,
-    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, AppConfigDto,
+    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, AppConfigDto,
     CadQueryExecuteRequest, CadQueryExportFormat, CadQueryFeatureFaces, CadQueryMeshPayload,
     CadQueryObjectKind, CadQueryPartMesh, CadQueryPreviewRequest, CadQueryResultGetRequest,
     CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
