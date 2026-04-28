@@ -11,26 +11,14 @@ pub(super) struct SelectionTargetDecision {
 pub(super) fn selection_target_decision(
     selections: &[SelectionRef],
     active_selection_index: Option<u32>,
-    prompt: &str,
 ) -> Option<SelectionTargetDecision> {
     let selection = active_selection(selections, active_selection_index)?;
     let selection_ref = preferred_selection_ref(selection);
-    let moving = movement_intent(prompt);
-    let replacing = replacement_intent(prompt);
-    let target_path = if moving && selection.instance_path.is_some() {
-        assembly_path_from_instance(selection.instance_path.as_deref())
-    } else if replacing && selection.instance_path.is_some() {
-        assembly_path_from_instance(selection.instance_path.as_deref())
-            .or_else(|| owner_or_selection_path(selection))
-    } else if moving && selection.kind == SelectionKind::Component {
-        None
-    } else {
-        owner_or_selection_path(selection)
-    };
+    let target_path = owner_or_selection_path(selection);
     Some(SelectionTargetDecision {
         selection_ref,
-        affected_paths: affected_paths(selection, target_path.as_deref(), replacing),
-        edit_goal: edit_goal(selection, moving, replacing),
+        affected_paths: affected_paths(target_path.as_deref()),
+        edit_goal: edit_goal(selection),
         target_path,
     })
 }
@@ -118,90 +106,25 @@ fn object_kind_from_selection(kind: SelectionKind) -> Option<CadQueryObjectKind>
     }
 }
 
-fn assembly_path_from_instance(instance_path: Option<&str>) -> Option<String> {
-    let assembly = instance_path?.split('/').next()?.trim();
-    (!assembly.is_empty()).then(|| format!("assemblies/{assembly}.py"))
-}
-
-fn affected_paths(
-    selection: &SelectionRef,
-    target_path: Option<&str>,
-    replacing: bool,
-) -> Vec<String> {
-    let mut paths = target_path
+fn affected_paths(target_path: Option<&str>) -> Vec<String> {
+    target_path
         .into_iter()
         .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if replacing && selection.instance_path.is_some() {
-        if let Some(path) = owner_or_selection_path(selection) {
-            paths.push(path);
-        }
-        if let Some(path) = assembly_path_from_instance(selection.instance_path.as_deref()) {
-            paths.push(path);
-        }
-    }
-    unique_strings(paths)
+        .collect::<Vec<_>>()
 }
 
-fn unique_strings(values: Vec<String>) -> Vec<String> {
-    values.into_iter().fold(Vec::new(), |mut acc, value| {
-        if !acc.contains(&value) {
-            acc.push(value);
-        }
-        acc
-    })
-}
-
-fn edit_goal(selection: &SelectionRef, moving: bool, replacing: bool) -> &'static str {
+fn edit_goal(selection: &SelectionRef) -> &'static str {
     if selection.ambiguous {
         return "ambiguous selection confirmation required";
     }
-    if moving && selection.kind == SelectionKind::Component {
-        return "assembly instance required";
-    }
-    if replacing && selection.instance_path.is_some() {
-        return "assembly instance replacement";
-    }
-    if replacing
-        && (selection.owner_object_kind == Some(CadQueryObjectKind::Component)
-            || selection.kind == SelectionKind::Component)
-    {
-        return "component replacement";
-    }
-    if moving && selection.instance_path.is_some() || selection.kind == SelectionKind::Assembly {
+    if selection.kind == SelectionKind::Assembly {
         return "assembly coordination";
     }
     if selection.owner_object_kind == Some(CadQueryObjectKind::Component)
         || selection.kind == SelectionKind::Component
+        || selection.kind == SelectionKind::Instance
     {
         return "component geometry";
     }
     "part geometry"
-}
-
-fn movement_intent(prompt: &str) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    contains_ascii_word(
-        &lower,
-        &["move", "shift", "place", "position", "align", "rotate"],
-    ) || ["移动", "对齐", "旋转", "摆放"]
-        .iter()
-        .any(|word| prompt.contains(word))
-}
-
-fn contains_ascii_word(input: &str, words: &[&str]) -> bool {
-    input
-        .split(|ch: char| !ch.is_ascii_alphabetic())
-        .filter(|token| !token.is_empty())
-        .any(|token| words.contains(&token))
-}
-
-fn replacement_intent(prompt: &str) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    ["replace", "swap", "change model", "different model"]
-        .iter()
-        .any(|word| lower.contains(word))
-        || ["替换", "换型号", "更换"]
-            .iter()
-            .any(|word| prompt.contains(word))
 }

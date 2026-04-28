@@ -31,46 +31,49 @@ describe("cadquery agent scope", () => {
     ]);
   });
 
-  it("maps moved component instance to assembly coordination target", () => {
+  it("does not infer instance movement from prompt words", () => {
     const confirmation = buildCadQueryConfirmation(
       chatSnapshot([instanceSelection()]),
       DEFAULT_CADQUERY_TARGET_PATH,
       "move this screw 5mm right",
     );
 
-    expect(confirmation.request.target_type).toBe("assembly");
+    expect(confirmation.request.target_type).toBe("component");
     expect(confirmation.request.target_path.path_segments).toEqual([
-      "assemblies",
-      "full_enclosure.py",
+      "components",
+      "screw.py",
     ]);
   });
 
-  it("declares assembly and component files when replacing an instance model", () => {
+  it("does not infer instance replacement from prompt words", () => {
     const confirmation = buildCadQueryConfirmation(
       chatSnapshot([instanceSelection()]),
       DEFAULT_CADQUERY_TARGET_PATH,
       "replace this screw with a countersunk version",
     );
 
-    expect(confirmation.request.target_type).toBe("assembly");
+    expect(confirmation.request.target_type).toBe("component");
     expect(confirmation.request.target_path.path_segments).toEqual([
-      "assemblies",
-      "full_enclosure.py",
+      "components",
+      "screw.py",
     ]);
     expect(confirmation.affected_files).toEqual([
-      { workspace_id: "ws", path_segments: ["assemblies", "full_enclosure.py"] },
       { workspace_id: "ws", path_segments: ["components", "screw.py"] },
     ]);
   });
 
-  it("rejects moving a component when no assembly instance is known", () => {
-    expect(() =>
-      buildCadQueryConfirmation(
-        chatSnapshot([componentSelection()]),
-        DEFAULT_CADQUERY_TARGET_PATH,
-        "move this component 5mm right",
-      ),
-    ).toThrow("assembly instance");
+  it("does not reject movement words for component selection", () => {
+    const confirmation = buildCadQueryConfirmation(
+      chatSnapshot([componentSelection()]),
+      DEFAULT_CADQUERY_TARGET_PATH,
+      "move this component 5mm right",
+    );
+
+    expect(confirmation.request.target_type).toBe("component");
+    expect(confirmation.request.target_path.path_segments).toEqual([
+      "components",
+      "pcb.py",
+    ]);
   });
 
   it("maps component replacement without requiring an assembly instance", () => {

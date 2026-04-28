@@ -30,10 +30,10 @@ type PathHandleLike = {
 export function buildCadQueryConfirmation(
   snapshot: ChatSnapshotLike | null,
   targetPath: string,
-  prompt: string,
+  _prompt: string,
 ) {
   const explicitPath = normalizeTargetPath(targetPath);
-  const scope = scopeFromSelection(activeSelection(snapshot), prompt);
+  const scope = scopeFromSelection(activeSelection(snapshot));
   const derived = explicitPath === DEFAULT_CADQUERY_TARGET_PATH ? scope : null;
   const effectivePath = derived?.path ?? explicitPath;
   const target = pathHandleFromWorkspace(snapshot, effectivePath);
@@ -70,22 +70,8 @@ function activeSelection(snapshot: ChatSnapshotLike | null): SelectionRef | null
   return selections[selections.length - 1] ?? null;
 }
 
-function scopeFromSelection(
-  selection: SelectionRef | null,
-  prompt: string,
-): TargetScope | null {
+function scopeFromSelection(selection: SelectionRef | null): TargetScope | null {
   if (!selection) return null;
-  const movesPlacement = movementIntent(prompt);
-  const replacesModel = replacementIntent(prompt);
-  if (replacesModel && selection.instance_path) {
-    return replacementScopeFromSelection(selection);
-  }
-  if (movesPlacement && selection.instance_path) {
-    return assemblyScopeFromSelection(selection);
-  }
-  if (movesPlacement && selection.kind === "component") {
-    throw new Error("需要选择 assembly instance 才能移动 component");
-  }
   const kind = selection.owner_object_kind ?? objectKindFromSelection(selection.kind);
   return pathScopeFromRef(selection.owner_ref_text ?? selection.ref_text, kind);
 }
@@ -113,68 +99,6 @@ function objectKindFromSelection(kind: SelectionKind): CadQueryObjectKind | null
   }
   if (kind === "instance") return "assembly";
   return null;
-}
-
-function assemblyScopeFromSelection(selection: SelectionRef): TargetScope | null {
-  const name = selection.instance_path?.split("/")[0]?.trim();
-  if (!name) return null;
-  const path = `assemblies/${name}.py`;
-  return {
-    path,
-    targetType: "assembly",
-    affectedPaths: [path],
-  };
-}
-
-function movementIntent(prompt: string): boolean {
-  const lower = prompt.toLowerCase();
-  return (
-    containsAsciiWord(lower, [
-      "move",
-      "shift",
-      "place",
-      "position",
-      "align",
-      "rotate",
-    ]) || ["移动", "对齐", "旋转", "摆放"].some((word) => prompt.includes(word))
-  );
-}
-
-function containsAsciiWord(input: string, words: string[]): boolean {
-  return input
-    .split(/[^a-z]+/u)
-    .filter(Boolean)
-    .some((token) => words.includes(token));
-}
-
-function replacementIntent(prompt: string): boolean {
-  const lower = prompt.toLowerCase();
-  return (
-    ["replace", "swap", "change model", "different model"].some((word) =>
-      lower.includes(word),
-    ) || ["替换", "换型号", "更换"].some((word) => prompt.includes(word))
-  );
-}
-
-function replacementScopeFromSelection(selection: SelectionRef): TargetScope | null {
-  const assemblyName = selection.instance_path?.split("/")[0]?.trim();
-  const assemblyPath = assemblyName ? `assemblies/${assemblyName}.py` : null;
-  const owner = ownerPath(selection);
-  if (!owner && !assemblyPath) return null;
-  const path = assemblyPath ?? owner;
-  if (!path) return null;
-  return {
-    path,
-    targetType: targetTypeFromPath(path),
-    affectedPaths: uniqueStrings([path, owner].filter(Boolean) as string[]),
-  };
-}
-
-function ownerPath(selection: SelectionRef): string | null {
-  return pathScopeFromRef(
-    selection.owner_ref_text ?? selection.ref_text,
-    selection.owner_object_kind ?? objectKindFromSelection(selection.kind),
-  )?.path ?? null;
 }
 
 function objectNameFromRef(refText: string): string | null {
@@ -229,10 +153,6 @@ function targetTypeFromPath(path: string): "part" | "component" | "assembly" {
   if (path.startsWith("assemblies/")) return "assembly";
   if (path.startsWith("components/")) return "component";
   return "part";
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return values.filter((value, index) => values.indexOf(value) === index);
 }
 
 function exportTargetFor(target: PathHandleLike): PathHandleLike {

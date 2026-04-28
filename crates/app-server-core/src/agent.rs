@@ -1,15 +1,11 @@
-mod codegen;
 mod selection;
 
 use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, SelectionRef,
 };
 
-use self::{
-    codegen::{CadQueryDimensions, cadquery_code, target_identifier, target_kind_label},
-    selection::{
-        affected_paths_text, export_target_path, preferred_selection_ref, selection_target_decision,
-    },
+use self::selection::{
+    affected_paths_text, export_target_path, preferred_selection_ref, selection_target_decision,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,46 +94,11 @@ impl AgentBackend for LocalAgentBackend {
 
     fn generate_cadquery_code(
         &self,
-        input: AgentCadQueryCodeInput,
+        _input: AgentCadQueryCodeInput,
     ) -> Result<GeneratedCadQueryCode, AgentBackendError> {
-        let target_name = target_identifier(&input.target_display_path);
-        let dimensions = CadQueryDimensions::default();
-        let selection_count = input.selections.len();
-        let selection_target = selection_target_decision(
-            &input.selections,
-            input.active_selection_index,
-            &input.prompt,
-        );
-        let history_count = input
-            .history
-            .iter()
-            .filter(|message| !message.content.trim().is_empty())
-            .count();
-        let selection_ref = selection_target
-            .as_ref()
-            .map(|target| target.selection_ref.as_str())
-            .unwrap_or("无当前选择");
-        let edit_goal = selection_target
-            .as_ref()
-            .map(|target| target.edit_goal)
-            .unwrap_or("part geometry");
-        Ok(GeneratedCadQueryCode {
-            code: cadquery_code(
-                &target_name,
-                dimensions,
-                input.target_type,
-                selection_target.as_ref(),
-            ),
-            response_text: format!(
-                "Execute turn\nTarget: {}\nSelection target: {}\nEdit: {}\nGenerated CadQuery {} `{}` from prompt, {} prior messages and {} selections.",
-                input.target_display_path,
-                selection_ref,
-                edit_goal,
-                target_kind_label(input.target_type),
-                target_name,
-                history_count,
-                selection_count
-            ),
+        Err(AgentBackendError {
+            message: "CadQuery Execute 需要 LLM 后端输出结构化 CadQuery 代码；本地 fallback 不生成几何代码"
+                .into(),
         })
     }
 }
@@ -164,8 +125,7 @@ fn draft_local_turn(input: AgentTurnInput) -> AgentTurnDraft {
 fn draft_cad_plan(input: AgentTurnInput) -> AgentTurnDraft {
     let prompt = non_empty(input.prompt.trim(), "未提供具体问题");
     let history = latest_history(&input.history);
-    let decision =
-        selection_target_decision(&input.selections, input.active_selection_index, prompt);
+    let decision = selection_target_decision(&input.selections, input.active_selection_index);
     let selection = decision
         .as_ref()
         .map(|target| target.selection_ref.as_str())

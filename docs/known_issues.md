@@ -1,21 +1,23 @@
 # 已知问题记录
 
-## 2026-04-28 09:10:00: CadQuery Agent 确认范围仍使用 prompt 关键词推断 move / replace 意图
+## 2026-04-28 09:22:00: CadQuery edit intent 尚未由 LLM 结构化输出接管
 
-- 来源：用户要求检查代码中是否还有其它硬编码后，复核 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts`。
+- 来源：用户明确要求不允许存在 move / replace 等硬编码判断，这些编辑意图应由 LLM 自行决定。
 - 原因：
-  - Phase 3 当前需要在没有结构化编辑意图字段的情况下，区分 instance move、instance replacement、component body edit 等确认范围。
-  - 当前实现用中英文关键词判断 move / replace 意图，再推导 `target_path`、`target_type` 和 `affected_files`。
-  - 几何代码生成中的 prompt-driven cut / fillet / height 之类启发式已经移除；本条仅指确认范围推导仍依赖 prompt 关键词。
+  - 当前协议和 Web confirmation 还没有承接 LLM 输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
+  - 本轮已删除 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts` 中的 prompt 关键词判断。
+  - 本轮新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应承担的结构化输出责任。
+  - 现阶段 Web confirmation 只能使用显式 target path 或 selection 的结构化 owner/ref 信息，不能替 LLM 猜测用户要移动、替换还是修改本体。
 - 影响范围：
-  - 未覆盖的同义表达可能导致确认范围不符合用户意图，例如本该修改 assembly 的操作被当作 component geometry，或反过来。
-  - Rust Plan fallback 与 Web Execute confirmation 各维护一份相似词表，后续容易出现两端判断不一致。
-  - 这不扩大写入权限，因为 Execute 仍必须经过确认范围和 app server 校验；风险在于确认范围的默认建议可能不准确。
+  - prompt 中出现 move / replace / 移动 / 替换 等词不会再改变确认范围，也不会生成几何修改。
+  - 在真实 LLM edit intent 接入前，instance move / replacement 这类语义需要通过显式 target 或后续结构化 tool call 才能准确表达。
+  - Agent Execute 在没有 LLM codegen 后端时会返回 `LlmError`，不再执行本地固定 CadQuery 几何模板。
+  - 这不扩大写入权限；Execute 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 限制。
 - 可能的解法：
-  - 在协议中为 Agent Plan / Execute confirmation 增加结构化 edit intent，例如 `BodyEdit`、`InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
-  - Web UI 使用显式分段控件或确认表单让用户选择 edit intent，而不是从 prompt 猜测。
-  - 后续接入真实 Agent tool schema 时，由模型输出结构化 intent，并由前端展示给用户确认；Rust 与 Web 共用 protocol enum，避免双端词表分叉。
-- 当前处理方式：MVP 为保护 Phase 3 的 instance move / replacement 验收路径暂时保留这两处确认范围关键词判断；已删除本地 fallback 中直接驱动几何生成的自然语言词表。
+  - 在 protocol 中增加 LLM tool output 专用的结构化 edit intent enum，并把它作为 confirmation 的一部分展示给用户确认。
+  - 真实 Agent 后端输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
+  - Web UI 只展示和确认 LLM 输出的结构化 intent；如果后续需要人工修正，应通过显式控件改结构化字段，而不是恢复关键词词表。
+- 当前处理方式：已删除 prompt 关键词推断和本地 CadQuery 几何 codegen；当前 fallback 仅使用 selection 结构化 owner/ref 选择默认目标，并把真实 LLM 结构化 intent 接入记录为后续能力缺口。
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
@@ -62,21 +64,21 @@
   - 在 CI 中固定全仓库 fmt 检查，避免格式差异继续累积。
 - 当前处理方式：本轮不修改无关源码；已对 Phase 1 触及的 Rust 文件执行 `rustfmt --edition 2024 --check` 并通过，后续仍需单独处理全仓库 fmt 差异。
 
-## 2026-04-28 04:18:42: Agent 后端暂用本地 CadQuery 代码生成 fallback，尚未接入真实 LLM provider 配置
+## 2026-04-28 04:18:42: Agent 后端尚未接入真实 LLM provider 配置
 
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1，按计划评估 Rig 后实现 Agent / Chat / CadQuery tool 主链路。
 - 原因：
   - Phase 1 已确认 `rig-core` 当前评估版本为 `0.35.0`，其 provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 方向符合后续接入需求。
   - 当前仓库尚无 LLM provider 配置模型、密钥管理策略、运行时 provider 选择规则和可复现的 provider mock 测试夹具。
-  - 为避免在 Phase 1 中硬编码供应商或凭据，当前实现先提供 `AgentBackend` trait，并使用本地 deterministic fallback 生成最小 CadQuery box 代码，确保 Chat / Agent / confirmation / CadQuery staging / Viewer result 主链路可验证。
+  - 为避免在 Phase 1 中硬编码供应商或凭据，当前实现先提供 `AgentBackend` trait。后续根据用户要求，已移除本地 deterministic CadQuery codegen fallback。
 - 影响范围：
-  - 当前 Agent 可以经由 Execute 确认范围生成并执行 CadQuery 代码，但自然语言理解能力非常有限，不能代表真实模型推理能力。
-  - 后续实现 Plan / Execute 的复杂 CAD 修改、基于 selection 的语义编辑和多轮工具调用时，必须接入真实 LLM provider 或 provider mock，不应继续把本地 fallback 当作完整 Agent 能力。
+  - 当前 Agent 可以处理 Inform / Plan 的本地文本草稿，但 Execute 需要真实 LLM codegen 后端；缺少后端时返回 `LlmError`。
+  - 后续实现 Plan / Execute 的复杂 CAD 修改、基于 selection 的语义编辑和多轮工具调用时，必须接入真实 LLM provider 或 provider mock。
 - 可能的解法：
   - 在 app server 配置中增加 provider 类型、模型名、base URL、密钥来源和超时等字段，并明确本地开发与生产部署的读取规则。
   - 基于 `AgentBackend` trait 接入 Rig provider，并为 tool call、streaming、cancel 和 error mapping 补充 mock backend 测试。
   - 将真实 provider 的不可用、鉴权失败和速率限制映射为协议错误与 Chat tool result，而不是直接暴露底层 SDK 错误。
-- 当前处理方式：Phase 1 保留本地 fallback 作为可测试实现，记录本条为后续 Agent provider 接入前必须处理的问题；该问题不阻断 Phase 1 的 protocol、Chat、ManagedClient、staging 权限边界验收。
+- 当前处理方式：保留 `AgentBackend` trait 和 Inform / Plan 文本草稿；Execute 不再使用本地几何 fallback，后续必须接入真实 provider 或 provider mock。
 
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 

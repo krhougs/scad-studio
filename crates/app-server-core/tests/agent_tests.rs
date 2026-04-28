@@ -54,8 +54,8 @@ fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
 }
 
 #[test]
-fn local_agent_backend_generates_cadquery_code_instead_of_echoing_prompt() {
-    let generated = generate_cadquery_code(AgentCadQueryCodeInput {
+fn local_agent_backend_refuses_part_codegen_without_llm_backend() {
+    let error = generate_cadquery_code(AgentCadQueryCodeInput {
         prompt: "make a 42 mm taller lid from chat".into(),
         history: vec![chat_message("msg-1", "previous plan")],
         selections: vec![selection("@face[top_lid:f_0]")],
@@ -63,78 +63,30 @@ fn local_agent_backend_generates_cadquery_code_instead_of_echoing_prompt() {
         target_display_path: "parts/top_lid.py".into(),
         target_type: CadQueryObjectKind::Part,
     })
-    .expect("generate cadquery code");
+    .expect_err("local fallback must not generate CadQuery geometry");
 
-    assert!(generated.code.contains("import cadquery as cq"));
-    assert!(generated.code.contains("def build(params=None):"));
-    assert!(generated.code.contains("height\", 1.000"));
-    assert!(generated.code.contains(".tag(\"top_lid\")"));
-    assert!(!generated.code.contains("make a 42 mm taller lid from chat"));
-    assert!(generated.response_text.contains("parts/top_lid.py"));
+    assert!(error.message.contains("LLM"));
+    assert!(!error.message.contains("make a 42 mm taller lid from chat"));
 }
 
 #[test]
-fn local_agent_backend_names_selection_context_without_prompt_driven_geometry() {
-    let generated = generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: "open a slot on the selected face".into(),
+fn local_agent_backend_refuses_assembly_codegen_without_llm_backend() {
+    let error = generate_cadquery_code(AgentCadQueryCodeInput {
+        prompt: "adjust this selected instance".into(),
         history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![selection("@face[top_lid:f_0]")],
+        selections: vec![instance_selection()],
         active_selection_index: Some(0),
-        target_display_path: "parts/top_lid.py".into(),
-        target_type: CadQueryObjectKind::Part,
+        target_display_path: "assemblies/full_enclosure.py".into(),
+        target_type: CadQueryObjectKind::Assembly,
     })
-    .expect("generate cadquery code");
+    .expect_err("local fallback must not generate assembly geometry");
 
-    assert!(
-        generated
-            .response_text
-            .contains("@feature[top_lid.top_surface]")
-    );
-    assert!(generated.response_text.contains("parts/top_lid.py"));
-    assert!(generated.response_text.contains("part geometry"));
-    assert!(generated.code.contains("SELECTION_REF"));
-    assert!(generated.code.contains("@feature[top_lid.top_surface]"));
-    assert!(!generated.code.contains("cutThruAll"));
-    assert!(!generated.code.contains("fillet"));
+    assert!(error.message.contains("LLM"));
+    assert!(!error.message.contains("cq.Assembly"));
 }
 
 #[test]
-fn local_agent_backend_preserves_selected_feature_metadata() {
-    let generated = generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: "open a slot on the selected face".into(),
-        history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![bottom_face_selection()],
-        active_selection_index: Some(0),
-        target_display_path: "parts/top_lid.py".into(),
-        target_type: CadQueryObjectKind::Part,
-    })
-    .expect("generate cadquery code");
-
-    assert!(generated.code.contains("@feature[top_lid.bottom_surface]"));
-    assert!(!generated.code.contains(".workplane().rect"));
-    assert!(!generated.code.contains("cutThruAll"));
-}
-
-#[test]
-fn local_agent_backend_does_not_modify_raw_face_without_feature_mapping() {
-    let generated = generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: "open a slot on the selected face".into(),
-        history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![raw_face_selection()],
-        active_selection_index: Some(0),
-        target_display_path: "parts/top_lid.py".into(),
-        target_type: CadQueryObjectKind::Part,
-    })
-    .expect("generate cadquery code");
-
-    assert!(generated.response_text.contains("@face[top_lid:f_9]"));
-    assert!(generated.code.contains("SELECTION_REF"));
-    assert!(!generated.code.contains(".workplane().rect"));
-    assert!(!generated.code.contains("cutThruAll"));
-}
-
-#[test]
-fn plan_turn_declares_instance_replacement_multi_file_scope() {
+fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
     let draft = draft_agent_turn(AgentTurnInput {
         operation: AgentOperationLevel::Plan,
         prompt: "replace this screw with a countersunk version".into(),
@@ -144,27 +96,27 @@ fn plan_turn_declares_instance_replacement_multi_file_scope() {
         confirmed_target_path: None,
     });
 
-    assert!(draft.text.contains("components/screw.py"));
-    assert!(draft.text.contains("assemblies/full_enclosure.py"));
-    assert!(draft.text.contains("assembly instance replacement"));
-    assert!(draft.text.contains("Target: assemblies/full_enclosure.py"));
+    assert!(draft.text.contains("Target: components/screw.py"));
+    assert!(draft.text.contains("component geometry"));
+    assert!(!draft.text.contains("assemblies/full_enclosure.py"));
+    assert!(!draft.text.contains("assembly instance replacement"));
 }
 
 #[test]
-fn local_agent_backend_generates_assembly_code_for_instance_move() {
-    let generated = generate_cadquery_code(AgentCadQueryCodeInput {
+fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
+    let draft = draft_agent_turn(AgentTurnInput {
+        operation: AgentOperationLevel::Plan,
         prompt: "move this screw 5mm right".into(),
         history: vec![chat_message("msg-1", "assembly plan")],
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
-        target_display_path: "assemblies/full_enclosure.py".into(),
-        target_type: CadQueryObjectKind::Assembly,
-    })
-    .expect("generate assembly cadquery code");
+        confirmed_target_path: None,
+    });
 
-    assert!(generated.code.contains("cq.Assembly"));
-    assert!(!generated.code.contains("return cq.Workplane(\"XY\").box"));
-    assert!(generated.response_text.contains("assembly coordination"));
+    assert!(draft.text.contains("Target: components/screw.py"));
+    assert!(draft.text.contains("component geometry"));
+    assert!(!draft.text.contains("assemblies/full_enclosure.py"));
+    assert!(!draft.text.contains("assembly coordination"));
 }
 
 #[test]
@@ -282,33 +234,5 @@ fn ambiguous_selection() -> SelectionRef {
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: true,
-    }
-}
-
-fn raw_face_selection() -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Face,
-        ref_text: "@face[top_lid:f_9]".into(),
-        owner_ref_text: Some("@part[top_lid]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Part),
-        instance_path: None,
-        candidate_feature_ref: None,
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
-    }
-}
-
-fn bottom_face_selection() -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Face,
-        ref_text: "@face[top_lid:f_2]".into(),
-        owner_ref_text: Some("@part[top_lid]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Part),
-        instance_path: None,
-        candidate_feature_ref: Some("@feature[top_lid.bottom_surface]".into()),
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
     }
 }

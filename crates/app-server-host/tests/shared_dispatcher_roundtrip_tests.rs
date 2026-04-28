@@ -253,11 +253,12 @@ fn dispatcher_rejects_execute_target_outside_confirmed_scope() {
 }
 
 #[test]
-fn dispatcher_execute_agent_runs_confirmed_cadquery_and_records_tool_history() {
-    let workspace = temp_workspace("dispatcher-agent-execute");
+fn dispatcher_execute_agent_requires_llm_codegen_backend_before_running_cadquery() {
+    let workspace = temp_workspace("dispatcher-agent-requires-llm");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
     std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
-    let runner = fake_cadquery_runner(&workspace);
+    let captured = workspace.join("captured-agent-code.py");
+    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
     let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
@@ -272,202 +273,17 @@ fn dispatcher_execute_agent_runs_confirmed_cadquery_and_records_tool_history() {
     let started = invoke_agent_with_confirmation(&mut dispatcher, 36, &session_id, confirmation);
 
     wait_for_done(&pushes, &started.run_id);
-    let result = find_tool_result_event(&pushes, &started.run_id).expect("tool result");
-    assert_eq!(result.tool_name, "cadquery");
+    let error = find_error_event(&pushes, &started.run_id).expect("llm error");
+    assert_eq!(error.error_type, AgentErrorType::LlmError);
+    assert!(error.message.contains("LLM"));
+    assert!(find_tool_result_event(&pushes, &started.run_id).is_none());
     assert!(find_done_event(&pushes, &started.run_id).is_some());
-    let history = read_chat_history(&mut dispatcher, &session_id);
-    assert!(
-        history
-            .iter()
-            .any(|message| message.role == ChatRole::Tool && message.tool_result.is_some())
-    );
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_execute_agent_maps_python_import_failure() {
-    let workspace = temp_workspace("dispatcher-agent-python-import");
-    std::fs::create_dir_all(workspace.join("parts")).unwrap();
-    std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
-    let runner = fake_python_import_error_cadquery_runner(&workspace);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    let target_path = path_handle(["parts", "top_lid.py"]);
-    let confirmation = AgentCadQueryConfirmation {
-        request: confirmed_cadquery_request(target_path.clone()),
-        plan_ref: None,
-        affected_files: vec![target_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
-    let started = invoke_agent_with_confirmation(&mut dispatcher, 37, &session_id, confirmation);
-
-    wait_for_done(&pushes, &started.run_id);
-    let error = find_error_event(&pushes, &started.run_id).expect("python import error");
-    assert_eq!(error.error_type, AgentErrorType::PythonImportError);
-    assert!(error.message.contains("ModuleNotFoundError"));
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_execute_agent_generates_cadquery_code_from_prompt() {
-    let workspace = temp_workspace("dispatcher-agent-generate-code");
-    std::fs::create_dir_all(workspace.join("parts")).unwrap();
-    std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    let target_path = path_handle(["parts", "top_lid.py"]);
-    let mut request = confirmed_cadquery_request(target_path.clone());
-    request.code = "make a taller lid from chat".into();
-    let confirmation = AgentCadQueryConfirmation {
-        request,
-        plan_ref: None,
-        affected_files: vec![target_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
-    let started = invoke_agent_with_confirmation_and_prompt(
-        &mut dispatcher,
-        37,
-        &session_id,
-        "make a taller lid from chat",
-        confirmation,
-    );
-
-    wait_for_done(&pushes, &started.run_id);
-    let captured_code = std::fs::read_to_string(captured).expect("captured agent code");
-    assert!(captured_code.contains("import cadquery as cq"));
-    assert!(!captured_code.contains("make a taller lid from chat"));
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("parts/top_lid.py")).unwrap(),
-        captured_code
-    );
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_execute_agent_generates_assembly_code_for_instance_move() {
-    let workspace = temp_workspace("dispatcher-agent-generate-assembly-code");
-    std::fs::create_dir_all(workspace.join("assemblies")).unwrap();
-    std::fs::write(workspace.join("assemblies/full_enclosure.py"), "old code\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    update_instance_selection(&mut dispatcher);
-    let target_path = path_handle(["assemblies", "full_enclosure.py"]);
-    let mut request = confirmed_cadquery_request(target_path.clone());
-    request.target_type = CadQueryObjectKind::Assembly;
-    let confirmation = AgentCadQueryConfirmation {
-        request,
-        plan_ref: None,
-        affected_files: vec![target_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
-    let started = invoke_agent_with_confirmation_and_prompt(
-        &mut dispatcher,
-        41,
-        &session_id,
-        "move this screw 5mm right",
-        confirmation,
-    );
-
-    wait_for_done(&pushes, &started.run_id);
-    let captured_code = std::fs::read_to_string(captured).expect("captured agent code");
-    assert!(captured_code.contains("cq.Assembly"));
-    assert!(!captured_code.contains("return cq.Workplane(\"XY\").box"));
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("assemblies/full_enclosure.py")).unwrap(),
-        captured_code
-    );
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_execute_agent_generates_assembly_code_for_instance_replacement() {
-    let workspace = temp_workspace("dispatcher-agent-replace-instance");
-    std::fs::create_dir_all(workspace.join("assemblies")).unwrap();
-    std::fs::create_dir_all(workspace.join("components")).unwrap();
-    std::fs::write(
-        workspace.join("assemblies/full_enclosure.py"),
-        "old assembly\n",
-    )
-    .unwrap();
-    std::fs::write(workspace.join("components/screw.py"), "old component\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    update_instance_selection(&mut dispatcher);
-    let target_path = path_handle(["assemblies", "full_enclosure.py"]);
-    let component_path = path_handle(["components", "screw.py"]);
-    let mut request = confirmed_cadquery_request(target_path.clone());
-    request.target_type = CadQueryObjectKind::Assembly;
-    let confirmation = AgentCadQueryConfirmation {
-        request,
-        plan_ref: None,
-        affected_files: vec![target_path.clone(), component_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
-    let started = invoke_agent_with_confirmation_and_prompt(
-        &mut dispatcher,
-        42,
-        &session_id,
-        "replace this screw with a countersunk version",
-        confirmation,
-    );
-
-    wait_for_done(&pushes, &started.run_id);
-    let captured_code = std::fs::read_to_string(captured).expect("captured agent code");
-    assert!(captured_code.contains("cq.Assembly"));
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("assemblies/full_enclosure.py")).unwrap(),
-        captured_code
-    );
-    assert_eq!(
-        std::fs::read_to_string(workspace.join("components/screw.py")).unwrap(),
-        "old component\n"
-    );
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_rejects_execute_outputs_outside_confirmed_scope() {
-    let workspace = temp_workspace("dispatcher-agent-unconfirmed-output");
-    std::fs::create_dir_all(workspace.join("parts")).unwrap();
-    std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, true);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    let target_path = path_handle(["parts", "top_lid.py"]);
-    let confirmation = AgentCadQueryConfirmation {
-        request: confirmed_cadquery_request(target_path.clone()),
-        plan_ref: None,
-        affected_files: vec![target_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
-    let started = invoke_agent_with_confirmation(&mut dispatcher, 38, &session_id, confirmation);
-
-    wait_for_done(&pushes, &started.run_id);
-    let error = find_error_event(&pushes, &started.run_id).expect("permission error");
-    assert_eq!(error.error_type, AgentErrorType::PermissionDenied);
     assert_eq!(
         std::fs::read_to_string(workspace.join("parts/top_lid.py")).unwrap(),
         "old code\n"
     );
+    assert!(!captured.exists());
     assert!(!workspace.join("outputs/top_lid.step").exists());
-    assert!(!workspace.join("outputs/unconfirmed.step").exists());
     cleanup_workspace(&workspace);
 }
 
@@ -786,36 +602,6 @@ fn update_selection(
     }
 }
 
-fn update_instance_selection(
-    dispatcher: &mut HostRequestDispatcher,
-) -> app_server_protocol::SelectionUpdateResponse {
-    let selection = SelectionRef {
-        kind: SelectionKind::Instance,
-        ref_text: "@instance[full_enclosure/screw_1]".into(),
-        owner_ref_text: Some("@component[screw]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Component),
-        instance_path: Some("full_enclosure/screw_1".into()),
-        candidate_feature_ref: None,
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
-    };
-    match dispatch(
-        dispatcher,
-        26,
-        ClientCommand::SelectionUpdate(SelectionUpdateRequest {
-            selections: vec![selection],
-            active_index: Some(0),
-        }),
-    )
-    .result
-    .expect("selection.update succeeds")
-    {
-        CommandSuccess::SelectionUpdated(response) => response,
-        other => panic!("unexpected selection.update response: {other:?}"),
-    }
-}
-
 fn archive_chat(dispatcher: &mut HostRequestDispatcher, session_id: &ChatSessionId) {
     match dispatch(
         dispatcher,
@@ -1053,20 +839,6 @@ fn cleanup_workspace(root: &std::path::Path) {
     let _ = std::fs::remove_dir_all(root);
 }
 
-fn fake_cadquery_runner(root: &std::path::Path) -> std::path::PathBuf {
-    let runner = root.join("fake-cadquery-runner.sh");
-    std::fs::write(
-        &runner,
-        format!(
-            "#!/bin/sh\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output-dir' ]; then\n    shift\n    out=\"$1\"\n  fi\n  shift\ndone\nif [ -n \"$out\" ]; then\n  mkdir -p \"$out\"\n  printf 'artifact\\n' > \"$out/top_lid.step\"\nfi\ncat <<'JSON'\n{}\nJSON\n",
-            cadquery_success_json()
-        ),
-    )
-    .expect("write fake cadquery runner");
-    make_executable(&runner);
-    runner
-}
-
 fn fake_capturing_cadquery_runner(
     root: &std::path::Path,
     capture_path: &std::path::Path,
@@ -1102,17 +874,6 @@ fn fake_variable_result_cadquery_runner(root: &std::path::Path) -> std::path::Pa
         ),
     )
     .expect("write fake cadquery runner");
-    make_executable(&runner);
-    runner
-}
-
-fn fake_python_import_error_cadquery_runner(root: &std::path::Path) -> std::path::PathBuf {
-    let runner = root.join("fake-python-import-cadquery-runner.sh");
-    std::fs::write(
-        &runner,
-        "#!/bin/sh\ncat <<'JSON'\n{\"status\":\"runner_error\",\"error_type\":\"ModuleNotFoundError\",\"error\":\"No module named 'cadquery'\"}\nJSON\nexit 2\n",
-    )
-    .expect("write fake python import cadquery runner");
     make_executable(&runner);
     runner
 }

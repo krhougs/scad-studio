@@ -178,7 +178,7 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 
 ### 完成情况
 
-- 评估并记录 `rig-core` 当前兼容版本 `0.35.0`：provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 符合后续接入方向。由于当前仓库没有 provider 配置、密钥管理和 mock provider 测试夹具，本 Phase 先实现 `AgentBackend` trait 和本地 deterministic fallback，不硬编码供应商或凭据。
+- 评估并记录 `rig-core` 当前兼容版本 `0.35.0`：provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 符合后续接入方向。由于当前仓库没有 provider 配置、密钥管理和 mock provider 测试夹具，本 Phase 先实现 `AgentBackend` trait，不硬编码供应商或凭据；后续已移除本地 CadQuery 几何 codegen fallback。
 - 扩展 `app-server-protocol`：新增 Chat 生命周期命令、Agent invoke / cancel、SelectionUpdate、CadQueryResultGet、Agent push events、`agent_busy` 错误，以及 Chat tool call / tool result / mesh result 记录。
 - 扩展 `studio-common::ManagedClient`：维护 Chat sessions / history、Agent run、current selection、CadQuery result ready 的 snapshot 与事件更新；`AgentCancelled` 只作为取消请求确认，真正清理 running 状态由后续 `AgentDone` 事件完成。
 - 扩展 `studio-web-wasm`、`app-server-protocol-wasm` 和 generated packages：新增 Chat / Agent / Selection dispatch；`cadquery.result.get` 的 JS 可见响应只保留轻量 `CadQueryResultReady`，mesh 大数组通过 `client_take_cadquery_mesh(result_id)` 读取。
@@ -187,13 +187,13 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - 实现 Chat JSONL 存储：支持 create / list / send / history / archive，消息记录可保存 tool call、tool result 和 mesh result；session id 在 path join 前校验，只允许 ASCII 字母数字和 `-`。
 - 收紧 Chat 文件系统边界：workspace root 以下的 `chats`、`chats/archived` 和每个 JSONL 文件均拒绝符号链接；`create`、`history`、`send`、`archive`、`list` 统一通过 no-follow metadata 检查，防止 Chat JSONL 写出 workspace。
 - 实现 Inform / Plan / Execute 权限模型：Execute 必须携带 `AgentCadQueryConfirmation`，目标文件、affected / new 文件和 export targets 均使用 `PathHandle`；Agent 只能写入确认范围内的目标和输出。
-- 修正 CadQuery 执行边界：Agent Execute 使用 backend 生成的 CadQuery 代码，不执行前端传入的原始 prompt 或任意 raw code；Agent Execute、直接 `CadQueryExecute` 和 `CadQueryPreview` 都使用 exact output scope，禁止把 staging 中未确认或非默认的 outputs 回写到真实 workspace；runner 返回后到 commit 前、commit prepare 前、commit 文件写入前都会再次检查 cancel 标记，文件间取消会回滚已写入文件和本轮新建目录，commit 成功后不再把 late cancel 改判为 cancelled done。
+- 修正 CadQuery 执行边界：Agent Execute 不执行前端传入的原始 prompt 或任意 raw code；没有真实 LLM codegen 后端时返回 `LlmError`。直接 `CadQueryExecute` 和 `CadQueryPreview` 都使用 exact output scope，禁止把 staging 中未确认或非默认的 outputs 回写到真实 workspace；runner 返回后到 commit 前、commit prepare 前、commit 文件写入前都会再次检查 cancel 标记，文件间取消会回滚已写入文件和本轮新建目录，commit 成功后不再把 late cancel 改判为 cancelled done。
 - 实现 Web Chat UI：支持 session 列表、创建 / 切换、Inform / Plan / Execute 模式、发送消息、agent streaming、tool result 展示、mesh result 展示和 done 后刷新 history；Chat archive 已在协议和后端实现，UI 暂未暴露归档入口；Chat / Agent / Selection 业务状态不写入 Zustand。
 
 ### Review 与修复记录
 
 - 第一轮独立 review 发现 Chat session id 路径逃逸、Agent 只有 placeholder、Web Execute confirmation 不完整、Chat JSONL 缺少 tool call / result 记录、缺少 CadQuery result get wrapper、Agent done 后未刷新 history。均已修复并补充对应测试。
-- 第二轮独立 review 发现 Agent Execute 仍会执行前端 raw code / prompt，以及 CadQuery staging 会把未确认 outputs 一并回写。已改为 `AgentBackend::generate_cadquery_code()` 生成代码，并新增 exact output scope。
+- 第二轮独立 review 发现 Agent Execute 仍会执行前端 raw code / prompt，以及 CadQuery staging 会把未确认 outputs 一并回写。已阻止 raw code / prompt 直接执行，并新增 exact output scope；后续按用户要求删除本地 CadQuery 几何 codegen fallback。
 - 第三轮独立 review 发现 `agent.cancel` 会在 worker 完成前释放 registry 并发送 done，直接 `CadQueryExecute` 也仍可绕过 output scope。已改为 worker 统一释放 registry；直接 execute / preview 均使用默认 exact output scope。
 - 第四轮独立 review 发现 ManagedClient 在 cancel ack 时提前清理 `agent_run`，以及 `CadQueryPreview` 缺少 output scope 回归测试。已修复 ack 语义，并补充 preview exact output scope 测试。
 - 第五轮独立 review 发现 ChatStore 可通过 `chats` 或 `chats/archived` 符号链接写出 workspace，且本文件缺少 Phase 1 结果记录。已补充 symlink 拒绝逻辑、红绿回归测试和本结果记录。
@@ -232,7 +232,7 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 ### 遗留问题
 
 - `docs/known_issues.md` 新增记录：全仓库 `cargo fmt --check` 当前受既有无关格式差异阻塞。本轮不格式化未触及的无关源码，Phase 1 触及的 Rust 文件已通过 `rustfmt --check`。
-- `docs/known_issues.md` 新增记录：Agent 后端当前使用本地 CadQuery 代码生成 fallback，尚未接入真实 LLM provider 配置；这不阻断 Phase 1 的协议、Chat、ManagedClient、权限范围和 CadQuery staging 主链路验收，但后续复杂 Agent 能力必须接入真实 provider 或 provider mock。
+- `docs/known_issues.md` 更新记录：Agent 后端尚未接入真实 LLM provider 配置；当前 Execute 缺少 LLM codegen 后端时返回 `LlmError`，后续复杂 Agent 能力必须接入真实 provider 或 provider mock。
 - `bun run protocol:check-generated` 在 Phase 1 提交前会因为 intended generated files 仍处于未提交 diff 状态而失败；本 Phase 使用 `bun run protocol:build` 验证生成流程，提交后再执行 generated check。
 - `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
 
@@ -280,17 +280,17 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 
 ### 完成情况
 
-- 打通 Viewer selection → Chat → Agent Plan / Execute 的选择上下文：Web Chat 从 ManagedClient snapshot 读取 `current_selection`，显示当前 CadQuery ref，并在 Execute confirmation 中按当前 prompt 与 active selection 生成结构化范围。
+- 打通 Viewer selection → Chat → Agent Plan / Execute 的选择上下文：Web Chat 从 ManagedClient snapshot 读取 `current_selection`，显示当前 CadQuery ref，并在 Execute confirmation 中按显式 target path 或 active selection 的结构化 owner/ref 生成默认范围。
 - 后端 Agent Plan 使用 active selection、history 和 prompt 生成 Markdown CAD Plan，声明 selection target、target path、edit goal、`affected_files` 和 export target。
-- Agent Execute 不执行前端 raw code；dispatcher 把 active selection 与确认的 `target_type` 传给后端 Agent，由后端生成 CadQuery 代码，再走 Phase 0c 的 staging 执行与 exact output scope。
+- Agent Execute 不执行前端 raw code；当前没有真实 LLM codegen backend 时返回 `LlmError`，后续由 LLM 输出结构化 CadQuery 代码后再走 Phase 0c 的 staging 执行与 exact output scope。
 - 实现 Ref 业务规则核心路径：
-  - part face 有 feature 映射时，上升为 `@feature[...]`，并作为 selection target 与代码元数据传递给 Agent fallback。
-  - 本地 Agent fallback 不再根据自然语言关键词生成 selector-based cut / fillet，避免把临时拓扑 id 或硬编码词表当成稳定几何编辑语义。
-  - instance move 以 assembly 文件为主写入目标。
-  - instance replacement 以 assembly 文件为主写入目标，owner component 文件仅作为受影响文件参与确认，避免误改所有同源 component 实例。
+  - part face 有 feature 映射时，上升为 `@feature[...]`，并作为 selection target 传递给 Agent 上下文。
+  - 本地 Agent fallback 不生成 selector-based cut / fillet，避免把临时拓扑 id 或硬编码词表当成稳定几何编辑语义。
+  - 本地 fallback 不再根据 prompt 判断 instance move / replacement；这类编辑意图后续必须由 LLM 结构化输出或显式 confirmation 字段表达。
+  - instance selection 默认使用结构化 owner/ref 指向 component；需要修改 assembly 时应由 LLM 或显式 target path 给出 assembly 目标。
   - component body edit 与普通 instance body edit 归类为 component geometry。
   - ambiguous selection 保留 raw ref，并在 Plan 中标记需要确认。
-- Web 侧新增 `cadquery-agent-scope.ts`，统一 Execute confirmation 的 target path、target type、affected files 和 export target 推导；Chat UI 不新增 Zustand 业务状态。
+- Web 侧新增 `cadquery-agent-scope.ts`，统一 Execute confirmation 的显式 target path、selection owner/ref 默认范围和 export target 生成；Chat UI 不新增 Zustand 业务状态。
 - `docs/known_issues.md` 新增记录：`AgentCadQueryConfirmation.plan_ref` 目前仍为 `null`，尚未持久绑定 CAD Plan 文件；当前不扩大写入权限，影响的是 Plan / Execute 长期追溯能力。
 
 ### Review 与修复记录
@@ -332,10 +332,12 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - 为 host 侧 CadQuery mesh result 增加有界缓存，当前限制为 8 个 result，并按插入顺序移除最早结果，避免长时间使用时缓存无上限增长。
 - 将 CadQuery runner 的 `ImportError` / `ModuleNotFoundError` 映射为 `CadQueryRunnerErrorKind::PythonImport`，Agent push event 对应输出 `AgentErrorType::PythonImportError`。
 - 拆分超过 500 行的新增文件：`agent.rs` 拆出 `agent/codegen.rs` 与 `agent/selection.rs`，`staging.rs` 拆出 `staging/commit.rs`，`cadquery_tests.rs` 拆出 `cadquery_staging_tests.rs`。
-- 响应用户关于硬编码 `开孔`、`槽` 等自然语言词表的质疑：移除本地 Agent fallback 中 prompt-driven cut / fillet 生成逻辑。fallback 只生成稳定基础 CadQuery 结构，并把 selection ref 保留为上下文元数据；复杂几何编辑后续应由结构化 tool schema 或真实 Agent 输出驱动。
+- 响应用户关于硬编码 `开孔`、`槽` 等自然语言词表的质疑：移除本地 Agent fallback 中 prompt-driven cut / fillet 生成逻辑；复杂几何编辑后续应由结构化 tool schema 或真实 Agent 输出驱动。
 - 最后一轮独立 review 未发现 Critical 或 Important，仅指出 `dispatcher_cadquery_result_cache_evicts_oldest_entries` 测试函数超过 50 行。已拆出 fixture、preview 断言和 cache get 断言 helper，测试主函数缩短到 15 行左右。
-- 继续按用户要求检查其它硬编码：移除本地 Agent fallback 中的 `height/tall` 尺寸启发式、固定 `faces(">Z")` body selector 和 assembly 默认 `offset=5`。当前 fallback 只生成默认 1x1x1 基础结构，参数仍可通过 `params` 覆盖。
-- 确认仍有两处 prompt 关键词用于 move / replace 确认范围推导：Rust Plan fallback 与 Web Execute confirmation。该逻辑不直接生成几何，但仍属于临时硬编码；已记录到 `docs/known_issues.md`，后续应以结构化 edit intent 替代。
+- 继续按用户要求检查其它硬编码：移除本地 Agent fallback 中的 `height/tall` 尺寸启发式、固定 `faces(">Z")` body selector 和 assembly 默认 `offset=5`；随后进一步删除整个本地 CadQuery 几何 codegen fallback。
+- 用户进一步明确“这些东西由 LLM 自己决定”后，删除 Rust Plan fallback 与 Web Execute confirmation 中剩余的 move / replace prompt 关键词推断。当前 confirmation 不再从 prompt 猜测编辑意图，只使用显式 target path 或 selection 结构化 owner/ref 作为默认范围。
+- 用户指出本地 `codegen` fallback 没有意义后，删除 `agent/codegen.rs`，并改为没有 LLM codegen 后端时返回 `LlmError`，不再生成固定 1x1x1 box 或 assembly 占位几何。
+- 新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应使用的 CadQuery Agent system prompt draft：由 LLM 输出结构化 intent、target、affected files、export targets 和 CadQuery code，Rust / Web 只负责校验与确认。
 
 ### 回归记录
 
@@ -357,11 +359,17 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - `cargo fmt --check -p app-server-core`：通过。
 - `cargo fmt --check -p app-server-host`：通过。
 - `git diff --check`：通过。
-- 最终独立 review 结论：未发现 Critical、Important 或 Minor finding；确认运行时代码不再根据 `开孔` / `槽` / `cut` / `fillet` / `height` / `tall` 等 prompt 词直接生成几何修改，move / replace 词表只影响确认范围推断且已记录到 `docs/known_issues.md`。
-- 行数复核：`agent.rs` 232 行、`agent/codegen.rs` 119 行、`agent/selection.rs` 207 行、`staging.rs` 419 行、`staging/commit.rs` 234 行、`cadquery_tests.rs` 289 行、`cadquery_staging_tests.rs` 436 行。
+- 最终独立 review 结论：未发现 Critical、Important 或 Minor finding；确认运行时代码不再根据 `开孔` / `槽` / `cut` / `fillet` / `height` / `tall` 等 prompt 词直接生成几何修改。
+- 红灯验证：新增 `plan_turn_does_not_infer_instance_replacement_from_prompt_words` / `plan_turn_does_not_infer_instance_movement_from_prompt_words` 和 Web confirmation 对应断言后，修复前 Rust `agent_tests` 有 2 项失败，Web `cadquery-agent-scope.test.ts` 有 3 项失败，均证明 move / replace 词表仍在影响确认范围。
+- 绿色验证：删除 move / replace prompt 推断后，`cargo test -p app-server-core --test agent_tests` 通过，13 个测试通过；`bun run --cwd packages/studio-web test:unit tests/unit/cadquery-agent-scope.test.ts` 通过，7 个测试通过。
+- 红灯验证：新增 `local_agent_backend_refuses_part_codegen_without_llm_backend` 和 `local_agent_backend_refuses_assembly_codegen_without_llm_backend` 后，修复前 Rust `agent_tests` 有 2 项失败，错误中显示仍生成固定 box / assembly CadQuery code。
+- 绿色验证：删除本地 codegen fallback 后，`cargo test -p app-server-core --test agent_tests` 通过，10 个测试通过；`cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests` 通过，10 个测试通过。
+- 全量验证：`cargo test --workspace` 通过；`bun run --cwd packages/studio-web test:unit` 通过，26 个文件、117 个测试通过；`bun run --cwd packages/studio-web typecheck` 通过。
+- 最终独立 review 结论：未发现 Critical、Important 或 Minor finding；确认 `agent/codegen.rs` 已删除、本地 `generate_cadquery_code` 直接要求 LLM 后端、host 不进入 tool start / runner / 写文件路径、Web confirmation 不再使用 prompt 推断 move / replace。
+- 行数复核：`agent.rs` 192 行、`agent/selection.rs` 130 行、`agent/codegen.rs` 已删除、`staging.rs` 419 行、`staging/commit.rs` 234 行、`agent_tests.rs` 238 行、`cadquery_tests.rs` 289 行、`cadquery_staging_tests.rs` 436 行、`docs/cadquery-mvp/agent-system-prompt.md` 59 行。
 - 函数长度复核：上一轮 review 指出的 cache eviction 测试函数已拆分；新增 helper 均低于 50 行。
 
 ### 遗留问题
 
-- `docs/known_issues.md` 新增记录：CadQuery Agent 确认范围仍使用 prompt 关键词推断 move / replace 意图。当前不直接生成几何、不扩大写入权限，但后续应以结构化 edit intent 替代。
+- `docs/known_issues.md` 更新记录：CadQuery edit intent 尚未由 LLM 结构化输出接管。当前已删除 prompt 关键词推断，不扩大写入权限；后续应让真实 Agent 输出结构化 edit intent，并由 Web 展示给用户确认。
 - `cargo test --workspace` 的 `watch.rs` dead code warning 与 `bun run web:build` 的 Vite large chunk warning 均为既有问题，不阻断本 plan 验收。
