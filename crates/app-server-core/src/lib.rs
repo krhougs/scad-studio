@@ -14,11 +14,16 @@ mod workspace;
 pub use agent::{
     AgentBackend, AgentBackendDecision, AgentBackendError, AgentCadQueryCodeInput, AgentLlmRequest,
     AgentTurnDraft, AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend,
-    build_execute_messages, build_turn_context, build_turn_messages,
-    cadquery_agent_system_prompt, draft_agent_turn, extract_cadquery_code,
-    generate_cadquery_code, llm_generate_cadquery_code, llm_request_for_cadquery_execute,
-    rig_backend_decision, stream_agent_turn, stream_agent_turn_with_tools,
-    tools::{ToolExecutor, WorkspaceToolExecutor, agent_tool_definitions, run_tool_loop},
+    build_execute_messages, build_turn_context, build_turn_messages, cadquery_agent_system_prompt,
+    draft_agent_turn, extract_cadquery_code, generate_cadquery_code, llm_generate_cadquery_code,
+    llm_request_for_cadquery_execute, rig_backend_decision, stream_agent_turn,
+    stream_agent_turn_with_tools,
+    tools::{
+        AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission,
+        AgentToolSpec, CadQueryModelFilePolicy, OutputPathPolicy, ToolExecutor,
+        WorkspaceToolExecutor, agent_tool_definitions, agent_tool_definitions_for_operation,
+        agent_tool_permission, agent_tool_specs, run_tool_loop,
+    },
 };
 pub use cadquery::{
     CadQueryCommitScope, CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult,

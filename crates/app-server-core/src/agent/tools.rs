@@ -1,6 +1,13 @@
+mod registry;
+
 use std::path::PathBuf;
 
 use crate::llm::{LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall, LlmToolDefinition};
+pub use registry::{
+    AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission, AgentToolSpec,
+    CadQueryModelFilePolicy, OutputPathPolicy, agent_tool_definitions_for_operation,
+    agent_tool_permission, agent_tool_specs,
+};
 
 const MAX_TOOL_ROUNDS: usize = 10;
 const MAX_FILE_READ_BYTES: usize = 64 * 1024;
@@ -195,4 +202,3 @@ fn parse_path_arg(json_args: &str) -> Result<String, String> {
         .map(|s| s.to_owned())
         .ok_or_else(|| "Error: missing 'path' argument".into())
 }
-

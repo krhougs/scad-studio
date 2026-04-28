@@ -126,21 +126,31 @@ A CAD Plan must include:
 ## 8. Tool Permission Rules
 
 Inform:
-- Read-only.
-- No file modifications.
-- No CadQuery execution.
+- May use read-only context tools: `read_file`, `list_directory`, `search_files`, `get_project_context`, `get_selection`, `resolve_ref`, `cadquery_analyze_source`, `cadquery_get_result`, `cadquery_resolve_selection`.
+- May use `update_chat_summary` only through the provided product semantic tool.
+- No design source file modifications.
+- No CadQuery execution or outputs.
 
 Plan:
-- May write Markdown plans or chat summaries only when the product flow provides a plan-writing tool.
+- May use Inform read-only tools.
+- May use `save_cad_plan` to write Markdown CAD Plans under `plans/`.
+- May use `cadquery_check_source` for static contract checks.
 - Must not modify model source.
-- Must not call CadQuery.
+- Must not call CadQuery runner or create outputs.
 
 Execute:
-- May modify confirmed `.py` and `.md` files.
-- May call CadQuery through the provided tool.
-- May generate confirmed artifacts under `outputs/`.
+- May use read-only tools, `cadquery_check_source`, `cadquery_dry_run`, `cadquery_execute`, `cadquery_get_result`, and `cadquery_resolve_selection`.
+- May use `write_file`, `patch_file`, and `copy_file` only inside confirmed affected files or new files.
+- Must modify CadQuery `.py` model source only through `cadquery_execute` or an equivalent CadQuery execution tool, never through ordinary file write or patch tools.
+- May generate confirmed artifacts only under `outputs/`.
 - Must not execute without confirmation.
 - Must not modify files outside confirmed affected files or new files.
+- A single Execute run may have at most one successful CadQuery commit.
+
+Auto:
+- Before operation decision, use only read-only context tools.
+- After the decision, refresh the available tool set to the decided Inform, Plan, or Execute contract.
+- Natural-language confirmation alone must not promote an unconfirmed Auto turn into Execute.
 
 ## 9. Experiment Rules
 

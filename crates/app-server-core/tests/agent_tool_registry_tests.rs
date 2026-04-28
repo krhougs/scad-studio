@@ -1,0 +1,276 @@
+use app_server_core::{
+    AgentSemanticStore, AgentToolSpec, CadQueryModelFilePolicy, OutputPathPolicy,
+    agent_tool_definitions_for_operation, agent_tool_permission, agent_tool_specs,
+};
+use app_server_protocol::AgentOperationLevel;
+
+#[test]
+fn registry_tool_set_matches_mvp_contract() {
+    let specs = agent_tool_specs();
+    let mut actual = specs
+        .iter()
+        .map(|spec| spec.definition.name.as_str())
+        .collect::<Vec<_>>();
+    actual.sort_unstable();
+    let mut expected = expected_tool_operations()
+        .iter()
+        .map(|(tool, _)| *tool)
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+
+    for spec in agent_tool_specs() {
+        assert_eq!(spec.definition.parameters["type"], "object");
+        assert!(spec.definition.parameters["properties"].is_object());
+        assert!(spec.definition.parameters["required"].is_array());
+        assert_eq!(spec.success_schema["type"], "object");
+        assert_eq!(spec.error_schema["type"], "object");
+        assert_eq!(spec.error_schema["properties"]["status"]["const"], "error");
+    }
+}
+
+#[test]
+fn registry_definitions_are_filtered_by_operation_contract() {
+    for (tool, operations) in expected_tool_operations() {
+        let spec = spec_by_name(tool);
+        assert_eq!(
+            spec.allowed_operations, operations,
+            "operation set for {tool}"
+        );
+        for operation in all_operations() {
+            let names = tool_names(operation);
+            assert_eq!(
+                names.iter().any(|name| name == tool),
+                operations.contains(&operation),
+                "tool definition visibility for {tool:?} in {operation:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn registry_permission_reports_confirmation_requirements() {
+    for (tool, operations) in expected_tool_operations() {
+        let spec = spec_by_name(tool);
+        for operation in all_operations() {
+            let without_confirmation = agent_tool_permission(tool, operation, false);
+            let with_confirmation = agent_tool_permission(tool, operation, true);
+            let allowed_by_operation = operations.contains(&operation);
+            assert_eq!(
+                without_confirmation.allowed,
+                allowed_by_operation && !spec.requires_confirmation,
+                "permission without confirmation for {tool:?} in {operation:?}"
+            );
+            assert_eq!(
+                with_confirmation.allowed, allowed_by_operation,
+                "permission with confirmation for {tool:?} in {operation:?}"
+            );
+            assert_eq!(
+                with_confirmation.requires_confirmation, spec.requires_confirmation,
+                "confirmation flag for {tool}"
+            );
+        }
+    }
+    assert!(
+        !agent_tool_permission("delete_everything", AgentOperationLevel::Execute, true).allowed
+    );
+}
+
+#[test]
+fn registry_declares_path_scope_contracts() {
+    let save_plan = spec_by_name("save_cad_plan");
+    assert_eq!(
+        save_plan.path_policy.semantic_store,
+        Some(AgentSemanticStore::CadPlan)
+    );
+    assert_eq!(save_plan.path_policy.allowed_roots, vec!["plans"]);
+
+    let chat_summary = spec_by_name("update_chat_summary");
+    assert_eq!(
+        chat_summary.path_policy.semantic_store,
+        Some(AgentSemanticStore::ChatSummary)
+    );
+    assert!(chat_summary.path_policy.denied_roots.contains(&"chats"));
+
+    for tool in ["write_file", "patch_file"] {
+        let spec = spec_by_name(tool);
+        assert!(spec.path_policy.requires_confirmation_scope);
+        assert_eq!(
+            spec.path_policy.cadquery_model_file,
+            CadQueryModelFilePolicy::Denied
+        );
+        assert!(spec.path_policy.denied_roots.contains(&"outputs"));
+        assert!(spec.path_policy.denied_roots.contains(&"chats"));
+    }
+
+    let copy_file = spec_by_name("copy_file");
+    assert_eq!(
+        copy_file.path_policy.cadquery_model_file,
+        CadQueryModelFilePolicy::CopyOnly
+    );
+
+    let cadquery_execute = spec_by_name("cadquery_execute");
+    assert!(cadquery_execute.path_policy.requires_confirmation_scope);
+    assert_eq!(
+        cadquery_execute.path_policy.cadquery_model_file,
+        CadQueryModelFilePolicy::CadQueryToolOnly
+    );
+    assert_eq!(
+        cadquery_execute.path_policy.output_paths,
+        OutputPathPolicy::ConfirmationOutputsOnly
+    );
+
+    let dry_run = spec_by_name("cadquery_dry_run");
+    assert_eq!(
+        dry_run.path_policy.output_paths,
+        OutputPathPolicy::TemporaryResultCacheOnly
+    );
+    assert!(!dry_run.path_policy.requires_confirmation_scope);
+
+    for tool in ["read_file", "list_directory", "cadquery_analyze_source"] {
+        assert!(
+            spec_by_name(tool)
+                .path_policy
+                .denied_roots
+                .contains(&".budn_staging")
+        );
+    }
+}
+
+#[test]
+fn registry_uses_specific_canonical_schemas() {
+    assert_required("cadquery_execute", &["target_path", "target_type", "code"]);
+    assert_required("cadquery_get_result", &["result_id"]);
+    assert_required(
+        "cadquery_resolve_selection",
+        &["result_id", "selection_ref"],
+    );
+    assert_required(
+        "patch_file",
+        &["path", "expected_hash", "search", "replace"],
+    );
+    assert_required(
+        "save_cad_plan",
+        &["title", "resolved_target", "affected_files"],
+    );
+    assert_success_required("read_file", &["path", "text", "hash", "truncated"]);
+    assert_success_required(
+        "cadquery_execute",
+        &["result_id", "build_id", "committed_files"],
+    );
+    assert_success_required(
+        "cadquery_get_result",
+        &["result_id", "root_ref_text", "parts"],
+    );
+
+    let error_schema = spec_by_name("cadquery_execute").error_schema;
+    assert_schema_required(&error_schema, &["tool_call_id", "error_type"]);
+    let error_types = error_schema["properties"]["error_type"]["enum"]
+        .as_array()
+        .expect("error type enum");
+    assert!(
+        error_types
+            .iter()
+            .any(|value| value == "python_import_error")
+    );
+
+    let check_success = spec_by_name("cadquery_check_source").success_schema;
+    let contract = &check_success["properties"]["contract"];
+    assert_schema_required(
+        contract,
+        &[
+            "target_type_matches",
+            "has_build_function",
+            "has_refs",
+            "unsafe_calls",
+        ],
+    );
+
+    let execute_success = spec_by_name("cadquery_execute").success_schema;
+    let summary = &execute_success["properties"]["summary"];
+    assert_schema_required(
+        summary,
+        &["part_count", "face_count", "edge_count", "vertex_count"],
+    );
+}
+
+fn spec_by_name(tool: &str) -> AgentToolSpec {
+    agent_tool_specs()
+        .into_iter()
+        .find(|spec| spec.definition.name == tool)
+        .unwrap_or_else(|| panic!("missing tool spec: {tool}"))
+}
+
+fn expected_tool_operations() -> Vec<(&'static str, Vec<AgentOperationLevel>)> {
+    let readonly = vec![
+        AgentOperationLevel::Inform,
+        AgentOperationLevel::Plan,
+        AgentOperationLevel::Execute,
+        AgentOperationLevel::Auto,
+    ];
+    vec![
+        ("read_file", readonly.clone()),
+        ("list_directory", readonly.clone()),
+        ("search_files", readonly.clone()),
+        ("get_project_context", readonly.clone()),
+        ("get_selection", readonly.clone()),
+        ("resolve_ref", readonly.clone()),
+        ("cadquery_analyze_source", readonly.clone()),
+        ("cadquery_get_result", readonly.clone()),
+        ("cadquery_resolve_selection", readonly),
+        (
+            "update_chat_summary",
+            vec![
+                AgentOperationLevel::Inform,
+                AgentOperationLevel::Plan,
+                AgentOperationLevel::Execute,
+            ],
+        ),
+        ("save_cad_plan", vec![AgentOperationLevel::Plan]),
+        (
+            "cadquery_check_source",
+            vec![AgentOperationLevel::Plan, AgentOperationLevel::Execute],
+        ),
+        ("cadquery_dry_run", vec![AgentOperationLevel::Execute]),
+        ("write_file", vec![AgentOperationLevel::Execute]),
+        ("patch_file", vec![AgentOperationLevel::Execute]),
+        ("copy_file", vec![AgentOperationLevel::Execute]),
+        ("cadquery_execute", vec![AgentOperationLevel::Execute]),
+    ]
+}
+
+fn all_operations() -> [AgentOperationLevel; 4] {
+    [
+        AgentOperationLevel::Inform,
+        AgentOperationLevel::Plan,
+        AgentOperationLevel::Execute,
+        AgentOperationLevel::Auto,
+    ]
+}
+
+fn tool_names(operation: AgentOperationLevel) -> Vec<String> {
+    agent_tool_definitions_for_operation(operation)
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect()
+}
+
+fn assert_required(tool: &str, fields: &[&str]) {
+    let schema = spec_by_name(tool).definition.parameters;
+    assert_schema_required(&schema, fields);
+}
+
+fn assert_success_required(tool: &str, fields: &[&str]) {
+    let schema = spec_by_name(tool).success_schema;
+    assert_schema_required(&schema, fields);
+}
+
+fn assert_schema_required(schema: &serde_json::Value, fields: &[&str]) {
+    let required = schema["required"].as_array().expect("required array");
+    for field in fields {
+        assert!(
+            required.iter().any(|value| value.as_str() == Some(field)),
+            "schema should require {field}"
+        );
+    }
+}
