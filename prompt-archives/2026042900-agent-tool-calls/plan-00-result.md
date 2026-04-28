@@ -14,6 +14,10 @@ Phase 3 已完成实现、多轮独立 review 收敛和完整聚焦回归。Phas
 
 Phase 4 已完成实现、独立 review 和完整聚焦回归。Phase 4 新增受限普通文件写入工具，按 confirmation 范围区分 `affected_files` 与 `new_files`，并保持 CAD Plan、Chat JSONL、CadQuery `.py` 模型源的专用工具边界。
 
+Phase 5 已完成实现、多轮独立 review 和完整聚焦回归。Phase 5 新增 CadQuery 专用工具、host runtime、result cache 读取和 selection 解析，并禁用旧 direct `CadQueryExecute` 写入入口。
+
+Phase 6 已完成实现、独立 review 和聚焦回归。Phase 6 复核并保护 Web Plan 确认流的结构化数据来源，补齐 Chat event 按当前 session 展示与 token 累积隔离，避免跨 Chat event 影响当前 Plan 卡片和 streaming 文本。
+
 ## Phase 结果记录
 
 | Phase | 状态 | 结果 |
@@ -23,8 +27,8 @@ Phase 4 已完成实现、独立 review 和完整聚焦回归。Phase 4 新增�
 | Phase 2 — 只读上下文工具补齐 | 已完成 | 已接入 `read_file`、`list_directory`、`search_files`、`get_project_context`、`get_selection`、`resolve_ref`；多轮独立 review 与完整聚焦回归通过 |
 | Phase 3 — CAD Plan 与 Chat 语义持久化工具 | 已完成 | 已接入 `save_cad_plan`、`update_chat_summary`、同 run `plan_ref` 确认校验、protocol v3 和 Web Plan 确认范围；多轮独立 review 与完整聚焦回归通过 |
 | Phase 4 — 受限文件写入工具 | 已完成 | 已接入 `write_file`、`patch_file`、`copy_file`，补齐 registry 与 executor 双层防护、普通写入范围、hash 冲突检测、symlink / hard link alias 拒绝和 CadQuery `.py` copy 边界；独立 review 与完整聚焦回归通过 |
-| Phase 5 — CadQuery 专用工具与执行边界 | 未开始 | 等待执行 |
-| Phase 6 — 前端确认流与协议补强 | 未开始 | 等待执行 |
+| Phase 5 — CadQuery 专用工具与执行边界 | 已完成 | 已接入 `cadquery_analyze_source`、`cadquery_check_source`、`cadquery_dry_run`、`cadquery_execute`、`cadquery_get_result`、`cadquery_resolve_selection`，复用 staging / exact output scope / result cache，并禁用旧 direct 写入入口；多轮独立 review 与完整聚焦回归通过 |
+| Phase 6 — 前端确认流与协议补强 | 已完成 | 已复核 Web Plan confirmation、preview、execute 调用与 tool event 展示；补齐当前 Chat session event 过滤和 streaming 文本重置；独立 review 与聚焦回归通过 |
 | Phase 7 — 权限模型回归、文档同步与端到端验证 | 未开始 | 等待执行 |
 
 ## 执行记录
@@ -346,3 +350,40 @@ Phase 4 已完成实现、独立 review 和完整聚焦回归。Phase 4 新增�
 
 - `diagnostics.traceback` 当前仅提供字段占位；runner traceback 仍主要在 error message 中。后续 Phase 7 文档同步或 runner 错误结构化时可继续拆分。
 - `.md` 执行记录追加失败在真实 commit 之后以 warnings 呈现，不再返回 `status: error`，避免已提交后同一 Execute run 继续重试。该策略已在本 Phase 结果中记录，Phase 7 文档同步时需要写入最终工具合同。
+
+### Phase 6 — 前端确认流与协议补强
+
+前序目标保护：
+
+- 保持 Phase 5 的后端安全边界：前端只展示和确认后端 `agent.plan_proposed` 结构化结果，不从 prompt 或当前 selection 重新推断影响范围。
+- 保持 Phase 3 的 saved Plan 绑定：`confirmPlan()` 继续使用 proposal 中的 `plan_ref`、`affected_files`、`new_files` 和 `export_targets` 构造 `AgentCadQueryConfirmation`。
+- 保持 Phase 5 对 preview 的定位：已有 workspace `.py` 继续走只读 preview 产品动作，拟议代码试运行仍由后端 CadQuery dry-run tool 承担。
+
+完成情况：
+
+- 复核 Web 确认流：
+  - `confirmPlan()` 已使用后端 proposal 的 `plan_ref` 与 confirmed scope，不再根据 prompt 或 selection 临时构造目标范围。
+  - `previewPlan()` 对已有文件调用只读 `dispatchCadQueryPreview`，不提交 workspace 文件。
+  - `ChatBody` 已展示 `agent.tool_start` 与 `agent.tool_result`，Plan 保存、普通文件工具和 CadQuery tool 的结果可在 Chat 中追溯。
+- 修复 Chat event session 隔离：
+  - `ChatZone` 现在先按当前 Chat session 过滤 `agent_events`，再生成 Plan 卡片和非 token tool event 列表。
+  - `useStreamAccumulator()` 改为消费当前 session events，并在 `currentSessionId` 变化时重置计数和 streaming 文本。
+  - 新增测试覆盖“其他 session token 不显示”和“切换 session 时清空旧 streaming 文本”两个场景。
+
+验证命令：
+
+- `bun --filter @budn/studio-web test:unit -- chat-zone.test.tsx chat-actions.test.ts`
+  - 结果：2 个测试文件通过，21 个测试通过。
+- `bun --filter @budn/studio-web typecheck`
+  - 结果：通过。
+- `git diff --check`
+  - 结果：通过。
+
+独立 review：
+
+- 第一轮 review 指出 `useStreamAccumulator` 仅按事件数量判断，切换 Chat session 且新旧事件数量相同或更多时可能保留旧 token；已补充 reset key 和回归测试修复。
+- 最终短 review 确认无 Blocker。
+
+遗留问题：
+
+- 未发现需要写入 `docs/known_issues.md` 的新问题。

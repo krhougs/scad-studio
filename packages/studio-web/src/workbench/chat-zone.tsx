@@ -121,15 +121,19 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const messages = snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
   const rawEvents = snapshot?.agent_events ?? [];
-  const agentEvents = useMemo(
+  const sessionEvents = useMemo(
     () =>
-      recentNonTokenEvents(rawEvents).filter((event) =>
+      rawEvents.filter((event) =>
         eventBelongsToCurrentSession(event, currentSessionId),
       ),
     [rawEvents, currentSessionId],
   );
+  const agentEvents = useMemo(
+    () => recentNonTokenEvents(sessionEvents),
+    [sessionEvents],
+  );
 
-  useStreamAccumulator(rawEvents, setStreamText);
+  useStreamAccumulator(sessionEvents, currentSessionId, setStreamText);
 
   const contextPills = useMemo(() => {
     const selections = snapshot?.current_selection?.selections ?? [];
@@ -379,10 +383,17 @@ function recentNonTokenEvents(events: AgentEvent[]): AgentEvent[] {
 
 function useStreamAccumulator(
   rawEvents: AgentEvent[],
+  resetKey: string | null,
   setStreamText: (value: string | ((prev: string) => string)) => void,
 ) {
   const countRef = useRef(0);
+  const resetKeyRef = useRef<string | null>(resetKey);
   useEffect(() => {
+    if (resetKeyRef.current !== resetKey) {
+      resetKeyRef.current = resetKey;
+      countRef.current = 0;
+      setStreamText("");
+    }
     const prevCount = countRef.current;
     countRef.current = rawEvents.length;
     if (rawEvents.length < prevCount) {
@@ -400,7 +411,7 @@ function useStreamAccumulator(
         setStreamText("");
       }
     }
-  }, [rawEvents, setStreamText]);
+  }, [rawEvents, resetKey, setStreamText]);
 }
 
 function lastAgentDoneKey(events: AgentEvent[]): string | null {

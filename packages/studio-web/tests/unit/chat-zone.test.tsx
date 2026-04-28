@@ -280,6 +280,77 @@ describe("ChatZone", () => {
     await waitFor(() => expect(screen.queryByTestId("plan-confirm-btn")).toBeNull());
   });
 
+  it("streams only tokens from the current chat session", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "other", run_id: "run-other", text: "other text" },
+            },
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "main text" },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("main text")).toBeTruthy());
+    expect(screen.queryByText("other text")).toBeNull();
+  });
+
+  it("resets streaming text when switching chat sessions", async () => {
+    const client = fakeClient();
+    const { rerender } = render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "main text" },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("main text")).toBeTruthy());
+
+    rerender(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          chat_sessions: [
+            { session_id: "main", title: "main", archived: false, message_count: 1 },
+            { session_id: "other", title: "other", archived: false, message_count: 1 },
+          ],
+          current_chat_session: "other",
+          agent_run: { session_id: "other", run_id: "run-other" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "other", run_id: "run-other", text: "other text" },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("other text")).toBeTruthy());
+    expect(screen.queryByText("main text")).toBeNull();
+  });
+
   it("shows welcome empty state when no messages or events", () => {
     render(
       <ChatZone
