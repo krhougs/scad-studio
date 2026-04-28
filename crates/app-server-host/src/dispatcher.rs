@@ -20,7 +20,7 @@ use app_server_protocol::{
     ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
     WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -34,13 +34,47 @@ use crate::HostSession;
 
 pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 
+const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
+
+#[derive(Debug)]
+struct CadQueryResultCache {
+    limit: usize,
+    order: VecDeque<String>,
+    results: HashMap<String, CadQueryMeshPayload>,
+}
+
+impl CadQueryResultCache {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            order: VecDeque::new(),
+            results: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, result_id: String, payload: CadQueryMeshPayload) {
+        self.order.retain(|existing| existing != &result_id);
+        self.order.push_back(result_id.clone());
+        self.results.insert(result_id, payload);
+        while self.order.len() > self.limit {
+            if let Some(evicted) = self.order.pop_front() {
+                self.results.remove(&evicted);
+            }
+        }
+    }
+
+    fn get(&self, result_id: &str) -> Option<CadQueryMeshPayload> {
+        self.results.get(result_id).cloned()
+    }
+}
+
 pub struct HostRequestDispatcher {
     workspace_id: WorkspaceId,
     workspace_path: Option<PathBuf>,
     denied_extensions: Vec<String>,
     next_subscription_id: u64,
     watchers: HashMap<String, FileWatcher>,
-    cadquery_results: Arc<Mutex<HashMap<String, CadQueryMeshPayload>>>,
+    cadquery_results: Arc<Mutex<CadQueryResultCache>>,
     agent_runs: Arc<Mutex<AgentRunRegistry>>,
     selection_snapshot: SelectionUpdateRequest,
     push_sink: ServerPushSink,
@@ -73,7 +107,9 @@ impl HostRequestDispatcher {
             denied_extensions,
             next_subscription_id: 1,
             watchers: HashMap::new(),
-            cadquery_results: Arc::new(Mutex::new(HashMap::new())),
+            cadquery_results: Arc::new(Mutex::new(CadQueryResultCache::new(
+                CADQUERY_RESULT_CACHE_LIMIT,
+            ))),
             agent_runs: Arc::new(Mutex::new(AgentRunRegistry::default())),
             selection_snapshot: SelectionUpdateRequest {
                 selections: Vec::new(),
@@ -179,12 +215,16 @@ impl HostRequestDispatcher {
                 .map_err(internal_error)
             }
             ClientCommand::CadQueryPreview(request) => {
+                if !request.export_formats.is_empty() {
+                    return Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "CadQuery preview 不允许 export_formats；需要写入 outputs 时必须使用 Execute confirmation",
+                    ));
+                }
                 let workspace_path = self.workspace_root()?.to_path_buf();
                 let source_path = resolve_workspace_path(&workspace_path, &request.target_path)?;
                 let code = fs::read_to_string(&source_path).map_err(internal_error)?;
                 let script = path_handle_to_relative_path(&request.target_path);
-                let commit_scope =
-                    default_cadquery_commit_scope(&request.target_path, &request.export_formats);
                 let staged = stage_cadquery_project(&workspace_path, &script, &code)
                     .map_err(internal_error)?;
                 self.session.issue_handle(request.target_path);
@@ -198,9 +238,6 @@ impl HostRequestDispatcher {
                     timeout: Duration::from_secs(60),
                 })
                 .map_err(internal_error)?;
-                staged
-                    .commit_outputs_with_scope(&commit_scope)
-                    .map_err(cadquery_command_error)?;
                 let ready = result.ready.clone();
                 self.cache_cadquery_mesh(result)?;
                 Ok(CommandSuccess::CadQueryResultReady(ready))
@@ -237,7 +274,6 @@ impl HostRequestDispatcher {
                     .lock()
                     .map_err(|_| internal_error("CadQuery result cache lock poisoned"))?
                     .get(&request.result_id)
-                    .cloned()
                     .ok_or_else(|| {
                         ProtocolError::new(
                             ProtocolErrorCode::NotFound,
@@ -564,7 +600,7 @@ struct AgentWorker {
     selection_snapshot: SelectionUpdateRequest,
     workspace_root: PathBuf,
     python: PathBuf,
-    cadquery_results: Arc<Mutex<HashMap<String, CadQueryMeshPayload>>>,
+    cadquery_results: Arc<Mutex<CadQueryResultCache>>,
     agent_runs: Arc<Mutex<AgentRunRegistry>>,
     push_sink: ServerPushSink,
 }
@@ -959,6 +995,7 @@ fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
         CadQueryRunnerErrorKind::Timeout => AgentErrorType::Timeout,
         CadQueryRunnerErrorKind::Cancelled => AgentErrorType::Timeout,
         CadQueryRunnerErrorKind::PermissionDenied => AgentErrorType::PermissionDenied,
+        CadQueryRunnerErrorKind::PythonImport => AgentErrorType::PythonImportError,
         CadQueryRunnerErrorKind::InvalidProjectPath
         | CadQueryRunnerErrorKind::Io
         | CadQueryRunnerErrorKind::Runner => AgentErrorType::CadQueryBuildError,
@@ -979,6 +1016,9 @@ fn cadquery_command_error(error: CadQueryRunnerError) -> ProtocolError {
         }
         CadQueryRunnerErrorKind::InvalidProjectPath => {
             ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.message)
+        }
+        CadQueryRunnerErrorKind::PythonImport => {
+            ProtocolError::new(ProtocolErrorCode::InvalidCommand, error.message)
         }
         _ => internal_error(error),
     }

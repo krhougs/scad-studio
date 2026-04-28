@@ -1,5 +1,22 @@
 # 已知问题记录
 
+## 2026-04-28 09:10:00: CadQuery Agent 确认范围仍使用 prompt 关键词推断 move / replace 意图
+
+- 来源：用户要求检查代码中是否还有其它硬编码后，复核 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts`。
+- 原因：
+  - Phase 3 当前需要在没有结构化编辑意图字段的情况下，区分 instance move、instance replacement、component body edit 等确认范围。
+  - 当前实现用中英文关键词判断 move / replace 意图，再推导 `target_path`、`target_type` 和 `affected_files`。
+  - 几何代码生成中的 prompt-driven cut / fillet / height 之类启发式已经移除；本条仅指确认范围推导仍依赖 prompt 关键词。
+- 影响范围：
+  - 未覆盖的同义表达可能导致确认范围不符合用户意图，例如本该修改 assembly 的操作被当作 component geometry，或反过来。
+  - Rust Plan fallback 与 Web Execute confirmation 各维护一份相似词表，后续容易出现两端判断不一致。
+  - 这不扩大写入权限，因为 Execute 仍必须经过确认范围和 app server 校验；风险在于确认范围的默认建议可能不准确。
+- 可能的解法：
+  - 在协议中为 Agent Plan / Execute confirmation 增加结构化 edit intent，例如 `BodyEdit`、`InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
+  - Web UI 使用显式分段控件或确认表单让用户选择 edit intent，而不是从 prompt 猜测。
+  - 后续接入真实 Agent tool schema 时，由模型输出结构化 intent，并由前端展示给用户确认；Rust 与 Web 共用 protocol enum，避免双端词表分叉。
+- 当前处理方式：MVP 为保护 Phase 3 的 instance move / replacement 验收路径暂时保留这两处确认范围关键词判断；已删除本地 fallback 中直接驱动几何生成的自然语言词表。
+
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 3 第二轮独立 review。

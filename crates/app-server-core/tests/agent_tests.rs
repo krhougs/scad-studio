@@ -67,14 +67,14 @@ fn local_agent_backend_generates_cadquery_code_instead_of_echoing_prompt() {
 
     assert!(generated.code.contains("import cadquery as cq"));
     assert!(generated.code.contains("def build(params=None):"));
-    assert!(generated.code.contains("height\", 42.000"));
+    assert!(generated.code.contains("height\", 1.000"));
     assert!(generated.code.contains(".tag(\"top_lid\")"));
     assert!(!generated.code.contains("make a 42 mm taller lid from chat"));
     assert!(generated.response_text.contains("parts/top_lid.py"));
 }
 
 #[test]
-fn local_agent_backend_names_selection_modification_target() {
+fn local_agent_backend_names_selection_context_without_prompt_driven_geometry() {
     let generated = generate_cadquery_code(AgentCadQueryCodeInput {
         prompt: "open a slot on the selected face".into(),
         history: vec![chat_message("msg-1", "previous plan")],
@@ -93,11 +93,13 @@ fn local_agent_backend_names_selection_modification_target() {
     assert!(generated.response_text.contains("parts/top_lid.py"));
     assert!(generated.response_text.contains("part geometry"));
     assert!(generated.code.contains("SELECTION_REF"));
-    assert!(generated.code.contains("cutThruAll"));
+    assert!(generated.code.contains("@feature[top_lid.top_surface]"));
+    assert!(!generated.code.contains("cutThruAll"));
+    assert!(!generated.code.contains("fillet"));
 }
 
 #[test]
-fn local_agent_backend_uses_selected_feature_selector_for_face_cut() {
+fn local_agent_backend_preserves_selected_feature_metadata() {
     let generated = generate_cadquery_code(AgentCadQueryCodeInput {
         prompt: "open a slot on the selected face".into(),
         history: vec![chat_message("msg-1", "previous plan")],
@@ -108,8 +110,9 @@ fn local_agent_backend_uses_selected_feature_selector_for_face_cut() {
     })
     .expect("generate cadquery code");
 
-    assert!(generated.code.contains("faces(\"<Z\")"));
-    assert!(!generated.code.contains("faces(\">Z\").workplane().rect"));
+    assert!(generated.code.contains("@feature[top_lid.bottom_surface]"));
+    assert!(!generated.code.contains(".workplane().rect"));
+    assert!(!generated.code.contains("cutThruAll"));
 }
 
 #[test]

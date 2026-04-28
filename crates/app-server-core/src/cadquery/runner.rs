@@ -17,6 +17,7 @@ pub enum CadQueryRunnerErrorKind {
     InvalidProjectPath,
     Io,
     PermissionDenied,
+    PythonImport,
     Runner,
     Timeout,
 }
@@ -128,9 +129,10 @@ fn parse_runner_output(output: Output) -> Result<CadQueryRunResult, CadQueryRunn
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
+        let parsed = parse_structured_runner_error(&stdout);
         return Err(CadQueryRunnerError {
-            kind: status_error_kind(output.status.code()),
-            message: runner_error_message(&stdout, &stderr),
+            kind: runner_error_kind(output.status.code(), parsed.as_ref()),
+            message: runner_error_message(parsed.as_ref(), &stderr),
         });
     }
     let mesh = parse_cadquery_success_json(&stdout).map_err(|error| CadQueryRunnerError {
@@ -144,20 +146,36 @@ fn parse_runner_output(output: Output) -> Result<CadQueryRunResult, CadQueryRunn
     })
 }
 
-fn runner_error_message(stdout: &str, stderr: &str) -> String {
+fn runner_error_message(parsed: Option<&StructuredRunnerError>, stderr: &str) -> String {
     let stderr = stderr.trim();
-    let parsed = serde_json::from_str::<serde_json::Value>(stdout)
-        .ok()
-        .and_then(|value| structured_runner_error(&value));
     match (parsed, stderr.is_empty()) {
-        (Some(message), true) => message,
-        (Some(message), false) => format!("{message}\n{stderr}"),
+        (Some(error), true) => error.message(),
+        (Some(error), false) => format!("{}\n{stderr}", error.message()),
         (None, false) => stderr.to_owned(),
         (None, true) => String::new(),
     }
 }
 
-fn structured_runner_error(value: &serde_json::Value) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StructuredRunnerError {
+    status: String,
+    error_type: String,
+    error: String,
+}
+
+impl StructuredRunnerError {
+    fn message(&self) -> String {
+        format!("{}:{}:{}", self.status, self.error_type, self.error)
+    }
+}
+
+fn parse_structured_runner_error(stdout: &str) -> Option<StructuredRunnerError> {
+    serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|value| structured_runner_error(&value))
+}
+
+fn structured_runner_error(value: &serde_json::Value) -> Option<StructuredRunnerError> {
     let status = value.get("status")?.as_str()?;
     let error_type = value
         .get("error_type")
@@ -167,7 +185,11 @@ fn structured_runner_error(value: &serde_json::Value) -> Option<String> {
         .get("error")
         .and_then(|value| value.as_str())
         .unwrap_or("");
-    Some(format!("{status}:{error_type}:{error}"))
+    Some(StructuredRunnerError {
+        status: status.into(),
+        error_type: error_type.into(),
+        error: error.into(),
+    })
 }
 
 fn export_arg(formats: &[CadQueryExportFormat]) -> String {
@@ -182,11 +204,29 @@ fn export_arg(formats: &[CadQueryExportFormat]) -> String {
         .join(",")
 }
 
+fn runner_error_kind(
+    code: Option<i32>,
+    parsed: Option<&StructuredRunnerError>,
+) -> CadQueryRunnerErrorKind {
+    if parsed.is_some_and(is_python_import_error) {
+        return CadQueryRunnerErrorKind::PythonImport;
+    }
+    status_error_kind(code)
+}
+
 fn status_error_kind(code: Option<i32>) -> CadQueryRunnerErrorKind {
     match code {
         Some(1) => CadQueryRunnerErrorKind::Build,
         _ => CadQueryRunnerErrorKind::Runner,
     }
+}
+
+fn is_python_import_error(error: &StructuredRunnerError) -> bool {
+    matches!(
+        error.error_type.as_str(),
+        "ImportError" | "ModuleNotFoundError"
+    ) || error.error.contains("No module named")
+        || error.error.contains("cannot import name")
 }
 
 pub(super) fn error_io(message: impl Into<String>) -> CadQueryRunnerError {

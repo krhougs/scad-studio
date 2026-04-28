@@ -285,6 +285,32 @@ fn dispatcher_execute_agent_runs_confirmed_cadquery_and_records_tool_history() {
 }
 
 #[test]
+fn dispatcher_execute_agent_maps_python_import_failure() {
+    let workspace = temp_workspace("dispatcher-agent-python-import");
+    std::fs::create_dir_all(workspace.join("parts")).unwrap();
+    std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
+    let runner = fake_python_import_error_cadquery_runner(&workspace);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
+    let target_path = path_handle(["parts", "top_lid.py"]);
+    let confirmation = AgentCadQueryConfirmation {
+        request: confirmed_cadquery_request(target_path.clone()),
+        plan_ref: None,
+        affected_files: vec![target_path],
+        new_files: Vec::new(),
+        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
+    };
+    let started = invoke_agent_with_confirmation(&mut dispatcher, 37, &session_id, confirmation);
+
+    wait_for_done(&pushes, &started.run_id);
+    let error = find_error_event(&pushes, &started.run_id).expect("python import error");
+    assert_eq!(error.error_type, AgentErrorType::PythonImportError);
+    assert!(error.message.contains("ModuleNotFoundError"));
+    cleanup_workspace(&workspace);
+}
+
+#[test]
 fn dispatcher_execute_agent_generates_cadquery_code_from_prompt() {
     let workspace = temp_workspace("dispatcher-agent-generate-code");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
@@ -477,6 +503,38 @@ fn dispatcher_cadquery_execute_rejects_outputs_outside_default_scope() {
 }
 
 #[test]
+fn dispatcher_cadquery_preview_rejects_export_formats_without_writing_outputs() {
+    let workspace = temp_workspace("dispatcher-preview-export-reject");
+    std::fs::create_dir_all(workspace.join("parts")).unwrap();
+    std::fs::write(
+        workspace.join("parts/top_lid.py"),
+        "import cadquery as cq\n\ndef build(params=None):\n    return cq.Workplane('XY').box(1, 1, 1)\n",
+    )
+    .unwrap();
+    let captured = workspace.join("captured-preview-code.py");
+    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let response = dispatch(
+        &mut dispatcher,
+        43,
+        ClientCommand::CadQueryPreview(app_server_protocol::CadQueryPreviewRequest {
+            target_path: path_handle(["parts", "top_lid.py"]),
+            export_formats: vec![CadQueryExportFormat::Step],
+            params_json: "{}".into(),
+        }),
+    );
+
+    let error = response
+        .result
+        .expect_err("preview exports should require Execute confirmation");
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(!captured.exists());
+    assert!(!workspace.join("outputs/top_lid.step").exists());
+    cleanup_workspace(&workspace);
+}
+
+#[test]
 fn dispatcher_cadquery_preview_rejects_outputs_outside_default_scope() {
     let workspace = temp_workspace("dispatcher-direct-preview-unconfirmed-output");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
@@ -506,6 +564,96 @@ fn dispatcher_cadquery_preview_rejects_outputs_outside_default_scope() {
     assert!(!workspace.join("outputs/top_lid.step").exists());
     assert!(!workspace.join("outputs/unconfirmed.step").exists());
     cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_cadquery_result_cache_evicts_oldest_entries() {
+    let workspace = temp_workspace("dispatcher-cadquery-cache-limit");
+    create_cache_limit_part_files(&workspace, 9);
+    let runner = fake_variable_result_cadquery_runner(&workspace);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    for index in 0..9 {
+        assert_cache_preview_result(&mut dispatcher, 50 + index as u64, index);
+    }
+
+    assert_cached_result_missing(&mut dispatcher, 70, "cq_part_0");
+    assert_cached_result_present(&mut dispatcher, 71, "cq_part_8");
+    cleanup_workspace(&workspace);
+}
+
+fn create_cache_limit_part_files(workspace: &std::path::Path, count: usize) {
+    std::fs::create_dir_all(workspace.join("parts")).unwrap();
+    for index in 0..count {
+        std::fs::write(
+            workspace.join(format!("parts/part_{index}.py")),
+            "import cadquery as cq\n\ndef build(params=None):\n    return cq.Workplane('XY').box(1, 1, 1)\n",
+        )
+        .unwrap();
+    }
+}
+
+fn assert_cache_preview_result(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    index: usize,
+) {
+    let response = dispatch(
+        dispatcher,
+        request_id,
+        ClientCommand::CadQueryPreview(app_server_protocol::CadQueryPreviewRequest {
+            target_path: PathHandle::new(
+                WorkspaceId::new("workspace"),
+                ["parts", &format!("part_{index}.py")],
+            )
+            .expect("part path"),
+            export_formats: Vec::new(),
+            params_json: "{}".into(),
+        }),
+    );
+    match response.result.expect("preview should succeed") {
+        CommandSuccess::CadQueryResultReady(ready) => {
+            assert_eq!(ready.result_id, format!("cq_part_{index}"));
+        }
+        other => panic!("unexpected preview response: {other:?}"),
+    }
+}
+
+fn assert_cached_result_missing(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    result_id: &str,
+) {
+    let error = dispatch_cached_result_get(dispatcher, request_id, result_id)
+        .result
+        .expect_err("result should be missing");
+    assert_eq!(error.code, ProtocolErrorCode::NotFound);
+}
+
+fn assert_cached_result_present(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    result_id: &str,
+) {
+    let response = dispatch_cached_result_get(dispatcher, request_id, result_id)
+        .result
+        .expect("result should remain");
+    assert!(matches!(response, CommandSuccess::CadQueryMesh(_)));
+}
+
+fn dispatch_cached_result_get(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    result_id: &str,
+) -> app_server_protocol::ServerResponseEnvelope {
+    dispatch(
+        dispatcher,
+        request_id,
+        ClientCommand::CadQueryResultGet(app_server_protocol::CadQueryResultGetRequest {
+            result_id: result_id.into(),
+        }),
+    )
 }
 
 fn dispatcher_with_pushes(
@@ -940,6 +1088,31 @@ fn fake_capturing_cadquery_runner(
         ),
     )
     .expect("write fake cadquery runner");
+    make_executable(&runner);
+    runner
+}
+
+fn fake_variable_result_cadquery_runner(root: &std::path::Path) -> std::path::PathBuf {
+    let runner = root.join("fake-variable-result-cadquery-runner.sh");
+    let json = cadquery_success_json();
+    std::fs::write(
+        &runner,
+        format!(
+            "#!/bin/sh\nscript=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--script' ]; then\n    shift\n    script=\"$1\"\n  fi\n  shift\ndone\nstem=$(basename \"$script\" .py)\nsed \"s/cq_abc/cq_${{stem}}/g\" <<'JSON'\n{json}\nJSON\n"
+        ),
+    )
+    .expect("write fake cadquery runner");
+    make_executable(&runner);
+    runner
+}
+
+fn fake_python_import_error_cadquery_runner(root: &std::path::Path) -> std::path::PathBuf {
+    let runner = root.join("fake-python-import-cadquery-runner.sh");
+    std::fs::write(
+        &runner,
+        "#!/bin/sh\ncat <<'JSON'\n{\"status\":\"runner_error\",\"error_type\":\"ModuleNotFoundError\",\"error\":\"No module named 'cadquery'\"}\nJSON\nexit 2\n",
+    )
+    .expect("write fake python import cadquery runner");
     make_executable(&runner);
     runner
 }

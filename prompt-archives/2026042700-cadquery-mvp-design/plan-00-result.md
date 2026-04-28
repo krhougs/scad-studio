@@ -284,8 +284,8 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - 后端 Agent Plan 使用 active selection、history 和 prompt 生成 Markdown CAD Plan，声明 selection target、target path、edit goal、`affected_files` 和 export target。
 - Agent Execute 不执行前端 raw code；dispatcher 把 active selection 与确认的 `target_type` 传给后端 Agent，由后端生成 CadQuery 代码，再走 Phase 0c 的 staging 执行与 exact output scope。
 - 实现 Ref 业务规则核心路径：
-  - part face 有 feature 映射时，上升为 `@feature[...]` 并只使用 feature selector 生成局部修改代码。
-  - raw face / edge / vertex 没有 feature 映射时，不生成 selector-based cut / fillet，避免把临时拓扑 id 当长期修改目标。
+  - part face 有 feature 映射时，上升为 `@feature[...]`，并作为 selection target 与代码元数据传递给 Agent fallback。
+  - 本地 Agent fallback 不再根据自然语言关键词生成 selector-based cut / fillet，避免把临时拓扑 id 或硬编码词表当成稳定几何编辑语义。
   - instance move 以 assembly 文件为主写入目标。
   - instance replacement 以 assembly 文件为主写入目标，owner component 文件仅作为受影响文件参与确认，避免误改所有同源 component 实例。
   - component body edit 与普通 instance body edit 归类为 component geometry。
@@ -296,7 +296,7 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 ### Review 与修复记录
 
 - 第一轮独立 review 发现非 part Execute 会生成 part 代码、selection 未影响实际 CadQuery 生成、active selection 未生效、ambiguous selection 被错误上升为 feature、`plan_ref` 未绑定。已补充 active selection 与 target type 传递，按 target type 生成 part / component / assembly 代码，ambiguous 保留 raw ref；`plan_ref` 问题记录到 `docs/known_issues.md`。
-- 第二轮独立 review 发现 selection geometry 仍固定为 `faces(">Z")`，且 replacement 多文件范围声明不足。已改为只根据 feature name 映射 selector，并补充 replacement affected files。
+- 第二轮独立 review 发现 selection geometry 仍固定为 `faces(">Z")`，且 replacement 多文件范围声明不足。已移除固定 selector 回退，并补充 replacement affected files。
 - 第三轮独立 review 发现 raw face / edge / vertex 在无 feature 映射时仍回退到通用 selector，且 component edit goal 文案不准确。已移除 raw geometry selector 回退，并把 component / instance body edit 标为 component geometry。
 - 第四轮独立 review 发现 instance replacement 主写入目标错误：写 component 会影响所有同源实例。已改为 assembly 主写入目标、component 仅作为 affected file；同时补充普通 instance body edit 的回归测试。
 - 最终独立 review 未发现 Critical、Important 或 Minor finding，确认 instance move / replacement / component replacement / instance body edit 的 target path、target type、affected files、edit goal 规则一致。
@@ -323,3 +323,45 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 
 - `docs/known_issues.md` 新增记录：CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件。当前 Execute 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 约束，不阻断 Phase 3；后续需要增加 Plan 文件持久化和 confirmation `plan_ref` 校验。
 - `bun scripts/build_studio_web.ts` 的大 chunk warning 是既有问题，已有 `docs/known_issues.md` 记录。
+
+## 整体独立 review 收敛 — 2026-04-28
+
+### 完成情况
+
+- 根据整体独立 review，修复 `cadquery.preview` 在非 Execute confirmation 路径允许 `export_formats` 并回写 outputs 的问题。现在 preview 明确拒绝非空 `export_formats`，且不调用 outputs commit。
+- 为 host 侧 CadQuery mesh result 增加有界缓存，当前限制为 8 个 result，并按插入顺序移除最早结果，避免长时间使用时缓存无上限增长。
+- 将 CadQuery runner 的 `ImportError` / `ModuleNotFoundError` 映射为 `CadQueryRunnerErrorKind::PythonImport`，Agent push event 对应输出 `AgentErrorType::PythonImportError`。
+- 拆分超过 500 行的新增文件：`agent.rs` 拆出 `agent/codegen.rs` 与 `agent/selection.rs`，`staging.rs` 拆出 `staging/commit.rs`，`cadquery_tests.rs` 拆出 `cadquery_staging_tests.rs`。
+- 响应用户关于硬编码 `开孔`、`槽` 等自然语言词表的质疑：移除本地 Agent fallback 中 prompt-driven cut / fillet 生成逻辑。fallback 只生成稳定基础 CadQuery 结构，并把 selection ref 保留为上下文元数据；复杂几何编辑后续应由结构化 tool schema 或真实 Agent 输出驱动。
+- 最后一轮独立 review 未发现 Critical 或 Important，仅指出 `dispatcher_cadquery_result_cache_evicts_oldest_entries` 测试函数超过 50 行。已拆出 fixture、preview 断言和 cache get 断言 helper，测试主函数缩短到 15 行左右。
+- 继续按用户要求检查其它硬编码：移除本地 Agent fallback 中的 `height/tall` 尺寸启发式、固定 `faces(">Z")` body selector 和 assembly 默认 `offset=5`。当前 fallback 只生成默认 1x1x1 基础结构，参数仍可通过 `params` 覆盖。
+- 确认仍有两处 prompt 关键词用于 move / replace 确认范围推导：Rust Plan fallback 与 Web Execute confirmation。该逻辑不直接生成几何，但仍属于临时硬编码；已记录到 `docs/known_issues.md`，后续应以结构化 edit intent 替代。
+
+### 回归记录
+
+- 红灯验证：新增 `dispatcher_cadquery_preview_rejects_export_formats_without_writing_outputs` 后，修复前 preview 返回 `CadQueryResultReady` 且允许输出写入路径。
+- 红灯验证：新增 `dispatcher_cadquery_result_cache_evicts_oldest_entries` 后，修复前第 9 个 preview 后仍可读取最早的 `cq_part_0`。
+- 红灯验证：新增 `cadquery_runner_maps_python_import_failure_to_error_kind` 后，修复前 `CadQueryRunnerErrorKind::PythonImport` 不存在。
+- 红灯验证：新增 `dispatcher_execute_agent_maps_python_import_failure` 后，修复前 Agent error type 为 `CadQueryBuildError`。
+- 绿色验证：`cargo test -p app-server-core --test agent_tests` 通过，12 个测试通过。
+- 绿色验证：`cargo test -p app-server-core --test cadquery_tests --test cadquery_staging_tests` 通过，22 个测试通过。
+- 绿色验证：`cargo test --workspace` 通过；仅有既有 `app-server-core/src/watch.rs` dead_code warning。
+- 绿色验证：`bun run --cwd packages/studio-web test:unit` 通过，26 个文件、117 个测试通过。
+- 绿色验证：`bun run --cwd packages/studio-web typecheck` 通过。
+- 绿色验证：`bun test tests/cadquery_runner.test.ts` 通过，9 个测试、57 个断言通过。
+- 绿色验证：`bun run protocol:check-generated` 通过。
+- 绿色验证：`bun run web:build` 构建成功，仍有既有 Vite large chunk warning。
+- 绿色验证：启动本地 Vite 后执行 `STUDIO_WEB_BASE_URL=http://127.0.0.1:5173 bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`，4 个 Chromium 测试通过；随后已停止本地服务。
+- 绿色验证：拆分测试 helper 后，`cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests dispatcher_cadquery_result_cache_evicts_oldest_entries -- --exact` 通过。
+- 绿色验证：移除 codegen 尺寸 / selector / offset 启发式后，`cargo test -p app-server-core --test agent_tests` 通过，12 个测试通过。
+- `cargo fmt --check -p app-server-core`：通过。
+- `cargo fmt --check -p app-server-host`：通过。
+- `git diff --check`：通过。
+- 最终独立 review 结论：未发现 Critical、Important 或 Minor finding；确认运行时代码不再根据 `开孔` / `槽` / `cut` / `fillet` / `height` / `tall` 等 prompt 词直接生成几何修改，move / replace 词表只影响确认范围推断且已记录到 `docs/known_issues.md`。
+- 行数复核：`agent.rs` 232 行、`agent/codegen.rs` 119 行、`agent/selection.rs` 207 行、`staging.rs` 419 行、`staging/commit.rs` 234 行、`cadquery_tests.rs` 289 行、`cadquery_staging_tests.rs` 436 行。
+- 函数长度复核：上一轮 review 指出的 cache eviction 测试函数已拆分；新增 helper 均低于 50 行。
+
+### 遗留问题
+
+- `docs/known_issues.md` 新增记录：CadQuery Agent 确认范围仍使用 prompt 关键词推断 move / replace 意图。当前不直接生成几何、不扩大写入权限，但后续应以结构化 edit intent 替代。
+- `cargo test --workspace` 的 `watch.rs` dead code warning 与 `bun run web:build` 的 Vite large chunk warning 均为既有问题，不阻断本 plan 验收。
