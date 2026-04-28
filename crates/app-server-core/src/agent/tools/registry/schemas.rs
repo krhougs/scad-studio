@@ -254,6 +254,7 @@ pub fn tool_error_schema() -> Value {
                 "type": "string",
                 "enum": [
                     "permission_denied",
+                    "unsupported_tool",
                     "invalid_arguments",
                     "not_found",
                     "file_conflict",

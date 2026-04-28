@@ -16,13 +16,14 @@ pub use agent::{
     AgentTurnDraft, AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend,
     build_execute_messages, build_turn_context, build_turn_messages, cadquery_agent_system_prompt,
     draft_agent_turn, extract_cadquery_code, generate_cadquery_code, llm_generate_cadquery_code,
-    llm_request_for_cadquery_execute, rig_backend_decision, stream_agent_turn,
-    stream_agent_turn_with_tools,
+    llm_request_for_cadquery_execute, operation_for_tool_loop, rig_backend_decision,
+    stream_agent_turn, stream_agent_turn_with_tools,
     tools::{
-        AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission,
-        AgentToolSpec, CadQueryModelFilePolicy, OutputPathPolicy, ToolExecutor,
-        WorkspaceToolExecutor, agent_tool_definitions, agent_tool_definitions_for_operation,
-        agent_tool_permission, agent_tool_specs, run_tool_loop,
+        AgentSemanticStore, AgentToolCategory, AgentToolConfirmationScope, AgentToolPathPolicy,
+        AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,
+        NoopToolLoopObserver, OutputPathPolicy, ToolExecutor, ToolLoopObserver,
+        WorkspaceToolExecutor, agent_tool_definitions_for_operation, agent_tool_permission,
+        agent_tool_specs, run_tool_loop_with_registry,
     },
 };
 pub use cadquery::{

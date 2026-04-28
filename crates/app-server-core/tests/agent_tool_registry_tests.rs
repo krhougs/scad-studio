@@ -139,7 +139,10 @@ fn registry_declares_path_scope_contracts() {
 
 #[test]
 fn registry_uses_specific_canonical_schemas() {
-    assert_required("cadquery_execute", &["target_path", "target_type", "code"]);
+    assert_required(
+        "cadquery_execute",
+        &["target_path", "target_type", "code", "export_targets"],
+    );
     assert_required("cadquery_get_result", &["result_id"]);
     assert_required(
         "cadquery_resolve_selection",
@@ -173,6 +176,7 @@ fn registry_uses_specific_canonical_schemas() {
             .iter()
             .any(|value| value == "python_import_error")
     );
+    assert!(error_types.iter().any(|value| value == "unsupported_tool"));
 
     let check_success = spec_by_name("cadquery_check_source").success_schema;
     let contract = &check_success["properties"]["contract"];

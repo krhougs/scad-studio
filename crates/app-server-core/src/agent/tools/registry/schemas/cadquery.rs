@@ -40,7 +40,7 @@ pub fn cadquery_execute_input_schema() -> Value {
             "plan_ref": string_schema("Saved plan path."),
             "reason": string_schema("Short execution reason.")
         })),
-        &["target_path", "target_type", "code"],
+        &["target_path", "target_type", "code", "export_targets"],
     )
 }
 

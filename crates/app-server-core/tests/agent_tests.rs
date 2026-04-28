@@ -1,6 +1,7 @@
 use app_server_core::{
     AgentCadQueryCodeInput, AgentTurnInput, cadquery_agent_system_prompt, draft_agent_turn,
-    generate_cadquery_code, llm_request_for_cadquery_execute, rig_backend_decision,
+    generate_cadquery_code, llm_request_for_cadquery_execute, operation_for_tool_loop,
+    rig_backend_decision,
 };
 use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
@@ -113,6 +114,30 @@ fn draft_agent_turn_uses_prompt_history_selection_and_execute_target() {
     assert!(draft.text.contains("previous plan"));
     assert!(draft.text.contains("@face[top_lid:f_0]"));
     assert!(draft.text.contains("parts/top_lid.py"));
+}
+
+#[test]
+fn auto_operation_decision_maps_to_concrete_tool_loop_operation() {
+    assert_eq!(
+        operation_for_tool_loop(AgentOperationLevel::Auto, "解释 CadQuery fillet", false),
+        AgentOperationLevel::Inform
+    );
+    assert_eq!(
+        operation_for_tool_loop(AgentOperationLevel::Auto, "给我一个修改方案", false),
+        AgentOperationLevel::Plan
+    );
+    assert_eq!(
+        operation_for_tool_loop(AgentOperationLevel::Auto, "解释怎么修改 fillet", false),
+        AgentOperationLevel::Inform
+    );
+    assert_eq!(
+        operation_for_tool_loop(AgentOperationLevel::Auto, "做吧", true),
+        AgentOperationLevel::Execute
+    );
+    assert_eq!(
+        operation_for_tool_loop(AgentOperationLevel::Plan, "解释", false),
+        AgentOperationLevel::Plan
+    );
 }
 
 #[test]

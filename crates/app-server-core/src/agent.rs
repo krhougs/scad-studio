@@ -109,6 +109,29 @@ pub fn llm_request_for_cadquery_execute(input: AgentCadQueryCodeInput) -> AgentL
     }
 }
 
+pub fn operation_for_tool_loop(
+    requested: AgentOperationLevel,
+    prompt: &str,
+    has_confirmation: bool,
+) -> AgentOperationLevel {
+    if requested != AgentOperationLevel::Auto {
+        return requested;
+    }
+    if has_confirmation {
+        return AgentOperationLevel::Execute;
+    }
+    let normalized = prompt.trim().to_ascii_lowercase();
+    if normalized.starts_with("/plan")
+        || normalized.contains(" plan")
+        || normalized.contains("方案")
+        || normalized.contains("计划")
+    {
+        AgentOperationLevel::Plan
+    } else {
+        AgentOperationLevel::Inform
+    }
+}
+
 impl AgentBackend for LocalAgentBackend {
     fn draft_turn(&self, input: AgentTurnInput) -> Result<AgentTurnDraft, AgentBackendError> {
         Ok(draft_local_turn(input))
@@ -337,15 +360,22 @@ pub fn stream_agent_turn_with_tools(
     input: AgentTurnInput,
     provider: &dyn LlmProvider,
     tool_executor: &dyn tools::ToolExecutor,
+    tool_context: tools::AgentToolRunContext,
+    tool_observer: &dyn tools::ToolLoopObserver,
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<AgentTurnDraft, AgentBackendError> {
     let messages = build_turn_messages(&input);
-    let tool_defs = tools::agent_tool_definitions();
-    let response =
-        tools::run_tool_loop(messages, &tool_defs, provider, tool_executor, on_token)
-            .map_err(|err| AgentBackendError {
-                message: err.message,
-            })?;
+    let response = tools::run_tool_loop_with_registry(
+        messages,
+        tool_context,
+        provider,
+        tool_executor,
+        tool_observer,
+        on_token,
+    )
+    .map_err(|err| AgentBackendError {
+        message: err.message,
+    })?;
     Ok(AgentTurnDraft {
         text: response.content,
     })

@@ -1,7 +1,10 @@
 use std::fs;
 
 use app_server_core::ChatStore;
-use app_server_protocol::{ChatRole, ChatSessionId, PathHandle, ProtocolErrorCode, WorkspaceId};
+use app_server_protocol::{
+    ChatRole, ChatSessionId, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
+    ProtocolErrorCode, WorkspaceId,
+};
 
 #[test]
 fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
@@ -62,6 +65,57 @@ fn chat_store_uses_unique_session_ids_for_repeated_titles() {
 
     assert_eq!(first.session_id, ChatSessionId("main".into()));
     assert_eq!(second.session_id, ChatSessionId("main-2".into()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn chat_store_persists_tool_call_and_result_records_in_history() {
+    let root = temp_dir("chat-store-tool-history");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store.create("agent tools", None, Vec::new()).unwrap();
+
+    let call_ack = store
+        .append_tool_call(
+            &created.session_id,
+            "agent tool started",
+            ChatToolCallRecord {
+                tool_call_id: "call_read".into(),
+                tool_name: "read_file".into(),
+                args_json: "{\"path\":\"README.md\"}".into(),
+            },
+        )
+        .expect("append tool call");
+    assert_eq!(call_ack.message_id, "msg-2");
+
+    let result_ack = store
+        .append_tool_result(
+            &created.session_id,
+            "agent tool completed",
+            ChatToolResultRecord {
+                tool_call_id: "call_read".into(),
+                tool_name: "read_file".into(),
+                result_json: "{\"status\":\"ok\"}".into(),
+            },
+            None,
+        )
+        .expect("append tool result");
+    assert_eq!(result_ack.message_id, "msg-3");
+
+    let history = store.history(&created.session_id, Some(10)).unwrap();
+    assert_eq!(history.messages.len(), 3);
+    let call_message = &history.messages[1];
+    assert_eq!(call_message.role, ChatRole::Assistant);
+    assert_eq!(call_message.tool_call_id.as_deref(), Some("call_read"));
+    assert_eq!(call_message.tool_calls.len(), 1);
+    assert_eq!(call_message.tool_calls[0].tool_name, "read_file");
+
+    let result_message = &history.messages[2];
+    assert_eq!(result_message.role, ChatRole::Tool);
+    assert_eq!(result_message.tool_call_id.as_deref(), Some("call_read"));
+    let result = result_message.tool_result.as_ref().unwrap();
+    assert_eq!(result.tool_name, "read_file");
+    assert_eq!(result.result_json, "{\"status\":\"ok\"}");
     let _ = fs::remove_dir_all(root);
 }
 

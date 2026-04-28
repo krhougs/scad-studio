@@ -1,8 +1,9 @@
+use app_server_core::llm::LlmToolCall;
 use app_server_core::{
-    AgentTurnInput, CadQueryCommitScope, CadQueryExecuteConfig,
-    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind, ChatStore,
-    FileWatcher, SlicerInstall, current_workspace, detect_slicer_paths,
-    execute_cadquery_with_staging_cancellable_scoped, export_model,
+    AgentToolConfirmationScope, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
+    CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
+    CadQueryRunnerErrorKind, ChatStore, FileWatcher, SlicerInstall, current_workspace,
+    detect_slicer_paths, execute_cadquery_with_staging_cancellable_scoped, export_model,
     list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
     resolve_workspace_path, resolve_workspace_write_path, run_cadquery_runner, save_config_dto,
     send_to_slicer, stage_cadquery_project,
@@ -649,12 +650,30 @@ struct AgentWorker {
     push_sink: ServerPushSink,
 }
 
+struct AgentToolEventRecorder {
+    workspace_root: PathBuf,
+    push_sink: ServerPushSink,
+    run: AgentRunHandle,
+}
+
+impl app_server_core::ToolLoopObserver for AgentToolEventRecorder {
+    fn tool_start(&self, call: &LlmToolCall) {
+        push_llm_tool_start(&self.push_sink, &self.run, call);
+        append_llm_tool_call(&self.workspace_root, &self.run, call);
+    }
+
+    fn tool_result(&self, call: &LlmToolCall, result: &str) {
+        push_llm_tool_result(&self.push_sink, &self.run, call, result);
+        append_llm_tool_result(&self.workspace_root, &self.run, call, result);
+    }
+}
+
 fn run_agent_worker(worker: AgentWorker) {
     match worker.operation {
         AgentOperationLevel::Execute => run_execute_agent(worker),
-        AgentOperationLevel::Inform
-        | AgentOperationLevel::Plan
-        | AgentOperationLevel::Auto => run_text_agent(worker),
+        AgentOperationLevel::Inform | AgentOperationLevel::Plan | AgentOperationLevel::Auto => {
+            run_text_agent(worker)
+        }
     }
 }
 
@@ -737,8 +756,13 @@ fn run_text_agent_llm(
         .confirmed_cadquery
         .as_ref()
         .map(|confirmation| confirmation.request.target_path.display_path().to_owned());
+    let operation = app_server_core::operation_for_tool_loop(
+        worker.operation,
+        &worker.prompt,
+        worker.confirmed_cadquery.is_some(),
+    );
     let input = AgentTurnInput {
-        operation: worker.operation,
+        operation,
         prompt: worker.prompt.clone(),
         history,
         selections: worker.selection_snapshot.selections.clone(),
@@ -746,8 +770,22 @@ fn run_text_agent_llm(
         confirmed_target_path,
         context_refs: worker.context_refs.clone(),
     };
-    let tool_executor =
-        app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone());
+    let tool_executor = app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone());
+    let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), operation);
+    tool_context.session_id = Some(worker.run.session_id.clone());
+    tool_context.run_id = Some(worker.run.run_id.clone());
+    tool_context.selections = worker.selection_snapshot.selections.clone();
+    tool_context.active_selection_index = worker.selection_snapshot.active_index;
+    tool_context.context_refs = worker.context_refs.clone();
+    tool_context.confirmation_scope = worker
+        .confirmed_cadquery
+        .as_ref()
+        .map(agent_tool_confirmation_scope);
+    let tool_observer = AgentToolEventRecorder {
+        workspace_root: worker.workspace_root.clone(),
+        push_sink: Arc::clone(&worker.push_sink),
+        run: worker.run.clone(),
+    };
     let push_sink = Arc::clone(&worker.push_sink);
     let run = worker.run.clone();
     let cancelled = Arc::clone(&worker.run.cancelled);
@@ -755,6 +793,8 @@ fn run_text_agent_llm(
         input,
         provider,
         &tool_executor,
+        tool_context,
+        &tool_observer,
         &|token| {
             if cancelled.load(Ordering::SeqCst) {
                 return false;
@@ -774,6 +814,28 @@ fn run_text_agent_llm(
             None
         }
     }
+}
+
+fn agent_tool_confirmation_scope(
+    confirmation: &AgentCadQueryConfirmation,
+) -> AgentToolConfirmationScope {
+    AgentToolConfirmationScope::new(
+        confirmation
+            .affected_files
+            .iter()
+            .map(PathHandle::display_path)
+            .collect(),
+        confirmation
+            .new_files
+            .iter()
+            .map(PathHandle::display_path)
+            .collect(),
+        confirmation
+            .export_targets
+            .iter()
+            .map(PathHandle::display_path)
+            .collect(),
+    )
 }
 
 fn run_execute_agent(worker: AgentWorker) {
@@ -1017,6 +1079,18 @@ fn append_agent_tool_call(
     );
 }
 
+fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmToolCall) {
+    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_call(
+        &run.session_id,
+        "agent tool started",
+        ChatToolCallRecord {
+            tool_call_id: call.id.clone(),
+            tool_name: call.function_name.clone(),
+            args_json: call.arguments.clone(),
+        },
+    );
+}
+
 fn append_agent_tool_result(
     workspace_root: &Path,
     run: &AgentRunHandle,
@@ -1034,12 +1108,42 @@ fn append_agent_tool_result(
     );
 }
 
+fn append_llm_tool_result(
+    workspace_root: &Path,
+    run: &AgentRunHandle,
+    call: &LlmToolCall,
+    result: &str,
+) {
+    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_result(
+        &run.session_id,
+        "agent tool completed",
+        ChatToolResultRecord {
+            tool_call_id: call.id.clone(),
+            tool_name: call.function_name.clone(),
+            result_json: result.to_owned(),
+        },
+        None,
+    );
+}
+
 fn push_agent_token(push_sink: &ServerPushSink, run: &AgentRunHandle, text: &str) {
     (push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentToken(AgentTokenEvent {
             session_id: run.session_id.clone(),
             run_id: run.run_id.clone(),
             text: text.to_owned(),
+        }),
+    });
+}
+
+fn push_llm_tool_start(push_sink: &ServerPushSink, run: &AgentRunHandle, call: &LlmToolCall) {
+    (push_sink)(ServerPushEnvelope {
+        event: ServerPushEvent::AgentToolStart(AgentToolStartEvent {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+            tool_call_id: call.id.clone(),
+            tool_name: call.function_name.clone(),
+            args_json: call.arguments.clone(),
         }),
     });
 }
@@ -1056,6 +1160,23 @@ fn push_agent_tool_start(
             tool_call_id: tool_call_id(run),
             tool_name: "cadquery".into(),
             args_json: cadquery_tool_args_json(request),
+        }),
+    });
+}
+
+fn push_llm_tool_result(
+    push_sink: &ServerPushSink,
+    run: &AgentRunHandle,
+    call: &LlmToolCall,
+    result: &str,
+) {
+    (push_sink)(ServerPushEnvelope {
+        event: ServerPushEvent::AgentToolResult(AgentToolResultEvent {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+            tool_call_id: call.id.clone(),
+            tool_name: call.function_name.clone(),
+            result_json: result.to_owned(),
         }),
     });
 }
