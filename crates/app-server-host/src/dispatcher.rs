@@ -1,19 +1,20 @@
 use app_server_core::llm::LlmToolCall;
 use app_server_core::{
     AgentToolConfirmationScope, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
-    CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
-    CadQueryRunnerErrorKind, ChatStore, FileWatcher, SlicerInstall, current_workspace,
-    detect_slicer_paths, execute_cadquery_with_staging_cancellable_scoped, export_model,
-    list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
-    resolve_workspace_path, resolve_workspace_write_path, run_cadquery_runner, save_config_dto,
-    send_to_slicer, stage_cadquery_project,
+    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
+    CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime,
+    CadQueryToolRuntimeError, ChatStore, FileWatcher, SlicerInstall, current_workspace,
+    detect_slicer_paths, export_model, list_workspace_entries, load_config_dto,
+    preview_ready_response, read_file_response, resolve_workspace_path,
+    resolve_workspace_write_path, run_cadquery_runner, run_cadquery_runner_with_cancel,
+    save_config_dto, send_to_slicer, stage_cadquery_project,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentOperationLevel,
     AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
     AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
-    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryMeshPayload, CapabilityHandshakeRequest,
+    CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
     ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
     ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
@@ -43,7 +44,7 @@ const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
 struct CadQueryResultCache {
     limit: usize,
     order: VecDeque<String>,
-    results: HashMap<String, CadQueryMeshPayload>,
+    results: HashMap<String, CadQueryToolCachedResult>,
 }
 
 impl CadQueryResultCache {
@@ -55,10 +56,19 @@ impl CadQueryResultCache {
         }
     }
 
-    fn insert(&mut self, result_id: String, payload: CadQueryMeshPayload) {
+    fn insert(&mut self, _result_id: String, payload: CadQueryMeshPayload) {
+        self.insert_cached(CadQueryToolCachedResult {
+            mesh: payload,
+            exports: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
+
+    fn insert_cached(&mut self, result: CadQueryToolCachedResult) {
+        let result_id = result.mesh.result_id.clone();
         self.order.retain(|existing| existing != &result_id);
         self.order.push_back(result_id.clone());
-        self.results.insert(result_id, payload);
+        self.results.insert(result_id, result);
         while self.order.len() > self.limit {
             if let Some(evicted) = self.order.pop_front() {
                 self.results.remove(&evicted);
@@ -67,6 +77,12 @@ impl CadQueryResultCache {
     }
 
     fn get(&self, result_id: &str) -> Option<CadQueryMeshPayload> {
+        self.results
+            .get(result_id)
+            .map(|result| result.mesh.clone())
+    }
+
+    fn get_cached(&self, result_id: &str) -> Option<CadQueryToolCachedResult> {
         self.results.get(result_id).cloned()
     }
 }
@@ -249,32 +265,10 @@ impl HostRequestDispatcher {
                 self.cache_cadquery_mesh(result)?;
                 Ok(CommandSuccess::CadQueryResultReady(ready))
             }
-            ClientCommand::CadQueryExecute(request) => {
-                let workspace_path = self.workspace_root()?.to_path_buf();
-                let _target_path =
-                    resolve_workspace_write_path(&workspace_path, &request.target_path)?;
-                let commit_scope =
-                    default_cadquery_commit_scope(&request.target_path, &request.export_formats);
-                let target = path_handle_to_relative_path(&request.target_path);
-                self.session.issue_handle(request.target_path.clone());
-                let result = execute_cadquery_with_staging_cancellable_scoped(
-                    &CadQueryExecuteConfig {
-                        python: cadquery_python_path(),
-                        workspace_root: workspace_path,
-                        target_relative_path: target,
-                        code: request.code,
-                        export_formats: request.export_formats,
-                        params_json: request.params_json,
-                        timeout: Duration::from_secs(60),
-                    },
-                    &|| false,
-                    &commit_scope,
-                )
-                .map_err(cadquery_command_error)?;
-                let ready = result.ready.clone();
-                self.cache_cadquery_mesh(result)?;
-                Ok(CommandSuccess::CadQueryResultReady(ready))
-            }
+            ClientCommand::CadQueryExecute(_request) => Err(ProtocolError::new(
+                ProtocolErrorCode::InvalidCommand,
+                "CadQuery execute 已迁移到 Agent Execute tool loop；直接协议写入已禁用",
+            )),
             ClientCommand::CadQueryResultGet(request) => {
                 let payload = self
                     .cadquery_results
@@ -693,6 +687,203 @@ impl app_server_core::ToolLoopObserver for AgentToolEventRecorder {
     }
 }
 
+struct HostCadQueryToolRuntime {
+    workspace_root: PathBuf,
+    python: PathBuf,
+    cadquery_results: Arc<Mutex<CadQueryResultCache>>,
+    push_sink: ServerPushSink,
+    run: AgentRunHandle,
+}
+
+impl CadQueryToolRuntime for HostCadQueryToolRuntime {
+    fn dry_run(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
+        let staged = stage_cadquery_project(
+            &self.workspace_root,
+            &PathBuf::from(&request.target_path),
+            &request.code,
+        )
+        .map_err(cadquery_tool_error)?;
+        let result = run_cadquery_runner_with_cancel(
+            &CadQueryRunConfig {
+                python: self.python.clone(),
+                project_root: staged.root().to_path_buf(),
+                script: staged.script_arg(),
+                output_dir: staged.output_dir(),
+                export_formats: Vec::new(),
+                params_json: request.params_json,
+                timeout: Duration::from_secs(60),
+            },
+            &|| self.run.cancelled.load(Ordering::SeqCst),
+        )
+        .map_err(cadquery_tool_error)?;
+        self.finish_result(
+            result,
+            request.target_type,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    fn execute(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
+        let commit_scope = CadQueryCommitScope::ExactOutputs(
+            request.export_targets.iter().map(PathBuf::from).collect(),
+        );
+        let staged = stage_cadquery_project(
+            &self.workspace_root,
+            &PathBuf::from(&request.target_path),
+            &request.code,
+        )
+        .map_err(cadquery_tool_error)?;
+        let result = run_cadquery_runner_with_cancel(
+            &CadQueryRunConfig {
+                python: self.python.clone(),
+                project_root: staged.root().to_path_buf(),
+                script: staged.script_arg(),
+                output_dir: staged.output_dir(),
+                export_formats: request.export_formats.clone(),
+                params_json: request.params_json,
+                timeout: Duration::from_secs(60),
+            },
+            &|| self.run.cancelled.load(Ordering::SeqCst),
+        )
+        .map_err(cadquery_tool_error)?;
+        validate_result_kind(&result.mesh, request.target_type)?;
+        if let Some(doc_path) = request.doc_update_path.as_deref() {
+            self.preflight_cadquery_doc_update(doc_path)?;
+        }
+        staged
+            .commit_success_with_scope_cancellable(&commit_scope, &|| {
+                self.run.cancelled.load(Ordering::SeqCst)
+            })
+            .map_err(cadquery_tool_error)?;
+        let mut committed_files = vec![request.target_path];
+        let mut extra_warnings = Vec::new();
+        if let Some(doc_path) = request.doc_update_path {
+            match self.append_cadquery_doc_update(&doc_path, &result) {
+                Ok(()) => committed_files.push(doc_path),
+                Err(warning) => extra_warnings.push(warning),
+            }
+        }
+        self.finish_result(
+            result,
+            request.target_type,
+            committed_files,
+            request.export_targets,
+            extra_warnings,
+        )
+    }
+
+    fn get_result(&self, result_id: &str) -> Option<CadQueryToolCachedResult> {
+        self.cadquery_results
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get_cached(result_id))
+    }
+}
+
+impl HostCadQueryToolRuntime {
+    fn finish_result(
+        &self,
+        result: CadQueryRunResult,
+        expected_type: CadQueryObjectKind,
+        committed_files: Vec<String>,
+        exports: Vec<String>,
+        extra_warnings: Vec<String>,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
+        validate_result_kind(&result.mesh, expected_type)?;
+        let mut warnings = runner_warnings(&result.stderr);
+        warnings.extend(extra_warnings);
+        let cached = CadQueryToolCachedResult {
+            mesh: result.mesh.clone(),
+            exports: exports.clone(),
+            warnings: warnings.clone(),
+        };
+        self.cadquery_results
+            .lock()
+            .map_err(|_| {
+                CadQueryToolRuntimeError::new(
+                    "cadquery_build_error",
+                    "CadQuery result cache lock poisoned",
+                    false,
+                )
+            })?
+            .insert_cached(cached);
+        push_agent_mesh_ready(&self.push_sink, &self.run, result.ready);
+        Ok(CadQueryToolRunResult {
+            mesh: result.mesh,
+            committed_files,
+            exports,
+            warnings,
+        })
+    }
+
+    fn preflight_cadquery_doc_update(
+        &self,
+        doc_path: &str,
+    ) -> Result<(), CadQueryToolRuntimeError> {
+        let absolute = self.workspace_root.join(doc_path);
+        let metadata = fs::symlink_metadata(&absolute).map_err(|error| {
+            CadQueryToolRuntimeError::new(
+                "file_conflict",
+                format!("读取 CadQuery 说明文档失败: {error}"),
+                false,
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CadQueryToolRuntimeError::new(
+                "permission_denied",
+                "CadQuery 说明文档不能是 symlink",
+                false,
+            ));
+        }
+        if is_hard_link(&metadata) {
+            return Err(CadQueryToolRuntimeError::new(
+                "permission_denied",
+                "CadQuery 说明文档不能是 hard link",
+                false,
+            ));
+        }
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&absolute)
+            .map(|_| ())
+            .map_err(|error| {
+                CadQueryToolRuntimeError::new(
+                    "file_conflict",
+                    format!("CadQuery 说明文档不可写: {error}"),
+                    false,
+                )
+            })
+    }
+
+    fn append_cadquery_doc_update(
+        &self,
+        doc_path: &str,
+        result: &CadQueryRunResult,
+    ) -> Result<(), String> {
+        let absolute = self.workspace_root.join(doc_path);
+        let note = format!(
+            "\n\n## budn' CadQuery 执行记录\n\n- result_id: `{}`\n- build_id: `{}`\n",
+            result.mesh.result_id, result.mesh.build_id
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&absolute)
+            .and_then(|mut file| {
+                use std::io::Write;
+                file.write_all(note.as_bytes())
+            })
+            .map_err(|error| format!("更新 CadQuery 说明文档失败: {error}"))
+    }
+}
+
 fn run_agent_worker(worker: AgentWorker) {
     match worker.operation {
         AgentOperationLevel::Execute => run_execute_agent(worker),
@@ -832,7 +1023,15 @@ fn run_text_agent_llm(
         confirmed_target_path,
         context_refs: worker.context_refs.clone(),
     };
-    let tool_executor = app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone());
+    let cadquery_runtime = Arc::new(HostCadQueryToolRuntime {
+        workspace_root: worker.workspace_root.clone(),
+        python: worker.python.clone(),
+        cadquery_results: Arc::clone(&worker.cadquery_results),
+        push_sink: Arc::clone(&worker.push_sink),
+        run: worker.run.clone(),
+    });
+    let tool_executor = app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone())
+        .with_cadquery_runtime(cadquery_runtime);
     let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), operation);
     tool_context.session_id = Some(worker.run.session_id.clone());
     tool_context.run_id = Some(worker.run.run_id.clone());
@@ -901,33 +1100,11 @@ fn agent_tool_confirmation_scope(
 }
 
 fn run_execute_agent(worker: AgentWorker) {
-    let Some(confirmation) = execute_confirmation_or_report(&worker) else {
+    if execute_confirmation_or_report(&worker).is_none() {
         finish_agent_worker(worker, false);
         return;
-    };
-    let Some(generated) = generate_cadquery_or_report(&worker, &confirmation) else {
-        finish_agent_worker(worker, false);
-        return;
-    };
-    if push_execute_intro_or_cancelled(&worker, &generated.response_text) {
-        finish_agent_worker(worker, true);
-        return;
     }
-    let mut request = confirmation.request;
-    request.code = generated.code;
-    push_agent_tool_start(&worker.push_sink, &worker.run, &request);
-    append_agent_tool_call(&worker.workspace_root, &worker.run, &request);
-    let result = execute_confirmed_cadquery(&worker, request, &confirmation.export_targets);
-    if handle_execute_result(&worker, result) {
-        finish_agent_worker(worker, true);
-        return;
-    }
-    append_agent_message(
-        &worker.workspace_root,
-        &worker.run,
-        &generated.response_text,
-    );
-    finish_agent_worker(worker, false);
+    run_text_agent(worker);
 }
 
 fn execute_confirmation_or_report(worker: &AgentWorker) -> Option<AgentCadQueryConfirmation> {
@@ -953,129 +1130,6 @@ fn report_execute_permission_error(worker: &AgentWorker, message: &str) {
         message,
     );
     append_agent_message(&worker.workspace_root, &worker.run, message);
-}
-
-fn generate_cadquery_or_report(
-    worker: &AgentWorker,
-    confirmation: &AgentCadQueryConfirmation,
-) -> Option<app_server_core::GeneratedCadQueryCode> {
-    let provider = match app_server_core::llm::create_provider() {
-        Ok(p) => p,
-        Err(error) => {
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::LlmError,
-                error.message,
-            );
-            return None;
-        }
-    };
-    match generate_agent_cadquery_llm(worker, confirmation, provider.as_ref()) {
-        Ok(generated) => Some(generated),
-        Err(error) => {
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::LlmError,
-                error.message,
-            );
-            None
-        }
-    }
-}
-
-fn generate_agent_cadquery_llm(
-    worker: &AgentWorker,
-    confirmation: &AgentCadQueryConfirmation,
-    provider: &dyn app_server_core::llm::LlmProvider,
-) -> Result<app_server_core::GeneratedCadQueryCode, app_server_core::AgentBackendError> {
-    let store = ChatStore::new(worker.workspace_root.clone());
-    let history = store
-        .history(&worker.run.session_id, Some(8))
-        .map(|response| response.messages)
-        .unwrap_or_default();
-    let input = app_server_core::AgentCadQueryCodeInput {
-        prompt: worker.prompt.clone(),
-        history,
-        selections: worker.selection_snapshot.selections.clone(),
-        active_selection_index: worker.selection_snapshot.active_index,
-        target_display_path: confirmation.request.target_path.display_path(),
-        target_type: confirmation.request.target_type,
-    };
-    let push_sink = Arc::clone(&worker.push_sink);
-    let run = worker.run.clone();
-    let cancelled = Arc::clone(&worker.run.cancelled);
-    app_server_core::llm_generate_cadquery_code(input, provider, &|token| {
-        if cancelled.load(Ordering::SeqCst) {
-            return false;
-        }
-        push_agent_token(&push_sink, &run, token);
-        true
-    })
-}
-
-fn push_execute_intro_or_cancelled(worker: &AgentWorker, response_text: &str) -> bool {
-    push_agent_token(&worker.push_sink, &worker.run, response_text);
-    thread::sleep(Duration::from_millis(120));
-    worker.run.cancelled.load(Ordering::SeqCst)
-}
-
-fn handle_execute_result(
-    worker: &AgentWorker,
-    result: Result<CadQueryRunResult, CadQueryRunnerError>,
-) -> bool {
-    match result {
-        Ok(result) => {
-            let ready = result.ready.clone();
-            if let Ok(mut cache) = worker.cadquery_results.lock() {
-                cache.insert(ready.result_id.clone(), result.mesh);
-            }
-            push_agent_tool_result(&worker.push_sink, &worker.run, &ready);
-            append_agent_tool_result(&worker.workspace_root, &worker.run, &ready);
-            push_agent_mesh_ready(&worker.push_sink, &worker.run, ready);
-            false
-        }
-        Err(error) if error.kind == CadQueryRunnerErrorKind::Cancelled => true,
-        Err(error) => {
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                agent_error_type(&error.kind),
-                error.message,
-            );
-            false
-        }
-    }
-}
-
-fn execute_confirmed_cadquery(
-    worker: &AgentWorker,
-    request: CadQueryExecuteRequest,
-    export_targets: &[PathHandle],
-) -> Result<CadQueryRunResult, CadQueryRunnerError> {
-    let _target = resolve_workspace_write_path(&worker.workspace_root, &request.target_path)
-        .map_err(protocol_to_cadquery_error)?;
-    let target_relative_path = path_handle_to_relative_path(&request.target_path);
-    let commit_scope = CadQueryCommitScope::ExactOutputs(
-        export_targets
-            .iter()
-            .map(path_handle_to_relative_path)
-            .collect(),
-    );
-    execute_cadquery_with_staging_cancellable_scoped(
-        &CadQueryExecuteConfig {
-            python: worker.python.clone(),
-            workspace_root: worker.workspace_root.clone(),
-            target_relative_path,
-            code: request.code,
-            export_formats: request.export_formats,
-            params_json: request.params_json,
-            timeout: Duration::from_secs(60),
-        },
-        &|| worker.run.cancelled.load(Ordering::SeqCst),
-        &commit_scope,
-    )
 }
 
 pub fn validate_cadquery_confirmation(
@@ -1190,22 +1244,6 @@ fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &s
     );
 }
 
-fn append_agent_tool_call(
-    workspace_root: &Path,
-    run: &AgentRunHandle,
-    request: &CadQueryExecuteRequest,
-) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_call(
-        &run.session_id,
-        "cadquery tool started",
-        ChatToolCallRecord {
-            tool_call_id: tool_call_id(run),
-            tool_name: "cadquery".into(),
-            args_json: cadquery_tool_args_json(request),
-        },
-    );
-}
-
 fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmToolCall) {
     let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_call(
         &run.session_id,
@@ -1215,23 +1253,6 @@ fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmT
             tool_name: call.function_name.clone(),
             args_json: call.arguments.clone(),
         },
-    );
-}
-
-fn append_agent_tool_result(
-    workspace_root: &Path,
-    run: &AgentRunHandle,
-    ready: &app_server_protocol::CadQueryResultReady,
-) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_result(
-        &run.session_id,
-        "cadquery tool completed",
-        ChatToolResultRecord {
-            tool_call_id: tool_call_id(run),
-            tool_name: "cadquery".into(),
-            result_json: cadquery_ready_json(ready),
-        },
-        Some(ready.clone()),
     );
 }
 
@@ -1275,22 +1296,6 @@ fn push_llm_tool_start(push_sink: &ServerPushSink, run: &AgentRunHandle, call: &
     });
 }
 
-fn push_agent_tool_start(
-    push_sink: &ServerPushSink,
-    run: &AgentRunHandle,
-    request: &CadQueryExecuteRequest,
-) {
-    (push_sink)(ServerPushEnvelope {
-        event: ServerPushEvent::AgentToolStart(AgentToolStartEvent {
-            session_id: run.session_id.clone(),
-            run_id: run.run_id.clone(),
-            tool_call_id: tool_call_id(run),
-            tool_name: "cadquery".into(),
-            args_json: cadquery_tool_args_json(request),
-        }),
-    });
-}
-
 fn push_llm_tool_result(
     push_sink: &ServerPushSink,
     run: &AgentRunHandle,
@@ -1306,43 +1311,6 @@ fn push_llm_tool_result(
             result_json: result.to_owned(),
         }),
     });
-}
-
-fn push_agent_tool_result(
-    push_sink: &ServerPushSink,
-    run: &AgentRunHandle,
-    ready: &app_server_protocol::CadQueryResultReady,
-) {
-    (push_sink)(ServerPushEnvelope {
-        event: ServerPushEvent::AgentToolResult(AgentToolResultEvent {
-            session_id: run.session_id.clone(),
-            run_id: run.run_id.clone(),
-            tool_call_id: tool_call_id(run),
-            tool_name: "cadquery".into(),
-            result_json: cadquery_ready_json(ready),
-        }),
-    });
-}
-
-fn cadquery_tool_args_json(request: &CadQueryExecuteRequest) -> String {
-    serde_json::json!({
-        "target_path": request.target_path.display_path(),
-        "target_type": request.target_type,
-        "export_formats": request.export_formats,
-    })
-    .to_string()
-}
-
-fn cadquery_ready_json(ready: &app_server_protocol::CadQueryResultReady) -> String {
-    serde_json::json!({
-        "result_id": ready.result_id,
-        "build_id": ready.build_id,
-        "part_count": ready.part_count,
-        "face_count": ready.face_count,
-        "edge_count": ready.edge_count,
-        "vertex_count": ready.vertex_count,
-    })
-    .to_string()
 }
 
 fn push_agent_mesh_ready(
@@ -1385,17 +1353,11 @@ fn push_agent_done(push_sink: &ServerPushSink, run: &AgentRunHandle, cancelled: 
     });
 }
 
-fn tool_call_id(run: &AgentRunHandle) -> String {
-    format!("{}-cadquery-1", run.run_id)
-}
-
 pub fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
     match kind {
         CadQueryRunnerErrorKind::Build => AgentErrorType::CadQueryBuildError,
         CadQueryRunnerErrorKind::FileConflict => AgentErrorType::FileConflict,
         CadQueryRunnerErrorKind::Timeout => AgentErrorType::Timeout,
-        // Cancelled is handled separately in handle_execute_result (returns early with cancelled=true),
-        // so this arm is unreachable in practice. Map to Timeout as the closest semantic fallback.
         CadQueryRunnerErrorKind::Cancelled => AgentErrorType::Timeout,
         CadQueryRunnerErrorKind::PermissionDenied => AgentErrorType::PermissionDenied,
         CadQueryRunnerErrorKind::PythonImport => AgentErrorType::PythonImportError,
@@ -1405,38 +1367,68 @@ pub fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
     }
 }
 
-fn protocol_to_cadquery_error(error: ProtocolError) -> CadQueryRunnerError {
-    CadQueryRunnerError {
-        kind: CadQueryRunnerErrorKind::InvalidProjectPath,
-        message: error.message,
+fn cadquery_tool_error(error: CadQueryRunnerError) -> CadQueryToolRuntimeError {
+    let retry_allowed = matches!(
+        error.kind,
+        CadQueryRunnerErrorKind::Build
+            | CadQueryRunnerErrorKind::PythonImport
+            | CadQueryRunnerErrorKind::Runner
+            | CadQueryRunnerErrorKind::Timeout
+    );
+    CadQueryToolRuntimeError::new(
+        cadquery_tool_error_type(&error.kind),
+        error.message,
+        retry_allowed,
+    )
+}
+
+fn cadquery_tool_error_type(kind: &CadQueryRunnerErrorKind) -> &'static str {
+    match kind {
+        CadQueryRunnerErrorKind::Build | CadQueryRunnerErrorKind::Runner => "cadquery_build_error",
+        CadQueryRunnerErrorKind::PythonImport => "python_import_error",
+        CadQueryRunnerErrorKind::FileConflict => "file_conflict",
+        CadQueryRunnerErrorKind::Timeout | CadQueryRunnerErrorKind::Cancelled => "timeout",
+        CadQueryRunnerErrorKind::PermissionDenied | CadQueryRunnerErrorKind::InvalidProjectPath => {
+            "permission_denied"
+        }
+        CadQueryRunnerErrorKind::Io => "cadquery_build_error",
     }
 }
 
-fn cadquery_command_error(error: CadQueryRunnerError) -> ProtocolError {
-    match error.kind {
-        CadQueryRunnerErrorKind::PermissionDenied => {
-            ProtocolError::new(ProtocolErrorCode::InvalidCommand, error.message)
-        }
-        CadQueryRunnerErrorKind::InvalidProjectPath => {
-            ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.message)
-        }
-        CadQueryRunnerErrorKind::PythonImport => {
-            ProtocolError::new(ProtocolErrorCode::InvalidCommand, error.message)
-        }
-        _ => internal_error(error),
+fn validate_result_kind(
+    mesh: &CadQueryMeshPayload,
+    expected: CadQueryObjectKind,
+) -> Result<(), CadQueryToolRuntimeError> {
+    if mesh.root_object_kind == expected {
+        Ok(())
+    } else {
+        Err(CadQueryToolRuntimeError::new(
+            "topology_mapping_error",
+            "CadQuery root object kind does not match target_type",
+            true,
+        ))
     }
 }
 
-fn default_cadquery_commit_scope(
-    target_path: &PathHandle,
-    formats: &[CadQueryExportFormat],
-) -> CadQueryCommitScope {
-    let stem = cadquery_target_stem(target_path);
-    let paths = formats
-        .iter()
-        .map(|format| PathBuf::from("outputs").join(cadquery_export_file_name(&stem, format)))
-        .collect();
-    CadQueryCommitScope::ExactOutputs(paths)
+fn runner_warnings(stderr: &str) -> Vec<String> {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        vec![trimmed.to_owned()]
+    }
+}
+
+#[cfg(unix)]
+fn is_hard_link(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    metadata.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn is_hard_link(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn cadquery_target_stem(target_path: &PathHandle) -> String {

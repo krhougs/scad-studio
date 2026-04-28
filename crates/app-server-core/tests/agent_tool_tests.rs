@@ -1,15 +1,18 @@
 use app_server_core::llm::{LlmError, LlmMessage, LlmResponse, LlmToolCall, LlmToolDefinition};
 use app_server_core::{
-    AgentToolConfirmationScope, AgentToolRunContext, ChatStore, NoopToolLoopObserver, ToolExecutor,
-    ToolLoopObserver, WorkspaceToolExecutor, agent_tool_definitions_for_operation,
-    run_tool_loop_with_registry,
+    AgentToolConfirmationScope, AgentToolRunContext, CadQueryToolCachedResult,
+    CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
+    ChatStore, NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
+    agent_tool_definitions_for_operation, run_tool_loop_with_registry,
 };
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatSessionId, PathHandle, SelectionKind,
-    SelectionRef, WorkspaceId,
+    AgentOperationLevel, CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind,
+    CadQueryPartMesh, ChatSessionId, EdgeGroup, FaceGroup, PathHandle, PreviewUnit, SelectionKind,
+    SelectionRef, VertexPoint, WorkspaceId,
 };
 use sha2::{Digest, Sha256};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 fn tool_context(
     operation: AgentOperationLevel,
@@ -1429,6 +1432,479 @@ fn workspace_tool_executor_copy_file_rejects_text_source_to_model_target() {
 }
 
 #[test]
+fn workspace_tool_executor_cadquery_analyze_source_summarizes_source() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("components")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        concat!(
+            "from components.pcb import build as pcb_build\n",
+            "REFS = {\"type\":\"part\",\"features\":{\"top\":{\"selector\":\"top\"}}}\n",
+            "def build(params=None):\n",
+            "    return pcb_build(params)\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# Lid\n").unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+
+    let result = tool_json(
+        &executor,
+        &call(
+            "cadquery_analyze_source",
+            "{\"target_path\":\"parts/lid.py\",\"include_paired_doc\":true,\"include_dependencies\":true}",
+        ),
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["target_type"], "part");
+    assert_eq!(result["has_build_function"], true);
+    assert_eq!(result["has_refs"], true);
+    assert_eq!(result["paired_doc_path"], "parts/lid.md");
+    assert_eq!(
+        result["local_dependencies"],
+        serde_json::json!(["components/pcb.py"])
+    );
+    assert_eq!(result["ref_keys"], serde_json::json!(["top"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_cadquery_analyze_source_rejects_symlink_model() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("chats/session.jsonl"), "{}\n").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("chats/session.jsonl"),
+        dir.path().join("parts/lid.py"),
+    )
+    .unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+
+    let result = tool_json(
+        &executor,
+        &call(
+            "cadquery_analyze_source",
+            "{\"target_path\":\"parts/lid.py\"}",
+        ),
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_check_source_reports_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_check_source",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"component\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "open('x', 'w')\\n\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["contract"]["has_build_function"], false);
+    assert_eq!(result["contract"]["has_refs"], true);
+    assert_eq!(result["contract"]["target_type_matches"], false);
+    assert_eq!(
+        result["contract"]["unsafe_calls"],
+        serde_json::json!(["open"])
+    );
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_dry_run_rejects_invalid_params_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("dry_cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_dry_run",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"params_json\":\"{\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(runtime.dry_run_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_dry_run_uses_runtime_without_writing_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("dry_cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_dry_run",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"params_json\":\"{}\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["result_id"], "dry_cq_1");
+    assert_eq!(result["summary"]["part_count"], 1);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("parts/lid.py")).unwrap(),
+        "old\n"
+    );
+    assert_eq!(runtime.dry_run_requests().len(), 1);
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_unsafe_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None):\\n    open('x', 'w')\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_invalid_project_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"import docs as design_docs, chats.session\\n",
+                "REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    );
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["result_id"], "cq_1");
+    assert_eq!(
+        result["committed_files"],
+        serde_json::json!(["parts/lid.py"])
+    );
+    assert_eq!(result["exports"], serde_json::json!(["outputs/lid.step"]));
+
+    let second = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+    assert_eq!(second["status"], "error");
+    assert_eq!(second["error_type"], "permission_denied");
+    assert_eq!(runtime.execute_requests().len(), 1);
+
+    let summary = tool_json(
+        &executor,
+        &call("cadquery_get_result", "{\"result_id\":\"cq_1\"}"),
+    );
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["root_ref_text"], "@part[lid]");
+    assert_eq!(summary["parts"][0]["features"], serde_json::json!(["top"]));
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_requires_confirmed_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_unmatched_export_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/other.step".into()],
+    );
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/other.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_requires_paired_doc_in_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# Lid\n").unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_hard_linked_paired_doc() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("chats")).unwrap();
+    std::fs::write(dir.path().join("chats/session.jsonl"), "{}\n").unwrap();
+    std::fs::hard_link(
+        dir.path().join("chats/session.jsonl"),
+        dir.path().join("parts/lid.md"),
+    )
+    .unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into(), "parts/lid.md".into()],
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_resolve_selection_rejects_selector_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+
+    let result = tool_json(
+        &executor,
+        &call(
+            "cadquery_resolve_selection",
+            "{\"result_id\":\"cq_1\",\"selection_ref\":\"@selector[top]\"}",
+        ),
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_resolve_selection_maps_feature() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+
+    let result = tool_json(
+        &executor,
+        &call(
+            "cadquery_resolve_selection",
+            "{\"result_id\":\"cq_1\",\"selection_ref\":\"@face[lid:f_0]\"}",
+        ),
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["owner_ref_text"], "@part[lid]");
+    assert_eq!(result["candidate_feature_ref"], "@feature[lid.top]");
+    assert_eq!(result["stable_ref"], "@feature[lid.top]");
+    assert_eq!(result["ambiguous"], false);
+}
+
+#[test]
 fn workspace_tool_executor_direct_call_denies_chat_summary_in_auto_operation() {
     let dir = tempfile::tempdir().unwrap();
     let store = ChatStore::new(dir.path().to_path_buf());
@@ -2275,6 +2751,113 @@ struct MockProvider {
     tool_names_seen: Mutex<Vec<Vec<String>>>,
 }
 
+struct FakeCadQueryRuntime {
+    mesh: CadQueryMeshPayload,
+    dry_runs: Mutex<Vec<CadQueryToolRunRequest>>,
+    executes: Mutex<Vec<CadQueryToolRunRequest>>,
+    results: Mutex<HashMap<String, CadQueryToolCachedResult>>,
+}
+
+impl FakeCadQueryRuntime {
+    fn new(mesh: CadQueryMeshPayload) -> Self {
+        let mut results = HashMap::new();
+        results.insert(
+            mesh.result_id.clone(),
+            CadQueryToolCachedResult {
+                mesh: mesh.clone(),
+                exports: Vec::new(),
+                warnings: Vec::new(),
+            },
+        );
+        Self {
+            mesh,
+            dry_runs: Mutex::new(Vec::new()),
+            executes: Mutex::new(Vec::new()),
+            results: Mutex::new(results),
+        }
+    }
+
+    fn dry_run_requests(&self) -> Vec<CadQueryToolRunRequest> {
+        self.dry_runs.lock().unwrap().clone()
+    }
+
+    fn execute_requests(&self) -> Vec<CadQueryToolRunRequest> {
+        self.executes.lock().unwrap().clone()
+    }
+}
+
+impl CadQueryToolRuntime for FakeCadQueryRuntime {
+    fn dry_run(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
+        self.dry_runs.lock().unwrap().push(request);
+        Ok(CadQueryToolRunResult {
+            mesh: self.mesh.clone(),
+            committed_files: Vec::new(),
+            exports: Vec::new(),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn execute(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
+        let committed_files = vec![request.target_path.clone()];
+        let exports = request.export_targets.clone();
+        self.executes.lock().unwrap().push(request);
+        Ok(CadQueryToolRunResult {
+            mesh: self.mesh.clone(),
+            committed_files,
+            exports,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn get_result(&self, result_id: &str) -> Option<CadQueryToolCachedResult> {
+        self.results.lock().unwrap().get(result_id).cloned()
+    }
+}
+
+fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {
+    CadQueryMeshPayload {
+        result_id: result_id.into(),
+        build_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        unit: PreviewUnit::Millimeter,
+        root_ref_text: "@part[lid]".into(),
+        root_object_kind: CadQueryObjectKind::Part,
+        parts: vec![CadQueryPartMesh {
+            name: "lid".into(),
+            object_kind: CadQueryObjectKind::Part,
+            ref_text: "@part[lid]".into(),
+            instance_path: None,
+            transform: None,
+            faces: vec![FaceGroup {
+                face_idx: 0,
+                positions: vec![0.0, 0.0, 0.0],
+                normals: vec![0.0, 0.0, 1.0],
+                features: vec!["top".into()],
+                ambiguous: false,
+            }],
+            edges: vec![EdgeGroup {
+                edge_idx: 0,
+                polyline: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                adjacent_faces: vec![0],
+            }],
+            vertices: vec![VertexPoint {
+                vertex_idx: 0,
+                position: [0.0, 0.0, 0.0],
+                adjacent_edges: vec![0],
+            }],
+            feature_map: vec![CadQueryFeatureFaces {
+                feature: "top".into(),
+                face_indices: vec![0],
+            }],
+        }],
+    }
+}
+
 impl MockProvider {
     fn new(responses: Vec<LlmResponse>) -> Self {
         Self {
@@ -3081,6 +3664,70 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
             .as_str()
             .unwrap()
             .contains("export_targets")
+    );
+}
+
+#[test]
+fn registry_tool_loop_executes_confirmed_cadquery_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            tool_calls: vec![LlmToolCall {
+                id: "call_cadquery_execute".into(),
+                function_name: "cadquery_execute".into(),
+                arguments: concat!(
+                    "{\"target_path\":\"parts/lid.py\",",
+                    "\"target_type\":\"part\",",
+                    "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                    "def build(params=None): pass\",",
+                    "\"export_formats\":[\"step\"],",
+                    "\"export_targets\":[\"outputs/lid.step\"]}"
+                )
+                .into(),
+            }],
+        },
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_loop_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let observer = RecordingObserver::default();
+    let mut context =
+        AgentToolRunContext::new(dir.path().to_path_buf(), AgentOperationLevel::Execute);
+    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    ));
+
+    run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "execute cadquery")],
+        context,
+        &provider,
+        &executor,
+        &observer,
+        &|_| true,
+    )
+    .unwrap();
+
+    assert_eq!(
+        observer.starts.lock().unwrap().as_slice(),
+        ["cadquery_execute"]
+    );
+    let result = observer.results.lock().unwrap().remove(0);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(parsed["result_id"], "cq_loop_1");
+    assert_eq!(runtime.execute_requests().len(), 1);
+    assert_eq!(
+        runtime.execute_requests()[0].export_targets,
+        vec!["outputs/lid.step"]
     );
 }
 

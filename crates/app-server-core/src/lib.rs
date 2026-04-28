@@ -21,9 +21,11 @@ pub use agent::{
     tools::{
         AgentSemanticStore, AgentToolCategory, AgentToolConfirmationScope, AgentToolPathPolicy,
         AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,
-        NoopToolLoopObserver, OutputPathPolicy, ToolExecutor, ToolLoopObserver,
-        WorkspaceToolExecutor, agent_tool_definitions_for_operation, agent_tool_permission,
-        agent_tool_specs, run_tool_loop_with_registry,
+        CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult,
+        CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver, OutputPathPolicy,
+        ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
+        agent_tool_definitions_for_operation, agent_tool_permission, agent_tool_specs,
+        run_tool_loop_with_registry,
     },
 };
 pub use cadquery::{

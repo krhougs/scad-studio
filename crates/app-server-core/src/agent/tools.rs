@@ -1,3 +1,4 @@
+mod cadquery;
 mod file_write;
 mod readonly;
 mod registry;
@@ -6,9 +7,15 @@ mod semantic_chat;
 mod semantic_export;
 mod tool_path_policy;
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicBool},
+};
 
-use app_server_protocol::{AgentOperationLevel, ChatSessionId, SelectionRef};
+use app_server_protocol::{
+    AgentOperationLevel, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind,
+    ChatSessionId, SelectionRef,
+};
 use serde_json::json;
 
 use crate::llm::{LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall};
@@ -29,6 +36,69 @@ pub trait ToolExecutor: Send + Sync {
 pub trait ToolLoopObserver: Send + Sync {
     fn tool_start(&self, call: &LlmToolCall);
     fn tool_result(&self, call: &LlmToolCall, result: &str);
+}
+
+pub trait CadQueryToolRuntime: Send + Sync {
+    fn dry_run(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError>;
+
+    fn execute(
+        &self,
+        request: CadQueryToolRunRequest,
+    ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError>;
+
+    fn get_result(&self, result_id: &str) -> Option<CadQueryToolCachedResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadQueryToolRunRequest {
+    pub target_path: String,
+    pub target_type: CadQueryObjectKind,
+    pub code: String,
+    pub params_json: String,
+    pub export_formats: Vec<CadQueryExportFormat>,
+    pub export_targets: Vec<String>,
+    pub doc_update_path: Option<String>,
+    pub plan_ref: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CadQueryToolCachedResult {
+    pub mesh: CadQueryMeshPayload,
+    pub exports: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CadQueryToolRunResult {
+    pub mesh: CadQueryMeshPayload,
+    pub committed_files: Vec<String>,
+    pub exports: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadQueryToolRuntimeError {
+    pub error_type: String,
+    pub message: String,
+    pub retry_allowed: bool,
+}
+
+impl CadQueryToolRuntimeError {
+    pub fn new(
+        error_type: impl Into<String>,
+        message: impl Into<String>,
+        retry_allowed: bool,
+    ) -> Self {
+        Self {
+            error_type: error_type.into(),
+            message: message.into(),
+            retry_allowed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,11 +175,22 @@ impl ToolLoopObserver for NoopToolLoopObserver {
 
 pub struct WorkspaceToolExecutor {
     workspace_root: PathBuf,
+    cadquery_runtime: Option<Arc<dyn CadQueryToolRuntime>>,
+    cadquery_committed: AtomicBool,
 }
 
 impl WorkspaceToolExecutor {
     pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+        Self {
+            workspace_root,
+            cadquery_runtime: None,
+            cadquery_committed: AtomicBool::new(false),
+        }
+    }
+
+    pub fn with_cadquery_runtime(mut self, runtime: Arc<dyn CadQueryToolRuntime>) -> Self {
+        self.cadquery_runtime = Some(runtime);
+        self
     }
 }
 
@@ -132,6 +213,22 @@ impl ToolExecutor for WorkspaceToolExecutor {
             "write_file" => file_write::write_file(&self.workspace_root, call, context),
             "patch_file" => file_write::patch_file(&self.workspace_root, call, context),
             "copy_file" => file_write::copy_file(&self.workspace_root, call, context),
+            "cadquery_analyze_source" => cadquery::analyze_source(&self.workspace_root, call),
+            "cadquery_check_source" => cadquery::check_source(call),
+            "cadquery_dry_run" => {
+                cadquery::dry_run(&self.workspace_root, call, self.cadquery_runtime.as_deref())
+            }
+            "cadquery_execute" => cadquery::execute(
+                &self.workspace_root,
+                call,
+                context,
+                self.cadquery_runtime.as_deref(),
+                &self.cadquery_committed,
+            ),
+            "cadquery_get_result" => cadquery::get_result(call, self.cadquery_runtime.as_deref()),
+            "cadquery_resolve_selection" => {
+                cadquery::resolve_selection(call, self.cadquery_runtime.as_deref())
+            }
             _ => tool_error_json(
                 call,
                 "tool is registered but not implemented by this executor",

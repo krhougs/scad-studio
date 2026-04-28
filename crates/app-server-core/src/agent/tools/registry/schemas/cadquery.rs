@@ -40,7 +40,7 @@ pub fn cadquery_execute_input_schema() -> Value {
             "plan_ref": string_schema("Saved plan path."),
             "reason": string_schema("Short execution reason.")
         })),
-        &["target_path", "target_type", "code", "export_targets"],
+        &["target_path", "target_type", "code"],
     )
 }
 
@@ -183,13 +183,15 @@ fn contract_schema() -> Value {
             "target_type_matches": {"type": "boolean"},
             "has_build_function": {"type": "boolean"},
             "has_refs": {"type": "boolean"},
-            "unsafe_calls": string_array_schema()
+            "unsafe_calls": string_array_schema(),
+            "invalid_imports": string_array_schema()
         }),
         &[
             "target_type_matches",
             "has_build_function",
             "has_refs",
             "unsafe_calls",
+            "invalid_imports",
         ],
     )
 }

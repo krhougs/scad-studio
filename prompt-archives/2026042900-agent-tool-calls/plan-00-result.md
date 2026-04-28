@@ -286,3 +286,63 @@ Phase 4 已完成实现、独立 review 和完整聚焦回归。Phase 4 新增�
 遗留问题：
 
 - 未发现需要写入 `docs/known_issues.md` 的新问题。
+
+### Phase 5 — CadQuery 专用工具与执行边界
+
+前序目标保护：
+
+- 保持 Phase 4 的普通文件写入边界：CadQuery `.py` 模型源仍不能通过 `write_file()` / `patch_file()` 改写；`copy_file()` 只能复制已有 CadQuery `.py` 到 confirmed `new_files`。
+- 保持 Phase 1 的统一 tool loop 入口：LLM Execute 现在通过 registry 暴露并执行 CadQuery tools，旧的 direct `ClientCommand::CadQueryExecute` 写入入口已禁用。
+- 保持 CadQuery staging 原子边界：dry run 只写 staging，不写真实 workspace；execute 在 topology 校验通过后才 commit 真实 target / outputs。
+
+完成情况：
+
+- 新增 CadQuery tool executor：
+  - `cadquery_analyze_source()`：只读分析现有 `.py`，返回 target type、`build`、`REFS`、配对 `.md`、本地依赖和 ref keys；拒绝 symlink alias。
+  - `cadquery_check_source()`：静态检查拟议完整源码，输出 `target_type_matches`、`has_build_function`、`has_refs`、`unsafe_calls`、`invalid_imports` 和 warnings。
+  - `cadquery_dry_run()`：通过 `CadQueryToolRuntime` 在 staging 中执行拟议源码，不回写真实 workspace，不写正式 outputs；无效 `params_json` 会提前拒绝。
+  - `cadquery_execute()`：只允许 Execute + confirmation，校验目标文件、export targets、source contract、危险调用、不允许的 project-local import、单次成功 commit guard 和配对 `.md` 更新范围。
+  - `cadquery_get_result()`：从 result cache 返回轻量结果摘要，不返回完整 mesh 大数组。
+  - `cadquery_resolve_selection()`：把 face / feature ref 映射到稳定 feature candidate；拒绝 `@selector[...]` 与 `@subshape[...]` 用户可见输出。
+- 新增 host runtime：
+  - `HostCadQueryToolRuntime` 复用 `stage_cadquery_project()`、`run_cadquery_runner_with_cancel()`、exact output commit scope 和 result cache。
+  - Execute 路径先 runner、再 `root_object_kind` 校验、再真实 commit，避免 topology mismatch 污染 workspace。
+  - Execute 成功后如果存在配对 `.md`，要求该 `.md` 在 confirmed scope 内；host preflight 拒绝 symlink / hard link，commit 后追加 budn' CadQuery 执行记录。追加失败会进入 tool result warnings，message 改为 `CadQuery execution completed with warnings`。
+  - 旧 `ClientCommand::CadQueryExecute` 直接协议写入入口返回 `InvalidCommand`，避免绕过 Agent Execute tool loop 和 confirmation。
+- 扩展静态安全检查：
+  - 拒绝 `open`、`io.open`、`Path`、`write_text`、`write_bytes`、`unlink`、`subprocess`、`os.system/remove/rename/replace`、`shutil.rmtree/move` 等明显文件系统或外部进程调用。
+  - 拒绝 `docs`、`chats`、`plans`、`outputs`、`.budn_staging`、`target`、`node_modules` 等不允许的 project-local import，并覆盖 `import docs as d, chats.session` 这类 alias / 逗号语法。
+- 同步 canonical schema：
+  - `cadquery_check_source` contract 增加 `invalid_imports`。
+  - `cadquery_execute` input schema 不再强制 `export_targets`，与无导出执行路径一致。
+  - runtime error result 增加 `diagnostics.traceback` 字段，当前无结构化 traceback 时为 `null`。
+
+验证命令：
+
+- `cargo test -p app-server-core --test agent_tool_tests workspace_tool_executor_cadquery -- --nocapture`
+  - 结果：14 passed。
+- `cargo test -p app-server-core --test agent_tool_tests workspace_tool_executor_cadquery_execute_rejects_invalid_project_import -- --nocapture`
+  - 结果：1 passed。
+- `cargo test -p app-server-core --test agent_tool_registry_tests --test agent_tool_tests --test cadquery_staging_tests`
+  - 结果：`agent_tool_registry_tests` 5 passed；`agent_tool_tests` 118 passed；`cadquery_staging_tests` 12 passed。
+- `cargo test -p app-server-core --test agent_tool_tests --test agent_tool_registry_tests --test chat_tests --test agent_tests --test llm_tests --test cadquery_tests --test cadquery_staging_tests`
+  - 结果：`agent_tests` 13 passed；`agent_tool_registry_tests` 5 passed；`agent_tool_tests` 116 passed；`cadquery_staging_tests` 12 passed；`cadquery_tests` 10 passed；`chat_tests` 8 passed；`llm_tests` 34 passed。
+  - 备注：后续补充测试后，最新 `agent_tool_tests` 为 118 passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests --test dispatcher_pure_fn_tests`
+  - 结果：`dispatcher_pure_fn_tests` 17 passed；`shared_dispatcher_roundtrip_tests` 13 passed。
+- `git diff --check`
+  - 结果：通过。
+- 新增文件规模检查：
+  - `cadquery.rs` 201 行，`cadquery/args.rs` 478 行，`cadquery/support.rs` 392 行；均小于 500 行。
+
+独立 review：
+
+- 第一轮 Phase 5 review 指出静态合同未拒绝危险调用、host runtime 在 commit 后才校验 root type、execute 成功后缺少 `.md` / Ref Map 更新机制、旧 direct `CadQueryExecute` 入口仍可绕过 tool loop、`analyze_source` symlink alias、selector ref 用户可见输出和 dry-run params 校验缺口；已修复。
+- 第二轮 review 指出旧 direct `CadQueryExecute` 仍保留、`.md` 更新缺 hard link alias 防护、post-commit `.md` 更新失败会导致已 commit 后仍可重试；已禁用 direct 写入入口，增加 hard link 防护，并把 post-commit 文档追加失败降级为 warnings，保证单次 commit guard 生效。
+- 第三轮 review 未发现 blocker；指出 import alias 绕过、warnings 语义和 diagnostics 字段缺口；已补充 import alias 解析、warnings message 和 `diagnostics.traceback`。
+- 最终短 review 确认没有 Blocker。
+
+遗留问题：
+
+- `diagnostics.traceback` 当前仅提供字段占位；runner traceback 仍主要在 error message 中。后续 Phase 7 文档同步或 runner 错误结构化时可继续拆分。
+- `.md` 执行记录追加失败在真实 commit 之后以 warnings 呈现，不再返回 `status: error`，避免已提交后同一 Execute run 继续重试。该策略已在本 Phase 结果中记录，Phase 7 文档同步时需要写入最终工具合同。
