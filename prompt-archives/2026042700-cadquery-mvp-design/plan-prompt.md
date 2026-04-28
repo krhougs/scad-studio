@@ -74,6 +74,10 @@
     - 用户指出当前 `codegen` fallback 没有意义，不应在代码里写一堆规则。
     - 用户要求方向改为设计 system prompt，由 LLM 决定编辑意图和 CadQuery 输出。
 
+14. **按提纲完善 system prompt 并使其工作**
+    - 用户提供 system prompt 提纲，要求覆盖 Role、Core Principles、Operation Levels、File System Contract、Component / Part / Assembly Rules、Ref Handling Rules、CAD Plan Rules、Tool Permission Rules、Experiment Rules、Response Rules。
+    - 用户要求完善 system prompt，并让它成为实际运行时可使用的 Agent prompt，而不是仅停留在文档。
+
 ## 注意事项
 
 - 本 plan 只是设计文档，尚未开始任何代码实施。

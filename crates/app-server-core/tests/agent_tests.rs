@@ -1,6 +1,6 @@
 use app_server_core::{
-    AgentCadQueryCodeInput, AgentTurnInput, draft_agent_turn, generate_cadquery_code,
-    rig_backend_decision,
+    AgentCadQueryCodeInput, AgentTurnInput, cadquery_agent_system_prompt, draft_agent_turn,
+    generate_cadquery_code, llm_request_for_cadquery_execute, rig_backend_decision,
 };
 use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
@@ -16,6 +16,84 @@ fn rig_backend_decision_records_current_compatible_version() {
     assert!(decision.selected);
     assert!(decision.rationale.contains("tool"));
     assert!(decision.rationale.contains("stream"));
+}
+
+#[test]
+fn cadquery_agent_system_prompt_covers_runtime_contract() {
+    let prompt = cadquery_agent_system_prompt();
+
+    for section in [
+        "Role",
+        "Core Principles",
+        "Operation Levels",
+        "File System Contract",
+        "Component / Part / Assembly Rules",
+        "Ref Handling Rules",
+        "CAD Plan Rules",
+        "Tool Permission Rules",
+        "Experiment Rules",
+        "Response Rules",
+    ] {
+        assert!(prompt.contains(section), "missing section: {section}");
+    }
+    assert!(prompt.contains("Inform"));
+    assert!(prompt.contains("Plan"));
+    assert!(prompt.contains("Execute"));
+    assert!(prompt.contains("source of truth"));
+    assert!(prompt.contains("`.py` files are model source code"));
+    assert!(prompt.contains("`.md` files are semantic design notes"));
+    assert!(prompt.contains("`outputs/` contains derived artifacts only"));
+    assert!(prompt.contains("@component"));
+    assert!(prompt.contains("@part"));
+    assert!(prompt.contains("@assembly"));
+    assert!(prompt.contains("@feature"));
+    assert!(prompt.contains("@selector"));
+    assert!(prompt.contains("@face"));
+    assert!(prompt.contains("@edge"));
+    assert!(prompt.contains("@vertex"));
+    assert!(prompt.contains("Raw face / edge / vertex refs are not long-term truth"));
+    assert!(prompt.contains("Do not expose selector refs as MVP protocol selections"));
+    assert!(prompt.contains("confirmed"));
+    assert!(!prompt.contains("keyword matching"));
+}
+
+#[test]
+fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
+    let request = llm_request_for_cadquery_execute(AgentCadQueryCodeInput {
+        prompt: "replace this screw with a countersunk version".into(),
+        history: vec![
+            chat_message("msg-1", "initial CAD Plan: preserve head clearance"),
+            chat_message("msg-2", ""),
+            chat_message("msg-3", "explicit confirmation: edit selected component"),
+        ],
+        selections: vec![instance_selection()],
+        active_selection_index: Some(0),
+        target_display_path: "components/screw.py".into(),
+        target_type: CadQueryObjectKind::Component,
+    });
+
+    assert_eq!(request.system_prompt, cadquery_agent_system_prompt());
+    assert!(request.context.contains("Operation: Execute"));
+    assert!(request.context.contains("Target path: components/screw.py"));
+    assert!(request.context.contains("Target type: component"));
+    assert!(request.context.contains("Active selection index: 0"));
+    assert!(
+        request
+            .context
+            .contains("@instance[full_enclosure/screw_1]")
+    );
+    assert!(request.context.contains("owner_ref_text=@component[screw]"));
+    assert!(
+        request
+            .context
+            .contains("initial CAD Plan: preserve head clearance")
+    );
+    assert!(
+        request
+            .context
+            .contains("explicit confirmation: edit selected component")
+    );
+    assert!(!request.context.contains("assembly instance replacement"));
 }
 
 #[test]

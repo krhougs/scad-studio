@@ -11,9 +11,10 @@ mod watch;
 mod workspace;
 
 pub use agent::{
-    AgentBackend, AgentBackendDecision, AgentBackendError, AgentCadQueryCodeInput, AgentTurnDraft,
-    AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend, draft_agent_turn,
-    generate_cadquery_code, rig_backend_decision,
+    AgentBackend, AgentBackendDecision, AgentBackendError, AgentCadQueryCodeInput, AgentLlmRequest,
+    AgentTurnDraft, AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend,
+    cadquery_agent_system_prompt, draft_agent_turn, generate_cadquery_code,
+    llm_request_for_cadquery_execute, rig_backend_decision,
 };
 pub use cadquery::{
     CadQueryCommitScope, CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult,

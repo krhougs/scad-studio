@@ -337,7 +337,8 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - 继续按用户要求检查其它硬编码：移除本地 Agent fallback 中的 `height/tall` 尺寸启发式、固定 `faces(">Z")` body selector 和 assembly 默认 `offset=5`；随后进一步删除整个本地 CadQuery 几何 codegen fallback。
 - 用户进一步明确“这些东西由 LLM 自己决定”后，删除 Rust Plan fallback 与 Web Execute confirmation 中剩余的 move / replace prompt 关键词推断。当前 confirmation 不再从 prompt 猜测编辑意图，只使用显式 target path 或 selection 结构化 owner/ref 作为默认范围。
 - 用户指出本地 `codegen` fallback 没有意义后，删除 `agent/codegen.rs`，并改为没有 LLM codegen 后端时返回 `LlmError`，不再生成固定 1x1x1 box 或 assembly 占位几何。
-- 新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应使用的 CadQuery Agent system prompt draft：由 LLM 输出结构化 intent、target、affected files、export targets 和 CadQuery code，Rust / Web 只负责校验与确认。
+- 完善 `docs/cadquery-mvp/agent-system-prompt.md`，按用户提纲覆盖 Role、Core Principles、Operation Levels、File System Contract、Component / Part / Assembly Rules、Ref Handling Rules、CAD Plan Rules、Tool Permission Rules、Experiment Rules 和 Response Rules。
+- 将 system prompt 接入运行时：新增 `cadquery_agent_system_prompt()` 直接加载该文档，并新增 `llm_request_for_cadquery_execute()` 构造带 system prompt、history、target 和 selection context 的 LLM 请求上下文。
 
 ### 回归记录
 
@@ -364,12 +365,18 @@ child_location_tuple=((1.0, 2.0, 3.0), (0.0, -0.0, 0.0))
 - 绿色验证：删除 move / replace prompt 推断后，`cargo test -p app-server-core --test agent_tests` 通过，13 个测试通过；`bun run --cwd packages/studio-web test:unit tests/unit/cadquery-agent-scope.test.ts` 通过，7 个测试通过。
 - 红灯验证：新增 `local_agent_backend_refuses_part_codegen_without_llm_backend` 和 `local_agent_backend_refuses_assembly_codegen_without_llm_backend` 后，修复前 Rust `agent_tests` 有 2 项失败，错误中显示仍生成固定 box / assembly CadQuery code。
 - 绿色验证：删除本地 codegen fallback 后，`cargo test -p app-server-core --test agent_tests` 通过，10 个测试通过；`cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests` 通过，10 个测试通过。
+- 红灯验证：新增 `cadquery_agent_system_prompt_covers_runtime_contract` 和 `cadquery_execute_llm_request_uses_system_prompt_and_structured_context` 后，修复前 `cargo test -p app-server-core --test agent_tests` 编译失败，缺少运行时 system prompt 接口。
+- 绿色验证：接入 system prompt 和 LLM request builder 后，`cargo test -p app-server-core --test agent_tests` 通过，12 个测试通过。
+- 独立 review 发现 Execute LLM request 只保留最后一条 history，无法满足 CAD Plan / 澄清 / 确认上下文要求；已补充多 history 红灯测试并改为保留所有非空 history。修复后 `cargo test -p app-server-core --test agent_tests cadquery_execute_llm_request_uses_system_prompt_and_structured_context -- --nocapture` 通过。
+- 独立 review 发现 `@selector` 与 MVP 5 层 Ref 边界存在歧义；已把 system prompt 调整为“`@selector[...]` 仅作为内部可信 metadata handle，不作为当前 MVP protocol selection 或长期用户可见真相”，同时保留用户提纲要求的 selector 识别能力。
+- 绿色验证：补强 system prompt 合同测试后，`cargo test -p app-server-core --test agent_tests` 通过，12 个测试通过。
 - 全量验证：`cargo test --workspace` 通过；`bun run --cwd packages/studio-web test:unit` 通过，26 个文件、117 个测试通过；`bun run --cwd packages/studio-web typecheck` 通过。
-- 最终独立 review 结论：未发现 Critical、Important 或 Minor finding；确认 `agent/codegen.rs` 已删除、本地 `generate_cadquery_code` 直接要求 LLM 后端、host 不进入 tool start / runner / 写文件路径、Web confirmation 不再使用 prompt 推断 move / replace。
-- 行数复核：`agent.rs` 192 行、`agent/selection.rs` 130 行、`agent/codegen.rs` 已删除、`staging.rs` 419 行、`staging/commit.rs` 234 行、`agent_tests.rs` 238 行、`cadquery_tests.rs` 289 行、`cadquery_staging_tests.rs` 436 行、`docs/cadquery-mvp/agent-system-prompt.md` 59 行。
+- 第二轮独立 review 未发现 Critical 或 Important；Minor 建议给 active selection index 增加测试断言，已补充并通过 `cargo test -p app-server-core --test agent_tests`。
+- 最新独立 review 发现项已修复；确认 `agent/codegen.rs` 已删除、本地 `generate_cadquery_code` 直接要求 LLM 后端、host 不进入 tool start / runner / 写文件路径、Web confirmation 不再使用 prompt 推断 move / replace。
+- 行数复核：`agent.rs` 313 行、`agent/selection.rs` 130 行、`agent/codegen.rs` 已删除、`staging.rs` 419 行、`staging/commit.rs` 234 行、`agent_tests.rs` 316 行、`cadquery_tests.rs` 289 行、`cadquery_staging_tests.rs` 436 行、`docs/cadquery-mvp/agent-system-prompt.md` 193 行。
 - 函数长度复核：上一轮 review 指出的 cache eviction 测试函数已拆分；新增 helper 均低于 50 行。
 
 ### 遗留问题
 
-- `docs/known_issues.md` 更新记录：CadQuery edit intent 尚未由 LLM 结构化输出接管。当前已删除 prompt 关键词推断，不扩大写入权限；后续应让真实 Agent 输出结构化 edit intent，并由 Web 展示给用户确认。
+- `docs/known_issues.md` 更新记录：CadQuery edit intent 尚未由 LLM 结构化输出接管。当前已删除 prompt 关键词推断，不扩大写入权限；system prompt 与 LLM request builder 已接入，后续应接入真实 provider 并由 Web 展示结构化 intent 给用户确认。
 - `cargo test --workspace` 的 `watch.rs` dead code warning 与 `bun run web:build` 的 Vite large chunk warning 均为既有问题，不阻断本 plan 验收。

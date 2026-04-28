@@ -1,7 +1,8 @@
 mod selection;
 
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, SelectionRef,
+    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
+    SelectionRef,
 };
 
 use self::selection::{
@@ -48,6 +49,12 @@ pub struct GeneratedCadQueryCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLlmRequest {
+    pub system_prompt: &'static str,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentBackendError {
     pub message: String,
 }
@@ -87,6 +94,17 @@ pub fn generate_cadquery_code(
     LocalAgentBackend.generate_cadquery_code(input)
 }
 
+pub fn cadquery_agent_system_prompt() -> &'static str {
+    include_str!("../../../docs/cadquery-mvp/agent-system-prompt.md")
+}
+
+pub fn llm_request_for_cadquery_execute(input: AgentCadQueryCodeInput) -> AgentLlmRequest {
+    AgentLlmRequest {
+        system_prompt: cadquery_agent_system_prompt(),
+        context: cadquery_execute_context(input),
+    }
+}
+
 impl AgentBackend for LocalAgentBackend {
     fn draft_turn(&self, input: AgentTurnInput) -> Result<AgentTurnDraft, AgentBackendError> {
         Ok(draft_local_turn(input))
@@ -94,13 +112,29 @@ impl AgentBackend for LocalAgentBackend {
 
     fn generate_cadquery_code(
         &self,
-        _input: AgentCadQueryCodeInput,
+        input: AgentCadQueryCodeInput,
     ) -> Result<GeneratedCadQueryCode, AgentBackendError> {
+        let _request = llm_request_for_cadquery_execute(input);
         Err(AgentBackendError {
             message: "CadQuery Execute 需要 LLM 后端输出结构化 CadQuery 代码；本地 fallback 不生成几何代码"
                 .into(),
         })
     }
+}
+
+fn cadquery_execute_context(input: AgentCadQueryCodeInput) -> String {
+    let history = history_context(&input.history);
+    let selections = selection_context(&input.selections);
+    format!(
+        "Operation: Execute\nUser request: {}\nHistory: {history}\nTarget path: {}\nTarget type: {}\nActive selection index: {}\nSelections:\n{selections}",
+        non_empty(input.prompt.trim(), "未提供具体问题"),
+        input.target_display_path,
+        object_kind_label(input.target_type),
+        input
+            .active_selection_index
+            .map(|index| index.to_string())
+            .unwrap_or_else(|| "none".into())
+    )
 }
 
 fn draft_local_turn(input: AgentTurnInput) -> AgentTurnDraft {
@@ -158,6 +192,62 @@ fn operation_label(operation: AgentOperationLevel) -> &'static str {
     }
 }
 
+fn object_kind_label(kind: CadQueryObjectKind) -> &'static str {
+    match kind {
+        CadQueryObjectKind::Part => "part",
+        CadQueryObjectKind::Component => "component",
+        CadQueryObjectKind::Assembly => "assembly",
+    }
+}
+
+fn selection_kind_label(kind: SelectionKind) -> &'static str {
+    match kind {
+        SelectionKind::Component => "component",
+        SelectionKind::Part => "part",
+        SelectionKind::Assembly => "assembly",
+        SelectionKind::Instance => "instance",
+        SelectionKind::Feature => "feature",
+        SelectionKind::Face => "face",
+        SelectionKind::Edge => "edge",
+        SelectionKind::Vertex => "vertex",
+    }
+}
+
+fn chat_role_label(role: ChatRole) -> &'static str {
+    match role {
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+        ChatRole::Tool => "tool",
+        ChatRole::Meta => "meta",
+    }
+}
+
+fn history_context(history: &[ChatMessageRecord]) -> String {
+    let items = history
+        .iter()
+        .filter_map(|message| {
+            let content = message.content.trim();
+            if content.is_empty() {
+                return None;
+            }
+            let id = if message.message_id.is_empty() {
+                "unknown"
+            } else {
+                message.message_id.as_str()
+            };
+            Some(format!(
+                "- id={id}; role={}: {content}",
+                chat_role_label(message.role)
+            ))
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        "- none".into()
+    } else {
+        items.join("\n")
+    }
+}
+
 fn latest_history(history: &[ChatMessageRecord]) -> &str {
     history
         .iter()
@@ -185,6 +275,37 @@ fn selection_summary_item(selection: &SelectionRef) -> String {
     } else {
         format!("{preferred} ({})", selection.ref_text)
     }
+}
+
+fn selection_context(selections: &[SelectionRef]) -> String {
+    if selections.is_empty() {
+        return "- none".into();
+    }
+    selections
+        .iter()
+        .enumerate()
+        .map(|(index, selection)| {
+            let owner = selection.owner_ref_text.as_deref().unwrap_or("none");
+            let owner_kind = selection
+                .owner_object_kind
+                .map(object_kind_label)
+                .unwrap_or("none");
+            let instance = selection.instance_path.as_deref().unwrap_or("none");
+            let feature = selection
+                .candidate_feature_ref
+                .as_deref()
+                .unwrap_or("none");
+            let build = selection.build_id.as_deref().unwrap_or("none");
+            let result = selection.result_id.as_deref().unwrap_or("none");
+            format!(
+                "- index={index}; kind={}; ref_text={}; owner_ref_text={owner}; owner_object_kind={owner_kind}; instance_path={instance}; candidate_feature_ref={feature}; build_id={build}; result_id={result}; ambiguous={}",
+                selection_kind_label(selection.kind),
+                selection.ref_text,
+                selection.ambiguous
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {

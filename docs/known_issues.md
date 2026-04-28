@@ -6,7 +6,7 @@
 - 原因：
   - 当前协议和 Web confirmation 还没有承接 LLM 输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
   - 本轮已删除 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts` 中的 prompt 关键词判断。
-  - 本轮新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应承担的结构化输出责任。
+  - 本轮新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应承担的结构化输出责任，并通过 `cadquery_agent_system_prompt()` 作为运行时 system prompt 加载。
   - 现阶段 Web confirmation 只能使用显式 target path 或 selection 的结构化 owner/ref 信息，不能替 LLM 猜测用户要移动、替换还是修改本体。
 - 影响范围：
   - prompt 中出现 move / replace / 移动 / 替换 等词不会再改变确认范围，也不会生成几何修改。
@@ -17,7 +17,7 @@
   - 在 protocol 中增加 LLM tool output 专用的结构化 edit intent enum，并把它作为 confirmation 的一部分展示给用户确认。
   - 真实 Agent 后端输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
   - Web UI 只展示和确认 LLM 输出的结构化 intent；如果后续需要人工修正，应通过显式控件改结构化字段，而不是恢复关键词词表。
-- 当前处理方式：已删除 prompt 关键词推断和本地 CadQuery 几何 codegen；当前 fallback 仅使用 selection 结构化 owner/ref 选择默认目标，并把真实 LLM 结构化 intent 接入记录为后续能力缺口。
+- 当前处理方式：已删除 prompt 关键词推断和本地 CadQuery 几何 codegen；当前 fallback 仅使用 selection 结构化 owner/ref 选择默认目标。`llm_request_for_cadquery_execute()` 已能构造带 system prompt、history、target 和 selection context 的 LLM 请求，真实 provider 接入仍是后续能力缺口。
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
