@@ -630,6 +630,16 @@ describe("ChatZone", () => {
     );
     expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
   });
+
+  it("shows LLM setup guide when llm_configured is false", () => {
+    render(
+      <ChatZone
+        client={null}
+        snapshot={{ ...chatSnapshot(), llm_configured: false }}
+      />,
+    );
+    expect(screen.getByTestId("llm-setup-guide")).toBeTruthy();
+  });
 });
 
 function isBefore(left: Element, right: Element): boolean {

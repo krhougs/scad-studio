@@ -67,6 +67,30 @@
 - `npx tsc --noEmit`：chat 文件零新增错误（仅有既有 DOM lib 问题）
 - `bun run test:unit`：160/160 测试通过，0 错误
 
-## 待执行 Phase
+## Phase 2 — 清理与集成
 
-4. Phase 2 — 清理与集成
+**状态**：已完成
+
+**变更摘要**：
+- `AgentEventRow` 属性 `planActionDisabled` 重命名为 `actionDisabled`，消除与 `ChatBodyCtx` 的命名不一致
+- 新增 `LlmSetupGuide` 分支测试（`llm_configured: false` → `llm-setup-guide` testid）
+
+**Review 修复**：
+- P2 #1：新增 `LlmSetupGuide` empty state 测试覆盖
+- P2 #2：`AgentEventRow` 属性重命名为 `actionDisabled`，统一命名
+
+**验证结果**：
+- `npx tsc --noEmit`：chat 文件零新增错误
+- `bun run test:unit`：161/161 测试通过（含新增 LlmSetupGuide 测试）
+
+**独立 review**：通过，无 P1 问题。6 项验收标准全部 PASS：
+1. Timeline dedup：`historyHasRun` 在 history 覆盖当前 run 时跳过 event 转换
+2. Auto-scroll：`ThreadPrimitive.Viewport` 的 `autoScroll` prop
+3. Empty state：`ThreadPrimitive.If empty` 分支渲染 WelcomeEmptyState / LlmSetupGuide
+4. Disabled state：`isDisabled` 通过 runtime 传递到 ComposerPrimitive
+5. Context pills：`ContextPillBar` 渲染 + remove 逻辑
+6. Operation select：`disabled` prop 完整传递
+
+## 全部 Phase 完成
+
+Phase 0a → 0b → 1 → 2 全部完成，4 轮独立 review 均通过。

@@ -95,7 +95,7 @@ function MarkdownText(props: TextMessagePartProps) {
 function AgentEventPart(props: DataMessagePartProps) {
   const { planActionDisabled } = useContext(ChatBodyCtx);
   const event = reconstructAgentEvent(props.name, props.data);
-  return <AgentEventRow event={event} planActionDisabled={planActionDisabled} />;
+  return <AgentEventRow event={event} actionDisabled={planActionDisabled} />;
 }
 
 function AgentErrorPart(props: DataMessagePartProps) {
@@ -109,7 +109,7 @@ function PlanSavedPart(props: DataMessagePartProps) {
   return (
     <AgentEventRow
       event={event}
-      planActionDisabled={planActionDisabled}
+      actionDisabled={planActionDisabled}
       onOpenPlan={onOpenPlan}
       onRunPlan={onRunPlan}
     />
@@ -184,12 +184,12 @@ export type PlanRunAction = {
 
 export function AgentEventRow({
   event,
-  planActionDisabled = false,
+  actionDisabled = false,
   onOpenPlan,
   onRunPlan,
 }: {
   event: AgentEvent;
-  planActionDisabled?: boolean;
+  actionDisabled?: boolean;
   onOpenPlan?: (path: unknown) => void;
   onRunPlan?: (plan: PlanRunAction) => void;
 }) {
@@ -202,7 +202,7 @@ export function AgentEventRow({
       return (
         <PlanPackageCard
           plan={plan}
-          actionDisabled={planActionDisabled}
+          actionDisabled={actionDisabled}
           onOpenPlan={onOpenPlan}
           onRunPlan={onRunPlan}
         />
