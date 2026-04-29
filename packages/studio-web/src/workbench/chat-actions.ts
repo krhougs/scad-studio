@@ -75,6 +75,29 @@ export async function sendChatMessage(params: {
   }
 }
 
+export async function runSavedPlan(params: {
+  client: WasmClient | null;
+  planId: string;
+  planRef: unknown;
+  currentSessionId: string | null;
+  sessions: ChatSessionSummary[];
+  agentRun: AgentRun | null;
+  busy: boolean;
+  contextPills: ContextPill[];
+  onStatus?: (message: string) => void;
+  setBusy: (value: boolean) => void;
+}): Promise<void> {
+  if (!params.client || params.busy || params.agentRun) return;
+  params.setBusy(true);
+  try {
+    await runSavedPlanInner(params);
+  } catch (err) {
+    reportError(params.onStatus)(err);
+  } finally {
+    params.setBusy(false);
+  }
+}
+
 async function sendChatMessageInner(
   params: {
     client: WasmClient | null;
@@ -116,6 +139,38 @@ async function sendChatMessageInner(
     mode,
     plan_ref: null,
     context_refs,
+  });
+  await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+}
+
+async function runSavedPlanInner(params: {
+  client: WasmClient | null;
+  planId: string;
+  planRef: unknown;
+  currentSessionId: string | null;
+  sessions: ChatSessionSummary[];
+  contextPills: ContextPill[];
+  onStatus?: (message: string) => void;
+  setBusy: (value: boolean) => void;
+}): Promise<void> {
+  const client = params.client;
+  if (!client) return;
+  const sessionId =
+    params.currentSessionId ??
+    (await createChatSession(
+      client,
+      params.sessions,
+      params.onStatus,
+      params.setBusy,
+    ));
+  if (!sessionId) return;
+  params.onStatus?.(`Running plan ${params.planId} in Agent mode`);
+  await client.dispatchAgentInvoke({
+    session_id: sessionId,
+    prompt: `Run plan ${params.planId}`,
+    mode: "agent",
+    plan_ref: params.planRef,
+    context_refs: params.contextPills.map((pill) => pill.ref_text),
   });
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
 }

@@ -567,23 +567,30 @@ export function WorkbenchLayout() {
   const entries: WorkspaceEntry[] = rootEntries;
   const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
 
+  const handleOpenPath = useCallback(
+    (path: unknown, label = pathLabel(path)) => {
+      const kind = resolveTabKind(label);
+      if (!kind) {
+        const ext = extensionOf(label) || "(no extension)";
+        setMessage(`unsupported file type: ${ext}`);
+        return;
+      }
+      const id = pathKey(path);
+      openTab({ id, label, path, kind });
+      setMessage(`opened ${label}`);
+    },
+    [openTab],
+  );
+
   const handleOpenEntry = useCallback(
     (entry: WorkspaceEntry) => {
       if (entry.isOperable === false || entry.pathError) {
         setMessage(`invalid workspace entry: ${entry.label}`);
         return;
       }
-      const kind = resolveTabKind(entry.label);
-      if (!kind) {
-        const ext = extensionOf(entry.label) || "(no extension)";
-        setMessage(`unsupported file type: ${ext}`);
-        return;
-      }
-      const id = pathKey(entry.path);
-      openTab({ id, label: entry.label, path: entry.path, kind });
-      setMessage(`opened ${entry.label}`);
+      handleOpenPath(entry.path, entry.label);
     },
-    [openTab],
+    [handleOpenPath],
   );
 
   const previewTargetLabel = activeTab ? activeTab.label : "—";
@@ -639,6 +646,7 @@ export function WorkbenchLayout() {
         expandedDirectories={expanded}
         directoryKey={pathKey}
         onRequestPreview={handleOpenEntry}
+        onOpenPath={handleOpenPath}
         onExpandDirectory={handleExpandDirectory}
         onCollapseDirectory={handleCollapseDirectory}
         logEntries={log.entries}

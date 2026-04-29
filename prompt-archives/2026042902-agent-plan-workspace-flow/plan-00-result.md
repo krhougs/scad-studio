@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，并均通过独立 subagent review；后续 Phase 自动继续执行。
+正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，Phase 5 已完成 Web Chat 模式简化，并均通过独立 subagent review；后续 Phase 自动继续执行。
 
 ## 前置提交
 
@@ -16,7 +16,7 @@
 | Phase 2 — Protocol 与共享数据模型收敛 | 已完成 | 已将 Agent 请求协议收敛为 Agent / Plan 双模式、加入 plan package ref / saved event、提升 protocol version 到 v4，并让旧 confirmation 命令仅保留 deprecated 兼容路径 |
 | Phase 3 — 后端 Plan Package 存储与解析 | 已完成 | 已将 `save_cad_plan` 改为 workspace plan package 三文件结构，新增 plan package parser、执行范围解析、legacy plan 只读展示和 `get_project_context` plan package 列表 |
 | Phase 4 — 后端 Agent Mode 执行模型 | 已完成 | 已将后端执行模型从 confirmation precondition 切换为 Agent / Plan mode，Agent mode 支持自由请求和 plan_ref execution scope 执行，Plan mode 保持只读加 `save_cad_plan`，并在 `cadquery_execute` 成功 / 失败时安全追加 `plan-result.md` |
-| Phase 5 — Web Chat 模式简化 | 未开始 | 待执行 |
+| Phase 5 — Web Chat 模式简化 | 已完成 | 已将 Web Chat 输入、快捷命令、Plan Package 卡片和 Run Plan 动作切换到 Agent / Plan 双模式；Run Plan 通过 Agent mode + plan_ref 触发，并保留 selection context 与 busy 防重复触发 |
 | Phase 6 — Markdown Plan Preview 执行入口 | 未开始 | 待执行 |
 | Phase 7 — 测试、迁移和文档收敛 | 未开始 | 待执行 |
 
@@ -131,3 +131,27 @@
   - `rg -n "confirmation scope|Operation: Execute|Confirmed target|Ensure you have confirmed|confirmed_cadquery|AgentOperationLevel|operation_for_tool_loop" ...`：仅命中 deprecated 文档、protocol deprecated 字段、host deprecated compatibility tests / helper 和 prompt 反向断言。
 - 遗留问题：
   - Phase 4 未处理 Web Chat UI 和 Markdown Plan Preview；Phase 5 将继续简化 Web Chat 模式与 Plan Package / Run Plan 入口，Phase 6 将实现 Markdown plan preview 执行入口。
+
+### Phase 5 — Web Chat 模式简化
+
+- 完成情况：
+  - 保持 Chat 输入区只暴露 `Agent` 和 `Plan` 两个模式；`/plan` 和 `/agent` 作为显式快捷命令，`/execute` 不再作为产品命令处理。
+  - Web Chat 主请求继续发送 `mode`、`plan_ref` 和 `context_refs`；普通消息不带 plan 时发送 `plan_ref: null`，selection context 仍随请求发送。
+  - 删除 Web Chat 当前主流程中的 Plan Confirmation 控件语义；legacy `agent.plan_proposed` 仅作为普通 agent event 显示，不渲染 Confirm Execute / Cancel 动作。
+  - 新增 Plan Package 卡片，显示 plan id、target、affected files、new files 和 exports，并提供 `Open Plan` 与 `Run Plan`。
+  - `Open Plan` 只在 `plan_ref` 为 `plans/<plan_id>` 且 `plan_path` 为同一 workspace、同一目录下 `plan.md` 时渲染；不满足条件时不展示 Plan Package 操作。
+  - `Run Plan` 通过 `agent.invoke { mode: "agent", plan_ref, context_refs }` 触发，Agent run busy 或本地 busy 时不重复触发。
+  - 为 Phase 2 的 protocol 字段变更重新生成 `packages/studio-web-wasm/generated` 产物，修复浏览器端旧 wasm 仍要求 `operation` 字段的问题。
+- Review：
+  - 第一轮 Phase 5 review 发现 `Open Plan` 直接信任 `agent.plan_saved.package.plan_path`，不能证明只打开同一 plan package 下的 `plan.md`。已补充 `plan_ref` / `plan_path` 结构和 workspace 一致性校验，并增加反例测试。
+  - 第二轮 Phase 5 review 未发现阻塞项或高风险问题。
+- 验证：
+  - `cd packages/studio-web && bun run typecheck`：通过。
+  - `cd packages/studio-web && bun run test:unit -- tests/unit/chat-zone.test.tsx tests/unit/chat-actions.test.ts tests/unit/workbench-wiring.test.ts tests/unit/protocol-package-import.test.ts`：4 个测试文件、22 个测试通过。
+  - `cd packages/studio-web && bun run test:e2e -- tests/playwright/agent-chat-interaction.spec.ts`：10 个测试通过。
+  - `cd packages/studio-web && bun run test:e2e -- tests/playwright/wasm-bridge-smoke.spec.ts`：1 个测试通过。
+  - `bun run check:wasm-bindgen`：通过，`wasm-bindgen` 版本为 0.2.117。
+  - `git diff --check`：通过。
+  - `rg -n "Confirm Execute|Plan Confirmation|agent\\.plan\\.confirm|agent\\.plan\\.reject|AgentOperationLevel|operation_for_tool_loop|confirmed_cadquery|Confirmed target|Operation level|Operation: Execute|/inform" packages/studio-web/src packages/studio-web/tests packages/studio-web-wasm/generated -S`：无命中。
+- 遗留问题：
+  - Phase 5 未处理 Markdown Plan Preview 顶部执行入口；Phase 6 将实现打开 `plans/<id>/plan.md` 后直接运行 plan。

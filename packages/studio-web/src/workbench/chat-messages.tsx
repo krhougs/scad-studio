@@ -3,6 +3,7 @@ import rehypeSanitize from "rehype-sanitize";
 import type { AgentErrorType } from "@budn/app-server-protocol";
 import { markdownSanitizeSchema } from "../viewers/markdown-security";
 import type { ChatMessageRecord, AgentEvent } from "./chat-zone";
+import { pathSegments } from "./path-utils";
 
 const mdWrapperElement = { "data-color-mode": "dark" } as const;
 
@@ -12,6 +13,9 @@ export function ChatBody(props: {
   llmConfigured: boolean;
   streaming: boolean;
   streamText: string;
+  planActionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
 }) {
   if (
     props.messages.length === 0 &&
@@ -27,7 +31,13 @@ export function ChatBody(props: {
         <ChatMessage key={message.message_id} message={message} />
       ))}
       {props.agentEvents.map((event, index) => (
-        <AgentEventRow key={`${event.event}-${index}`} event={event} />
+        <AgentEventRow
+          key={`${event.event}-${index}`}
+          event={event}
+          planActionDisabled={props.planActionDisabled}
+          onOpenPlan={props.onOpenPlan}
+          onRunPlan={props.onRunPlan}
+        />
       ))}
       {props.streamText && <StreamingMessage text={props.streamText} />}
       {!props.streamText && props.streaming && <ThinkingIndicator />}
@@ -124,9 +134,37 @@ function ChatMessage({ message }: { message: ChatMessageRecord }) {
   );
 }
 
-export function AgentEventRow({ event }: { event: AgentEvent }) {
+export type PlanRunAction = {
+  planId: string;
+  planRef: unknown;
+};
+
+export function AgentEventRow({
+  event,
+  planActionDisabled = false,
+  onOpenPlan,
+  onRunPlan,
+}: {
+  event: AgentEvent;
+  planActionDisabled?: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
+}) {
   if (event.event === "agent.error") {
     return <AgentErrorCard event={event} />;
+  }
+  if (event.event === "agent.plan_saved") {
+    const plan = parsePlanSavedEvent(event);
+    if (plan) {
+      return (
+        <PlanPackageCard
+          plan={plan}
+          actionDisabled={planActionDisabled}
+          onOpenPlan={onOpenPlan}
+          onRunPlan={onRunPlan}
+        />
+      );
+    }
   }
   const label = event.event.replace("agent.", "");
   const detail = agentEventDetail(event);
@@ -138,6 +176,62 @@ export function AgentEventRow({ event }: { event: AgentEvent }) {
         </span>
       </div>
       <div className="op-detail">{detail}</div>
+    </div>
+  );
+}
+
+type PlanPackageCardData = {
+  planId: string;
+  status: string;
+  targetPath: string;
+  affectedFiles: string[];
+  newFiles: string[];
+  exportTargets: string[];
+  planRef: unknown;
+  planPath: unknown;
+};
+
+function PlanPackageCard(props: {
+  plan: PlanPackageCardData;
+  actionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
+}) {
+  const { plan } = props;
+  return (
+    <div className="agent-op plan-package-card" data-testid="plan-package-card">
+      <div className="op-head">
+        <span>{plan.status || "planned"}</span>
+      </div>
+      <div className="plan-card-title">{plan.planId}</div>
+      <PlanField label="target" values={[plan.targetPath]} />
+      <PlanField label="affected" values={plan.affectedFiles} />
+      <PlanField label="new" values={plan.newFiles} />
+      <PlanField label="exports" values={plan.exportTargets} />
+      <div className="plan-card-actions">
+        <button type="button" onClick={() => props.onOpenPlan?.(plan.planPath)}>
+          Open Plan
+        </button>
+        <button
+          type="button"
+          disabled={props.actionDisabled}
+          onClick={() =>
+            props.onRunPlan?.({ planId: plan.planId, planRef: plan.planRef })
+          }
+        >
+          Run Plan
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanField(props: { label: string; values: string[] }) {
+  const values = props.values.length > 0 ? props.values : ["none"];
+  return (
+    <div className="plan-card-field">
+      <span>{props.label}</span>
+      <code>{values.join(", ")}</code>
     </div>
   );
 }
@@ -171,6 +265,26 @@ function agentEventDetail(event: AgentEvent): string {
     return stringField(payload, "change_description") || "plan proposed";
   }
   return event.event;
+}
+
+function parsePlanSavedEvent(event: AgentEvent): PlanPackageCardData | null {
+  const payload = event.payload ?? {};
+  const planPackage = objectField(payload, "package");
+  const planId = stringField(planPackage, "plan_id");
+  const planRef = planPackage["plan_ref"];
+  const planPath = planPackage["plan_path"];
+  if (!planId || !planRef || !planPath) return null;
+  if (!isPlanMarkdownPath(planId, planRef, planPath)) return null;
+  return {
+    planId,
+    status: stringField(payload, "status"),
+    targetPath: pathText(payload["target_path"]),
+    affectedFiles: pathList(payload["affected_files"]),
+    newFiles: pathList(payload["new_files"]),
+    exportTargets: pathList(payload["export_targets"]),
+    planRef,
+    planPath,
+  };
 }
 
 export function findAffectedAssemblies(paths: string[]): string[] {
@@ -229,6 +343,52 @@ export function friendlyErrorMessage(errorType: string): FriendlyError {
 function stringField(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   return typeof value === "string" ? value : "";
+}
+
+function objectField(payload: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = payload[key];
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function pathText(value: unknown): string {
+  const joined = pathSegments(value).join("/");
+  return joined || "none";
+}
+
+function pathList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(pathText).filter((item) => item !== "none");
+}
+
+function isPlanMarkdownPath(
+  planId: string,
+  planRef: unknown,
+  planPath: unknown,
+): boolean {
+  const planRefSegments = pathSegments(planRef);
+  const planPathSegments = pathSegments(planPath);
+  const planRefWorkspace = workspaceIdKey(planRef);
+  const planPathWorkspace = workspaceIdKey(planPath);
+  return (
+    planRefSegments.length === 2 &&
+    planRefSegments[0] === "plans" &&
+    planRefSegments[1] === planId &&
+    planPathSegments.length === 3 &&
+    planPathSegments[0] === planRefSegments[0] &&
+    planPathSegments[1] === planRefSegments[1] &&
+    planPathSegments[2] === "plan.md" &&
+    planRefWorkspace !== null &&
+    planRefWorkspace === planPathWorkspace
+  );
+}
+
+function workspaceIdKey(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (!("workspace_id" in record)) return null;
+  return JSON.stringify(record["workspace_id"]);
 }
 
 function formatTime(value: number): string {

@@ -114,6 +114,17 @@ test("@agent-chat input area renders with placeholder and send button", async ({
   await expect(page.getByRole("button", { name: /send/i })).toBeVisible();
 });
 
+test("@agent-chat mode selector only exposes Agent and Plan", async ({
+  page,
+}) => {
+  await waitForChatReady(page);
+  const options = await page
+    .getByLabel("agent mode")
+    .locator("option")
+    .allTextContents();
+  expect(options).toEqual(["Agent", "Plan"]);
+});
+
 // --- Protocol frame tests (require completed handshake) ---
 
 test("@agent-chat sending a message emits agent.invoke with mode agent", async ({
@@ -178,6 +189,27 @@ test("@agent-chat slash command /agent sends mode agent", async ({
   const payload = cmd as Record<string, unknown>;
   expect(payload["mode"]).toBe("agent");
   expect(payload["prompt"]).toBe("apply the changes");
+});
+
+test("@agent-chat slash command /execute is sent as normal agent text", async ({
+  page,
+}) => {
+  await waitForChatReadyWithHandshake(page);
+  await clearRecordedClientCommands(page);
+
+  await fillAndSend(page, "/execute apply the changes");
+
+  await expect
+    .poll(
+      () => latestRecordedClientCommand(page, "agent.invoke"),
+      { timeout: 15_000 },
+    )
+    .toBeTruthy();
+
+  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const payload = cmd as Record<string, unknown>;
+  expect(payload["mode"]).toBe("agent");
+  expect(payload["prompt"]).toBe("/execute apply the changes");
 });
 
 test("@agent-chat chat.send frame carries the display content without slash prefix", async ({

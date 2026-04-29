@@ -216,6 +216,51 @@
   color: var(--t-1);
   font-weight: 500;
 }
+.plan-package-card {
+  gap: 8px;
+}
+.plan-card-title {
+  color: var(--t-1);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.plan-card-field {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+}
+.plan-card-field span {
+  color: var(--t-5);
+  text-transform: uppercase;
+}
+.plan-card-field code {
+  color: var(--t-3);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.plan-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.plan-card-actions button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ink-4s);
+  background: transparent;
+  color: var(--t-2);
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  cursor: pointer;
+}
+.plan-card-actions button:disabled {
+  color: var(--t-5);
+  cursor: not-allowed;
+}
 
 .chat-markdown {
   background: transparent !important;

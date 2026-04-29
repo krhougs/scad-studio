@@ -13,6 +13,7 @@ import {
   cancelAgentRun,
   createChatSession,
   reportError,
+  runSavedPlan,
   selectChatSession,
   sendChatMessage,
 } from "./chat-actions";
@@ -21,6 +22,7 @@ type ChatZoneProps = {
   client: WasmClient | null;
   snapshot: ChatSnapshot | null;
   onStatus?: (message: string) => void;
+  onOpenPlan?: (path: unknown) => void;
 };
 
 export type ChatSnapshot = {
@@ -68,8 +70,8 @@ export type ContextPill = {
 
 const MAX_CONTEXT_PILLS = 3;
 
-export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
-  const controller = useChatController({ client, snapshot, onStatus });
+export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
+  const controller = useChatController({ client, snapshot, onStatus, onOpenPlan });
   return (
     <section className="chat" data-testid="workbench-chat" aria-label="agent">
       <ChatHeader
@@ -88,6 +90,9 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
         llmConfigured={snapshot?.llm_configured ?? true}
         streaming={Boolean(controller.agentRun)}
         streamText={controller.streamText}
+        planActionDisabled={controller.composerDisabled}
+        onOpenPlan={controller.openPlan}
+        onRunPlan={controller.runPlan}
       />
       <ChatComposer
         value={controller.draft}
@@ -103,7 +108,7 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
   );
 }
 
-function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
+function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
@@ -176,6 +181,7 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     removePill: (refText: string) => {
       setRemovedRefs((prev) => new Set(prev).add(refText));
     },
+    openPlan: onOpenPlan,
     ...actions,
   };
 }
@@ -259,6 +265,12 @@ function useChatActions(input: {
     cancelAgent: () =>
       void cancelAgentRun(input.client, input.agentRun, input.onStatus),
     send: () => void sendChatMessage(input),
+    runPlan: (plan: { planId: string; planRef: unknown }) =>
+      void runSavedPlan({
+        ...input,
+        planId: plan.planId,
+        planRef: plan.planRef,
+      }),
   };
 }
 

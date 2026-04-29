@@ -18,6 +18,7 @@ type LeftPanelProps = {
   expandedDirectories: Map<string, WorkspaceDirectoryNode>;
   directoryKey: (path: unknown) => string;
   onRequestPreview: (entry: WorkspaceEntry) => void;
+  onOpenPath: (path: unknown) => void;
   onExpandDirectory: (entry: WorkspaceEntry) => void;
   onCollapseDirectory: (entry: WorkspaceEntry) => void;
   logEntries: LogEntry[];
@@ -38,6 +39,7 @@ export function LeftPanel(props: LeftPanelProps) {
     expandedDirectories,
     directoryKey,
     onRequestPreview,
+    onOpenPath,
     onExpandDirectory,
     onCollapseDirectory,
     logEntries,
@@ -55,7 +57,12 @@ export function LeftPanel(props: LeftPanelProps) {
       aria-label="left panel"
     >
       {activePanel === "chat" ? (
-        <ChatZone client={client} snapshot={snapshot} onStatus={onStatus} />
+        <ChatZone
+          client={client}
+          snapshot={snapshot}
+          onStatus={onStatus}
+          onOpenPlan={onOpenPath}
+        />
       ) : null}
       {activePanel === "files" ? (
         <FilesPanel
