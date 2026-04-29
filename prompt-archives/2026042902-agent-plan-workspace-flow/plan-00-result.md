@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，Phase 5 已完成 Web Chat 模式简化，并均通过独立 subagent review；后续 Phase 自动继续执行。
+正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，Phase 5 已完成 Web Chat 模式简化，Phase 6 已完成 Markdown Plan Preview 执行入口，Phase 7 已完成测试、迁移和文档收敛；所有 Phase 均已通过独立 subagent review，下一步进入 Plan 级独立 review。
 
 ## 前置提交
 
@@ -17,8 +17,8 @@
 | Phase 3 — 后端 Plan Package 存储与解析 | 已完成 | 已将 `save_cad_plan` 改为 workspace plan package 三文件结构，新增 plan package parser、执行范围解析、legacy plan 只读展示和 `get_project_context` plan package 列表 |
 | Phase 4 — 后端 Agent Mode 执行模型 | 已完成 | 已将后端执行模型从 confirmation precondition 切换为 Agent / Plan mode，Agent mode 支持自由请求和 plan_ref execution scope 执行，Plan mode 保持只读加 `save_cad_plan`，并在 `cadquery_execute` 成功 / 失败时安全追加 `plan-result.md` |
 | Phase 5 — Web Chat 模式简化 | 已完成 | 已将 Web Chat 输入、快捷命令、Plan Package 卡片和 Run Plan 动作切换到 Agent / Plan 双模式；Run Plan 通过 Agent mode + plan_ref 触发，并保留 selection context 与 busy 防重复触发 |
-| Phase 6 — Markdown Plan Preview 执行入口 | 未开始 | 待执行 |
-| Phase 7 — 测试、迁移和文档收敛 | 未开始 | 待执行 |
+| Phase 6 — Markdown Plan Preview 执行入口 | 已完成 | 已在 Markdown preview 中为 plan package Markdown 增加 Run Plan 入口，普通 Markdown 不显示执行入口，执行仍通过 app server protocol 的 Agent mode + plan_ref 触发 |
+| Phase 7 — 测试、迁移和文档收敛 | 已完成 | 已完成 Rust / Web / protocol / wasm / 文档一致性回归，已关闭旧 confirmation known issue 并记录 legacy `plans/*.md` 只读兼容范围；第二轮独立 review 未发现阻塞问题 |
 
 ## 执行记录
 
@@ -176,3 +176,31 @@
   - `rg -n "Confirm Execute|Plan Confirmation|agent\\.plan\\.confirm|agent\\.plan\\.reject|AgentOperationLevel|operation_for_tool_loop|confirmed_cadquery|Confirmed target|Operation level|Operation: Execute|/inform" packages/studio-web/src packages/studio-web/tests -S`：无命中。
 - 遗留问题：
   - Phase 6 未处理最终跨 Phase 回归和整体交付 review；Phase 7 将补充端到端验收与清理。
+
+### Phase 7 — 测试、迁移和文档收敛
+
+- 完成情况：
+  - 完成 Rust 侧聚焦回归，覆盖 protocol roundtrip、plan package 创建与解析、Agent mode plan 执行、Plan mode 写源文件拒绝、普通文件工具拒绝直接改写 `.py` 模型源、system prompt 和 LLM turn context 的 Agent / Plan 双模式契约。
+  - 完成 Web 侧聚焦回归，覆盖 Chat 模式、Plan Package card、Markdown Plan preview `Run Plan` 和 browser wasm bridge。
+  - 更新 `docs/known_issues.md`，将旧 confirmation 主流程与 Agent / Plan 双模式冲突记录标记为已处理，并记录 legacy `plans/*.md` 仅只读展示、不生成可执行 `plan_ref`、不触发 Markdown preview `Run Plan`。
+  - 完成文档一致性扫描，旧 confirmation 关键词仅命中 deprecated 说明、known issues 历史记录和反向断言测试。
+  - 清理 Playwright 回归生成的临时 chat JSONL 文件，保留用户既有未跟踪文件 `AGENTS.new.md` 不动。
+- Review：
+  - 第一轮 Phase 7 review 发现结果存档顶部仍显示 Phase 6 / Phase 7 未开始，且未记录 Phase 7 执行结果；本次已修复顶部状态表并补充 Phase 7 执行记录。
+  - 第二轮 Phase 7 review 未发现阻塞问题或高风险问题。
+- 验证：
+  - `cargo test -p app-server-protocol --tests`：通过。
+  - `cargo test -p app-server-core --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `cargo test -p app-server-host --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `cargo test -p studio-common --tests`：通过。
+  - `cargo test -p studio-web-wasm --tests`：通过。
+  - `cargo fmt --check -p app-server-protocol -p app-server-core -p app-server-host -p studio-common -p studio-web-wasm`：通过。
+  - `cd packages/studio-web && bun run typecheck`：通过。
+  - `cd packages/studio-web && bun run test:unit -- tests/unit/plan-preview-path.test.ts tests/unit/markdown-viewer.test.tsx tests/unit/markdown-preview-security.test.ts tests/unit/chat-zone.test.tsx tests/unit/chat-actions.test.ts tests/unit/workbench-wiring.test.ts tests/unit/protocol-package-import.test.ts`：7 个测试文件、32 个测试通过。
+  - `cd packages/studio-web && bun run test:e2e -- tests/playwright/agent-chat-interaction.spec.ts tests/playwright/markdown-preview.spec.ts tests/playwright/wasm-bridge-smoke.spec.ts`：13 个测试通过。
+  - `bun run protocol:smoke`：通过。
+  - `bun run check:wasm-bindgen`：通过，`wasm-bindgen` 版本为 0.2.117。
+  - `git diff --check`：通过。
+  - `rg -n "Inform / Plan / Execute|Operation level|Operation: Execute|确认执行|AgentPlanConfirm|AgentCadQueryConfirmation|confirmed_cadquery|Confirmed target|confirmation scope|Plan 确认卡片" docs crates/app-server-core/src crates/app-server-core/tests`：仅命中 deprecated 说明、known issues 历史记录和反向断言测试。
+- 遗留问题：
+  - Phase 7 当前无新增代码遗留问题；下一步进入 Plan 级独立 review。

@@ -2,7 +2,7 @@
 
 ## 2026-04-29 13:20:30: 旧 confirmation 主流程与 Agent / Plan 双模式冲突
 
-- 状态：处理中，当前计划 `prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` 覆盖文档、protocol、后端、Web Chat 和 Markdown preview 的迁移。
+- 状态：已处理，`prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` 已覆盖文档、protocol、后端、Web Chat 和 Markdown preview 的迁移。
 - 来源：执行 `prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` Phase 1。
 - 原因：
   - 旧文档和运行时 prompt 把 `Inform / Plan / Execute / Auto`、Plan 确认卡片、`AgentPlanConfirm`、`AgentCadQueryConfirmation` 和 `confirmed_cadquery` 作为主执行流程。
@@ -16,7 +16,11 @@
   - 将 plan 持久化改为 `plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
   - 废弃旧 confirmation command；新入口使用 `agent.invoke { mode: Agent, plan_ref }`。
   - 用 Agent mode path policy、CadQuery staging、`.py` 专用工具边界和 execution scope 替代旧 confirmation 安全边界。
-- 当前处理方式：Phase 1 已开始统一文档语义；实现完成并验证后，本条应更新为已处理，并记录 legacy `plans/*.md` 兼容范围。
+- 当前处理方式：
+  - 当前产品主路径只保留 `Agent` / `Plan` 双模式；Web Chat 和 Markdown preview 的执行入口均使用 `agent.invoke { mode: Agent, plan_ref }`。
+  - `plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}` 是可执行 workspace plan package；app server 解析该目录生成 execution scope，并在执行后更新同目录 `plan-result.md`。
+  - legacy `plans/*.md` 只作为历史计划文件只读展示，不生成可执行 `plan_ref`，也不会触发 Markdown preview 的 `Run Plan` 入口。
+  - `agent.plan.confirm` 和 `agent.plan.reject` 保留为 deprecated 兼容 command，返回 deprecated error，不再作为当前 UI 或后端主执行流程。
 
 ## 2026-04-29 23:20:00: CadQuery runner traceback 仍需结构化拆分
 
