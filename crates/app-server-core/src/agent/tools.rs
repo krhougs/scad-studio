@@ -325,8 +325,9 @@ pub fn run_tool_loop_with_registry(
             return Ok(response);
         }
         last_content = response.content.clone();
-        messages.push(LlmMessage::assistant_with_tool_calls(
+        messages.push(LlmMessage::assistant_response(
             response.content.clone(),
+            response.reasoning_content.clone(),
             response.tool_calls.clone(),
         ));
         for call in &response.tool_calls {
@@ -342,6 +343,7 @@ pub fn run_tool_loop_with_registry(
         } else {
             last_content
         },
+        reasoning_content: None,
         tool_calls: Vec::new(),
     })
 }

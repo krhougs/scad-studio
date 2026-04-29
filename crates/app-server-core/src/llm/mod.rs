@@ -23,6 +23,7 @@ pub struct LlmToolCall {
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
     pub content: String,
+    pub reasoning_content: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,
 }
 
@@ -36,6 +37,7 @@ impl LlmResponse {
 pub struct LlmMessage {
     pub role: String,
     pub content: String,
+    pub reasoning_content: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,
     pub tool_call_id: Option<String>,
 }
@@ -45,15 +47,33 @@ impl LlmMessage {
         Self {
             role: role.into(),
             content: content.into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
     }
 
     pub fn assistant_with_tool_calls(content: String, tool_calls: Vec<LlmToolCall>) -> Self {
+        Self::assistant_response(content, None, tool_calls)
+    }
+
+    pub fn assistant_with_reasoning_and_tool_calls(
+        content: String,
+        reasoning_content: String,
+        tool_calls: Vec<LlmToolCall>,
+    ) -> Self {
+        Self::assistant_response(content, Some(reasoning_content), tool_calls)
+    }
+
+    pub fn assistant_response(
+        content: String,
+        reasoning_content: Option<String>,
+        tool_calls: Vec<LlmToolCall>,
+    ) -> Self {
         Self {
             role: "assistant".into(),
             content,
+            reasoning_content,
             tool_calls,
             tool_call_id: None,
         }
@@ -63,6 +83,7 @@ impl LlmMessage {
         Self {
             role: "tool".into(),
             content,
+            reasoning_content: None,
             tool_calls: Vec::new(),
             tool_call_id: Some(tool_call_id),
         }

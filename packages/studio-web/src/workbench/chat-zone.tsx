@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Stop } from "@phosphor-icons/react";
 import type {
   AgentMode,
@@ -7,6 +7,7 @@ import type {
 } from "@budn/app-server-protocol";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import type { WasmClient } from "../wasm-bridge";
+import { useChatSnapshot } from "../state/protocol-store";
 import { preferredRefText } from "./cadquery-agent-scope";
 import { ChatBody } from "./chat-messages";
 import { ChatComposer } from "./chat-composer";
@@ -22,7 +23,6 @@ import {
 
 type ChatZoneProps = {
   client: WasmClient | null;
-  snapshot: ChatSnapshot | null;
   onStatus?: (message: string) => void;
   onOpenPlan?: (path: unknown) => void;
 };
@@ -73,7 +73,8 @@ export type ContextPill = {
 
 const MAX_CONTEXT_PILLS = 3;
 
-export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
+export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }: ChatZoneProps) {
+  const snapshot = useChatSnapshot();
   const controller = useChatController({ client, snapshot, onStatus, onOpenPlan });
   const runtime = useChatRuntime({
     messages: controller.messages,
@@ -91,14 +92,14 @@ export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZonePro
         currentSessionId={controller.currentSessionId}
         disabled={controller.headerDisabled}
         agentRun={controller.agentRun}
-        llmConfigured={snapshot?.llm_configured ?? true}
+        llmConfigured={snapshot.llm_configured ?? true}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
       />
       <AssistantRuntimeProvider runtime={runtime}>
         <ChatBody
-          llmConfigured={snapshot?.llm_configured ?? true}
+          llmConfigured={snapshot.llm_configured ?? true}
           planActionDisabled={controller.composerDisabled}
           onOpenPlan={controller.openPlan}
           onRunPlan={controller.runPlan}
@@ -113,9 +114,9 @@ export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZonePro
       </AssistantRuntimeProvider>
     </section>
   );
-}
+});
 
-function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
+function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps & { snapshot: ChatSnapshot }) {
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());

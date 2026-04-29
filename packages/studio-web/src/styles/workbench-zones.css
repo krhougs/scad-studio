@@ -336,6 +336,7 @@
   border-color: var(--t-1);
 }
 .chat-input textarea {
+  field-sizing: content;
   width: 100%;
   background: transparent;
   border: 0;
@@ -345,6 +346,8 @@
   font-size: var(--fs-sm);
   letter-spacing: var(--tr-tight);
   min-height: 40px;
+  max-height: 200px;
+  overflow-y: auto;
   outline: none;
   line-height: 1.5;
 }

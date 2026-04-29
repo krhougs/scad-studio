@@ -1,7 +1,6 @@
 import type { AppConfigState } from "../config/app-config";
 import type { WasmClient } from "../wasm-bridge";
 import { ChatZone } from "./chat-zone";
-import type { ChatSnapshot } from "./chat-zone";
 import { FilesPanel } from "./files-panel";
 import type { LeftPanelId } from "./left-panel-routing";
 import { LogPanel, type LogEntry } from "./log-panel";
@@ -24,7 +23,6 @@ type LeftPanelProps = {
   onRefreshFiles: () => void;
   logEntries: LogEntry[];
   client: WasmClient | null;
-  snapshot: ChatSnapshot | null;
   onStatus?: (message: string) => void;
   appConfig: AppConfigState;
   wsUrl: string;
@@ -46,7 +44,6 @@ export function LeftPanel(props: LeftPanelProps) {
     onRefreshFiles,
     logEntries,
     client,
-    snapshot,
     onStatus,
     appConfig,
     wsUrl,
@@ -61,7 +58,6 @@ export function LeftPanel(props: LeftPanelProps) {
       {activePanel === "chat" ? (
         <ChatZone
           client={client}
-          snapshot={snapshot}
           onStatus={onStatus}
           onOpenPlan={onOpenPath}
         />

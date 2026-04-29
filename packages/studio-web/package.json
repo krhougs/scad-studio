@@ -13,11 +13,12 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@assistant-ui/core": "^0.1.16",
     "@assistant-ui/react": "^0.12.27",
     "@base-ui/react": "^1.4.1",
     "@budn/app-server-protocol": "workspace:*",
-    "@phosphor-icons/react": "^2.1.10",
     "@budn/studio-web-wasm": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
     "@uiw/react-markdown-preview": "^5.2.0",
     "mermaid": "^11.14.0",
     "react": "^18.3.1",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "bun scripts/run_studio_web_dev.ts",
     "web": "bun scripts/run_studio_web_dev.ts",
     "web:dev": "bun run --cwd packages/studio-web dev",
     "web:host": "bun scripts/run_websocket_host.ts",
@@ -23,8 +24,5 @@
   },
   "peerDependencies": {
     "typescript": "^5"
-  },
-  "dependencies": {
-    "@assistant-ui/react": "^0.12.27"
   }
 }

@@ -2,6 +2,7 @@ use crate::{
     AppConfigDto, CadQueryMeshPayload, ClientEnvelope, CommandSuccess, PreviewArtifact,
     PreviewMeshPayload, PreviewUnit, ProtocolError, ProtocolErrorCode, ServerEnvelope,
 };
+use std::panic::Location;
 
 pub const WIRE_MAGIC: [u8; 4] = *b"BDNP";
 pub const WIRE_VERSION: u8 = 2;
@@ -12,6 +13,7 @@ pub fn encode_client_frame(envelope: &ClientEnvelope) -> Result<Vec<u8>, Protoco
     encode_frame(envelope)
 }
 
+#[track_caller]
 pub fn decode_client_frame(bytes: &[u8]) -> Result<ClientEnvelope, ProtocolError> {
     let envelope = decode_frame(bytes)?;
     validate_client_envelope(&envelope)?;
@@ -23,6 +25,7 @@ pub fn encode_server_frame(envelope: &ServerEnvelope) -> Result<Vec<u8>, Protoco
     encode_frame(envelope)
 }
 
+#[track_caller]
 pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerEnvelope, ProtocolError> {
     let envelope = decode_frame(bytes)?;
     validate_server_envelope(&envelope)?;
@@ -43,7 +46,9 @@ fn encode_frame<T: borsh::BorshSerialize>(value: &T) -> Result<Vec<u8>, Protocol
     Ok(frame)
 }
 
+#[track_caller]
 fn decode_frame<T: borsh::BorshDeserialize>(bytes: &[u8]) -> Result<T, ProtocolError> {
+    let caller = Location::caller();
     if bytes.len() < HEADER_LEN {
         return Err(ProtocolError::new(
             ProtocolErrorCode::InvalidWireFrame,
@@ -63,9 +68,14 @@ fn decode_frame<T: borsh::BorshDeserialize>(bytes: &[u8]) -> Result<T, ProtocolE
         ));
     }
     borsh::from_slice(&bytes[HEADER_LEN..]).map_err(|error| {
+        let payload = &bytes[HEADER_LEN..];
+        let hex: String = payload.iter().take(80).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
         ProtocolError::new(
             classify_decode_error(&error.to_string()),
-            format!("解码 wire frame 失败: {error}"),
+            format!(
+                "解码 wire frame 失败: {error}\n  at {caller}\n  payload({}B): {hex}",
+                payload.len(),
+            ),
         )
     })
 }

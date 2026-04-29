@@ -4,9 +4,9 @@
 // 挂载到 Canvas Zone）。左栏 Files 点击文件 → 按扩展名路由到对应 viewer tab；
 // 不支持的扩展名仅更新状态条消息，不开 tab。
 //
-// 协议业务状态仍在 wasm 内；Zustand 只存 UI 壳状态（openTabs / activeTabId
-// / sidePanelOpen 等）。viewer 自己发 FileRead / PreviewRequest，tab 只记
-// id / label / path / kind。
+// 协议业务状态通过 protocol-store (Zustand) 按域拆分订阅，避免全树
+// re-render。UI 壳状态在 ui-store。viewer 自己发 FileRead /
+// PreviewRequest，tab 只记 id / label / path / kind。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -25,8 +25,14 @@ import {
 } from "../config/app-config-store";
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
+import {
+  useProtocolStore,
+  useWorkspaceName,
+  useAgentRun,
+  useChatSessions,
+  useCurrentChatSession,
+} from "../state/protocol-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
-import type { ChatSnapshot } from "./chat-zone";
 import { runSavedPlan } from "./chat-actions";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
@@ -68,22 +74,6 @@ type ProtocolEntry = {
   path_error?: unknown;
 };
 
-type Snapshot = {
-  workspace_current?: {
-    workspace_id?: unknown;
-    root_name?: string;
-  } | null;
-  workspace_list?: {
-    directory?: unknown;
-    entries?: ProtocolEntry[];
-  } | null;
-  chat_sessions?: ChatSnapshot["chat_sessions"];
-  current_chat_session?: ChatSnapshot["current_chat_session"];
-  current_chat_history?: ChatSnapshot["current_chat_history"];
-  agent_run?: ChatSnapshot["agent_run"];
-  agent_events?: ChatSnapshot["agent_events"];
-  transport_status?: string;
-} | null;
 
 function phaseToStatus(phase: Phase): TopbarStatus {
   switch (phase) {
@@ -128,7 +118,11 @@ export function WorkbenchLayout() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
-  const [snapshot, setSnapshot] = useState<Snapshot>(null);
+  const applySnapshot = useProtocolStore((s) => s.applySnapshot);
+  const rootName = useWorkspaceName();
+  const agentRun = useAgentRun();
+  const chatSessions = useChatSessions();
+  const currentChatSession = useCurrentChatSession();
   const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
@@ -164,6 +158,8 @@ export function WorkbenchLayout() {
     [searchParams],
   );
   const clientRef = useRef<WasmClient | null>(null);
+  const applySnapshotRef = useRef(applySnapshot);
+  applySnapshotRef.current = applySnapshot;
   const expandedRef = useRef<Map<string, WorkspaceDirectoryNode>>(new Map());
   const watchActiveRef = useRef(false);
   const log = useLogBuffer();
@@ -180,7 +176,6 @@ export function WorkbenchLayout() {
   const routePanel = normalizeLeftPanelId(routePanelValue);
   const activeTab = openTabs.find((tab) => tab.id === activeTabId) ?? null;
   const client = clientReady ? clientRef.current : null;
-  const agentRun = snapshot?.agent_run ?? null;
   const scadWorkbenchState = useScadWorkbenchState({
     path: activeTab?.kind === "scad" ? activeTab.path : null,
     client,
@@ -429,7 +424,7 @@ export function WorkbenchLayout() {
       buildClientCallbacks({
         onSnapshotDirty: () => {
           if (disposed) return;
-          setSnapshot(client.snapshot() as Snapshot);
+          applySnapshotRef.current(client.snapshot());
         },
         onHandshakeAccepted: () => {
           if (disposed) return;
@@ -580,7 +575,6 @@ export function WorkbenchLayout() {
 
   const entriesLoaded = rootLoaded;
   const entries: WorkspaceEntry[] = rootEntries;
-  const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
 
   const handleOpenPath = useCallback(
     (path: unknown, label = pathLabel(path)) => {
@@ -616,8 +610,8 @@ export function WorkbenchLayout() {
         client: activeClient,
         planId: target.planId,
         planRef: target.planRef,
-        currentSessionId: snapshot?.current_chat_session ?? null,
-        sessions: snapshot?.chat_sessions ?? [],
+        currentSessionId: currentChatSession,
+        sessions: chatSessions,
         agentRun,
         busy: markdownPlanBusy,
         contextPills: [],
@@ -628,8 +622,8 @@ export function WorkbenchLayout() {
     [
       agentRun,
       markdownPlanBusy,
-      snapshot?.chat_sessions,
-      snapshot?.current_chat_session,
+      chatSessions,
+      currentChatSession,
     ],
   );
 
@@ -692,7 +686,6 @@ export function WorkbenchLayout() {
         onRefreshFiles={handleRefreshFiles}
         logEntries={log.entries}
         client={client}
-        snapshot={snapshot as ChatSnapshot | null}
         onStatus={setMessage}
         appConfig={appConfig}
         wsUrl={wsUrl}

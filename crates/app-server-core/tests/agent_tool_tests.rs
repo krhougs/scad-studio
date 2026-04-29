@@ -3096,6 +3096,7 @@ fn workspace_tool_executor_resolve_ref_keeps_ambiguous_selection_unstable() {
 struct MockProvider {
     responses: Mutex<Vec<LlmResponse>>,
     tool_names_seen: Mutex<Vec<Vec<String>>>,
+    messages_seen: Mutex<Vec<Vec<LlmMessage>>>,
 }
 
 struct FakeCadQueryRuntime {
@@ -3210,21 +3211,27 @@ impl MockProvider {
         Self {
             responses: Mutex::new(responses),
             tool_names_seen: Mutex::new(Vec::new()),
+            messages_seen: Mutex::new(Vec::new()),
         }
     }
 
     fn tool_names_seen(&self) -> Vec<Vec<String>> {
         self.tool_names_seen.lock().unwrap().clone()
     }
+
+    fn messages_seen(&self) -> Vec<Vec<LlmMessage>> {
+        self.messages_seen.lock().unwrap().clone()
+    }
 }
 
 impl app_server_core::llm::LlmProvider for MockProvider {
     fn stream_chat(
         &self,
-        _messages: Vec<LlmMessage>,
+        messages: Vec<LlmMessage>,
         tools: &[LlmToolDefinition],
         _on_token: &dyn Fn(&str) -> bool,
     ) -> Result<LlmResponse, LlmError> {
+        self.messages_seen.lock().unwrap().push(messages);
         self.tool_names_seen.lock().unwrap().push(
             tools
                 .iter()
@@ -3311,6 +3318,7 @@ impl ToolLoopObserver for RecordingObserver {
 fn run_tool_loop_returns_text_when_no_tool_calls() {
     let provider = MockProvider::new(vec![LlmResponse {
         content: "Hello!".into(),
+        reasoning_content: None,
         tool_calls: Vec::new(),
     }]);
     let result = run_tool_loop_with_registry(
@@ -3329,6 +3337,7 @@ fn run_tool_loop_executes_tools_and_continues() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_1".into(),
                 function_name: "read_file".into(),
@@ -3337,6 +3346,7 @@ fn run_tool_loop_executes_tools_and_continues() {
         },
         LlmResponse {
             content: "Based on the file, here is my answer.".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3355,10 +3365,51 @@ fn run_tool_loop_executes_tools_and_continues() {
 }
 
 #[test]
+fn run_tool_loop_replays_reasoning_content_after_tool_call() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: "Checking the file.".into(),
+            reasoning_content: Some("Need the source before answering.".into()),
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".into(),
+                function_name: "read_file".into(),
+                arguments: "{\"path\": \"a.py\"}".into(),
+            }],
+        },
+        LlmResponse {
+            content: "Done".into(),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let result = run_tool_loop_with_registry(
+        vec![LlmMessage::new("user", "what's in a.py?")],
+        tool_context(AgentMode::Agent, None),
+        &provider,
+        &EchoExecutor,
+        &NoopToolLoopObserver,
+        &|_| true,
+    );
+
+    assert_eq!(result.unwrap().content, "Done");
+    let seen = provider.messages_seen();
+    let second_round = seen.get(1).expect("tool loop should make a second request");
+    let assistant_tool_call = second_round
+        .iter()
+        .find(|message| message.role == "assistant" && !message.tool_calls.is_empty())
+        .expect("second request should replay assistant tool call");
+    assert_eq!(
+        assistant_tool_call.reasoning_content.as_deref(),
+        Some("Need the source before answering.")
+    );
+}
+
+#[test]
 fn run_tool_loop_handles_multiple_tool_rounds() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "c1".into(),
                 function_name: "list_directory".into(),
@@ -3367,6 +3418,7 @@ fn run_tool_loop_handles_multiple_tool_rounds() {
         },
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "c2".into(),
                 function_name: "read_file".into(),
@@ -3375,6 +3427,7 @@ fn run_tool_loop_handles_multiple_tool_rounds() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3393,6 +3446,7 @@ fn run_tool_loop_handles_multiple_tool_rounds() {
 fn registry_tool_loop_filters_tools_for_agent_mode() {
     let provider = MockProvider::new(vec![LlmResponse {
         content: "done".into(),
+        reasoning_content: None,
         tool_calls: Vec::new(),
     }]);
     run_tool_loop_with_registry(
@@ -3418,6 +3472,7 @@ fn registry_tool_loop_denies_plan_mode_write_without_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_write".into(),
                 function_name: "write_file".into(),
@@ -3426,6 +3481,7 @@ fn registry_tool_loop_denies_plan_mode_write_without_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3456,6 +3512,7 @@ fn registry_tool_loop_enforces_denied_path_roots_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_outputs".into(),
                 function_name: "read_file".into(),
@@ -3464,6 +3521,7 @@ fn registry_tool_loop_enforces_denied_path_roots_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3493,6 +3551,7 @@ fn registry_tool_loop_enforces_dotted_denied_path_roots_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_outputs".into(),
                 function_name: "read_file".into(),
@@ -3501,6 +3560,7 @@ fn registry_tool_loop_enforces_dotted_denied_path_roots_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3530,6 +3590,7 @@ fn registry_tool_loop_enforces_staging_path_denial_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_staging".into(),
                 function_name: "list_directory".into(),
@@ -3538,6 +3599,7 @@ fn registry_tool_loop_enforces_staging_path_denial_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3570,6 +3632,7 @@ fn registry_tool_loop_enforces_scoped_file_scope_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_write_scope".into(),
                 function_name: "write_file".into(),
@@ -3578,6 +3641,7 @@ fn registry_tool_loop_enforces_scoped_file_scope_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3607,6 +3671,7 @@ fn registry_tool_loop_requires_patch_target_in_affected_files_before_executing()
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_patch_new_file".into(),
                 function_name: "patch_file".into(),
@@ -3621,6 +3686,7 @@ fn registry_tool_loop_requires_patch_target_in_affected_files_before_executing()
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3656,6 +3722,7 @@ fn registry_tool_loop_requires_copy_target_in_new_files_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_copy_affected".into(),
                 function_name: "copy_file".into(),
@@ -3665,6 +3732,7 @@ fn registry_tool_loop_requires_copy_target_in_new_files_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3695,6 +3763,7 @@ fn registry_tool_loop_rejects_text_source_to_model_copy_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_text_to_model".into(),
                 function_name: "copy_file".into(),
@@ -3704,6 +3773,7 @@ fn registry_tool_loop_rejects_text_source_to_model_copy_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3734,6 +3804,7 @@ fn registry_tool_loop_rejects_write_file_new_file_with_expected_hash_before_exec
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_new_with_hash".into(),
                 function_name: "write_file".into(),
@@ -3744,6 +3815,7 @@ fn registry_tool_loop_rejects_write_file_new_file_with_expected_hash_before_exec
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3774,6 +3846,7 @@ fn registry_tool_loop_rejects_write_file_affected_without_hash_before_executing(
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_affected_without_hash".into(),
                 function_name: "write_file".into(),
@@ -3782,6 +3855,7 @@ fn registry_tool_loop_rejects_write_file_affected_without_hash_before_executing(
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3817,6 +3891,7 @@ fn registry_tool_loop_denies_plain_file_tool_writes_to_cadquery_model_source() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_model_write".into(),
                 function_name: "write_file".into(),
@@ -3825,6 +3900,7 @@ fn registry_tool_loop_denies_plain_file_tool_writes_to_cadquery_model_source() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3854,6 +3930,7 @@ fn registry_tool_loop_enforces_scoped_export_targets_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_export_scope".into(),
                 function_name: "cadquery_execute".into(),
@@ -3868,6 +3945,7 @@ fn registry_tool_loop_enforces_scoped_export_targets_before_executing() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3906,6 +3984,7 @@ fn registry_tool_loop_requires_export_targets_when_export_formats_are_requested(
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_missing_exports".into(),
                 function_name: "cadquery_execute".into(),
@@ -3920,6 +3999,7 @@ fn registry_tool_loop_requires_export_targets_when_export_formats_are_requested(
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -3958,6 +4038,7 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_bad_export_target_type".into(),
                 function_name: "cadquery_execute".into(),
@@ -3973,6 +4054,7 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -4017,6 +4099,7 @@ fn registry_tool_loop_executes_scoped_cadquery_tool() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_cadquery_execute".into(),
                 function_name: "cadquery_execute".into(),
@@ -4033,6 +4116,7 @@ fn registry_tool_loop_executes_scoped_cadquery_tool() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -4078,6 +4162,7 @@ fn registry_tool_loop_allows_save_cad_plan_declared_export_targets() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_save_plan".into(),
                 function_name: "save_cad_plan".into(),
@@ -4097,6 +4182,7 @@ fn registry_tool_loop_allows_save_cad_plan_declared_export_targets() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -4134,6 +4220,7 @@ fn registry_tool_loop_records_authorized_tool_start_and_result() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_read".into(),
                 function_name: "read_file".into(),
@@ -4142,6 +4229,7 @@ fn registry_tool_loop_records_authorized_tool_start_and_result() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);
@@ -4170,6 +4258,7 @@ fn registry_tool_loop_passes_unified_context_to_executor() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
+            reasoning_content: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_read_context".into(),
                 function_name: "read_file".into(),
@@ -4178,6 +4267,7 @@ fn registry_tool_loop_passes_unified_context_to_executor() {
         },
         LlmResponse {
             content: "done".into(),
+            reasoning_content: None,
             tool_calls: Vec::new(),
         },
     ]);

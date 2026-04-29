@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type {
   ExternalStoreAdapter,
   ThreadMessageLike,
@@ -10,7 +10,7 @@ import type {
   AgentRun,
 } from "./chat-zone";
 
-type RuntimeMessage = {
+export type RuntimeMessage = {
   readonly source: "history" | "stream" | "event";
   readonly id: string;
   readonly record?: ChatMessageRecord;
@@ -31,6 +31,11 @@ export function useChatRuntime(input: {
     [input.messages, input.agentEvents, input.agentRun],
   );
 
+  const onNewRef = useRef(input.onNew);
+  onNewRef.current = input.onNew;
+  const onCancelRef = useRef(input.onCancel);
+  onCancelRef.current = input.onCancel;
+
   const store = useMemo(
     (): ExternalStoreAdapter<RuntimeMessage> => ({
       messages: converted,
@@ -38,34 +43,35 @@ export function useChatRuntime(input: {
       isDisabled: input.disabled,
       convertMessage,
       onNew: async (msg) => {
-        const text =
-          typeof msg.content === "string"
-            ? msg.content
-            : msg.content
-                .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                .map((p) => p.text)
-                .join("");
-        input.onNew(text);
+        let text = "";
+        for (const part of msg.content) {
+          if (part.type === "text") text += part.text;
+        }
+        onNewRef.current(text);
       },
       onCancel: async () => {
-        input.onCancel();
+        onCancelRef.current();
       },
     }),
-    [converted, input.agentRun, input.disabled, input.onNew, input.onCancel],
+    [converted, input.agentRun, input.disabled],
   );
 
   return useExternalStoreRuntime(store);
 }
 
-function convertAll(
+export function convertAll(
   history: ChatMessageRecord[],
   events: AgentEvent[],
   agentRun: AgentRun | null,
 ): RuntimeMessage[] {
   const result: RuntimeMessage[] = [];
 
+  const visibleRunId = agentRun?.run_id ?? latestRunIdFromEvents(events);
+  const hasEvents = events.length > 0;
+
   for (const record of history) {
     if (record.role === "meta") continue;
+    if (hasEvents && visibleRunId && record.role === "assistant" && record.run_id === visibleRunId) continue;
     result.push({
       source: "history",
       id: `h-${record.message_id}`,
@@ -73,10 +79,7 @@ function convertAll(
     });
   }
 
-  const visibleRunId = agentRun?.run_id ?? latestRunIdFromEvents(events);
-  const isRunning = Boolean(agentRun);
-  const historyCoversRun = !isRunning && historyHasRun(history, visibleRunId);
-  if (historyCoversRun) return result;
+  if (!hasEvents) return result;
 
   let pendingText = "";
   let streamIndex = 0;
@@ -110,7 +113,7 @@ function convertAll(
   return result;
 }
 
-function historyHasRun(
+export function historyHasRun(
   history: ChatMessageRecord[],
   runId: string | null,
 ): boolean {
@@ -133,7 +136,7 @@ function latestRunIdFromEvents(events: AgentEvent[]): string | null {
   return null;
 }
 
-function convertMessage(msg: RuntimeMessage): ThreadMessageLike {
+export function convertMessage(msg: RuntimeMessage): ThreadMessageLike {
   if (msg.source === "history" && msg.record) {
     const r = msg.record;
     return {
@@ -176,12 +179,12 @@ function extractEventPayload(
 ): Record<string, unknown> {
   const payload = event.payload ?? {};
   return {
-    event: event.event,
     ...payload,
+    event: event.event,
   };
 }
 
-function agentEventToken(event: AgentEvent): string | null {
+export function agentEventToken(event: AgentEvent): string | null {
   if (event.event !== "agent.token") return null;
   const text = event.payload?.["text"];
   return typeof text === "string" ? text : null;

@@ -146,6 +146,29 @@ fn read_sse_stream_collects_tokens_and_calls_back() {
 }
 
 #[test]
+fn read_sse_stream_collects_reasoning_content_without_emitting_tokens() {
+    let sse_data = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Need context. \"},\"index\":0}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Read file.\"},\"index\":0}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"index\":0}]}\n\n\
+                    data: [DONE]\n\n";
+    let reader = Cursor::new(sse_data.as_bytes());
+
+    let tokens = RefCell::new(Vec::new());
+    let result = read_sse_stream(std::io::BufReader::new(reader), &|token| {
+        tokens.borrow_mut().push(token.to_owned());
+        true
+    });
+
+    let response = result.unwrap();
+    assert_eq!(
+        response.reasoning_content.as_deref(),
+        Some("Need context. Read file.")
+    );
+    assert_eq!(response.content, "Done");
+    assert_eq!(tokens.into_inner(), vec!["Done"]);
+}
+
+#[test]
 fn read_sse_stream_stops_when_callback_returns_false() {
     let sse_data = "data: {\"choices\":[{\"delta\":{\"content\":\"first\"},\"index\":0}]}\n\n\
                     data: {\"choices\":[{\"delta\":{\"content\":\"second\"},\"index\":0}]}\n\n\
@@ -526,4 +549,35 @@ fn build_request_body_serializes_tool_message() {
     assert_eq!(msgs[1]["role"], "tool");
     assert_eq!(msgs[1]["tool_call_id"], "call_1");
     assert_eq!(msgs[1]["content"], "file content");
+}
+
+#[test]
+fn build_request_body_serializes_reasoning_content_for_assistant_tool_call() {
+    let config = LlmConfig {
+        base_url: String::new(),
+        api_key: String::new(),
+        model: "test".into(),
+        timeout_secs: 30,
+        max_tokens: 1024,
+        temperature: 0.0,
+    };
+    let messages = vec![LlmMessage::assistant_with_reasoning_and_tool_calls(
+        "checking".into(),
+        "Need the current file contents.".into(),
+        vec![LlmToolCall {
+            id: "call_1".into(),
+            function_name: "read_file".into(),
+            arguments: "{\"path\": \"a.py\"}".into(),
+        }],
+    )];
+
+    let body = build_request_body(&config, &messages, &[], true);
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(msgs[0]["role"], "assistant");
+    assert_eq!(msgs[0]["content"], "checking");
+    assert_eq!(
+        msgs[0]["reasoning_content"],
+        "Need the current file contents."
+    );
+    assert_eq!(msgs[0]["tool_calls"][0]["id"], "call_1");
 }

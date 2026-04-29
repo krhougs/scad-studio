@@ -91,6 +91,20 @@
 5. Context pills：`ContextPillBar` 渲染 + remove 逻辑
 6. Operation select：`disabled` prop 完整传递
 
+## Plan 级 Codex Review
+
+**状态**：通过
+
+**审查结论**：全部 7 项审查标准 PASS，无阻塞项。
+
+1. Phase 验收标准覆盖：PASS — 0a 的 run_id 协议/旧 JSONL 兼容/TS 类型同步、0b 的 8 项设计决策验证、1 的 17 项功能清单、2 的 6 项旧功能覆盖，均有代码证据
+2. Phase 间行为冲突：PASS — run_id 协议被 Phase 1 正确消费，Phase 2 仅做命名统一未破坏 Phase 1
+3. 前序目标保护：PASS — 每个 Phase 均保留了前序 Phase 的核心成果
+4. 测试/编译验证：PASS — `cargo test` 全通过、`npx tsc --noEmit` 零错误、161/161 单元测试通过
+5. 结果文档准确性：PASS — 变更摘要与实际 diff 一致，验证结果与命令输出一致
+6. 用户强制约束遵守：PASS — 未安装 react-ui/react-markdown、合成消息方案、保留 select 切换器、bun 工具链
+7. 风险项检查：PASS — Tailwind 风险已解除、useMemo 增量缓存、稳定 id 来自 snapshot、无 run_id 回退基线去重
+
 ## 全部 Phase 完成
 
-Phase 0a → 0b → 1 → 2 全部完成，4 轮独立 review 均通过。
+Phase 0a → 0b → 1 → 2 全部完成，5 轮独立 review（4 轮 Phase review + 1 轮 Plan 级 codex review）均通过。

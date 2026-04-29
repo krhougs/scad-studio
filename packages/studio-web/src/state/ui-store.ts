@@ -1,5 +1,5 @@
-// Zustand store for UI shell state only. No protocol business state is allowed
-// here; those fields live inside the wasm client snapshot.
+// Zustand store for UI shell state only. Protocol business state lives in
+// protocol-store.ts, not here.
 //
 // Phase 6: `openTabs` holds DocumentTab descriptors (id/label/path/kind) only.
 // Never store document contents (markdown source, image bytes, scad text) in

@@ -1,3 +1,4 @@
+import { forwardRef, useCallback, useRef, type MutableRefObject } from "react";
 import { ArrowUp, Cube, Paperclip, Ruler, X } from "@phosphor-icons/react";
 import type { AgentMode } from "@budn/app-server-protocol";
 import { ComposerPrimitive } from "@assistant-ui/react";
@@ -15,11 +16,14 @@ export function ChatComposer(props: {
       <div className="wrap">
         <ContextPillBar pills={props.contextPills} onRemove={props.onRemovePill} />
         <ComposerPrimitive.Input
+          asChild
           placeholder="Describe what you want to build or change..."
           submitMode="ctrlEnter"
           data-testid="chat-input"
           aria-label="chat message"
-        />
+        >
+          <ImeSafeTextarea />
+        </ComposerPrimitive.Input>
         <ChatComposerTools
           disabled={props.disabled}
           mode={props.mode}
@@ -111,4 +115,64 @@ function DisabledToolButtons() {
       </button>
     </>
   );
+}
+
+const ImeSafeTextarea = forwardRef<
+  HTMLTextAreaElement,
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>
+>(function ImeSafeTextarea({ value, onCompositionStart, onCompositionEnd, ...rest }, forwardedRef) {
+  const composingRef = useRef(false);
+
+  const setRef = useCallback((node: HTMLTextAreaElement | null) => {
+    if (typeof forwardedRef === "function") forwardedRef(node);
+    else if (forwardedRef) forwardedRef.current = node;
+
+    if (node) installImeSafeValueSetter(node, composingRef);
+  }, [forwardedRef]);
+
+  return (
+    <textarea
+      {...rest}
+      ref={setRef}
+      value={value}
+      onCompositionStart={(e) => {
+        composingRef.current = true;
+        onCompositionStart?.(e);
+      }}
+      onCompositionEnd={(e) => {
+        composingRef.current = false;
+        onCompositionEnd?.(e);
+      }}
+    />
+  );
+});
+
+type ImeSafeTextareaNode = HTMLTextAreaElement & {
+  __budnImeSafeValueSetter?: boolean;
+};
+
+function installImeSafeValueSetter(
+  node: HTMLTextAreaElement,
+  composingRef: MutableRefObject<boolean>,
+): void {
+  const typedNode = node as ImeSafeTextareaNode;
+  if (typedNode.__budnImeSafeValueSetter) return;
+
+  const proto = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  );
+  if (!proto?.get || !proto.set) return;
+
+  Object.defineProperty(node, "value", {
+    get() {
+      return proto.get!.call(this);
+    },
+    set(v: string) {
+      if (composingRef.current) return;
+      proto.set!.call(this, v);
+    },
+    configurable: true,
+  });
+  typedNode.__budnImeSafeValueSetter = true;
 }

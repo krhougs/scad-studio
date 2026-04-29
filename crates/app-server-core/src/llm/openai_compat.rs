@@ -135,16 +135,30 @@ fn serialize_message(msg: &LlmMessage) -> serde_json::Value {
         } else {
             serde_json::Value::String(msg.content.clone())
         };
-        return serde_json::json!({
+        let mut value = serde_json::json!({
             "role": msg.role,
             "content": content,
             "tool_calls": tc_json,
         });
+        append_reasoning_content(&mut value, msg);
+        return value;
     }
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "role": msg.role,
         "content": msg.content,
-    })
+    });
+    append_reasoning_content(&mut value, msg);
+    value
+}
+
+fn append_reasoning_content(value: &mut serde_json::Value, msg: &LlmMessage) {
+    if msg.role != "assistant" {
+        return;
+    }
+    let Some(reasoning_content) = &msg.reasoning_content else {
+        return;
+    };
+    value["reasoning_content"] = serde_json::Value::String(reasoning_content.clone());
 }
 
 pub fn read_sse_stream(
@@ -152,6 +166,7 @@ pub fn read_sse_stream(
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<LlmResponse, LlmError> {
     let mut content = String::new();
+    let mut reasoning_content = String::new();
     let mut tool_acc = ToolCallAccumulator::new();
 
     for line_result in reader.lines() {
@@ -177,6 +192,12 @@ pub fn read_sse_stream(
             continue;
         };
 
+        if let Some(text) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+            if !text.is_empty() {
+                reasoning_content.push_str(text);
+            }
+        }
+
         if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
             if !text.is_empty() {
                 content.push_str(text);
@@ -193,8 +214,13 @@ pub fn read_sse_stream(
 
     Ok(LlmResponse {
         content,
+        reasoning_content: non_empty_string(reasoning_content),
         tool_calls: tool_acc.finish(),
     })
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn first_choice_delta(value: &serde_json::Value) -> Option<&serde_json::Value> {

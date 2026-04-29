@@ -1,6 +1,7 @@
-// Studio web dev 启动器：websocket-host + Vite dev。
+// Studio web dev 启动器：websocket-host + WASM watch + Vite dev。
 
 import path from "node:path";
+import { watch } from "node:fs";
 import { launchWebsocketHost, REPO_ROOT, resolveWsUrl } from "./run_websocket_host";
 
 type Args = {
@@ -53,10 +54,111 @@ function printUsage(code: number): never {
   process.exit(code);
 }
 
+const WASM_WATCH_DIRS = [
+  path.join(REPO_ROOT, "crates", "app-server-protocol", "src"),
+  path.join(REPO_ROOT, "crates", "app-server-protocol-wasm", "src"),
+  path.join(REPO_ROOT, "crates", "studio-web-wasm", "src"),
+  path.join(REPO_ROOT, "crates", "studio-common", "src"),
+  path.join(REPO_ROOT, "crates", "scad-scene", "src"),
+];
+
+function startWasmWatch(): { stop: () => void; initialBuild: Promise<void> } {
+  let building = false;
+  let pending = false;
+  let resolveInitial: () => void;
+  const initialBuild = new Promise<void>((resolve) => {
+    resolveInitial = resolve;
+  });
+
+  const buildStudioWebWasm = async (): Promise<boolean> => {
+    const cargo = Bun.spawn(
+      ["cargo", "build", "-p", "studio-web-wasm", "--target", "wasm32-unknown-unknown", "--release"],
+      { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit", stdin: "ignore" },
+    );
+    if ((await cargo.exited) !== 0) return false;
+    const bindgen = Bun.spawn(
+      [
+        "wasm-bindgen",
+        path.join(REPO_ROOT, "target", "wasm32-unknown-unknown", "release", "studio_web_wasm.wasm"),
+        "--target", "bundler",
+        "--out-dir", path.join(REPO_ROOT, "packages", "studio-web-wasm", "generated"),
+        "--out-name", "studio_web_wasm",
+      ],
+      { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit", stdin: "ignore" },
+    );
+    return (await bindgen.exited) === 0;
+  };
+
+  const build = async () => {
+    if (building) {
+      pending = true;
+      return;
+    }
+    building = true;
+    console.log("[wasm-watch] rebuilding wasm packages...");
+    try {
+      const protocolProc = Bun.spawn(
+        ["bun", "run", "protocol:build"],
+        { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit", stdin: "ignore" },
+      );
+      const [protocolCode, studioOk] = await Promise.all([
+        protocolProc.exited,
+        buildStudioWebWasm(),
+      ]);
+      if (protocolCode === 0 && studioOk) {
+        console.log("[wasm-watch] build complete");
+      } else {
+        console.error("[wasm-watch] build failed (protocol=" + protocolCode + " studio-web=" + studioOk + ")");
+      }
+    } catch (err) {
+      console.error("[wasm-watch] build error:", err instanceof Error ? err.message : String(err));
+    } finally {
+      building = false;
+      resolveInitial();
+      if (pending) {
+        pending = false;
+        build();
+      }
+    }
+  };
+
+  // 初始构建
+  build();
+
+  const watchers = WASM_WATCH_DIRS.map((dir) => {
+    try {
+      return watch(dir, { recursive: true }, (_event, filename) => {
+        if (filename && filename.endsWith(".rs")) {
+          build();
+        }
+      });
+    } catch {
+      console.warn(`[wasm-watch] cannot watch ${dir}`);
+      return null;
+    }
+  });
+
+  console.log("[wasm-watch] watching for Rust source changes");
+
+  return {
+    stop: () => {
+      for (const w of watchers) {
+        try {
+          w?.close();
+        } catch {}
+      }
+    },
+    initialBuild,
+  };
+}
+
 async function main() {
   const args = parseArgs(Bun.argv.slice(2));
   const parsed = resolveWsUrl(args.wsUrl);
   const directWsOverride = Boolean(args.wsUrl ?? process.env.SCAD_STUDIO_WS_URL);
+
+  const wasmWatch = startWasmWatch();
+  await wasmWatch.initialBuild;
 
   console.log(`[studio-web] starting websocket-host on ${parsed.bind}`);
   const host = await launchWebsocketHost({
@@ -96,6 +198,7 @@ async function main() {
   );
 
   const shutdown = async () => {
+    wasmWatch.stop();
     try {
       vite.kill();
     } catch {}
