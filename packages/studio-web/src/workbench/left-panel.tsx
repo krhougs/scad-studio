@@ -21,6 +21,7 @@ type LeftPanelProps = {
   onOpenPath: (path: unknown) => void;
   onExpandDirectory: (entry: WorkspaceEntry) => void;
   onCollapseDirectory: (entry: WorkspaceEntry) => void;
+  onRefreshFiles: () => void;
   logEntries: LogEntry[];
   client: WasmClient | null;
   snapshot: ChatSnapshot | null;
@@ -42,6 +43,7 @@ export function LeftPanel(props: LeftPanelProps) {
     onOpenPath,
     onExpandDirectory,
     onCollapseDirectory,
+    onRefreshFiles,
     logEntries,
     client,
     snapshot,
@@ -75,6 +77,7 @@ export function LeftPanel(props: LeftPanelProps) {
           onRequestPreview={onRequestPreview}
           onExpandDirectory={onExpandDirectory}
           onCollapseDirectory={onCollapseDirectory}
+          onRefreshFiles={onRefreshFiles}
         />
       ) : null}
       {activePanel === "settings" ? (

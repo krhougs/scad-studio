@@ -1,3 +1,4 @@
+import { ArrowClockwise } from "@phosphor-icons/react";
 import { WorkspaceTree, type WorkspaceDirectoryNode, type WorkspaceEntry } from "./workspace-tree";
 import { SidePanelHeader } from "./side-panel-header";
 
@@ -11,6 +12,7 @@ type FilesPanelProps = {
   onRequestPreview: (entry: WorkspaceEntry) => void;
   onExpandDirectory: (entry: WorkspaceEntry) => void;
   onCollapseDirectory: (entry: WorkspaceEntry) => void;
+  onRefreshFiles: () => void;
 };
 
 export function FilesPanel(props: FilesPanelProps) {
@@ -24,6 +26,7 @@ export function FilesPanel(props: FilesPanelProps) {
     onRequestPreview,
     onExpandDirectory,
     onCollapseDirectory,
+    onRefreshFiles,
   } = props;
   return (
     <section
@@ -31,7 +34,21 @@ export function FilesPanel(props: FilesPanelProps) {
       data-testid="left-panel-files"
       aria-label="files"
     >
-      <SidePanelHeader title="files" meta={rootName} />
+      <SidePanelHeader
+        title="files"
+        meta={rootName}
+        actions={
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm side-panel__icon-button"
+            onClick={onRefreshFiles}
+            aria-label="refresh files"
+            title="refresh files"
+          >
+            <ArrowClockwise size={13} weight="bold" aria-hidden="true" />
+          </button>
+        }
+      />
       <div className="side-panel__body">
         {!entriesLoaded ? (
           <div className="tree">

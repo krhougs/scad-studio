@@ -29,8 +29,25 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--ink-4s);
+}
+
+.side-panel__title-group {
+  min-width: 0;
+}
+
+.side-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.side-panel__icon-button {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
 }
 
 .side-panel__head .title {

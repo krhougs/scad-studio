@@ -333,6 +333,13 @@ export function WorkbenchLayout() {
     [setExpandedBoth],
   );
 
+  const handleRefreshFiles = useCallback(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    refreshRootListing(client);
+    refreshExpandedDirectories(client);
+  }, [refreshExpandedDirectories, refreshRootListing]);
+
   const handleExpandDirectory = useCallback(
     (entry: WorkspaceEntry) => {
       if (entry.isOperable === false || entry.pathError) return;
@@ -678,6 +685,7 @@ export function WorkbenchLayout() {
         onOpenPath={handleOpenPath}
         onExpandDirectory={handleExpandDirectory}
         onCollapseDirectory={handleCollapseDirectory}
+        onRefreshFiles={handleRefreshFiles}
         logEntries={log.entries}
         client={client}
         snapshot={snapshot as ChatSnapshot | null}

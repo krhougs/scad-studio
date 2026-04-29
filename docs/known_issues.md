@@ -1,5 +1,23 @@
 # 已知问题记录
 
+## 2026-04-29 17:55:58: Web 文件列表缺少手动刷新入口
+
+- 状态：已处理，`prompt-archives/2026042903-web-agent-chat-ui-fixes/plan-00.md` Phase 3 已增加 Files panel 刷新按钮。
+- 来源：用户反馈“文件列表缺一个刷新按钮”。
+- 原因：
+  - Web 工作台已有 watch event 自动刷新目录树，也已有 `refreshRootListing` 与 `refreshExpandedDirectories` 两条刷新函数。
+  - Files panel 没有暴露手动触发入口，用户在 watch 事件延迟、外部工具写入或需要主动重拉目录时只能等待自动刷新。
+- 影响范围：
+  - Web Files panel 的 root 文件列表和已展开目录列表缺少手动刷新能力。
+  - 不影响 app server protocol；刷新仍应通过现有 `workspace.list` 请求完成。
+- 可能的解法：
+  - 在 Files panel header 增加刷新按钮。
+  - 点击后复用 Workbench 现有 root listing 与 expanded directories 刷新函数，不直接读取本地文件系统。
+- 当前处理方式：
+  - Files panel header 已增加可访问名称为 `refresh files` 的图标按钮。
+  - 点击按钮会通过 Workbench 现有 `workspace.list` 链路重新请求 root 与已展开目录。
+  - 已增加单元测试覆盖按钮渲染与点击回调。
+
 ## 2026-04-29 13:20:30: 旧 confirmation 主流程与 Agent / Plan 双模式冲突
 
 - 状态：已处理，`prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` 已覆盖文档、protocol、后端、Web Chat 和 Markdown preview 的迁移。
