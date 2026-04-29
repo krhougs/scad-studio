@@ -54,28 +54,32 @@ pub fn save_cad_plan_input_schema() -> Value {
     object_schema(
         json!({
             "title": string_schema("Plan title."),
+            "request": string_schema("Original user request and relevant context."),
             "target_ref": string_schema("Primary visible target ref."),
-            "resolved_target": string_schema("Workspace target path."),
+            "target_path": string_schema("Workspace target path."),
+            "target_type": {"type": "string", "enum": ["part", "component", "assembly"]},
             "affected_files": string_array_schema(),
             "new_files": string_array_schema(),
             "export_targets": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Runner output paths: outputs/{resolved_target stem}.step, .stl, or .3mf."
+                "description": "Runner output paths: outputs/{target_path stem}.step, .stl, or .3mf."
             },
             "strategy": string_schema("CadQuery strategy."),
             "risks": string_array_schema(),
             "acceptance": string_array_schema(),
-            "execution_boundary": string_schema("Confirmed execution boundary.")
+            "execution_scope": string_schema("Planned execution scope.")
         }),
         &[
             "title",
+            "request",
             "target_ref",
-            "resolved_target",
+            "target_path",
+            "target_type",
             "affected_files",
             "export_targets",
             "strategy",
-            "execution_boundary",
+            "execution_scope",
         ],
     )
 }
@@ -222,29 +226,35 @@ pub fn resolve_ref_success_schema() -> Value {
 pub fn save_cad_plan_success_schema() -> Value {
     success_schema(
         json!({
-            "plan_ref": string_schema("Plan path under plans/."),
-            "display_path": string_schema("User-visible path."),
+            "plan_id": string_schema("Plan package id."),
+            "plan_ref": string_schema("Plan package directory under plans/."),
+            "request_path": string_schema("Workspace path to request.md."),
+            "plan_path": string_schema("Workspace path to plan.md."),
+            "result_path": string_schema("Workspace path to plan-result.md."),
             "hash": string_schema("Stable content hash."),
             "summary": string_schema("Short plan summary."),
-            "target_ref": string_schema("Visible target ref."),
             "target_path": string_schema("Resolved CadQuery target path."),
+            "target_type": {"type": "string", "enum": ["part", "component", "assembly"]},
             "affected_files": string_array_schema(),
             "new_files": string_array_schema(),
             "export_targets": string_array_schema(),
-            "execution_boundary": string_schema("Confirmed execution boundary."),
+            "plan_status": string_schema("Plan package status."),
             "run_id": nullable_string_schema()
         }),
         &[
+            "plan_id",
             "plan_ref",
-            "display_path",
+            "request_path",
+            "plan_path",
+            "result_path",
             "hash",
             "summary",
-            "target_ref",
             "target_path",
+            "target_type",
             "affected_files",
             "new_files",
             "export_targets",
-            "execution_boundary",
+            "plan_status",
             "run_id",
         ],
     )

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use app_server_core::ParsedPlanPackage;
 use app_server_protocol::{
     AgentCadQueryConfirmation, CadQueryObjectKind, ChatMessageRecord, PathHandle, ProtocolError,
     ProtocolErrorCode, SelectionUpdateRequest, WorkspaceId,
@@ -65,6 +66,14 @@ pub fn validate_saved_plan_confirmation(
     Ok(())
 }
 
+pub fn parse_plan_package(
+    workspace_root: &Path,
+    plan_ref: &PathHandle,
+) -> Result<ParsedPlanPackage, ProtocolError> {
+    app_server_core::parse_plan_package(workspace_root, &plan_ref.display_path())
+        .map_err(|error| ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.message))
+}
+
 fn saved_plan_from_message(message: &ChatMessageRecord, run_id: &str) -> Option<SavedCadPlan> {
     let result = message.tool_result.as_ref()?;
     if result.tool_name != "save_cad_plan" {
@@ -75,9 +84,12 @@ fn saved_plan_from_message(message: &ChatMessageRecord, run_id: &str) -> Option<
         return None;
     }
     let target_path = string_field(&value, "target_path")?;
+    let target_type = string_field(&value, "target_type")
+        .and_then(|value| target_type_from_label(&value))
+        .unwrap_or_else(|| target_type_for_path(&target_path));
     Some(SavedCadPlan {
         plan_ref: string_field(&value, "plan_ref")?,
-        target_type: target_type_for_path(&target_path),
+        target_type,
         affected_paths: string_array_field(&value, "affected_files")
             .filter(|paths| !paths.is_empty())
             .unwrap_or_else(|| vec![target_path.clone()]),
@@ -86,6 +98,15 @@ fn saved_plan_from_message(message: &ChatMessageRecord, run_id: &str) -> Option<
         description: string_field(&value, "summary").unwrap_or_default(),
         target_path,
     })
+}
+
+fn target_type_from_label(value: &str) -> Option<CadQueryObjectKind> {
+    match value {
+        "assembly" => Some(CadQueryObjectKind::Assembly),
+        "component" => Some(CadQueryObjectKind::Component),
+        "part" => Some(CadQueryObjectKind::Part),
+        _ => None,
+    }
 }
 
 fn same_paths(handles: &[PathHandle], paths: &[String]) -> bool {

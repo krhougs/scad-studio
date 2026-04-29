@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，并通过独立 subagent review；后续 Phase 自动继续执行。
+正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，并均通过独立 subagent review；后续 Phase 自动继续执行。
 
 ## 前置提交
 
@@ -14,7 +14,7 @@
 |---|---|---|
 | Phase 1 — 文档与产品语义更新 | 已完成 | 已统一 Agent / Plan 双模式文档、运行时 system prompt、tool contract、Ref PRD、Chat 交互设计和 known issues；旧 confirmation 术语仅保留在历史 / deprecated / known issues 语境 |
 | Phase 2 — Protocol 与共享数据模型收敛 | 已完成 | 已将 Agent 请求协议收敛为 Agent / Plan 双模式、加入 plan package ref / saved event、提升 protocol version 到 v4，并让旧 confirmation 命令仅保留 deprecated 兼容路径 |
-| Phase 3 — 后端 Plan Package 存储与解析 | 未开始 | 待执行 |
+| Phase 3 — 后端 Plan Package 存储与解析 | 已完成 | 已将 `save_cad_plan` 改为 workspace plan package 三文件结构，新增 plan package parser、执行范围解析、legacy plan 只读展示和 `get_project_context` plan package 列表 |
 | Phase 4 — 后端 Agent Mode 执行模型 | 未开始 | 待执行 |
 | Phase 5 — Web Chat 模式简化 | 未开始 | 待执行 |
 | Phase 6 — Markdown Plan Preview 执行入口 | 未开始 | 待执行 |
@@ -82,3 +82,25 @@
 - 遗留问题：
   - Phase 2 只完成协议与共享数据模型收敛；plan package 的实际创建 / 解析由 Phase 3 完成。
   - core 内部 `confirmation_scope` / `requires_confirmation` 仍会在 Phase 4 中替换为 Agent mode execution scope 和 path policy。
+
+### Phase 3 — 后端 Plan Package 存储与解析
+
+- 完成情况：
+  - 新增 `app_server_core::agent::plan_package`，将 `save_cad_plan` 从单文件 `plans/*.md` 改为创建 `plans/YYYYmmddnn-slug/{request.md,plan.md,plan-result.md}`，并返回 `plan_id`、`plan_ref`、`request_path`、`plan_path` 和 `result_path`。
+  - 新增当天 plan id 分配和 slug 规范化逻辑：扫描同日期已有 plan package，按最大序号递增，slug 只保留 ASCII 小写字母、数字和连字符，无法生成时使用 `cad-plan`。
+  - 为 `plan.md` 增加机器可解析 front matter，记录 `target_path`、`target_type`、`affected_files`、`new_files`、`export_targets`、`status` 和 `created_at`，并初始化 `plan-result.md` 为 `status: pending`。
+  - 新增 `parse_plan_package()`，校验 plan package 三文件完整性、拒绝 symlink `plans/`、拒绝 workspace escape、校验 target / affected / new / export 路径，并返回规范化后的执行范围。
+  - 更新 `get_project_context`，返回 `kind: plan_package` 的 plan 列表和 `kind: legacy_plan` 的根目录旧版单文件计划；legacy plan 只读展示，不作为可执行 plan package。
+  - 更新 `save_cad_plan` tool schema、registry 测试和语义导出，使 Plan mode 的唯一写入为创建 plan package；普通文件工具继续禁止直接改写 CadQuery `.py` 模型源。
+- Review：
+  - 第一轮 Phase 3 review 发现三个阻塞问题：parser / project context 未拒绝 symlink `plans/` 父目录、parser 返回未规范化 front matter 路径、`get_project_context` 缺少 `updated_ms`。已补充实现和测试覆盖。
+  - 第二轮 Phase 3 review 未发现阻塞项；review 确认 symlink 拒绝、legacy plan 只读展示、执行范围规范化返回、`updated_ms` 输出和 `.py` 普通写入边界符合 Phase 3 验收标准。
+- 验证：
+  - `cargo fmt --check -p app-server-core -p app-server-host`：通过。
+  - `cargo test -p app-server-host --test plan_extraction_tests parse_plan_package`：通过，覆盖 5 个 parser 测试。
+  - `cargo test -p app-server-core --test agent_tool_tests get_project_context`：通过，覆盖 4 个 project context 测试。
+  - `cargo test -p app-server-core --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `cargo test -p app-server-host --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `git diff --check`：通过。
+- 遗留问题：
+  - Phase 3 仅完成 plan package 创建、展示和解析；Phase 4 将使用 parser 输出替换旧 `confirmation_scope` / `requires_confirmation`，并在 Agent mode 执行 plan 后更新 `plan-result.md`。

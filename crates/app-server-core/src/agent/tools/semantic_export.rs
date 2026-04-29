@@ -5,15 +5,15 @@ use crate::llm::LlmToolCall;
 use super::tool_error_json;
 
 pub(super) fn validate_plan_export_targets(
-    resolved_target: &str,
+    target_path: &str,
     export_targets: &[String],
     call: &LlmToolCall,
 ) -> Result<(), String> {
     for target in export_targets {
-        if !matches_runner_export_target(resolved_target, target) {
+        if !matches_runner_export_target(target_path, target) {
             return Err(tool_error_json(
                 call,
-                "export_targets must match runner output names for resolved_target",
+                "export_targets must match runner output names for target_path",
                 "invalid_arguments",
             ));
         }
@@ -21,14 +21,14 @@ pub(super) fn validate_plan_export_targets(
     Ok(())
 }
 
-fn matches_runner_export_target(resolved_target: &str, export_target: &str) -> bool {
+fn matches_runner_export_target(target_path: &str, export_target: &str) -> bool {
     let Some(extension) = runner_export_extension(export_target) else {
         return false;
     };
     export_target
         == format!(
             "outputs/{}.{}",
-            cadquery_target_stem(resolved_target),
+            cadquery_target_stem(target_path),
             extension
         )
 }

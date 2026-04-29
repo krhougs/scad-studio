@@ -52,6 +52,25 @@ fn test_hash(text: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
 }
 
+fn save_plan_call_json(title: &str) -> String {
+    format!(
+        r#"{{
+            "title":"{title}",
+            "request":"Add three rounded ventilation slots to the selected top lid.",
+            "target_ref":"@part[top_lid]",
+            "target_path":"parts/top_lid.py",
+            "target_type":"part",
+            "affected_files":["parts/top_lid.py"],
+            "new_files":[],
+            "export_targets":["outputs/top_lid.step"],
+            "strategy":"Cut three rounded vent slots into the top face.",
+            "risks":["Maintain wall thickness"],
+            "acceptance":["STEP export builds"],
+            "execution_scope":"Only Agent mode CadQuery execution may modify parts/top_lid.py."
+        }}"#
+    )
+}
+
 #[test]
 fn agent_tool_definitions_returns_expected_tools() {
     let defs = agent_tool_definitions_for_mode(AgentMode::Agent);
@@ -224,15 +243,17 @@ fn workspace_tool_executor_save_cad_plan_writes_structured_markdown_under_plans(
             "save_cad_plan",
             r#"{
                 "title":"Add lid vents",
+                "request":"Add three rounded ventilation slots to the selected top lid.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
-                "new_files":["plans/add-lid-vents-notes.md"],
+                "new_files":[],
                 "export_targets":["outputs/top_lid.step"],
                 "strategy":"Cut three rounded vent slots into the top face.",
                 "risks":["Maintain wall thickness"],
                 "acceptance":["STEP export builds"],
-                "execution_boundary":"Only Agent mode CadQuery execution may modify parts/top_lid.py."
+                "execution_scope":"Only Agent mode CadQuery execution may modify parts/top_lid.py."
             }"#,
         ),
         &context,
@@ -240,8 +261,14 @@ fn workspace_tool_executor_save_cad_plan_writes_structured_markdown_under_plans(
 
     assert_eq!(result["status"], "ok");
     assert_eq!(result["tool"], "save_cad_plan");
-    assert_eq!(result["target_ref"], "@part[top_lid]");
+    assert!(
+        result["plan_id"]
+            .as_str()
+            .unwrap()
+            .ends_with("-add-lid-vents")
+    );
     assert_eq!(result["target_path"], "parts/top_lid.py");
+    assert_eq!(result["target_type"], "part");
     assert_eq!(
         result["affected_files"],
         serde_json::json!(["parts/top_lid.py"])
@@ -254,15 +281,58 @@ fn workspace_tool_executor_save_cad_plan_writes_structured_markdown_under_plans(
     assert!(result["hash"].as_str().unwrap().starts_with("sha256:"));
 
     let plan_ref = result["plan_ref"].as_str().unwrap();
-    assert!(plan_ref.starts_with("plans/add-lid-vents"));
-    assert!(plan_ref.ends_with(".md"));
-    let markdown = std::fs::read_to_string(dir.path().join(plan_ref)).unwrap();
-    assert!(markdown.contains("# Add lid vents"));
-    assert!(markdown.contains("Target Ref"));
-    assert!(markdown.contains("@part[top_lid]"));
-    assert!(markdown.contains("parts/top_lid.py"));
-    assert!(markdown.contains("outputs/top_lid.step"));
-    assert!(markdown.contains("Only Agent mode CadQuery execution may modify parts/top_lid.py."));
+    assert!(plan_ref.starts_with("plans/"));
+    assert!(plan_ref.ends_with("-add-lid-vents"));
+    assert_eq!(result["request_path"], format!("{plan_ref}/request.md"));
+    assert_eq!(result["plan_path"], format!("{plan_ref}/plan.md"));
+    assert_eq!(result["result_path"], format!("{plan_ref}/plan-result.md"));
+    assert_eq!(result["plan_status"], "planned");
+
+    let request =
+        std::fs::read_to_string(dir.path().join(format!("{plan_ref}/request.md"))).unwrap();
+    let plan = std::fs::read_to_string(dir.path().join(format!("{plan_ref}/plan.md"))).unwrap();
+    let plan_result =
+        std::fs::read_to_string(dir.path().join(format!("{plan_ref}/plan-result.md"))).unwrap();
+    assert!(request.contains("Add three rounded ventilation slots"));
+    assert!(plan.contains("plan_id:"));
+    assert!(plan.contains("mode: plan"));
+    assert!(plan.contains("target_path: parts/top_lid.py"));
+    assert!(plan.contains("target_type: part"));
+    assert!(plan.contains("status: planned"));
+    assert!(plan.contains("# CAD Plan: Add lid vents"));
+    assert!(plan.contains("outputs/top_lid.step"));
+    assert!(plan.contains("Only Agent mode CadQuery execution may modify parts/top_lid.py."));
+    assert!(plan_result.starts_with("status: pending"));
+}
+
+#[test]
+fn workspace_tool_executor_save_cad_plan_allocates_next_daily_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
+
+    let first = tool_json_with_context(
+        &executor,
+        &call("save_cad_plan", &save_plan_call_json("Add lid vents")),
+        &context,
+    );
+    let second = tool_json_with_context(
+        &executor,
+        &call("save_cad_plan", &save_plan_call_json("Add lid vents")),
+        &context,
+    );
+
+    assert_eq!(first["status"], "ok");
+    assert_eq!(second["status"], "ok");
+    let first_id = first["plan_id"].as_str().unwrap();
+    let second_id = second["plan_id"].as_str().unwrap();
+    assert!(first_id.ends_with("00-add-lid-vents"));
+    assert!(second_id.ends_with("01-add-lid-vents"));
+    assert!(
+        dir.path()
+            .join(second["plan_path"].as_str().unwrap())
+            .is_file()
+    );
 }
 
 #[test]
@@ -277,12 +347,14 @@ fn workspace_tool_executor_save_cad_plan_rejects_unsafe_scope_paths() {
             "save_cad_plan",
             r#"{
                 "title":"Unsafe plan",
+                "request":"Unsafe plan request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["../secret.py"],
                 "export_targets":["outputs/top_lid.step"],
                 "strategy":"No write should happen.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -305,11 +377,13 @@ fn workspace_tool_executor_save_cad_plan_requires_export_targets() {
             "save_cad_plan",
             r#"{
                 "title":"Missing export",
+                "request":"Missing export request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -338,12 +412,14 @@ fn workspace_tool_executor_save_cad_plan_requires_target_in_confirmed_scope() {
             "save_cad_plan",
             r#"{
                 "title":"Wrong scope",
+                "request":"Wrong scope request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/base.py"],
                 "export_targets":["outputs/top_lid.step"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -351,12 +427,7 @@ fn workspace_tool_executor_save_cad_plan_requires_target_in_confirmed_scope() {
 
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "invalid_arguments");
-    assert!(
-        result["message"]
-            .as_str()
-            .unwrap()
-            .contains("resolved_target")
-    );
+    assert!(result["message"].as_str().unwrap().contains("target_path"));
     assert!(!dir.path().join("plans").exists());
 }
 
@@ -372,12 +443,14 @@ fn workspace_tool_executor_save_cad_plan_rejects_unknown_export_target_extension
             "save_cad_plan",
             r#"{
                 "title":"Unknown export",
+                "request":"Unknown export request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
                 "export_targets":["outputs/top_lid.obj"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -406,12 +479,14 @@ fn workspace_tool_executor_save_cad_plan_requires_runner_export_filename() {
             "save_cad_plan",
             r#"{
                 "title":"Add lid vents",
+                "request":"Add lid vents request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
                 "export_targets":["outputs/custom.step"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -448,21 +523,27 @@ fn workspace_tool_executor_save_cad_plan_does_not_write_through_symlink_file() {
             "save_cad_plan",
             r#"{
                 "title":"Add lid vents",
+                "request":"Add lid vents request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
                 "export_targets":["outputs/top_lid.step"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
     );
 
     assert_eq!(result["status"], "ok");
-    assert_eq!(result["plan_ref"], "plans/add-lid-vents-2.md");
+    assert_ne!(result["plan_ref"], "plans/add-lid-vents.md");
     assert!(!outside.path().join("escaped.md").exists());
-    assert!(dir.path().join("plans/add-lid-vents-2.md").is_file());
+    assert!(
+        dir.path()
+            .join(result["plan_ref"].as_str().unwrap())
+            .is_dir()
+    );
 }
 
 #[test]
@@ -477,11 +558,13 @@ fn workspace_tool_executor_direct_call_denies_save_plan_outside_plan_mode() {
             "save_cad_plan",
             r#"{
                 "title":"Add lid vents",
+                "request":"Add lid vents request.",
                 "target_ref":"@part[top_lid]",
-                "resolved_target":"parts/top_lid.py",
+                "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
                 "strategy":"Cut three rounded vent slots.",
-                "execution_boundary":"Plan only."
+                "execution_scope":"Plan only."
             }"#,
         ),
         &context,
@@ -2231,6 +2314,39 @@ fn workspace_tool_executor_get_project_context_summarizes_cadquery_objects() {
     std::fs::write(dir.path().join("parts/lid.py"), "def build(): pass\n").unwrap();
     std::fs::write(dir.path().join("parts/lid.md"), "# lid\n").unwrap();
     std::fs::write(dir.path().join("plans/lid-plan.md"), "# plan\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("plans/2026042900-add-lid-vents")).unwrap();
+    std::fs::write(
+        dir.path().join("plans/2026042900-add-lid-vents/request.md"),
+        "# Request\n\nAdd lid vents.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("plans/2026042900-add-lid-vents/plan.md"),
+        r#"---
+plan_id: 2026042900-add-lid-vents
+mode: plan
+target_path: parts/lid.py
+target_type: part
+affected_files:
+  - parts/lid.py
+new_files: []
+export_targets:
+  - outputs/lid.step
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: Add lid vents
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path()
+            .join("plans/2026042900-add-lid-vents/plan-result.md"),
+        "status: pending\n",
+    )
+    .unwrap();
     std::fs::write(dir.path().join("chats/main.jsonl"), "{}\n").unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
@@ -2239,8 +2355,52 @@ fn workspace_tool_executor_get_project_context_summarizes_cadquery_objects() {
     assert_eq!(result["objects"][0]["object_type"], "part");
     assert_eq!(result["objects"][0]["source_path"], "parts/lid.py");
     assert_eq!(result["objects"][0]["paired_doc_path"], "parts/lid.md");
-    assert_eq!(result["plans"][0]["path"], "plans/lid-plan.md");
+    let plans = result["plans"].as_array().unwrap();
+    let package = plans
+        .iter()
+        .find(|plan| plan["kind"] == "plan_package")
+        .unwrap();
+    assert_eq!(package["plan_id"], "2026042900-add-lid-vents");
+    assert_eq!(package["plan_ref"], "plans/2026042900-add-lid-vents");
+    assert_eq!(package["title"], "Add lid vents");
+    assert_eq!(package["status"], "planned");
+    assert_eq!(package["target_path"], "parts/lid.py");
+    assert_eq!(package["target_type"], "part");
+    assert!(package["updated_ms"].is_number());
+    assert_eq!(
+        package["result_path"],
+        "plans/2026042900-add-lid-vents/plan-result.md"
+    );
+    let legacy = plans
+        .iter()
+        .find(|plan| plan["kind"] == "legacy_plan")
+        .unwrap();
+    assert_eq!(legacy["path"], "plans/lid-plan.md");
+    assert!(legacy["updated_ms"].is_number());
     assert_eq!(result["chats"][0]["path"], "chats/main.jsonl");
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_get_project_context_does_not_follow_plans_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("plans/2026042900-external")).unwrap();
+    std::fs::write(outside.path().join("plans/legacy.md"), "# leaked\n").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("plans"), dir.path().join("plans")).unwrap();
+
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let result = tool_json(&executor, &call("get_project_context", "{}"));
+
+    assert_eq!(result["status"], "ok");
+    assert!(result["plans"].as_array().unwrap().is_empty());
+    assert!(
+        result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("symlink"))
+    );
 }
 
 #[cfg(unix)]
@@ -3703,12 +3863,14 @@ fn registry_tool_loop_allows_save_cad_plan_declared_export_targets() {
                 function_name: "save_cad_plan".into(),
                 arguments: concat!(
                     "{\"title\":\"Add lid vents\",",
+                    "\"request\":\"Add lid vents request.\",",
                     "\"target_ref\":\"@part[top_lid]\",",
-                    "\"resolved_target\":\"parts/top_lid.py\",",
+                    "\"target_path\":\"parts/top_lid.py\",",
+                    "\"target_type\":\"part\",",
                     "\"affected_files\":[\"parts/top_lid.py\"],",
                     "\"export_targets\":[\"outputs/top_lid.step\"],",
                     "\"strategy\":\"Cut three rounded vent slots.\",",
-                    "\"execution_boundary\":\"Plan only.\"}"
+                    "\"execution_scope\":\"Plan only.\"}"
                 )
                 .into(),
             }],
@@ -3740,7 +3902,11 @@ fn registry_tool_loop_allows_save_cad_plan_declared_export_targets() {
         parsed["export_targets"],
         serde_json::json!(["outputs/top_lid.step"])
     );
-    assert!(dir.path().join("plans/add-lid-vents.md").is_file());
+    assert!(
+        dir.path()
+            .join(parsed["plan_path"].as_str().unwrap())
+            .is_file()
+    );
 }
 
 #[test]

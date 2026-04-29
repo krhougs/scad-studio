@@ -32,7 +32,7 @@ pub(super) fn validate_tool_path_policy(
     let parsed: serde_json::Value = serde_json::from_str(args).map_err(|error| {
         ToolPolicyError::invalid_arguments(format!("invalid tool arguments: {error}"))
     })?;
-    let path_args = collect_normalized_path_args(&parsed, policy)?;
+    let path_args = collect_normalized_path_args(tool_name, &parsed, policy)?;
     validate_copy_model_boundary(tool_name, &path_args)?;
     for (field, normalized) in path_args {
         validate_cadquery_model_file_policy(&field, &normalized, policy)?;
@@ -93,15 +93,26 @@ fn collect_normalized_workspace_path_args(
 }
 
 fn collect_normalized_path_args(
+    tool_name: &str,
     parsed: &serde_json::Value,
     policy: &AgentToolPathPolicy,
 ) -> Result<Vec<(&'static str, String)>, ToolPolicyError> {
-    collect_workspace_path_args(parsed)
+    collect_workspace_path_args_for_tool(tool_name, parsed)
         .into_iter()
         .map(|(field, path)| {
             let normalized = validate_one_tool_path(&path, policy)?;
             Ok((field, normalized))
         })
+        .collect()
+}
+
+fn collect_workspace_path_args_for_tool(
+    tool_name: &str,
+    parsed: &serde_json::Value,
+) -> Vec<(&'static str, String)> {
+    collect_workspace_path_args(parsed)
+        .into_iter()
+        .filter(|(field, _)| !(tool_name == "save_cad_plan" && *field == "target_path"))
         .collect()
 }
 

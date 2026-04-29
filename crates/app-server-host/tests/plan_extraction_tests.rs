@@ -1,6 +1,6 @@
 use app_server_host::{
     export_handle_for, extract_object_name, extract_plan_from_json_block,
-    extract_plan_from_selection, extract_plan_proposal, latest_saved_cad_plan,
+    extract_plan_from_selection, extract_plan_proposal, latest_saved_cad_plan, parse_plan_package,
     validate_saved_plan_confirmation,
 };
 use app_server_protocol::{
@@ -107,30 +107,220 @@ fn latest_saved_cad_plan_extracts_plan_ref_and_confirm_scope() {
                 "status":"ok",
                 "tool":"save_cad_plan",
                 "run_id":"run-2",
-                "plan_ref":"plans/add-lid-vents.md",
+                "plan_id":"2026042900-add-lid-vents",
+                "plan_ref":"plans/2026042900-add-lid-vents",
+                "request_path":"plans/2026042900-add-lid-vents/request.md",
+                "plan_path":"plans/2026042900-add-lid-vents/plan.md",
+                "result_path":"plans/2026042900-add-lid-vents/plan-result.md",
                 "target_ref":"@part[top_lid]",
                 "target_path":"parts/top_lid.py",
+                "target_type":"part",
                 "affected_files":["parts/top_lid.py"],
-                "new_files":["plans/add-lid-vents-notes.md"],
+                "new_files":[],
                 "export_targets":["outputs/top_lid.step"],
                 "summary":"Cut three rounded vent slots into the top face.",
-                "execution_boundary":"Only CadQuery Execute may modify parts/top_lid.py."
+                "plan_status":"planned"
             }"#,
         ),
     ];
 
     let saved = latest_saved_cad_plan(&messages, "run-2").expect("saved plan should parse");
 
-    assert_eq!(saved.plan_ref, "plans/add-lid-vents.md");
+    assert_eq!(saved.plan_ref, "plans/2026042900-add-lid-vents");
     assert_eq!(saved.target_path, "parts/top_lid.py");
     assert_eq!(saved.target_type, CadQueryObjectKind::Part);
     assert_eq!(saved.affected_paths, vec!["parts/top_lid.py"]);
-    assert_eq!(saved.new_paths, vec!["plans/add-lid-vents-notes.md"]);
+    assert!(saved.new_paths.is_empty());
     assert_eq!(saved.export_targets, vec!["outputs/top_lid.step"]);
     assert_eq!(
         saved.description,
         "Cut three rounded vent slots into the top face."
     );
+}
+
+#[test]
+fn parse_plan_package_extracts_execution_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    write_plan_package(
+        dir.path(),
+        "2026042900-add-lid-vents",
+        r#"---
+plan_id: 2026042900-add-lid-vents
+mode: plan
+target_path: parts/top_lid.py
+target_type: part
+affected_files:
+  - parts/top_lid.py
+new_files: []
+export_targets:
+  - outputs/top_lid.step
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: Add lid vents
+"#,
+    );
+
+    let parsed = parse_plan_package(
+        dir.path(),
+        &path_handle(["plans", "2026042900-add-lid-vents"]),
+    )
+    .expect("plan package should parse");
+
+    assert_eq!(parsed.plan_id, "2026042900-add-lid-vents");
+    assert_eq!(parsed.plan_ref, "plans/2026042900-add-lid-vents");
+    assert_eq!(parsed.target_path, "parts/top_lid.py");
+    assert_eq!(parsed.target_type, CadQueryObjectKind::Part);
+    assert_eq!(parsed.affected_files, vec!["parts/top_lid.py"]);
+    assert!(parsed.new_files.is_empty());
+    assert_eq!(parsed.export_targets, vec!["outputs/top_lid.step"]);
+    assert_eq!(
+        parsed.result_path,
+        "plans/2026042900-add-lid-vents/plan-result.md"
+    );
+}
+
+#[test]
+fn parse_plan_package_returns_normalized_execution_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    write_plan_package(
+        dir.path(),
+        "2026042900-normalized-scope",
+        r#"---
+plan_id: 2026042900-normalized-scope
+mode: plan
+target_path: ./parts//top_lid.py
+target_type: part
+affected_files:
+  - parts/./top_lid.py
+new_files: []
+export_targets:
+  - outputs//top_lid.step
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: Normalized scope
+"#,
+    );
+
+    let parsed = parse_plan_package(
+        dir.path(),
+        &path_handle(["plans", "2026042900-normalized-scope"]),
+    )
+    .expect("plan package should parse");
+
+    assert_eq!(parsed.target_path, "parts/top_lid.py");
+    assert_eq!(parsed.affected_files, vec!["parts/top_lid.py"]);
+    assert_eq!(parsed.export_targets, vec!["outputs/top_lid.step"]);
+}
+
+#[test]
+fn parse_plan_package_rejects_missing_required_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plans/2026042900-missing-result")).unwrap();
+    std::fs::write(
+        dir.path()
+            .join("plans/2026042900-missing-result/request.md"),
+        "# Request\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("plans/2026042900-missing-result/plan.md"),
+        "---\nplan_id: 2026042900-missing-result\n---\n",
+    )
+    .unwrap();
+
+    let error = parse_plan_package(
+        dir.path(),
+        &path_handle(["plans", "2026042900-missing-result"]),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.code,
+        app_server_protocol::ProtocolErrorCode::InvalidPathHandle
+    );
+    assert!(error.message.contains("plan-result.md"));
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_plan_package_rejects_symlinked_plans_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    write_plan_package(
+        outside.path(),
+        "2026042900-external-plan",
+        r#"---
+plan_id: 2026042900-external-plan
+mode: plan
+target_path: parts/top_lid.py
+target_type: part
+affected_files:
+  - parts/top_lid.py
+new_files: []
+export_targets:
+  - outputs/top_lid.step
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: External plan
+"#,
+    );
+    std::os::unix::fs::symlink(outside.path().join("plans"), dir.path().join("plans")).unwrap();
+
+    let error = parse_plan_package(
+        dir.path(),
+        &path_handle(["plans", "2026042900-external-plan"]),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.code,
+        app_server_protocol::ProtocolErrorCode::InvalidPathHandle
+    );
+    assert!(error.message.contains("symlink"));
+}
+
+#[test]
+fn parse_plan_package_rejects_workspace_escape_and_bad_exports() {
+    let dir = tempfile::tempdir().unwrap();
+    write_plan_package(
+        dir.path(),
+        "2026042900-bad-scope",
+        r#"---
+plan_id: 2026042900-bad-scope
+mode: plan
+target_path: ../parts/top_lid.py
+target_type: part
+affected_files:
+  - parts/top_lid.py
+new_files: []
+export_targets:
+  - outputs/top_lid.obj
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: Bad scope
+"#,
+    );
+
+    let error = parse_plan_package(dir.path(), &path_handle(["plans", "2026042900-bad-scope"]))
+        .unwrap_err();
+
+    assert_eq!(
+        error.code,
+        app_server_protocol::ProtocolErrorCode::InvalidPathHandle
+    );
+    assert!(error.message.contains("target_path"));
 }
 
 #[test]
@@ -152,7 +342,7 @@ fn latest_saved_cad_plan_ignores_failed_or_wrong_run_results() {
 #[test]
 fn saved_plan_confirmation_requires_same_plan_ref_and_scope() {
     let plan = saved_plan();
-    let confirmation = plan_confirmation(Some(path_handle(["plans", "add-lid-vents.md"])));
+    let confirmation = plan_confirmation(Some(path_handle(["plans", "2026042900-add-lid-vents"])));
 
     assert!(validate_saved_plan_confirmation(&confirmation, &plan).is_ok());
 }
@@ -161,7 +351,7 @@ fn saved_plan_confirmation_requires_same_plan_ref_and_scope() {
 fn saved_plan_confirmation_rejects_missing_or_mismatched_plan_ref() {
     let plan = saved_plan();
     let missing_ref = plan_confirmation(None);
-    let wrong_ref = plan_confirmation(Some(path_handle(["plans", "other.md"])));
+    let wrong_ref = plan_confirmation(Some(path_handle(["plans", "2026042900-other"])));
 
     assert!(validate_saved_plan_confirmation(&missing_ref, &plan).is_err());
     assert!(validate_saved_plan_confirmation(&wrong_ref, &plan).is_err());
@@ -170,7 +360,8 @@ fn saved_plan_confirmation_rejects_missing_or_mismatched_plan_ref() {
 #[test]
 fn saved_plan_confirmation_rejects_scope_mismatch() {
     let plan = saved_plan();
-    let mut confirmation = plan_confirmation(Some(path_handle(["plans", "add-lid-vents.md"])));
+    let mut confirmation =
+        plan_confirmation(Some(path_handle(["plans", "2026042900-add-lid-vents"])));
     confirmation.export_targets = vec![path_handle(["outputs", "other.step"])];
 
     assert!(validate_saved_plan_confirmation(&confirmation, &plan).is_err());
@@ -240,7 +431,7 @@ fn tool_result_message(tool_call_id: &str, result_json: &str) -> ChatMessageReco
 
 fn saved_plan() -> app_server_host::plan_extraction::SavedCadPlan {
     app_server_host::plan_extraction::SavedCadPlan {
-        plan_ref: "plans/add-lid-vents.md".into(),
+        plan_ref: "plans/2026042900-add-lid-vents".into(),
         target_path: "parts/top_lid.py".into(),
         target_type: CadQueryObjectKind::Part,
         affected_paths: vec!["parts/top_lid.py".into()],
@@ -264,6 +455,14 @@ fn plan_confirmation(plan_ref: Option<PathHandle>) -> AgentCadQueryConfirmation 
         new_files: Vec::new(),
         export_targets: vec![path_handle(["outputs", "top_lid.step"])],
     }
+}
+
+fn write_plan_package(root: &std::path::Path, plan_id: &str, plan_markdown: &str) {
+    let plan_dir = root.join("plans").join(plan_id);
+    std::fs::create_dir_all(&plan_dir).unwrap();
+    std::fs::write(plan_dir.join("request.md"), "# Request\n").unwrap();
+    std::fs::write(plan_dir.join("plan.md"), plan_markdown).unwrap();
+    std::fs::write(plan_dir.join("plan-result.md"), "status: pending\n").unwrap();
 }
 
 fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {

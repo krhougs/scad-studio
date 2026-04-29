@@ -23,4 +23,5 @@ yawc = "0.3.3"
 
 [dev-dependencies]
 stl_io = "0.7"
+tempfile = "3"
 tokio-tungstenite = "0.28"

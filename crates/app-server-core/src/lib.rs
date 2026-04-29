@@ -16,8 +16,13 @@ pub use agent::{
     AgentTurnDraft, AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend,
     build_execute_messages, build_turn_context, build_turn_messages, cadquery_agent_system_prompt,
     draft_agent_turn, extract_cadquery_code, generate_cadquery_code, llm_generate_cadquery_code,
-    llm_request_for_cadquery_execute, mode_for_tool_loop, rig_backend_decision, stream_agent_turn,
-    stream_agent_turn_with_tools,
+    llm_request_for_cadquery_execute, mode_for_tool_loop,
+    plan_package::{
+        ParsedPlanPackage, PlanPackageError, PlanPackagePaths, PlanTimestamp,
+        SaveCadPlanPackageInput, SavedPlanPackage, collect_plan_packages, parse_plan_package,
+        save_plan_package, save_plan_package_with_timestamp, slugify_plan_title,
+    },
+    rig_backend_decision, stream_agent_turn, stream_agent_turn_with_tools,
     tools::{
         AgentSemanticStore, AgentToolCategory, AgentToolConfirmationScope, AgentToolPathPolicy,
         AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,

@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 app-server-protocol = { path = "../app-server-protocol" }
 dirs = "6"
+jiff = "0.2.23"
 log.workspace = true
 notify = "8.2"
 scad-scene = { path = "../scad-scene" }
