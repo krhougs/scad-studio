@@ -3,16 +3,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 use app_server_core::ChatStore;
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
-    AgentCadQueryConfirmation, AgentCancelRequest, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentOperationLevel, AgentPlanConfirmRequest, AgentToolResultEvent,
-    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest,
-    ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole,
-    ChatSendRequest, ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand,
-    ClientPlatform, ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest,
-    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind,
-    ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
-    SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId,
-    WorkspaceListRequest, web_file_read_capability,
+    AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
+    AgentPlanConfirmRequest, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
+    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
+    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
+    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
+    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
+    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
 };
 
 #[test]
@@ -36,7 +35,7 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         .handshake(handshake_request())
         .expect("handshake should negotiate");
     assert_eq!(handshake.session_token.0, "session-1");
-    assert_eq!(handshake.negotiated_version, 3);
+    assert_eq!(handshake.negotiated_version, 4);
 
     let current = dispatcher.dispatch_envelope(ClientRequestEnvelope {
         request_id: RequestId(1),
@@ -246,73 +245,35 @@ fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
 }
 
 #[test]
-fn dispatcher_rejects_direct_execute_agent_confirmation_without_plan_confirm() {
-    let workspace = temp_workspace("dispatcher-agent-direct-confirmation");
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    let request = confirmed_cadquery_request(path_handle(["parts", "top_lid.py"]));
-    let confirmation = AgentCadQueryConfirmation {
-        request,
-        plan_ref: None,
-        affected_files: vec![path_handle(["parts", "bottom.py"])],
-        new_files: Vec::new(),
-        export_targets: Vec::new(),
-    };
-    let error =
-        invoke_agent_with_confirmation_error(&mut dispatcher, 35, &session_id, confirmation);
-
-    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
-    assert!(pushes.lock().expect("push buffer lock").is_empty());
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_execute_agent_requires_llm_codegen_backend_before_running_cadquery() {
-    let workspace = temp_workspace("dispatcher-agent-requires-llm");
+fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload() {
+    let workspace = temp_workspace("dispatcher-agent-plan-ref");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
     std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
-    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    append_saved_plan_result(&workspace, &session_id, "plan-run-1");
-    let target_path = path_handle(["parts", "top_lid.py"]);
-    let confirmation = AgentCadQueryConfirmation {
-        request: confirmed_cadquery_request(target_path.clone()),
-        plan_ref: Some(path_handle(["plans", "add-lid-vents.md"])),
-        affected_files: vec![target_path],
-        new_files: Vec::new(),
-        export_targets: vec![path_handle(["outputs", "top_lid.step"])],
-    };
     let started = match dispatch(
         &mut dispatcher,
         36,
-        ClientCommand::AgentPlanConfirm(AgentPlanConfirmRequest {
-            session_id,
-            run_id: "plan-run-1".into(),
-            confirmed_cadquery: confirmation,
+        ClientCommand::AgentInvoke(AgentInvokeRequest {
+            session_id: session_id.clone(),
+            prompt: "run plan".into(),
+            mode: AgentMode::Agent,
+            plan_ref: Some(path_handle(["plans", "2026050100-add-lid-vents"])),
+            context_refs: Vec::new(),
         }),
     )
     .result
-    .expect("agent.plan.confirm succeeds")
+    .expect("agent.invoke with plan_ref succeeds")
     {
-        CommandSuccess::AgentPlanConfirmed(response) => response,
-        other => panic!("unexpected agent.plan.confirm response: {other:?}"),
+        CommandSuccess::AgentStarted(response) => response,
+        other => panic!("unexpected agent.invoke response: {other:?}"),
     };
 
     wait_for_done(&pushes, &started.run_id);
-    let error = find_error_event(&pushes, &started.run_id).expect("llm error");
-    assert_eq!(error.error_type, AgentErrorType::LlmError);
-    assert!(error.message.contains("LLM"));
-    assert!(find_tool_result_event(&pushes, &started.run_id).is_none());
-    assert!(find_done_event(&pushes, &started.run_id).is_some());
     assert_eq!(
         std::fs::read_to_string(workspace.join("parts/top_lid.py")).unwrap(),
         "old code\n"
     );
-    assert!(!captured.exists());
-    assert!(!workspace.join("outputs/top_lid.step").exists());
     cleanup_workspace(&workspace);
 }
 
@@ -380,7 +341,7 @@ fn dispatcher_cadquery_preview_rejects_export_formats_without_writing_outputs() 
 }
 
 #[test]
-fn dispatcher_plan_confirm_rejects_missing_saved_plan_ref() {
+fn dispatcher_plan_confirm_returns_deprecated_error_without_using_saved_plan() {
     let workspace = temp_workspace("dispatcher-plan-confirm-ref");
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
@@ -404,14 +365,17 @@ fn dispatcher_plan_confirm_rejects_missing_saved_plan_ref() {
         }),
     );
 
-    let error = response.result.expect_err("missing plan_ref should reject");
+    let error = response
+        .result
+        .expect_err("deprecated plan confirm should reject");
     assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(error.message.contains("已废弃"));
     assert!(pushes.lock().expect("push buffer lock").is_empty());
     cleanup_workspace(&workspace);
 }
 
 #[test]
-fn dispatcher_plan_confirm_rejects_saved_plan_scope_mismatch() {
+fn dispatcher_plan_confirm_rejects_before_scope_validation() {
     let workspace = temp_workspace("dispatcher-plan-confirm-scope");
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
@@ -435,8 +399,11 @@ fn dispatcher_plan_confirm_rejects_saved_plan_scope_mismatch() {
         }),
     );
 
-    let error = response.result.expect_err("scope mismatch should reject");
+    let error = response
+        .result
+        .expect_err("deprecated plan confirm should reject");
     assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    assert!(error.message.contains("已废弃"));
     assert!(pushes.lock().expect("push buffer lock").is_empty());
     cleanup_workspace(&workspace);
 }
@@ -750,8 +717,8 @@ fn invoke_agent(
         ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
             prompt: prompt.into(),
-            operation: AgentOperationLevel::Inform,
-            confirmed_cadquery: None,
+            mode: AgentMode::Agent,
+            plan_ref: None,
             context_refs: Vec::new(),
         }),
     )
@@ -759,66 +726,6 @@ fn invoke_agent(
     {
         CommandSuccess::AgentStarted(response) => Ok(response),
         other => panic!("unexpected agent.invoke response: {other:?}"),
-    }
-}
-
-fn invoke_agent_with_confirmation_error(
-    dispatcher: &mut HostRequestDispatcher,
-    request_id: u64,
-    session_id: &ChatSessionId,
-    confirmation: AgentCadQueryConfirmation,
-) -> app_server_protocol::ProtocolError {
-    dispatch(
-        dispatcher,
-        request_id,
-        ClientCommand::AgentInvoke(AgentInvokeRequest {
-            session_id: session_id.clone(),
-            prompt: "execute confirmed cadquery".into(),
-            operation: AgentOperationLevel::Execute,
-            confirmed_cadquery: Some(confirmation),
-            context_refs: Vec::new(),
-        }),
-    )
-    .result
-    .expect_err("agent.invoke with direct confirmation should fail")
-}
-
-fn invoke_agent_error(
-    dispatcher: &mut HostRequestDispatcher,
-    request_id: u64,
-    session_id: &ChatSessionId,
-) -> app_server_protocol::ProtocolError {
-    dispatch(
-        dispatcher,
-        request_id,
-        ClientCommand::AgentInvoke(AgentInvokeRequest {
-            session_id: session_id.clone(),
-            prompt: "try again".into(),
-            operation: AgentOperationLevel::Inform,
-            confirmed_cadquery: None,
-            context_refs: Vec::new(),
-        }),
-    )
-    .result
-    .expect_err("agent.invoke should fail")
-}
-
-fn cancel_agent(
-    dispatcher: &mut HostRequestDispatcher,
-    run_id: &str,
-) -> app_server_protocol::AgentCancelledResponse {
-    match dispatch(
-        dispatcher,
-        33,
-        ClientCommand::AgentCancel(AgentCancelRequest {
-            run_id: Some(run_id.into()),
-        }),
-    )
-    .result
-    .expect("agent.cancel succeeds")
-    {
-        CommandSuccess::AgentCancelled(response) => response,
-        other => panic!("unexpected agent.cancel response: {other:?}"),
     }
 }
 
@@ -871,40 +778,8 @@ fn wait_for_done(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
     panic!("agent.done not observed for {run_id}");
 }
 
-fn find_error_event(
-    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
-    run_id: &str,
-) -> Option<AgentErrorEvent> {
-    pushes
-        .lock()
-        .expect("push buffer lock")
-        .iter()
-        .find_map(|push| match &push.event {
-            ServerPushEvent::AgentError(event) if event.run_id.as_deref() == Some(run_id) => {
-                Some(event.clone())
-            }
-            _ => None,
-        })
-}
-
-fn find_tool_result_event(
-    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
-    run_id: &str,
-) -> Option<AgentToolResultEvent> {
-    pushes
-        .lock()
-        .expect("push buffer lock")
-        .iter()
-        .find_map(|push| match &push.event {
-            ServerPushEvent::AgentToolResult(event) if event.run_id == run_id => {
-                Some(event.clone())
-            }
-            _ => None,
-        })
-}
-
 fn handshake_request() -> CapabilityHandshakeRequest {
-    handshake_request_with_version(ProtocolVersionRange::new(3, 3))
+    handshake_request_with_version(ProtocolVersionRange::new(4, 4))
 }
 
 fn handshake_request_with_version(

@@ -1,9 +1,6 @@
 import MarkdownPreview from "@uiw/react-markdown-preview";
 import rehypeSanitize from "rehype-sanitize";
-import type {
-  AgentErrorType,
-  AgentPlanProposedEvent,
-} from "@budn/app-server-protocol";
+import type { AgentErrorType } from "@budn/app-server-protocol";
 import { markdownSanitizeSchema } from "../viewers/markdown-security";
 import type { ChatMessageRecord, AgentEvent } from "./chat-zone";
 
@@ -12,18 +9,13 @@ const mdWrapperElement = { "data-color-mode": "dark" } as const;
 export function ChatBody(props: {
   messages: ChatMessageRecord[];
   agentEvents: AgentEvent[];
-  pendingPlan: AgentPlanProposedEvent | null;
   llmConfigured: boolean;
   streaming: boolean;
   streamText: string;
-  onPreviewPlan: () => void;
-  onConfirmPlan: () => void;
-  onRejectPlan: () => void;
 }) {
   if (
     props.messages.length === 0 &&
     props.agentEvents.length === 0 &&
-    !props.pendingPlan &&
     !props.streaming
   ) {
     if (!props.llmConfigured) return <LlmSetupGuide />;
@@ -39,14 +31,6 @@ export function ChatBody(props: {
       ))}
       {props.streamText && <StreamingMessage text={props.streamText} />}
       {!props.streamText && props.streaming && <ThinkingIndicator />}
-      {props.pendingPlan && (
-        <PlanConfirmationCard
-          plan={props.pendingPlan}
-          onPreview={props.onPreviewPlan}
-          onConfirm={props.onConfirmPlan}
-          onReject={props.onRejectPlan}
-        />
-      )}
     </div>
   );
 }
@@ -140,72 +124,6 @@ function ChatMessage({ message }: { message: ChatMessageRecord }) {
   );
 }
 
-function PlanConfirmationCard(props: {
-  plan: AgentPlanProposedEvent;
-  onPreview: () => void;
-  onConfirm: () => void;
-  onReject: () => void;
-}) {
-  const { plan } = props;
-  const targetDisplay = plan.target_path.path_segments.join("/");
-  const affectedPaths = plan.affected_files.map((f) => f.path_segments.join("/"));
-  const affectedAssemblies = findAffectedAssemblies(affectedPaths);
-  return (
-    <div className="plan-card" data-testid="plan-confirmation-card">
-      <div className="plan-card-header">Plan Confirmation</div>
-      {plan.change_description && (
-        <p className="plan-card-desc">{plan.change_description}</p>
-      )}
-      <dl className="plan-card-details">
-        <dt>Target</dt>
-        <dd>
-          <code>{targetDisplay}</code>{" "}
-          <span className="plan-type-tag">{plan.target_type}</span>
-        </dd>
-        <dt>Affected files</dt>
-        <dd><code>{affectedPaths.join(", ")}</code></dd>
-        <dt>Export</dt>
-        <dd>
-          <code>
-            {plan.export_targets
-              .map((t) => t.path_segments.join("/"))
-              .join(", ")}
-          </code>
-        </dd>
-      </dl>
-      {affectedAssemblies.length > 0 && (
-        <AssemblyImpactWarning assemblies={affectedAssemblies} />
-      )}
-      <div className="plan-card-actions">
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          data-testid="plan-preview-btn"
-          onClick={props.onPreview}
-        >
-          Preview
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary btn--sm"
-          data-testid="plan-confirm-btn"
-          onClick={props.onConfirm}
-        >
-          Confirm Execute
-        </button>
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          data-testid="plan-reject-btn"
-          onClick={props.onReject}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function AgentEventRow({ event }: { event: AgentEvent }) {
   if (event.event === "agent.error") {
     return <AgentErrorCard event={event} />;
@@ -255,19 +173,6 @@ function agentEventDetail(event: AgentEvent): string {
   return event.event;
 }
 
-function AssemblyImpactWarning(props: { assemblies: string[] }) {
-  return (
-    <div className="plan-assembly-warning" data-testid="assembly-impact-warning">
-      <strong>This change affects assemblies:</strong>
-      <ul>
-        {props.assemblies.map((path) => (
-          <li key={path}><code>{path}</code></li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 export function findAffectedAssemblies(paths: string[]): string[] {
   return paths.filter((p) => p.startsWith("assemblies/") || p.includes("/assemblies/"));
 }
@@ -313,7 +218,7 @@ const ERROR_MESSAGES: Record<string, FriendlyError> = {
   },
   permission_denied: {
     title: "Permission denied",
-    hint: "The operation was not permitted. Ensure you have confirmed the plan.",
+    hint: "The operation was not permitted. Switch to Agent mode or run an existing plan.",
   },
 };
 

@@ -13,15 +13,15 @@ use std::{
 };
 
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind,
-    ChatSessionId, SelectionRef,
+    AgentMode, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, ChatSessionId,
+    SelectionRef,
 };
 use serde_json::json;
 
 use crate::llm::{LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall};
 pub use registry::{
     AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission, AgentToolSpec,
-    CadQueryModelFilePolicy, OutputPathPolicy, agent_tool_definitions_for_operation,
+    CadQueryModelFilePolicy, OutputPathPolicy, agent_tool_definitions_for_mode,
     agent_tool_permission, agent_tool_specs,
 };
 use tool_path_policy::{
@@ -143,7 +143,7 @@ pub struct AgentToolRunContext {
     pub workspace_root: PathBuf,
     pub session_id: Option<ChatSessionId>,
     pub run_id: Option<String>,
-    pub operation: AgentOperationLevel,
+    pub mode: AgentMode,
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
     pub context_refs: Vec<String>,
@@ -151,12 +151,12 @@ pub struct AgentToolRunContext {
 }
 
 impl AgentToolRunContext {
-    pub fn new(workspace_root: PathBuf, operation: AgentOperationLevel) -> Self {
+    pub fn new(workspace_root: PathBuf, mode: AgentMode) -> Self {
         Self {
             workspace_root,
             session_id: None,
             run_id: None,
-            operation,
+            mode,
             selections: Vec::new(),
             active_selection_index: None,
             context_refs: Vec::new(),
@@ -247,7 +247,7 @@ fn validate_direct_executor_permission(
         .find(|spec| spec.definition.name == call.function_name)?;
     let permission = agent_tool_permission(
         &call.function_name,
-        context.operation,
+        context.mode,
         context.confirmation_scope.is_some(),
     );
     if !permission.allowed {
@@ -275,7 +275,7 @@ pub fn run_tool_loop_with_registry(
     observer: &dyn ToolLoopObserver,
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<LlmResponse, LlmError> {
-    let tools = agent_tool_definitions_for_operation(context.operation);
+    let tools = agent_tool_definitions_for_mode(context.mode);
     let mut messages = initial_messages;
     let mut last_content = String::new();
     for _ in 0..MAX_TOOL_ROUNDS {
@@ -315,7 +315,7 @@ fn execute_registry_tool(
         .find(|spec| spec.definition.name == call.function_name);
     let permission = agent_tool_permission(
         &call.function_name,
-        context.operation,
+        context.mode,
         context.confirmation_scope.is_some(),
     );
     if !permission.allowed {

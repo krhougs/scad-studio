@@ -1,11 +1,10 @@
 use app_server_core::{
     AgentCadQueryCodeInput, AgentTurnInput, cadquery_agent_system_prompt, draft_agent_turn,
-    generate_cadquery_code, llm_request_for_cadquery_execute, operation_for_tool_loop,
+    generate_cadquery_code, llm_request_for_cadquery_execute, mode_for_tool_loop,
     rig_backend_decision,
 };
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
-    SelectionRef,
+    AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind, SelectionRef,
 };
 
 #[test]
@@ -26,20 +25,21 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
     for section in [
         "Role",
         "Core Principles",
-        "Operation Levels",
+        "Modes",
         "File System Contract",
         "Component / Part / Assembly Rules",
         "Ref Handling Rules",
-        "CAD Plan Rules",
+        "Workspace Plan Package Rules",
         "Tool Permission Rules",
         "Experiment Rules",
         "Response Rules",
     ] {
         assert!(prompt.contains(section), "missing section: {section}");
     }
-    assert!(prompt.contains("Inform"));
-    assert!(prompt.contains("Plan"));
-    assert!(prompt.contains("Execute"));
+    assert!(prompt.contains("`Agent`"));
+    assert!(prompt.contains("`Plan`"));
+    assert!(!prompt.contains("Inform / Plan / Execute"));
+    assert!(!prompt.contains("confirmed_cadquery"));
     assert!(prompt.contains("source of truth"));
     assert!(prompt.contains("`.py` files are model source code"));
     assert!(prompt.contains("`.md` files are semantic design notes"));
@@ -54,34 +54,20 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
     assert!(prompt.contains("@vertex"));
     assert!(prompt.contains("Raw face / edge / vertex refs are not long-term truth"));
     assert!(prompt.contains("Do not expose selector refs as MVP protocol selections"));
-    assert!(prompt.contains("confirmed"));
     assert!(prompt.contains("CadQuery execution completed with warnings"));
     assert!(prompt.contains("diagnostics.traceback"));
     assert!(prompt.contains("byte-for-byte variants"));
-    assert!(prompt.contains("Static `cadquery_check_source` is allowed"));
+    assert!(prompt.contains("Static CadQuery source checks"));
     let tool_rules = prompt
         .split("## 8. Tool Permission Rules")
         .nth(1)
         .expect("tool permission section exists");
-    let plan_and_after = tool_rules
-        .split("Plan:")
-        .nth(1)
-        .expect("plan permission block exists");
-    let plan_rules = plan_and_after
-        .split("Execute:")
-        .next()
-        .expect("plan permission block exists");
-    assert!(plan_rules.contains("May use `update_chat_summary`"));
-    assert!(plan_rules.contains("May use `cadquery_check_source`"));
-    assert!(!plan_rules.contains("Do not call CadQuery."));
-    let execute_rules = tool_rules
-        .split("Execute:")
-        .nth(1)
-        .and_then(|section| section.split("Auto:").next())
-        .expect("execute permission block exists");
-    assert!(execute_rules.contains("`update_chat_summary`"));
-    assert!(execute_rules.contains("`cadquery_dry_run`"));
-    assert!(execute_rules.contains("`cadquery_execute`"));
+    assert!(tool_rules.contains("| `update_chat_summary` semantic tool | Not allowed | Allowed |"));
+    assert!(tool_rules.contains("| Static CadQuery source checks | Allowed | Allowed |"));
+    assert!(tool_rules.contains("| `cadquery_dry_run` | Not allowed | Allowed through staging |"));
+    assert!(tool_rules.contains(
+        "| `cadquery_execute` | Not allowed | Allowed through staging and execution scope |"
+    ));
     assert!(!prompt.contains("keyword matching"));
 }
 
@@ -101,7 +87,7 @@ fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
     });
 
     assert_eq!(request.system_prompt, cadquery_agent_system_prompt());
-    assert!(request.context.contains("Operation: Execute"));
+    assert!(request.context.contains("Mode: Agent"));
     assert!(request.context.contains("Target path: components/screw.py"));
     assert!(request.context.contains("Target type: component"));
     assert!(request.context.contains("Active selection index: 0"));
@@ -125,57 +111,39 @@ fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
 }
 
 #[test]
-fn draft_agent_turn_uses_prompt_history_selection_and_execute_target() {
+fn draft_agent_turn_uses_prompt_history_selection_and_plan_ref() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Execute,
+        mode: AgentMode::Agent,
         prompt: "make the lid taller".into(),
         history: vec![chat_message("msg-1", "previous plan")],
         selections: vec![selection("@face[top_lid:f_0]")],
         active_selection_index: Some(0),
-        confirmed_target_path: Some("parts/top_lid.py".into()),
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
-    assert!(draft.text.contains("Execute"));
+    assert!(draft.text.contains("Agent"));
     assert!(draft.text.contains("make the lid taller"));
     assert!(draft.text.contains("previous plan"));
     assert!(draft.text.contains("@face[top_lid:f_0]"));
-    assert!(draft.text.contains("parts/top_lid.py"));
+    assert!(draft.text.contains("Plan ref: none"));
 }
 
 #[test]
-fn auto_operation_decision_maps_to_concrete_tool_loop_operation() {
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "解释 CadQuery fillet", false),
-        AgentOperationLevel::Inform
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "给我一个修改方案", false),
-        AgentOperationLevel::Plan
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "解释怎么修改 fillet", false),
-        AgentOperationLevel::Inform
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "做吧", true),
-        AgentOperationLevel::Execute
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Plan, "解释", false),
-        AgentOperationLevel::Plan
-    );
+fn mode_for_tool_loop_preserves_requested_product_mode() {
+    assert_eq!(mode_for_tool_loop(AgentMode::Agent), AgentMode::Agent);
+    assert_eq!(mode_for_tool_loop(AgentMode::Plan), AgentMode::Plan);
 }
 
 #[test]
 fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "add a vent on this face".into(),
         history: vec![chat_message("msg-1", "initial enclosure plan")],
         selections: vec![selection("@face[top_lid:f_0]")],
         active_selection_index: Some(0),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
@@ -220,12 +188,12 @@ fn local_agent_backend_refuses_assembly_codegen_without_llm_backend() {
 #[test]
 fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "replace this screw with a countersunk version".into(),
         history: vec![chat_message("msg-1", "assembly plan")],
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
@@ -238,12 +206,12 @@ fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
 #[test]
 fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "move this screw 5mm right".into(),
         history: vec![chat_message("msg-1", "assembly plan")],
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
@@ -256,12 +224,12 @@ fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
 #[test]
 fn plan_turn_labels_component_body_edit_as_component_geometry() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "make this component wider".into(),
         history: vec![chat_message("msg-1", "component plan")],
         selections: vec![component_selection()],
         active_selection_index: Some(0),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
@@ -273,12 +241,12 @@ fn plan_turn_labels_component_body_edit_as_component_geometry() {
 #[test]
 fn plan_turn_labels_instance_body_edit_as_component_geometry() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "make this selected instance wider".into(),
         history: vec![chat_message("msg-1", "component plan")],
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 
@@ -290,12 +258,12 @@ fn plan_turn_labels_instance_body_edit_as_component_geometry() {
 #[test]
 fn plan_turn_uses_active_selection_and_keeps_ambiguous_raw_ref() {
     let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "modify the active face".into(),
         history: vec![chat_message("msg-1", "initial enclosure plan")],
         selections: vec![selection("@face[top_lid:f_0]"), ambiguous_selection()],
         active_selection_index: Some(1),
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     });
 

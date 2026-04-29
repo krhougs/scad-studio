@@ -1,17 +1,16 @@
 use app_server_core::llm::LlmToolCall;
 use app_server_core::{
-    AgentToolConfirmationScope, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
-    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
-    CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime,
-    CadQueryToolRuntimeError, ChatStore, FileWatcher, SlicerInstall, current_workspace,
-    detect_slicer_paths, export_model, list_workspace_entries, load_config_dto,
-    preview_ready_response, read_file_response, resolve_workspace_path,
+    AgentToolRunContext, AgentTurnInput, CadQueryCommitScope, CadQueryRunConfig, CadQueryRunResult,
+    CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
+    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
+    SlicerInstall, current_workspace, detect_slicer_paths, export_model, list_workspace_entries,
+    load_config_dto, preview_ready_response, read_file_response, resolve_workspace_path,
     resolve_workspace_write_path, run_cadquery_runner, run_cadquery_runner_with_cancel,
     save_config_dto, send_to_slicer, stage_cadquery_project,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
-    AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentOperationLevel,
+    AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
     AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
     AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
     CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
@@ -493,11 +492,6 @@ impl HostRequestDispatcher {
         request: AgentInvokeRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
         self.chat_store()?.history(&request.session_id, Some(1))?;
-        if request.confirmed_cadquery.is_some() {
-            return Err(invalid_command(
-                "CadQuery confirmation 必须通过 agent.plan.confirm 提交",
-            ));
-        }
         let run = self
             .agent_runs
             .lock()
@@ -510,8 +504,8 @@ impl HostRequestDispatcher {
         let worker = AgentWorker {
             run,
             prompt: request.prompt,
-            operation: request.operation,
-            confirmed_cadquery: request.confirmed_cadquery,
+            mode: request.mode,
+            plan_ref: request.plan_ref,
             context_refs: request.context_refs,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
@@ -547,55 +541,20 @@ impl HostRequestDispatcher {
     // request.run_id identifies the plan-proposing run; confirm creates a new Execute run.
     fn confirm_agent_plan(
         &mut self,
-        request: AgentPlanConfirmRequest,
+        _request: AgentPlanConfirmRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
-        self.validate_confirmed_plan(&request)?;
-        let run = self
-            .agent_runs
-            .lock()
-            .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .try_start(request.session_id.clone())?;
-        let response = AgentStartedResponse {
-            session_id: run.session_id.clone(),
-            run_id: run.run_id.clone(),
-        };
-        let worker = AgentWorker {
-            run,
-            prompt: String::new(),
-            operation: AgentOperationLevel::Execute,
-            confirmed_cadquery: Some(request.confirmed_cadquery),
-            context_refs: Vec::new(),
-            selection_snapshot: self.selection_snapshot.clone(),
-            workspace_root: self.workspace_root()?.to_path_buf(),
-            python: cadquery_python_path(),
-            cadquery_results: Arc::clone(&self.cadquery_results),
-            agent_runs: Arc::clone(&self.agent_runs),
-            push_sink: Arc::clone(&self.push_sink),
-        };
-        thread::spawn(move || run_agent_worker(worker));
-        Ok(CommandSuccess::AgentPlanConfirmed(response))
-    }
-
-    fn validate_confirmed_plan(
-        &self,
-        request: &AgentPlanConfirmRequest,
-    ) -> Result<(), ProtocolError> {
-        let history = self.chat_store()?.history(&request.session_id, None)?;
-        let Some(plan) = latest_saved_cad_plan(&history.messages, &request.run_id) else {
-            return Err(invalid_command(
-                "Agent confirmation 缺少同一 run 保存的 CAD Plan",
-            ));
-        };
-        validate_saved_plan_confirmation(&request.confirmed_cadquery, &plan)
-            .map_err(invalid_command)?;
-        validate_cadquery_confirmation(&request.confirmed_cadquery).map_err(invalid_command)
+        Err(deprecated_command(
+            "agent.plan.confirm 已废弃；请使用 agent.invoke { mode: Agent, plan_ref } 执行计划",
+        ))
     }
 
     fn reject_agent_plan(
         &mut self,
         _request: AgentPlanRejectRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
-        Ok(CommandSuccess::AgentPlanRejected)
+        Err(deprecated_command(
+            "agent.plan.reject 已废弃；Plan package 不再需要确认或拒绝命令",
+        ))
     }
 }
 
@@ -658,8 +617,8 @@ struct AgentRunHandle {
 struct AgentWorker {
     run: AgentRunHandle,
     prompt: String,
-    operation: AgentOperationLevel,
-    confirmed_cadquery: Option<AgentCadQueryConfirmation>,
+    mode: AgentMode,
+    plan_ref: Option<PathHandle>,
     context_refs: Vec<String>,
     selection_snapshot: SelectionUpdateRequest,
     workspace_root: PathBuf,
@@ -885,12 +844,7 @@ impl HostCadQueryToolRuntime {
 }
 
 fn run_agent_worker(worker: AgentWorker) {
-    match worker.operation {
-        AgentOperationLevel::Execute => run_execute_agent(worker),
-        AgentOperationLevel::Inform | AgentOperationLevel::Plan | AgentOperationLevel::Auto => {
-            run_text_agent(worker)
-        }
-    }
+    run_text_agent(worker);
 }
 
 fn run_text_agent(worker: AgentWorker) {
@@ -919,18 +873,12 @@ fn run_text_agent(worker: AgentWorker) {
         finish_agent_worker(worker, true);
         return;
     }
-    let saved_plan = if matches!(
-        worker.operation,
-        AgentOperationLevel::Auto | AgentOperationLevel::Plan
-    ) {
+    let saved_plan = if matches!(worker.mode, AgentMode::Plan) {
         latest_saved_plan_for_worker(&worker)
     } else {
         None
     };
-    if matches!(
-        worker.operation,
-        AgentOperationLevel::Auto | AgentOperationLevel::Plan
-    ) {
+    if matches!(worker.mode, AgentMode::Plan) {
         try_propose_plan(&worker, saved_plan.as_ref());
     }
     append_agent_message(&worker.workspace_root, &worker.run, &response_text);
@@ -992,9 +940,7 @@ fn path_handles_for(workspace_root: &Path, paths: &[String]) -> Vec<PathHandle> 
         .collect()
 }
 
-use crate::plan_extraction::{
-    SavedCadPlan, latest_saved_cad_plan, plan_target_handle, validate_saved_plan_confirmation,
-};
+use crate::plan_extraction::{SavedCadPlan, latest_saved_cad_plan, plan_target_handle};
 
 fn run_text_agent_llm(
     worker: &AgentWorker,
@@ -1005,22 +951,14 @@ fn run_text_agent_llm(
         .history(&worker.run.session_id, Some(8))
         .map(|response| response.messages)
         .unwrap_or_default();
-    let confirmed_target_path = worker
-        .confirmed_cadquery
-        .as_ref()
-        .map(|confirmation| confirmation.request.target_path.display_path().to_owned());
-    let operation = app_server_core::operation_for_tool_loop(
-        worker.operation,
-        &worker.prompt,
-        worker.confirmed_cadquery.is_some(),
-    );
+    let mode = app_server_core::mode_for_tool_loop(worker.mode);
     let input = AgentTurnInput {
-        operation,
+        mode,
         prompt: worker.prompt.clone(),
         history,
         selections: worker.selection_snapshot.selections.clone(),
         active_selection_index: worker.selection_snapshot.active_index,
-        confirmed_target_path,
+        plan_ref: worker.plan_ref.clone(),
         context_refs: worker.context_refs.clone(),
     };
     let cadquery_runtime = Arc::new(HostCadQueryToolRuntime {
@@ -1032,16 +970,12 @@ fn run_text_agent_llm(
     });
     let tool_executor = app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone())
         .with_cadquery_runtime(cadquery_runtime);
-    let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), operation);
+    let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), mode);
     tool_context.session_id = Some(worker.run.session_id.clone());
     tool_context.run_id = Some(worker.run.run_id.clone());
     tool_context.selections = worker.selection_snapshot.selections.clone();
     tool_context.active_selection_index = worker.selection_snapshot.active_index;
     tool_context.context_refs = worker.context_refs.clone();
-    tool_context.confirmation_scope = worker
-        .confirmed_cadquery
-        .as_ref()
-        .map(agent_tool_confirmation_scope);
     let tool_observer = AgentToolEventRecorder {
         workspace_root: worker.workspace_root.clone(),
         push_sink: Arc::clone(&worker.push_sink),
@@ -1075,61 +1009,6 @@ fn run_text_agent_llm(
             None
         }
     }
-}
-
-fn agent_tool_confirmation_scope(
-    confirmation: &AgentCadQueryConfirmation,
-) -> AgentToolConfirmationScope {
-    AgentToolConfirmationScope::new(
-        confirmation
-            .affected_files
-            .iter()
-            .map(PathHandle::display_path)
-            .collect(),
-        confirmation
-            .new_files
-            .iter()
-            .map(PathHandle::display_path)
-            .collect(),
-        confirmation
-            .export_targets
-            .iter()
-            .map(PathHandle::display_path)
-            .collect(),
-    )
-}
-
-fn run_execute_agent(worker: AgentWorker) {
-    if execute_confirmation_or_report(&worker).is_none() {
-        finish_agent_worker(worker, false);
-        return;
-    }
-    run_text_agent(worker);
-}
-
-fn execute_confirmation_or_report(worker: &AgentWorker) -> Option<AgentCadQueryConfirmation> {
-    let Some(confirmation) = worker.confirmed_cadquery.clone() else {
-        report_execute_permission_error(
-            worker,
-            "Execute 需要 confirmed_cadquery 才能写入并执行 CadQuery",
-        );
-        return None;
-    };
-    if let Err(message) = validate_cadquery_confirmation(&confirmation) {
-        report_execute_permission_error(worker, message);
-        return None;
-    }
-    Some(confirmation)
-}
-
-fn report_execute_permission_error(worker: &AgentWorker, message: &str) {
-    push_agent_error(
-        &worker.push_sink,
-        &worker.run,
-        AgentErrorType::PermissionDenied,
-        message,
-    );
-    append_agent_message(&worker.workspace_root, &worker.run, message);
 }
 
 pub fn validate_cadquery_confirmation(
@@ -1485,6 +1364,10 @@ fn internal_error(error: impl std::fmt::Display) -> ProtocolError {
 
 fn invalid_command(message: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::new(ProtocolErrorCode::InvalidCommand, message.to_string())
+}
+
+fn deprecated_command(message: impl std::fmt::Display) -> ProtocolError {
+    invalid_command(message)
 }
 
 fn path_buf_to_host_path(path: PathBuf) -> Result<HostLocalPath, ProtocolError> {

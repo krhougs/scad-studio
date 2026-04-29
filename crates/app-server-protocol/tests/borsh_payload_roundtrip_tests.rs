@@ -1,15 +1,16 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentOperationLevel, AgentPlanProposedEvent, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CadQueryFeatureFaces,
-    CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest,
-    ChatArchivedResponse, ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest,
-    ChatHistoryResponse, ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole,
-    ChatSendRequest, ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord,
-    ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope,
-    CommandSuccess, EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse,
-    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
+    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
+    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
+    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
+    ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
+    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
     PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
     PreviewResponseFormat, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
     RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
@@ -35,7 +36,7 @@ fn handshake_and_command_frame_roundtrip() {
         capabilities: ClientCapabilities {
             client_name: "studio-web".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(1, 3),
+            protocol_version: ProtocolVersionRange::new(1, CURRENT_PROTOCOL_VERSION),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -143,10 +144,10 @@ fn preview_response(vertex_count: usize) -> PreviewReadyResponse {
 #[test]
 fn reclaim_and_artifact_variants_roundtrip() {
     let response = CapabilityHandshakeResponse {
-        negotiated_version: 2,
+        negotiated_version: CURRENT_PROTOCOL_VERSION,
         session_token: SessionToken("session-1".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(1, 2),
+            protocol_version: ProtocolVersionRange::new(1, CURRENT_PROTOCOL_VERSION),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![
@@ -473,8 +474,8 @@ fn agent_push_events_and_busy_error_roundtrip() {
         command: ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
             prompt: "make a taller lid".into(),
-            operation: AgentOperationLevel::Plan,
-            confirmed_cadquery: None,
+            mode: AgentMode::Plan,
+            plan_ref: None,
             context_refs: Vec::new(),
         }),
     });
@@ -560,11 +561,24 @@ fn agent_push_events_and_busy_error_roundtrip() {
     let decoded = decode_server_frame(&encode_server_frame(&tool_result).unwrap()).unwrap();
     assert_eq!(decoded, tool_result);
 
-    let proposed = ServerEnvelope::Push(ServerPushEnvelope {
-        event: ServerPushEvent::AgentPlanProposed(AgentPlanProposedEvent {
+    let plan_ref = workspace_path(["plans", "2026050100-add-lid-vents"]);
+    let saved = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentPlanSaved(AgentPlanSavedEvent {
             session_id: session_id.clone(),
             run_id: "run-1".into(),
-            plan_ref: Some(workspace_path(["plans", "add-lid-vents.md"])),
+            package: AgentPlanPackageRef {
+                plan_id: "2026050100-add-lid-vents".into(),
+                plan_ref: plan_ref.clone(),
+                request_path: workspace_path(["plans", "2026050100-add-lid-vents", "request.md"]),
+                plan_path: workspace_path(["plans", "2026050100-add-lid-vents", "plan.md"]),
+                result_path: workspace_path([
+                    "plans",
+                    "2026050100-add-lid-vents",
+                    "plan-result.md",
+                ]),
+            },
+            title: "Add lid vents".into(),
+            status: "planned".into(),
             target_path: workspace_path(["parts", "top_lid.py"]),
             target_type: CadQueryObjectKind::Part,
             affected_files: vec![workspace_path(["parts", "top_lid.py"])],
@@ -573,8 +587,21 @@ fn agent_push_events_and_busy_error_roundtrip() {
             export_targets: vec![workspace_path(["outputs", "top_lid.step"])],
         }),
     });
-    let decoded = decode_server_frame(&encode_server_frame(&proposed).unwrap()).unwrap();
-    assert_eq!(decoded, proposed);
+    let decoded = decode_server_frame(&encode_server_frame(&saved).unwrap()).unwrap();
+    assert_eq!(decoded, saved);
+
+    let run_plan = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(63),
+        command: ClientCommand::AgentInvoke(AgentInvokeRequest {
+            session_id: session_id.clone(),
+            prompt: "run plan".into(),
+            mode: AgentMode::Agent,
+            plan_ref: Some(plan_ref),
+            context_refs: vec!["@part[top_lid]".into()],
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&run_plan).unwrap()).unwrap();
+    assert_eq!(decoded, run_plan);
 
     let agent_error = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::AgentError(AgentErrorEvent {

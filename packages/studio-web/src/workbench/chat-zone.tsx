@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Stop } from "@phosphor-icons/react";
 import type {
-  AgentOperationLevel,
-  AgentPlanProposedEvent,
+  AgentMode,
   SelectionRef,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
@@ -12,10 +11,7 @@ import { ChatBody } from "./chat-messages";
 import { ChatComposer } from "./chat-composer";
 import {
   cancelAgentRun,
-  confirmPlan,
   createChatSession,
-  rejectPlan,
-  previewPlan,
   reportError,
   selectChatSession,
   sendChatMessage,
@@ -89,21 +85,17 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
       <ChatBody
         messages={controller.messages}
         agentEvents={controller.agentEvents}
-        pendingPlan={controller.pendingPlan}
         llmConfigured={snapshot?.llm_configured ?? true}
         streaming={Boolean(controller.agentRun)}
         streamText={controller.streamText}
-        onPreviewPlan={controller.previewPlan}
-        onConfirmPlan={controller.confirmPlan}
-        onRejectPlan={controller.rejectPlan}
       />
       <ChatComposer
         value={controller.draft}
         disabled={controller.composerDisabled}
-        operation={controller.operation}
+        mode={controller.mode}
         contextPills={controller.contextPills}
         onChange={controller.setDraft}
-        onOperationChange={controller.setOperation}
+        onModeChange={controller.setMode}
         onRemovePill={controller.removePill}
         onSend={controller.send}
       />
@@ -113,11 +105,9 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
 
 function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const [draft, setDraft] = useState("");
-  const [operation, setOperation] = useState<AgentOperationLevel>("auto");
+  const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
-  const [pendingPlan, setPendingPlan] =
-    useState<AgentPlanProposedEvent | null>(null);
   const [streamText, setStreamText] = useState("");
   const sessions = snapshot?.chat_sessions ?? [];
   const currentSessionId =
@@ -152,7 +142,6 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     }
   }, [snapshot?.current_selection]);
 
-  usePlanProposedTracker(agentEvents, setPendingPlan);
   useInitialChatList(client, onStatus);
   useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
 
@@ -163,7 +152,7 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     agentRun,
     busy,
     draft,
-    operation,
+    mode,
     contextPills,
     onStatus,
     setBusy,
@@ -173,8 +162,8 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   return {
     draft,
     setDraft,
-    operation,
-    setOperation,
+    mode,
+    setMode,
     sessions,
     currentSessionId,
     messages,
@@ -182,26 +171,10 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     agentEvents,
     streamText,
     contextPills,
-    pendingPlan,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
     removePill: (refText: string) => {
       setRemovedRefs((prev) => new Set(prev).add(refText));
-    },
-    previewPlan: () => {
-      if (!pendingPlan) return;
-      void previewPlan(client, pendingPlan, onStatus);
-    },
-    confirmPlan: () => {
-      if (!pendingPlan || !snapshot) return;
-      setPendingPlan(null);
-      void confirmPlan(client, pendingPlan, snapshot, onStatus);
-    },
-    rejectPlan: () => {
-      if (!pendingPlan || !currentSessionId) return;
-      const runId = pendingPlan.run_id;
-      setPendingPlan(null);
-      void rejectPlan(client, currentSessionId, runId, onStatus);
     },
     ...actions,
   };
@@ -228,40 +201,6 @@ function buildContextPills(
       ref_text: sel.ref_text,
       display: preferredRefText(sel),
     }));
-}
-
-function usePlanProposedTracker(
-  agentEvents: AgentEvent[],
-  setPendingPlan: (plan: AgentPlanProposedEvent | null) => void,
-) {
-  const trackedRef = useRef<string | null>(null);
-  useEffect(() => {
-    let sawDone = false;
-    for (let i = agentEvents.length - 1; i >= 0; i--) {
-      const ev = agentEvents[i] as AgentEvent | undefined;
-      if (!ev) continue;
-      if (ev.event === "agent.plan_proposed" && ev.payload) {
-        if (!ev.payload["plan_ref"]) {
-          trackedRef.current = null;
-          setPendingPlan(null);
-          return;
-        }
-        const runId = ev.payload["run_id"] as string | undefined;
-        if (runId && trackedRef.current !== runId) {
-          trackedRef.current = runId;
-          setPendingPlan(ev.payload as unknown as AgentPlanProposedEvent);
-        }
-        return;
-      }
-      if (ev.event === "agent.done") {
-        sawDone = true;
-      }
-    }
-    if (sawDone) {
-      trackedRef.current = null;
-      setPendingPlan(null);
-    }
-  }, [agentEvents, setPendingPlan]);
 }
 
 function useInitialChatList(
@@ -301,7 +240,7 @@ function useChatActions(input: {
   agentRun: AgentRun | null;
   busy: boolean;
   draft: string;
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   contextPills: ContextPill[];
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;

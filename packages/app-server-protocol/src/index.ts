@@ -49,7 +49,7 @@ export type CadQueryExportFormat = "step" | "stl" | "three_mf";
 export type CadQueryObjectKind = "part" | "component" | "assembly";
 export type ChatRole = "user" | "assistant" | "tool" | "meta";
 export type ChatSessionId = string;
-export type AgentOperationLevel = "inform" | "plan" | "execute" | "auto";
+export type AgentMode = "agent" | "plan";
 export type AgentErrorType =
   | "llm_error"
   | "llm_refused"
@@ -415,11 +415,12 @@ export interface ChatArchivedResponse {
 export interface AgentInvokeRequest {
   session_id: ChatSessionId;
   prompt: string;
-  operation: AgentOperationLevel;
-  confirmed_cadquery: AgentCadQueryConfirmation | null;
+  mode: AgentMode;
+  plan_ref: PathHandle | null;
   context_refs?: string[];
 }
 
+/** Deprecated: use AgentInvokeRequest { mode: "agent", plan_ref }. */
 export interface AgentCadQueryConfirmation {
   request: CadQueryExecuteRequest;
   plan_ref: PathHandle | null;
@@ -494,12 +495,36 @@ export interface AgentPlanProposedEvent {
   export_targets: PathHandle[];
 }
 
+export interface AgentPlanPackageRef {
+  plan_id: string;
+  plan_ref: PathHandle;
+  request_path: PathHandle;
+  plan_path: PathHandle;
+  result_path: PathHandle;
+}
+
+export interface AgentPlanSavedEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  package: AgentPlanPackageRef;
+  title: string;
+  status: string;
+  target_path: PathHandle;
+  target_type: CadQueryObjectKind;
+  affected_files: PathHandle[];
+  new_files: PathHandle[];
+  change_description: string;
+  export_targets: PathHandle[];
+}
+
+/** Deprecated: use AgentInvokeRequest { mode: "agent", plan_ref }. */
 export interface AgentPlanConfirmRequest {
   session_id: ChatSessionId;
   run_id: string;
   confirmed_cadquery: AgentCadQueryConfirmation;
 }
 
+/** Deprecated: use Agent mode chat flow instead. */
 export interface AgentPlanRejectRequest {
   session_id: ChatSessionId;
   run_id: string;
@@ -607,7 +632,8 @@ export type ServerPushEvent =
   | { event: "agent.mesh_ready"; payload: AgentMeshReadyEvent }
   | { event: "agent.error"; payload: AgentErrorEvent }
   | { event: "agent.done"; payload: AgentDoneEvent }
-  | { event: "agent.plan_proposed"; payload: AgentPlanProposedEvent };
+  | { event: "agent.plan_proposed"; payload: AgentPlanProposedEvent }
+  | { event: "agent.plan_saved"; payload: AgentPlanSavedEvent };
 
 export interface ServerPushEnvelope {
   event: ServerPushEvent;

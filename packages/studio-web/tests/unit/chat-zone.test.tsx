@@ -12,7 +12,7 @@ import type { WasmClient } from "../../src/wasm-bridge";
 describe("ChatZone", () => {
   afterEach(cleanup);
 
-  it("sends auto invoke without confirmed_cadquery", async () => {
+  it("sends agent invoke without plan_ref", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -29,14 +29,14 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "auto",
-        confirmed_cadquery: null,
+        mode: "agent",
+        plan_ref: null,
         context_refs: [],
       }),
     );
   });
 
-  it("sends the operation selected in the composer dropdown", async () => {
+  it("sends the mode selected in the composer dropdown", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -45,10 +45,10 @@ describe("ChatZone", () => {
       />,
     );
 
-    const operationSelect = screen.getByLabelText("agent operation");
-    expect((operationSelect as HTMLSelectElement).value).toBe("auto");
+    const modeSelect = screen.getByLabelText("agent mode");
+    expect((modeSelect as HTMLSelectElement).value).toBe("agent");
 
-    fireEvent.change(operationSelect, { target: { value: "execute" } });
+    fireEvent.change(modeSelect, { target: { value: "plan" } });
     fireEvent.change(screen.getByTestId("chat-input"), {
       target: { value: "apply the latest plan" },
     });
@@ -57,13 +57,13 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "execute",
+        mode: "plan",
         prompt: "apply the latest plan",
       }),
     );
   });
 
-  it("lets slash commands override the composer operation dropdown", async () => {
+  it("lets slash commands override the composer mode dropdown", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -72,18 +72,18 @@ describe("ChatZone", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("agent operation"), {
+    fireEvent.change(screen.getByLabelText("agent mode"), {
       target: { value: "plan" },
     });
     fireEvent.change(screen.getByTestId("chat-input"), {
-      target: { value: "/inform explain CadQuery loft" },
+      target: { value: "/agent explain CadQuery loft" },
     });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "inform",
+        mode: "agent",
         prompt: "explain CadQuery loft",
       }),
     );
@@ -139,14 +139,14 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "auto",
-        confirmed_cadquery: null,
+        mode: "agent",
+        plan_ref: null,
         context_refs: ["@face[top_lid:f_0]"],
       }),
     );
   });
 
-  it("sends explicit operation when using slash command", async () => {
+  it("sends explicit mode when using slash command", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -163,7 +163,7 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
     expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
-        operation: "plan",
+        mode: "plan",
         prompt: "design a sliding lid",
       }),
     );
@@ -174,7 +174,7 @@ describe("ChatZone", () => {
     );
   });
 
-  it("dispatches cadquery preview when clicking plan preview button", async () => {
+  it("renders legacy plan proposals as events without confirmation controls", async () => {
     const client = fakeClient();
     render(
       <ChatZone
@@ -200,137 +200,10 @@ describe("ChatZone", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByTestId("plan-preview-btn")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("plan-preview-btn"));
-
-    await waitFor(() => expect(client.dispatchCadQueryPreview).toHaveBeenCalled());
-    expect(client.dispatchCadQueryPreview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target_path: { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
-        export_formats: [],
-      }),
-    );
-  });
-
-  it("keeps proposed plan visible after the proposing run is done", async () => {
-    const client = fakeClient();
-    render(
-      <ChatZone
-        client={client as unknown as WasmClient}
-        snapshot={{
-          ...chatSnapshot(),
-          agent_events: [
-            {
-              event: "agent.plan_proposed",
-              payload: {
-                session_id: "main",
-                run_id: "run-1",
-                plan_ref: {
-                  workspace_id: "ws",
-                  path_segments: ["plans", "lid.md"],
-                },
-                target_path: {
-                  workspace_id: "ws",
-                  path_segments: ["parts", "lid.py"],
-                },
-                target_type: "part",
-                affected_files: [
-                  { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
-                ],
-                new_files: [],
-                export_targets: [
-                  { workspace_id: "ws", path_segments: ["outputs", "lid.step"] },
-                ],
-                change_description: "increase height",
-              },
-            },
-            {
-              event: "agent.done",
-              payload: { run_id: "run-1", cancelled: false },
-            },
-          ],
-        }}
-      />,
-    );
-
-    await waitFor(() => expect(screen.getByTestId("plan-confirm-btn")).toBeTruthy());
-  });
-
-  it("does not show confirmation controls for plan proposals without plan_ref", async () => {
-    const client = fakeClient();
-    render(
-      <ChatZone
-        client={client as unknown as WasmClient}
-        snapshot={{
-          ...chatSnapshot(),
-          agent_events: [
-            {
-              event: "agent.plan_proposed",
-              payload: {
-                session_id: "main",
-                run_id: "run-1",
-                plan_ref: null,
-                target_path: {
-                  workspace_id: "ws",
-                  path_segments: ["parts", "lid.py"],
-                },
-                target_type: "part",
-                affected_files: [
-                  { workspace_id: "ws", path_segments: ["parts", "lid.py"] },
-                ],
-                new_files: [],
-                export_targets: [
-                  { workspace_id: "ws", path_segments: ["outputs", "lid.step"] },
-                ],
-                change_description: "increase height",
-              },
-            },
-          ],
-        }}
-      />,
-    );
-
+    await waitFor(() => expect(screen.getByText("plan_proposed")).toBeTruthy());
+    expect(screen.getByText("increase height")).toBeTruthy();
     await waitFor(() => expect(screen.queryByTestId("plan-confirm-btn")).toBeNull());
-  });
-
-  it("ignores plan proposals from a different chat session", async () => {
-    const client = fakeClient();
-    render(
-      <ChatZone
-        client={client as unknown as WasmClient}
-        snapshot={{
-          ...chatSnapshot(),
-          agent_events: [
-            {
-              event: "agent.plan_proposed",
-              payload: {
-                session_id: "other",
-                run_id: "run-1",
-                plan_ref: {
-                  workspace_id: "ws",
-                  path_segments: ["plans", "other.md"],
-                },
-                target_path: {
-                  workspace_id: "ws",
-                  path_segments: ["parts", "other.py"],
-                },
-                target_type: "part",
-                affected_files: [
-                  { workspace_id: "ws", path_segments: ["parts", "other.py"] },
-                ],
-                new_files: [],
-                export_targets: [
-                  { workspace_id: "ws", path_segments: ["outputs", "other.step"] },
-                ],
-                change_description: "change other chat",
-              },
-            },
-          ],
-        }}
-      />,
-    );
-
-    await waitFor(() => expect(screen.queryByTestId("plan-confirm-btn")).toBeNull());
+    expect(screen.queryByTestId("plan-preview-btn")).toBeNull();
   });
 
   it("streams only tokens from the current chat session", async () => {
@@ -458,8 +331,6 @@ function fakeClient(): Pick<
   | "dispatchAgentInvoke"
   | "dispatchChatHistory"
   | "dispatchAgentCancel"
-  | "dispatchAgentPlanConfirm"
-  | "dispatchAgentPlanReject"
   | "dispatchCadQueryPreview"
 > {
   return {
@@ -469,8 +340,6 @@ function fakeClient(): Pick<
     dispatchAgentInvoke: vi.fn().mockResolvedValue({}),
     dispatchChatHistory: vi.fn().mockResolvedValue({}),
     dispatchAgentCancel: vi.fn().mockResolvedValue({}),
-    dispatchAgentPlanConfirm: vi.fn().mockResolvedValue({}),
-    dispatchAgentPlanReject: vi.fn().mockResolvedValue({}),
     dispatchCadQueryPreview: vi.fn().mockResolvedValue({}),
   };
 }

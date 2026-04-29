@@ -198,7 +198,7 @@ fn handshake_request() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "studio-app".into(),
             platform: ClientPlatform::Desktop,
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![
                 app_server_protocol::PreviewRequestKind::GeometryArtifact,
@@ -221,10 +221,10 @@ fn recv_server_message(transport: &mut dyn ClientTransport) -> Option<ServerEnve
 #[allow(dead_code)]
 fn handshake_response() -> CapabilityHandshakeResponse {
     CapabilityHandshakeResponse {
-        negotiated_version: 2,
+        negotiated_version: 4,
         session_token: SessionToken("session-1".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![

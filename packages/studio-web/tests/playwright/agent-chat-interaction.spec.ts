@@ -116,7 +116,7 @@ test("@agent-chat input area renders with placeholder and send button", async ({
 
 // --- Protocol frame tests (require completed handshake) ---
 
-test("@agent-chat sending a message emits agent.invoke with operation auto", async ({
+test("@agent-chat sending a message emits agent.invoke with mode agent", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
@@ -133,12 +133,12 @@ test("@agent-chat sending a message emits agent.invoke with operation auto", asy
 
   const cmd = await latestRecordedClientCommand(page, "agent.invoke");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["operation"]).toBe("auto");
+  expect(payload["mode"]).toBe("agent");
   expect(payload["prompt"]).toBe("make the lid taller");
-  expect(payload["confirmed_cadquery"]).toBeFalsy();
+  expect(payload["plan_ref"]).toBeFalsy();
 });
 
-test("@agent-chat slash command /plan sends operation plan in protocol frame", async ({
+test("@agent-chat slash command /plan sends mode plan in protocol frame", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
@@ -155,17 +155,17 @@ test("@agent-chat slash command /plan sends operation plan in protocol frame", a
 
   const cmd = await latestRecordedClientCommand(page, "agent.invoke");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["operation"]).toBe("plan");
+  expect(payload["mode"]).toBe("plan");
   expect(payload["prompt"]).toBe("design a sliding lid mechanism");
 });
 
-test("@agent-chat slash command /execute sends operation execute", async ({
+test("@agent-chat slash command /agent sends mode agent", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
   await clearRecordedClientCommands(page);
 
-  await fillAndSend(page, "/execute apply the changes");
+  await fillAndSend(page, "/agent apply the changes");
 
   await expect
     .poll(
@@ -176,29 +176,8 @@ test("@agent-chat slash command /execute sends operation execute", async ({
 
   const cmd = await latestRecordedClientCommand(page, "agent.invoke");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["operation"]).toBe("execute");
+  expect(payload["mode"]).toBe("agent");
   expect(payload["prompt"]).toBe("apply the changes");
-});
-
-test("@agent-chat slash command /inform sends operation inform", async ({
-  page,
-}) => {
-  await waitForChatReadyWithHandshake(page);
-  await clearRecordedClientCommands(page);
-
-  await fillAndSend(page, "/inform explain CadQuery fillet");
-
-  await expect
-    .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
-      { timeout: 15_000 },
-    )
-    .toBeTruthy();
-
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
-  const payload = cmd as Record<string, unknown>;
-  expect(payload["operation"]).toBe("inform");
-  expect(payload["prompt"]).toBe("explain CadQuery fillet");
 });
 
 test("@agent-chat chat.send frame carries the display content without slash prefix", async ({

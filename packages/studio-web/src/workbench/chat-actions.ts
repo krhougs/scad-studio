@@ -1,10 +1,6 @@
-import type {
-  CadQueryExportFormat,
-  AgentOperationLevel,
-  AgentPlanProposedEvent,
-} from "@budn/app-server-protocol";
+import type { AgentMode } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
-import type { ChatSnapshot, ContextPill, AgentRun, ChatSessionSummary } from "./chat-zone";
+import type { ContextPill, AgentRun, ChatSessionSummary } from "./chat-zone";
 
 export async function createChatSession(
   client: WasmClient | null,
@@ -56,7 +52,7 @@ export async function cancelAgentRun(
 export async function sendChatMessage(params: {
   client: WasmClient | null;
   draft: string;
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
   agentRun: AgentRun | null;
@@ -82,7 +78,7 @@ export async function sendChatMessage(params: {
 async function sendChatMessageInner(
   params: {
     client: WasmClient | null;
-    operation: AgentOperationLevel;
+    mode: AgentMode;
     currentSessionId: string | null;
     sessions: ChatSessionSummary[];
     contextPills: ContextPill[];
@@ -104,8 +100,8 @@ async function sendChatMessageInner(
     ));
   if (!sessionId) return;
   const explicitCommand = parseExplicitSlashCommand(content);
-  const { operation, prompt } =
-    explicitCommand ?? { operation: params.operation, prompt: content.trim() };
+  const { mode, prompt } =
+    explicitCommand ?? { mode: params.mode, prompt: content.trim() };
   const displayContent = prompt || content;
   await client.dispatchChatSend({
     session_id: sessionId,
@@ -117,105 +113,27 @@ async function sendChatMessageInner(
   await client.dispatchAgentInvoke({
     session_id: sessionId,
     prompt: displayContent,
-    operation,
-    confirmed_cadquery: null,
+    mode,
+    plan_ref: null,
     context_refs,
   });
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
 }
 
-export async function previewPlan(
-  client: WasmClient | null,
-  plan: AgentPlanProposedEvent,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  await client
-    .dispatchCadQueryPreview({
-      target_path: plan.target_path,
-      export_formats: [],
-      params_json: "{}",
-    })
-    .catch(reportError(onStatus));
-}
-
-// plan.run_id identifies the plan-proposing run; the backend creates a new Execute run on confirm.
-export async function confirmPlan(
-  client: WasmClient | null,
-  plan: AgentPlanProposedEvent,
-  _snapshot: ChatSnapshot,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  const confirmation = {
-    request: {
-      target_path: plan.target_path,
-      target_type: plan.target_type,
-      code: "",
-      export_formats: exportFormatsForTargets(plan.export_targets),
-      params_json: "{}",
-    },
-    plan_ref: plan.plan_ref,
-    affected_files: plan.affected_files,
-    new_files: plan.new_files ?? [],
-    export_targets: plan.export_targets,
-  };
-  await client
-    .dispatchAgentPlanConfirm({
-      session_id: plan.session_id,
-      run_id: plan.run_id,
-      confirmed_cadquery: confirmation,
-    })
-    .catch(reportError(onStatus));
-}
-
-function exportFormatsForTargets(
-  targets: AgentPlanProposedEvent["export_targets"],
-): CadQueryExportFormat[] {
-  const formats = targets
-    .map((target) => target.path_segments.at(-1) ?? "")
-    .map(exportFormatFromFilename)
-    .filter((format): format is CadQueryExportFormat => Boolean(format));
-  return Array.from(new Set(formats));
-}
-
-function exportFormatFromFilename(
-  filename: string,
-): CadQueryExportFormat | null {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".step")) return "step";
-  if (lower.endsWith(".stl")) return "stl";
-  if (lower.endsWith(".3mf")) return "three_mf";
-  return null;
-}
-
-export async function rejectPlan(
-  client: WasmClient | null,
-  sessionId: string,
-  runId: string,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  await client
-    .dispatchAgentPlanReject({ session_id: sessionId, run_id: runId })
-    .catch(reportError(onStatus));
-}
-
 type SlashCommandResult = {
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   prompt: string;
 };
 
-const SLASH_COMMANDS: Record<string, AgentOperationLevel> = {
+const SLASH_COMMANDS: Record<string, AgentMode> = {
+  "/agent": "agent",
   "/plan": "plan",
-  "/execute": "execute",
-  "/inform": "inform",
 };
 
 export function parseSlashCommand(input: string): SlashCommandResult {
   return (
     parseExplicitSlashCommand(input) ?? {
-      operation: "auto",
+      mode: "agent",
       prompt: input.trim(),
     }
   );
@@ -223,11 +141,11 @@ export function parseSlashCommand(input: string): SlashCommandResult {
 
 function parseExplicitSlashCommand(input: string): SlashCommandResult | null {
   const trimmed = input.trimStart();
-  for (const [prefix, operation] of Object.entries(SLASH_COMMANDS)) {
+  for (const [prefix, mode] of Object.entries(SLASH_COMMANDS)) {
     if (!trimmed.startsWith(prefix)) continue;
     const afterCmd = trimmed.slice(prefix.length);
     if (afterCmd.length === 0 || /^\s/.test(afterCmd)) {
-      return { operation, prompt: afterCmd.trim() };
+      return { mode, prompt: afterCmd.trim() };
     }
   }
   return null;

@@ -4,7 +4,7 @@ use std::{
 };
 
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryExportFormat, CadQueryObjectKind, PathHandle, WorkspaceId,
+    AgentMode, CadQueryExportFormat, CadQueryObjectKind, PathHandle, WorkspaceId,
 };
 use serde_json::Value;
 
@@ -115,10 +115,10 @@ pub(super) fn validate_execute_scope(
     request: &CadQueryToolRunRequest,
     context: &AgentToolRunContext,
 ) -> Result<(), String> {
-    if context.operation != AgentOperationLevel::Execute {
+    if context.mode != AgentMode::Agent {
         return Err(tool_error_json(
             call,
-            "cadquery_execute requires Execute operation",
+            "cadquery_execute requires Agent mode",
             "permission_denied",
         ));
     }

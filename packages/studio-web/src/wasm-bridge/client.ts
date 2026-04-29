@@ -171,10 +171,12 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
   }
 
+  /** @deprecated Use dispatchAgentInvoke with mode "agent" and plan_ref. */
   dispatchAgentPlanConfirm(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_confirm(h, params));
   }
 
+  /** @deprecated Plan package flow no longer requires a reject command. */
   dispatchAgentPlanReject(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_reject(h, params));
   }

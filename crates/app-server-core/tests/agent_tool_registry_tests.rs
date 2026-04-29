@@ -1,8 +1,8 @@
 use app_server_core::{
     AgentSemanticStore, AgentToolSpec, CadQueryModelFilePolicy, OutputPathPolicy,
-    agent_tool_definitions_for_operation, agent_tool_permission, agent_tool_specs,
+    agent_tool_definitions_for_mode, agent_tool_permission, agent_tool_specs,
 };
-use app_server_protocol::AgentOperationLevel;
+use app_server_protocol::AgentMode;
 
 #[test]
 fn registry_tool_set_matches_mvp_contract() {
@@ -12,7 +12,7 @@ fn registry_tool_set_matches_mvp_contract() {
         .map(|spec| spec.definition.name.as_str())
         .collect::<Vec<_>>();
     actual.sort_unstable();
-    let mut expected = expected_tool_operations()
+    let mut expected = expected_tool_modes()
         .iter()
         .map(|(tool, _)| *tool)
         .collect::<Vec<_>>();
@@ -30,19 +30,16 @@ fn registry_tool_set_matches_mvp_contract() {
 }
 
 #[test]
-fn registry_definitions_are_filtered_by_operation_contract() {
-    for (tool, operations) in expected_tool_operations() {
+fn registry_definitions_are_filtered_by_mode_contract() {
+    for (tool, modes) in expected_tool_modes() {
         let spec = spec_by_name(tool);
-        assert_eq!(
-            spec.allowed_operations, operations,
-            "operation set for {tool}"
-        );
-        for operation in all_operations() {
-            let names = tool_names(operation);
+        assert_eq!(spec.allowed_modes, modes, "mode set for {tool}");
+        for mode in all_modes() {
+            let names = tool_names(mode);
             assert_eq!(
                 names.iter().any(|name| name == tool),
-                operations.contains(&operation),
-                "tool definition visibility for {tool:?} in {operation:?}"
+                modes.contains(&mode),
+                "tool definition visibility for {tool:?} in {mode:?}"
             );
         }
     }
@@ -50,20 +47,20 @@ fn registry_definitions_are_filtered_by_operation_contract() {
 
 #[test]
 fn registry_permission_reports_confirmation_requirements() {
-    for (tool, operations) in expected_tool_operations() {
+    for (tool, modes) in expected_tool_modes() {
         let spec = spec_by_name(tool);
-        for operation in all_operations() {
-            let without_confirmation = agent_tool_permission(tool, operation, false);
-            let with_confirmation = agent_tool_permission(tool, operation, true);
-            let allowed_by_operation = operations.contains(&operation);
+        for mode in all_modes() {
+            let without_confirmation = agent_tool_permission(tool, mode, false);
+            let with_confirmation = agent_tool_permission(tool, mode, true);
+            let allowed_by_mode = modes.contains(&mode);
             assert_eq!(
                 without_confirmation.allowed,
-                allowed_by_operation && !spec.requires_confirmation,
-                "permission without confirmation for {tool:?} in {operation:?}"
+                allowed_by_mode && !spec.requires_confirmation,
+                "permission without confirmation for {tool:?} in {mode:?}"
             );
             assert_eq!(
-                with_confirmation.allowed, allowed_by_operation,
-                "permission with confirmation for {tool:?} in {operation:?}"
+                with_confirmation.allowed, allowed_by_mode,
+                "permission with confirmation for {tool:?} in {mode:?}"
             );
             assert_eq!(
                 with_confirmation.requires_confirmation, spec.requires_confirmation,
@@ -71,9 +68,7 @@ fn registry_permission_reports_confirmation_requirements() {
             );
         }
     }
-    assert!(
-        !agent_tool_permission("delete_everything", AgentOperationLevel::Execute, true).allowed
-    );
+    assert!(!agent_tool_permission("delete_everything", AgentMode::Agent, true).allowed);
 }
 
 #[test]
@@ -235,13 +230,8 @@ fn spec_by_name(tool: &str) -> AgentToolSpec {
         .unwrap_or_else(|| panic!("missing tool spec: {tool}"))
 }
 
-fn expected_tool_operations() -> Vec<(&'static str, Vec<AgentOperationLevel>)> {
-    let readonly = vec![
-        AgentOperationLevel::Inform,
-        AgentOperationLevel::Plan,
-        AgentOperationLevel::Execute,
-        AgentOperationLevel::Auto,
-    ];
+fn expected_tool_modes() -> Vec<(&'static str, Vec<AgentMode>)> {
+    let readonly = vec![AgentMode::Agent, AgentMode::Plan];
     vec![
         ("read_file", readonly.clone()),
         ("list_directory", readonly.clone()),
@@ -252,38 +242,26 @@ fn expected_tool_operations() -> Vec<(&'static str, Vec<AgentOperationLevel>)> {
         ("cadquery_analyze_source", readonly.clone()),
         ("cadquery_get_result", readonly.clone()),
         ("cadquery_resolve_selection", readonly),
-        (
-            "update_chat_summary",
-            vec![
-                AgentOperationLevel::Inform,
-                AgentOperationLevel::Plan,
-                AgentOperationLevel::Execute,
-            ],
-        ),
-        ("save_cad_plan", vec![AgentOperationLevel::Plan]),
+        ("update_chat_summary", vec![AgentMode::Agent]),
+        ("save_cad_plan", vec![AgentMode::Plan]),
         (
             "cadquery_check_source",
-            vec![AgentOperationLevel::Plan, AgentOperationLevel::Execute],
+            vec![AgentMode::Plan, AgentMode::Agent],
         ),
-        ("cadquery_dry_run", vec![AgentOperationLevel::Execute]),
-        ("write_file", vec![AgentOperationLevel::Execute]),
-        ("patch_file", vec![AgentOperationLevel::Execute]),
-        ("copy_file", vec![AgentOperationLevel::Execute]),
-        ("cadquery_execute", vec![AgentOperationLevel::Execute]),
+        ("cadquery_dry_run", vec![AgentMode::Agent]),
+        ("write_file", vec![AgentMode::Agent]),
+        ("patch_file", vec![AgentMode::Agent]),
+        ("copy_file", vec![AgentMode::Agent]),
+        ("cadquery_execute", vec![AgentMode::Agent]),
     ]
 }
 
-fn all_operations() -> [AgentOperationLevel; 4] {
-    [
-        AgentOperationLevel::Inform,
-        AgentOperationLevel::Plan,
-        AgentOperationLevel::Execute,
-        AgentOperationLevel::Auto,
-    ]
+fn all_modes() -> [AgentMode; 2] {
+    [AgentMode::Agent, AgentMode::Plan]
 }
 
-fn tool_names(operation: AgentOperationLevel) -> Vec<String> {
-    agent_tool_definitions_for_operation(operation)
+fn tool_names(mode: AgentMode) -> Vec<String> {
+    agent_tool_definitions_for_mode(mode)
         .into_iter()
         .map(|definition| definition.name)
         .collect()

@@ -7,8 +7,8 @@ use app_server_core::{
     build_turn_messages, extract_cadquery_code,
 };
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
-    SelectionRef,
+    AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
+    SelectionRef, WorkspaceId,
 };
 use std::cell::RefCell;
 use std::io::Cursor;
@@ -182,12 +182,12 @@ fn read_sse_stream_returns_empty_for_no_content_chunks() {
 #[test]
 fn build_turn_messages_includes_system_prompt_and_history() {
     let input = AgentTurnInput {
-        operation: AgentOperationLevel::Inform,
+        mode: AgentMode::Agent,
         prompt: "explain fillet".into(),
         history: vec![chat_msg("user", "hi"), chat_msg("assistant", "hello")],
         selections: Vec::new(),
         active_selection_index: None,
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     };
     let messages = build_turn_messages(&input);
@@ -204,7 +204,7 @@ fn build_turn_messages_includes_system_prompt_and_history() {
 #[test]
 fn build_turn_messages_skips_empty_and_tool_history() {
     let input = AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
+        mode: AgentMode::Plan,
         prompt: "design a lid".into(),
         history: vec![
             chat_msg("user", "initial"),
@@ -213,7 +213,7 @@ fn build_turn_messages_skips_empty_and_tool_history() {
         ],
         selections: Vec::new(),
         active_selection_index: None,
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     };
     let messages = build_turn_messages(&input);
@@ -222,48 +222,50 @@ fn build_turn_messages_skips_empty_and_tool_history() {
 }
 
 #[test]
-fn build_turn_context_includes_operation_and_selection() {
+fn build_turn_context_includes_mode_plan_ref_and_selection() {
     let input = AgentTurnInput {
-        operation: AgentOperationLevel::Inform,
+        mode: AgentMode::Agent,
         prompt: "unused".into(),
         history: Vec::new(),
         selections: vec![test_selection()],
         active_selection_index: Some(0),
-        confirmed_target_path: Some("parts/lid.py".into()),
+        plan_ref: Some(
+            PathHandle::new(WorkspaceId::new("ws"), ["plans", "2026050100-lid"]).unwrap(),
+        ),
         context_refs: Vec::new(),
     };
     let context = build_turn_context(&input);
-    assert!(context.contains("Inform"));
+    assert!(context.contains("Mode: Agent"));
+    assert!(context.contains("Plan ref: plans/2026050100-lid"));
     assert!(context.contains("Viewer selection"));
-    assert!(context.contains("Confirmed target: parts/lid.py"));
 }
 
 #[test]
 fn build_turn_context_omits_selection_when_empty() {
     let input = AgentTurnInput {
-        operation: AgentOperationLevel::Auto,
+        mode: AgentMode::Agent,
         prompt: "unused".into(),
         history: Vec::new(),
         selections: Vec::new(),
         active_selection_index: None,
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: Vec::new(),
     };
     let context = build_turn_context(&input);
-    assert!(context.contains("Auto"));
+    assert!(context.contains("Mode: Agent"));
     assert!(!context.contains("Viewer selection"));
-    assert!(!context.contains("Confirmed target"));
+    assert!(!context.contains("Plan ref"));
 }
 
 #[test]
 fn build_turn_context_includes_context_refs() {
     let input = AgentTurnInput {
-        operation: AgentOperationLevel::Auto,
+        mode: AgentMode::Agent,
         prompt: "unused".into(),
         history: Vec::new(),
         selections: Vec::new(),
         active_selection_index: None,
-        confirmed_target_path: None,
+        plan_ref: None,
         context_refs: vec!["@face[top_lid:f_0]".into(), "@part[bottom_case]".into()],
     };
     let context = build_turn_context(&input);
@@ -288,7 +290,7 @@ fn build_execute_messages_includes_structured_context() {
     assert_eq!(messages[1].content, "previous request");
     let last = &messages[2];
     assert_eq!(last.role, "user");
-    assert!(last.content.contains("Operation: Execute"));
+    assert!(last.content.contains("Mode: Agent"));
     assert!(last.content.contains("Target path: parts/box.py"));
     assert!(last.content.contains("Target type: part"));
     assert!(last.content.contains("```python"));

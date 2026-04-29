@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，并通过独立 subagent review；后续 Phase 自动继续执行。
+正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，并通过独立 subagent review；后续 Phase 自动继续执行。
 
 ## 前置提交
 
@@ -13,7 +13,7 @@
 | Phase | 状态 | 结果 |
 |---|---|---|
 | Phase 1 — 文档与产品语义更新 | 已完成 | 已统一 Agent / Plan 双模式文档、运行时 system prompt、tool contract、Ref PRD、Chat 交互设计和 known issues；旧 confirmation 术语仅保留在历史 / deprecated / known issues 语境 |
-| Phase 2 — Protocol 与共享数据模型收敛 | 未开始 | 待执行 |
+| Phase 2 — Protocol 与共享数据模型收敛 | 已完成 | 已将 Agent 请求协议收敛为 Agent / Plan 双模式、加入 plan package ref / saved event、提升 protocol version 到 v4，并让旧 confirmation 命令仅保留 deprecated 兼容路径 |
 | Phase 3 — 后端 Plan Package 存储与解析 | 未开始 | 待执行 |
 | Phase 4 — 后端 Agent Mode 执行模型 | 未开始 | 待执行 |
 | Phase 5 — Web Chat 模式简化 | 未开始 | 待执行 |
@@ -55,3 +55,30 @@
   - `git diff --check`：通过。
 - 遗留问题：
   - Phase 1 仅完成文档和运行时 prompt 契约更新；protocol、后端、Web Chat 和 Markdown preview 实现继续由 Phase 2 至 Phase 6 完成。
+
+### Phase 2 — Protocol 与共享数据模型收敛
+
+- 完成情况：
+  - 更新 `crates/app-server-protocol/src/protocol.rs` 和 TypeScript protocol package，将 `AgentOperationLevel` / `operation` 替换为 `AgentMode` / `mode`，并在 `AgentInvokeRequest` 中加入 `plan_ref` 和 `context_refs`。
+  - 新增 `AgentPlanPackageRef`、`AgentPlanSavedEvent` 和 `agent.plan_saved` push event；保留 `AgentPlanConfirmRequest`、`AgentPlanRejectRequest` 和 `AgentCadQueryConfirmation` 作为 deprecated 兼容类型。
+  - 将 protocol version 提升到 v4，并更新 Rust roundtrip、host、wasm bridge、Web wiring 和 protocol smoke 覆盖。
+  - 更新 app server host dispatcher，使 `agent.plan.confirm` 和 `agent.plan.reject` 返回明确 deprecated error，不再作为执行成功路径。
+  - 为了保持协议变更后的编译和行为一致，同步将 core agent turn、tool registry 和 Web Chat 主请求路径迁移到 `Agent` / `Plan` mode；Web 新主路径不再暴露 `/execute`、`/inform`、Plan Confirmation 或 Confirm Execute。
+- Review：
+  - 第一轮 Phase 2 review 发现 host / core 仍依赖旧 `AgentOperationLevel`、Web 仍展示 Plan Confirmation、Web 单测仍固定旧确认流，已修复。
+  - 第二轮 Phase 2 review 发现 host 测试仍使用旧 `AgentInvokeRequest` 字段、旧 confirm 成功测试仍存在、host / wasm 协议样例仍为 v3，已修复。
+  - 第三轮 Phase 2 review 未发现阻塞项；review 明确指出 core 中残留的 `confirmation_scope` / `requires_confirmation` 属于 Phase 4 执行模型重构范围，未重新成为 Web、host 或 protocol 的当前主流程入口。
+- 验证：
+  - `cargo fmt --check -p app-server-protocol -p app-server-core -p app-server-host -p studio-web-wasm`：通过。
+  - `cargo test -p app-server-protocol --tests`：通过。
+  - `cargo test -p app-server-core --tests`：通过，仅有既有 watch dead_code warning。
+  - `cargo test -p app-server-host --tests`：通过，仅有既有 watch dead_code warning。
+  - `cargo test -p studio-web-wasm --tests`：通过。
+  - `bun run protocol:smoke`：通过。
+  - `cd packages/studio-web && bun run typecheck`：通过。
+  - `cd packages/studio-web && bun run test:unit -- tests/unit/chat-actions.test.ts tests/unit/chat-zone.test.tsx tests/unit/protocol-package-import.test.ts tests/unit/workbench-wiring.test.ts`：4 个测试文件、20 个测试通过。
+  - `rg -n "AgentOperationLevel|operation_for_tool_loop|agent_tool_definitions_for_operation|confirmed_cadquery|Confirmed target|Operation level|Operation: Execute|Confirm Execute|Plan Confirmation|/execute|/inform" ...`：仅命中 deprecated 兼容字段、deprecated confirm 测试 helper 和 prompt 反向断言。
+  - `git diff --check`：通过。
+- 遗留问题：
+  - Phase 2 只完成协议与共享数据模型收敛；plan package 的实际创建 / 解析由 Phase 3 完成。
+  - core 内部 `confirmation_scope` / `requires_confirmation` 仍会在 Phase 4 中替换为 Agent mode execution scope 和 path policy。

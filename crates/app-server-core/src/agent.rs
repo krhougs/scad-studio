@@ -2,7 +2,7 @@ mod selection;
 pub mod tools;
 
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
+    AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
     SelectionRef,
 };
 
@@ -22,12 +22,12 @@ pub struct AgentBackendDecision {
 
 #[derive(Debug, Clone)]
 pub struct AgentTurnInput {
-    pub operation: AgentOperationLevel,
+    pub mode: AgentMode,
     pub prompt: String,
     pub history: Vec<ChatMessageRecord>,
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
-    pub confirmed_target_path: Option<String>,
+    pub plan_ref: Option<PathHandle>,
     pub context_refs: Vec<String>,
 }
 
@@ -109,27 +109,8 @@ pub fn llm_request_for_cadquery_execute(input: AgentCadQueryCodeInput) -> AgentL
     }
 }
 
-pub fn operation_for_tool_loop(
-    requested: AgentOperationLevel,
-    prompt: &str,
-    has_confirmation: bool,
-) -> AgentOperationLevel {
-    if requested != AgentOperationLevel::Auto {
-        return requested;
-    }
-    if has_confirmation {
-        return AgentOperationLevel::Execute;
-    }
-    let normalized = prompt.trim().to_ascii_lowercase();
-    if normalized.starts_with("/plan")
-        || normalized.contains(" plan")
-        || normalized.contains("方案")
-        || normalized.contains("计划")
-    {
-        AgentOperationLevel::Plan
-    } else {
-        AgentOperationLevel::Inform
-    }
+pub fn mode_for_tool_loop(requested: AgentMode) -> AgentMode {
+    requested
 }
 
 impl AgentBackend for LocalAgentBackend {
@@ -143,7 +124,7 @@ impl AgentBackend for LocalAgentBackend {
     ) -> Result<GeneratedCadQueryCode, AgentBackendError> {
         let _request = llm_request_for_cadquery_execute(input);
         Err(AgentBackendError {
-            message: "CadQuery Execute 需要 LLM 后端输出结构化 CadQuery 代码；本地 fallback 不生成几何代码"
+            message: "Agent mode CadQuery 生成需要 LLM 后端输出结构化 CadQuery 代码；本地 fallback 不生成几何代码"
                 .into(),
         })
     }
@@ -153,7 +134,7 @@ fn cadquery_execute_context(input: AgentCadQueryCodeInput) -> String {
     let history = history_context(&input.history);
     let selections = selection_context(&input.selections);
     format!(
-        "Operation: Execute\nUser request: {}\nHistory: {history}\nTarget path: {}\nTarget type: {}\nActive selection index: {}\nSelections:\n{selections}",
+        "Mode: Agent\nUser request: {}\nHistory: {history}\nTarget path: {}\nTarget type: {}\nActive selection index: {}\nSelections:\n{selections}",
         non_empty(input.prompt.trim(), "未提供具体问题"),
         input.target_display_path,
         object_kind_label(input.target_type),
@@ -165,20 +146,21 @@ fn cadquery_execute_context(input: AgentCadQueryCodeInput) -> String {
 }
 
 fn draft_local_turn(input: AgentTurnInput) -> AgentTurnDraft {
-    if input.operation == AgentOperationLevel::Plan {
+    if input.mode == AgentMode::Plan {
         return draft_cad_plan(input);
     }
-    let operation = operation_label(input.operation);
+    let mode = mode_label(input.mode);
     let prompt = non_empty(input.prompt.trim(), "未提供具体问题");
     let history = latest_history(&input.history);
     let selections = selection_summary(&input.selections);
-    let target = input
-        .confirmed_target_path
-        .as_deref()
-        .unwrap_or("未确认 CadQuery 目标文件");
+    let plan_ref = input
+        .plan_ref
+        .as_ref()
+        .map(PathHandle::display_path)
+        .unwrap_or_else(|| "none".into());
     AgentTurnDraft {
         text: format!(
-            "{operation} turn\nPrompt: {prompt}\nContext: {history}\nSelection: {selections}\nTarget: {target}"
+            "{mode} turn\nPrompt: {prompt}\nContext: {history}\nSelection: {selections}\nPlan ref: {plan_ref}"
         ),
     }
 }
@@ -194,7 +176,7 @@ fn draft_cad_plan(input: AgentTurnInput) -> AgentTurnDraft {
     let target_path = decision
         .as_ref()
         .and_then(|target| target.target_path.as_deref())
-        .unwrap_or("未确认 CadQuery 目标文件");
+        .unwrap_or("未指定 CadQuery 目标文件");
     let affected_files = decision
         .as_ref()
         .map(affected_paths_text)
@@ -205,18 +187,16 @@ fn draft_cad_plan(input: AgentTurnInput) -> AgentTurnDraft {
         .unwrap_or("part geometry");
     AgentTurnDraft {
         text: format!(
-            "## CAD Plan\n- Request: {prompt}\n- Context: {history}\n- Selection: {selection}\n- Target: {target_path}\n- Edit: {edit_goal}\n- Confirmation: affected_files=[{affected_files}], export_targets=[{}]",
+            "## CAD Plan\n- Request: {prompt}\n- Context: {history}\n- Selection: {selection}\n- Target: {target_path}\n- Edit: {edit_goal}\n- Execution scope: affected_files=[{affected_files}], export_targets=[{}]",
             export_target_path(target_path)
         ),
     }
 }
 
-fn operation_label(operation: AgentOperationLevel) -> &'static str {
-    match operation {
-        AgentOperationLevel::Inform => "Inform",
-        AgentOperationLevel::Plan => "Plan",
-        AgentOperationLevel::Execute => "Execute",
-        AgentOperationLevel::Auto => "Auto",
+fn mode_label(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Agent => "Agent",
+        AgentMode::Plan => "Plan",
     }
 }
 
@@ -439,10 +419,10 @@ fn append_history_messages(messages: &mut Vec<LlmMessage>, history: &[ChatMessag
 
 pub fn build_turn_context(input: &AgentTurnInput) -> String {
     let mut parts = Vec::new();
-    parts.push(format!(
-        "Operation level: {}",
-        operation_label(input.operation)
-    ));
+    parts.push(format!("Mode: {}", mode_label(input.mode)));
+    if let Some(plan_ref) = &input.plan_ref {
+        parts.push(format!("Plan ref: {}", plan_ref.display_path()));
+    }
     if !input.context_refs.is_empty() {
         parts.push(format!(
             "User-attached context refs: {}",
@@ -455,16 +435,13 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
             selection_context(&input.selections)
         ));
     }
-    if let Some(target) = &input.confirmed_target_path {
-        parts.push(format!("Confirmed target: {target}"));
-    }
     parts.join("\n")
 }
 
 fn cadquery_execute_context_for_llm(input: &AgentCadQueryCodeInput) -> String {
     let selections = selection_context(&input.selections);
     format!(
-        "Operation: Execute\n\
+        "Mode: Agent\n\
          User request: {}\n\
          Target path: {}\n\
          Target type: {}\n\

@@ -55,7 +55,7 @@ fn build_session() -> HostSession {
     HostSession::new(
         SessionToken("session-1".into()),
         ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],

@@ -1,6 +1,6 @@
 mod schemas;
 
-use app_server_protocol::AgentOperationLevel;
+use app_server_protocol::AgentMode;
 
 use crate::llm::LlmToolDefinition;
 use schemas::*;
@@ -51,7 +51,7 @@ pub struct AgentToolPathPolicy {
 pub struct AgentToolSpec {
     pub definition: LlmToolDefinition,
     pub category: AgentToolCategory,
-    pub allowed_operations: Vec<AgentOperationLevel>,
+    pub allowed_modes: Vec<AgentMode>,
     pub requires_confirmation: bool,
     pub automatic_llm_tool: bool,
     pub path_policy: AgentToolPathPolicy,
@@ -134,7 +134,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             save_cad_plan_input_schema(),
             save_cad_plan_success_schema(),
             AgentToolCategory::SemanticState,
-            vec![AgentOperationLevel::Plan],
+            vec![AgentMode::Plan],
             false,
             cad_plan_policy(),
         ),
@@ -144,11 +144,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             update_chat_summary_input_schema(),
             update_chat_summary_success_schema(),
             AgentToolCategory::SemanticState,
-            vec![
-                AgentOperationLevel::Inform,
-                AgentOperationLevel::Plan,
-                AgentOperationLevel::Execute,
-            ],
+            vec![AgentMode::Agent],
             false,
             chat_summary_policy(),
         ),
@@ -158,7 +154,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             write_file_input_schema(),
             file_write_success_schema(),
             AgentToolCategory::FileWrite,
-            vec![AgentOperationLevel::Execute],
+            vec![AgentMode::Agent],
             true,
             confirmed_text_write_policy(CadQueryModelFilePolicy::Denied),
         ),
@@ -168,7 +164,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             patch_file_input_schema(),
             file_write_success_schema(),
             AgentToolCategory::FileWrite,
-            vec![AgentOperationLevel::Execute],
+            vec![AgentMode::Agent],
             true,
             confirmed_text_write_policy(CadQueryModelFilePolicy::Denied),
         ),
@@ -178,7 +174,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             copy_file_input_schema(),
             file_write_success_schema(),
             AgentToolCategory::FileWrite,
-            vec![AgentOperationLevel::Execute],
+            vec![AgentMode::Agent],
             true,
             confirmed_text_write_policy(CadQueryModelFilePolicy::CopyOnly),
         ),
@@ -191,21 +187,17 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
     ]
 }
 
-pub fn agent_tool_definitions_for_operation(
-    operation: AgentOperationLevel,
-) -> Vec<LlmToolDefinition> {
+pub fn agent_tool_definitions_for_mode(mode: AgentMode) -> Vec<LlmToolDefinition> {
     agent_tool_specs()
         .into_iter()
-        .filter(|spec| {
-            spec.automatic_llm_tool && spec.allowed_operations.iter().any(|op| *op == operation)
-        })
+        .filter(|spec| spec.automatic_llm_tool && spec.allowed_modes.iter().any(|op| *op == mode))
         .map(|spec| spec.definition)
         .collect()
 }
 
 pub fn agent_tool_permission(
     tool_name: &str,
-    operation: AgentOperationLevel,
+    mode: AgentMode,
     has_confirmation: bool,
 ) -> AgentToolPermission {
     let Some(spec) = agent_tool_specs()
@@ -214,10 +206,10 @@ pub fn agent_tool_permission(
     else {
         return denied(false, "unknown tool");
     };
-    if !spec.allowed_operations.iter().any(|op| *op == operation) {
+    if !spec.allowed_modes.iter().any(|op| *op == mode) {
         return denied(
             spec.requires_confirmation,
-            "tool is not allowed for this operation",
+            "tool is not allowed for this mode",
         );
     }
     if spec.requires_confirmation && !has_confirmation {
@@ -236,7 +228,7 @@ fn spec(
     parameters: serde_json::Value,
     success_schema: serde_json::Value,
     category: AgentToolCategory,
-    allowed_operations: Vec<AgentOperationLevel>,
+    allowed_modes: Vec<AgentMode>,
     requires_confirmation: bool,
     path_policy: AgentToolPathPolicy,
 ) -> AgentToolSpec {
@@ -247,7 +239,7 @@ fn spec(
             parameters,
         },
         category,
-        allowed_operations,
+        allowed_modes,
         requires_confirmation,
         automatic_llm_tool: true,
         path_policy,
@@ -276,7 +268,7 @@ fn cadquery_check_source_spec() -> AgentToolSpec {
         cadquery_check_source_input_schema(),
         cadquery_check_source_success_schema(),
         AgentToolCategory::CadQuery,
-        vec![AgentOperationLevel::Plan, AgentOperationLevel::Execute],
+        vec![AgentMode::Plan, AgentMode::Agent],
         false,
         cadquery_read_policy(OutputPathPolicy::Denied),
     )
@@ -289,7 +281,7 @@ fn cadquery_dry_run_spec() -> AgentToolSpec {
         cadquery_dry_run_input_schema(),
         cadquery_run_success_schema(),
         AgentToolCategory::CadQuery,
-        vec![AgentOperationLevel::Execute],
+        vec![AgentMode::Agent],
         false,
         cadquery_read_policy(OutputPathPolicy::TemporaryResultCacheOnly),
     )
@@ -302,7 +294,7 @@ fn cadquery_execute_spec() -> AgentToolSpec {
         cadquery_execute_input_schema(),
         cadquery_execute_success_schema(),
         AgentToolCategory::CadQuery,
-        vec![AgentOperationLevel::Execute],
+        vec![AgentMode::Agent],
         true,
         cadquery_execute_policy(),
     )
@@ -342,13 +334,8 @@ fn denied(requires_confirmation: bool, reason: &'static str) -> AgentToolPermiss
     }
 }
 
-fn readonly_ops() -> Vec<AgentOperationLevel> {
-    vec![
-        AgentOperationLevel::Inform,
-        AgentOperationLevel::Plan,
-        AgentOperationLevel::Execute,
-        AgentOperationLevel::Auto,
-    ]
+fn readonly_ops() -> Vec<AgentMode> {
+    vec![AgentMode::Agent, AgentMode::Plan]
 }
 
 fn no_path_policy() -> AgentToolPathPolicy {

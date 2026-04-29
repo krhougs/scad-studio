@@ -1,14 +1,14 @@
 import { ArrowUp, Cube, Paperclip, Ruler, X } from "@phosphor-icons/react";
-import type { AgentOperationLevel } from "@budn/app-server-protocol";
+import type { AgentMode } from "@budn/app-server-protocol";
 import type { ContextPill } from "./chat-zone";
 
 export function ChatComposer(props: {
   value: string;
   disabled: boolean;
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   contextPills: ContextPill[];
   onChange: (value: string) => void;
-  onOperationChange: (value: AgentOperationLevel) => void;
+  onModeChange: (value: AgentMode) => void;
   onRemovePill: (refText: string) => void;
   onSend: () => void;
 }) {
@@ -23,8 +23,8 @@ export function ChatComposer(props: {
         />
         <ChatComposerTools
           disabled={props.disabled}
-          operation={props.operation}
-          onOperationChange={props.onOperationChange}
+          mode={props.mode}
+          onModeChange={props.onModeChange}
           onSend={props.onSend}
         />
       </div>
@@ -76,8 +76,8 @@ function ChatTextarea(props: {
 
 function ChatComposerTools(props: {
   disabled: boolean;
-  operation: AgentOperationLevel;
-  onOperationChange: (value: AgentOperationLevel) => void;
+  mode: AgentMode;
+  onModeChange: (value: AgentMode) => void;
   onSend: () => void;
 }) {
   return (
@@ -85,8 +85,8 @@ function ChatComposerTools(props: {
       <div className="tools-left">
         <OperationSelect
           disabled={props.disabled}
-          value={props.operation}
-          onChange={props.onOperationChange}
+          value={props.mode}
+          onChange={props.onModeChange}
         />
         <DisabledToolButtons />
       </div>
@@ -104,23 +104,21 @@ function ChatComposerTools(props: {
 
 function OperationSelect(props: {
   disabled: boolean;
-  value: AgentOperationLevel;
-  onChange: (value: AgentOperationLevel) => void;
+  value: AgentMode;
+  onChange: (value: AgentMode) => void;
 }) {
   return (
     <select
-      aria-label="agent operation"
+      aria-label="agent mode"
       className="operation-select"
       disabled={props.disabled}
       value={props.value}
       onChange={(event) =>
-        props.onChange((event.target as HTMLSelectElement).value as AgentOperationLevel)
+        props.onChange((event.target as HTMLSelectElement).value as AgentMode)
       }
     >
-      <option value="auto">auto</option>
-      <option value="inform">inform</option>
-      <option value="plan">plan</option>
-      <option value="execute">execute</option>
+      <option value="agent">Agent</option>
+      <option value="plan">Plan</option>
     </select>
   );
 }

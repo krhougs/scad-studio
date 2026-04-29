@@ -2,6 +2,7 @@ import {
   initProtocolWasm,
   protocol_decode_client_frame,
   protocol_decode_server_frame,
+  protocol_encode_agent_invoke_request,
   protocol_encode_config_save_request,
   protocol_encode_export_run_request,
   protocol_path_handle,
@@ -10,6 +11,7 @@ import {
   protocol_validate_finite_number,
   protocol_validate_host_local_path,
   type AppConfigDto,
+  type AgentInvokeRequest,
   type ConfigSaveRequest,
   type ExportRunRequest,
   type PathHandle,
@@ -104,5 +106,24 @@ const exportFrame = protocol_encode_export_run_request(7n, exportRequest);
 assert(exportFrame instanceof Uint8Array && exportFrame.length > 5, "export frame failed");
 const decodedExport = protocol_decode_client_frame(exportFrame) as Record<string, unknown>;
 assert(JSON.stringify(decodedExport).includes("export.run"), "export request decode failed");
+
+const agentInvokeRequest: AgentInvokeRequest = {
+  session_id: "chat-1",
+  prompt: "run plan",
+  mode: "agent",
+  plan_ref: protocol_path_handle("ws", ["plans", "2026050100-add-lid-vents"]) as PathHandle,
+  context_refs: ["@part[top_lid]"],
+};
+const agentInvokeFrame = protocol_encode_agent_invoke_request(8n, agentInvokeRequest);
+assert(
+  agentInvokeFrame instanceof Uint8Array && agentInvokeFrame.length > 5,
+  "agent.invoke frame failed",
+);
+const decodedAgentInvoke = protocol_decode_client_frame(agentInvokeFrame) as Record<
+  string,
+  unknown
+>;
+assert(JSON.stringify(decodedAgentInvoke).includes("agent.invoke"), "agent.invoke decode failed");
+assert(JSON.stringify(decodedAgentInvoke).includes("plan_ref"), "agent.invoke plan_ref missing");
 
 console.log("[protocol-package] smoke OK");

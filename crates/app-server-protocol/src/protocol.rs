@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 3;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 4;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -609,13 +609,12 @@ pub struct ChatArchivedResponse {
 )]
 #[serde(rename_all = "snake_case")]
 #[borsh(use_discriminant = true)]
-pub enum AgentOperationLevel {
-    Inform = 0,
+pub enum AgentMode {
+    Agent = 0,
     Plan = 1,
-    Execute = 2,
-    Auto = 3,
 }
 
+/// Deprecated: use `AgentMode` and `AgentInvokeRequest::plan_ref`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentCadQueryConfirmation {
     pub request: CadQueryExecuteRequest,
@@ -629,8 +628,8 @@ pub struct AgentCadQueryConfirmation {
 pub struct AgentInvokeRequest {
     pub session_id: ChatSessionId,
     pub prompt: String,
-    pub operation: AgentOperationLevel,
-    pub confirmed_cadquery: Option<AgentCadQueryConfirmation>,
+    pub mode: AgentMode,
+    pub plan_ref: Option<PathHandle>,
     #[serde(default)]
     pub context_refs: Vec<String>,
 }
@@ -732,12 +731,39 @@ pub struct AgentPlanProposedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentPlanPackageRef {
+    pub plan_id: String,
+    pub plan_ref: PathHandle,
+    pub request_path: PathHandle,
+    pub plan_path: PathHandle,
+    pub result_path: PathHandle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentPlanSavedEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub package: AgentPlanPackageRef,
+    pub title: String,
+    pub status: String,
+    pub target_path: PathHandle,
+    pub target_type: CadQueryObjectKind,
+    pub affected_files: Vec<PathHandle>,
+    #[serde(default)]
+    pub new_files: Vec<PathHandle>,
+    pub change_description: String,
+    pub export_targets: Vec<PathHandle>,
+}
+
+/// Deprecated: use `AgentInvokeRequest { mode: AgentMode::Agent, plan_ref }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentPlanConfirmRequest {
     pub session_id: ChatSessionId,
     pub run_id: String,
     pub confirmed_cadquery: AgentCadQueryConfirmation,
 }
 
+/// Deprecated: use Agent mode chat flow instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentPlanRejectRequest {
     pub session_id: ChatSessionId,
@@ -994,6 +1020,8 @@ pub enum ServerPushEvent {
     AgentDone(AgentDoneEvent) = 7,
     #[serde(rename = "agent.plan_proposed")]
     AgentPlanProposed(AgentPlanProposedEvent) = 8,
+    #[serde(rename = "agent.plan_saved")]
+    AgentPlanSaved(AgentPlanSavedEvent) = 9,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

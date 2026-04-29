@@ -45,7 +45,7 @@ fn handshake_params() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "wasm-bridge-smoke".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -54,10 +54,10 @@ fn handshake_params() -> CapabilityHandshakeRequest {
 
 fn handshake_ack_bytes() -> Vec<u8> {
     let ack = CapabilityHandshakeResponse {
-        negotiated_version: 2,
+        negotiated_version: 4,
         session_token: SessionToken("test-session".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
