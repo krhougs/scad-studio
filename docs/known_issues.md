@@ -1,5 +1,23 @@
 # 已知问题记录
 
+## 2026-04-29 13:20:30: 旧 confirmation 主流程与 Agent / Plan 双模式冲突
+
+- 状态：处理中，当前计划 `prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` 覆盖文档、protocol、后端、Web Chat 和 Markdown preview 的迁移。
+- 来源：执行 `prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` Phase 1。
+- 原因：
+  - 旧文档和运行时 prompt 把 `Inform / Plan / Execute / Auto`、Plan 确认卡片、`AgentPlanConfirm`、`AgentCadQueryConfirmation` 和 `confirmed_cadquery` 作为主执行流程。
+  - 新产品方向只保留 `Agent` 和 `Plan` 两个模式；Plan mode 只创建 workspace plan package，Agent mode 可直接执行当前请求或已有 plan。
+  - 如果旧语义继续作为当前约束存在，后续 Web `/execute` 或 execute 模式仍会依赖结构化确认数据，导致没有 confirmation payload 时必然失败。
+- 影响范围：
+  - `docs/cadquery-mvp/init.md`、Ref PRD、Agent Chat 交互设计、竞品分析、system prompt 和 tool contract 的当前流程说明。
+  - `crates/app-server-protocol`、`app-server-core`、`app-server-host`、Web Chat composer、Plan 卡片和 Markdown preview 执行入口。
+- 可能的解法：
+  - 将运行时和文档主流程统一为 `Agent` / `Plan` 双模式。
+  - 将 plan 持久化改为 `plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
+  - 废弃旧 confirmation command；新入口使用 `agent.invoke { mode: Agent, plan_ref }`。
+  - 用 Agent mode path policy、CadQuery staging、`.py` 专用工具边界和 execution scope 替代旧 confirmation 安全边界。
+- 当前处理方式：Phase 1 已开始统一文档语义；实现完成并验证后，本条应更新为已处理，并记录 legacy `plans/*.md` 兼容范围。
+
 ## 2026-04-29 23:20:00: CadQuery runner traceback 仍需结构化拆分
 
 - 来源：执行 `prompt-archives/2026042900-agent-tool-calls/plan-00.md` Phase 5 独立 review。
@@ -16,40 +34,41 @@
 
 ## 2026-04-28 09:22:00: CadQuery edit intent 尚未由 LLM 结构化输出接管
 
+- 状态：历史记录；当前 Agent / Plan 双模式迁移后，结构化 edit intent 应进入 Agent mode execution scope，不再进入旧 confirmation payload。
 - 来源：用户明确要求不允许存在 move / replace 等硬编码判断，这些编辑意图应由 LLM 自行决定。
 - 原因：
-  - 当前协议和 Web confirmation 还没有承接 LLM 输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
+  - 当前协议和 Web 执行范围还没有承接 LLM 输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
   - 本轮已删除 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts` 中的 prompt 关键词判断。
   - 本轮新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应承担的结构化输出责任，并通过 `cadquery_agent_system_prompt()` 作为运行时 system prompt 加载。
-  - 现阶段 Web confirmation 只能使用显式 target path 或 selection 的结构化 owner/ref 信息，不能替 LLM 猜测用户要移动、替换还是修改本体。
+  - 现阶段 Web 只能使用显式 target path 或 selection 的结构化 owner/ref 信息，不能替 LLM 猜测用户要移动、替换还是修改本体。
 - 影响范围：
   - prompt 中出现 move / replace / 移动 / 替换 等词不会再改变确认范围，也不会生成几何修改。
   - 在真实 LLM edit intent 接入前，instance move / replacement 这类语义需要通过显式 target 或后续结构化 tool call 才能准确表达。
   - Agent Execute 在没有 LLM codegen 后端时会返回 `LlmError`，不再执行本地固定 CadQuery 几何模板。
-  - 这不扩大写入权限；Execute 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 限制。
+  - 这不扩大写入权限；Agent mode 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 限制。
 - 可能的解法：
-  - 在 protocol 中增加 LLM tool output 专用的结构化 edit intent enum，并把它作为 confirmation 的一部分展示给用户确认。
+  - 在 protocol 中增加 LLM tool output 专用的结构化 edit intent enum，并把它作为 Agent mode execution scope 的一部分展示给用户。
   - 真实 Agent 后端输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
-  - Web UI 只展示和确认 LLM 输出的结构化 intent；如果后续需要人工修正，应通过显式控件改结构化字段，而不是恢复关键词词表。
+  - Web UI 只展示 LLM 输出的结构化 execution scope；如果后续需要人工修正，应通过显式控件改结构化字段，再由 Agent mode 执行，而不是恢复关键词词表。
 - 当前处理方式：已删除 prompt 关键词推断和本地 CadQuery 几何 codegen；当前 fallback 仅使用 selection 结构化 owner/ref 选择默认目标。`llm_request_for_cadquery_execute()` 已能构造带 system prompt、history、target 和 selection context 的 LLM 请求，真实 provider 接入仍是后续能力缺口。
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
-- 状态：已在 `prompt-archives/2026042900-agent-tool-calls/plan-00.md` Phase 3 中处理。
+- 状态：历史记录；曾在 `prompt-archives/2026042900-agent-tool-calls/plan-00.md` Phase 3 中按旧 confirmation 流处理，现已被 `prompt-archives/2026042902-agent-plan-workspace-flow/plan-00.md` 的 Agent / Plan 双模式迁移取代。
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 3 第二轮独立 review。
 - 原因：
   - 原记录中，协议已有 `AgentCadQueryConfirmation.plan_ref` 字段，但 Web Chat 侧尚未实现 CAD Plan 文件持久化、计划选择和确认绑定流程。
   - 原记录中，Execute 前只校验 `target_path`、`affected_files` / `new_files` 与 `export_targets`，但 `plan_ref` 仍为 `null`。
-- 影响范围：
+- 历史影响范围：
   - 已新增 `save_cad_plan`，将 CAD Plan 作为 Markdown 文件持久化到 `plans/`，并通过 Chat tool result 记录 `plan_ref`、target、affected files、new files 和 export targets。
   - `agent.plan_proposed` 已携带 `plan_ref` 和 `new_files`，服务端在 `AgentPlanConfirm` 时会读取同一 run 的 saved Plan 并校验 confirmation scope 是否一致。
   - 协议 payload 因 `AgentPlanProposedEvent` 新增字段升级到 protocol version 3，避免旧 Borsh 客户端继续以 2.2 协商后解码失败。
-- 可能的解法：
+- 历史处理方式：
   - 已采用产品语义工具 `save_cad_plan`，而不是普通 `write_file`，保存计划。
   - 已采用服务端校验同一 run 的 saved Plan 与 confirmation 的 `plan_ref`、target、affected files、new files 和 export targets。
   - `agent.invoke` 不再接受直接携带的 CadQuery confirmation，确认执行必须走 `agent.plan.confirm`。
-  - 后续如果引入多 Plan 版本，仍需要在 Chat UI 中明确用户当前确认的是哪一版计划。
-- 当前处理方式：本条作为历史已处理问题保留；后续剩余风险仅限多 Plan 版本 UI 选择与展示策略。
+  - 后续如果引入多 Plan 版本，仍需要在 Chat UI 中明确用户当前选择的是哪一版计划。
+- 当前处理方式：本条仅作为历史记录保留。新主路径不再使用 `agent.plan.confirm`，改为 `agent.invoke { mode: Agent, plan_ref }`；剩余风险并入“旧 confirmation 主流程与 Agent / Plan 双模式冲突”记录跟踪。
 
 ## 2026-04-28 05:38:28: CadQuery edge / vertex pick tolerance 仍需真实模型校准
 
