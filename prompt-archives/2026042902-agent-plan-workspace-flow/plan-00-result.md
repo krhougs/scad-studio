@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-计划已创建。本轮仅按用户要求完成设计和实施计划，没有修改前端或后端产品代码。根据后续反馈，计划已补充“现有 Agent 流程文档对齐”要求，明确 `init.md`、Ref PRD、Agent Chat 交互设计、system prompt、tool contract 和 known issues 必须一起更新。
+计划已创建。本轮仅按用户要求完成设计和实施计划，没有修改前端或后端产品代码。根据后续反馈，计划已补充“现有 Agent 流程文档对齐”要求，明确 `init.md`、Ref PRD、Agent Chat 交互设计、system prompt、tool contract 和 known issues 必须一起更新。随后又补充了运行时 system prompt 改造范围，明确 `docs/cadquery-mvp/agent-system-prompt.md` 会被后端直接加载，必须同步修改后端注入给模型的 turn context、CadQuery generation context 和相关测试。
 
 ## 前置提交
 
@@ -32,3 +32,7 @@
   - `docs/cadquery-mvp/agent-system-prompt.md`
   - `docs/cadquery-mvp/agent-tool-contract.md`
   - `docs/known_issues.md`
+- 已根据反馈补充 system prompt 改造范围：
+  - 将运行时 prompt 从 Inform / Plan / Execute / Auto 重写为 Agent / Plan 两模式。
+  - 将 confirmation 规则改为 Agent mode execution scope、plan package 和 CadQuery staging 约束。
+  - 要求同步更新 `build_turn_context()`、CadQuery generation context、本地 fallback 文案和 prompt / LLM 单测。

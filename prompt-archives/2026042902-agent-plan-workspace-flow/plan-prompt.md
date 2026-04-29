@@ -12,6 +12,10 @@
 3. `Agent` mode 是可以正常干活的状态，`confirm plan` 流程无意义，需要删除。
 4. Markdown 预览如果打开的是 plan，可以提供入口直接触发执行 plan。
 
+## 后续追加输入
+
+用户补充要求：还需要思考 system prompt 如何修改。这里的 system prompt 不是普通说明文档，当前后端通过 `include_str!` 直接读取 `docs/cadquery-mvp/agent-system-prompt.md`，因此该文件会直接影响运行时 Agent 行为。
+
 ## 已完成前置动作
 
 - 已按用户要求提交当时工作区现有改动：
@@ -21,6 +25,7 @@
 
 - `docs/cadquery-mvp/agent-tool-contract.md` 当前把 `save_cad_plan` 定义为写入单个 `plans/*.md`，并把 `AgentPlanConfirm` / `confirmed_cadquery` 作为 Execute 写入边界。
 - `docs/cadquery-mvp/agent-system-prompt.md` 当前强调：Planning does not execute，Execution happens only after confirmation。
+- `crates/app-server-core/src/agent.rs` 当前通过 `cadquery_agent_system_prompt()` 读取 `docs/cadquery-mvp/agent-system-prompt.md`，同时 `build_turn_context()`、`cadquery_execute_context_for_llm()`、本地 fallback 文案仍写入 `Operation level`、`Operation: Execute`、`Confirmed target` 和 confirmation 相关语义。
 - `crates/app-server-protocol/src/protocol.rs` 当前暴露 `AgentOperationLevel::{Inform, Plan, Execute, Auto}`、`AgentPlanConfirmRequest`、`AgentPlanRejectRequest`、`AgentCadQueryConfirmation`。
 - `crates/app-server-host/src/dispatcher.rs` 当前 `agent.invoke` 禁止直接携带 `confirmed_cadquery`，`agent.plan.confirm` 会创建 Execute worker 并注入 confirmation scope。
 - `crates/app-server-core/src/agent/tools/semantic.rs` 当前 `save_cad_plan` 会创建 `plans/<slug>.md` 单文件。
@@ -34,4 +39,4 @@
 
 ## 本计划目标
 
-输出一个可执行的分 Phase 实施计划，覆盖文档、协议、后端工具与 dispatcher、前端 chat / Markdown preview，以及测试和迁移策略。
+输出一个可执行的分 Phase 实施计划，覆盖文档、system prompt、协议、后端工具与 dispatcher、前端 chat / Markdown preview，以及测试和迁移策略。

@@ -79,6 +79,34 @@ source_chat_session: chat-1
 
 Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后续实现会同时面对旧 PRD、旧交互设计和新计划三套互相冲突的约束。
 
+### System Prompt 改造原则
+
+`docs/cadquery-mvp/agent-system-prompt.md` 是运行时 prompt：`crates/app-server-core/src/agent.rs` 通过 `include_str!("../../../docs/cadquery-mvp/agent-system-prompt.md")` 直接加载它。因此这次不能只做术语替换，必须把 prompt 重写为新的 Agent / Plan 两模式契约，并同步后端注入给模型的上下文。
+
+新的 system prompt 应满足：
+
+- 第一层只描述 `Agent` 和 `Plan` 两种产品模式，不再把 `Inform`、`Execute`、`Auto` 作为可选操作级别。
+- `Plan` 模式的规则是：可读取上下文、分析 refs、生成 workspace plan package；不得修改 CAD 源文件、不得运行 CadQuery runner、不得生成 outputs。
+- `Plan` 模式允许写入的唯一内容是 `plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`，其中 `plan-result.md` 初始状态为 `pending`，不得被写成执行结果。
+- `Agent` 模式的规则是：可以读取、写入和执行；可以直接根据当前请求工作，也可以读取 `plan_ref` 指向的 plan package 并执行。
+- 当 `plan_ref` 存在时，Agent 必须先读取 `request.md`、解析 `plan.md` 的 YAML front matter，并把其中的 target、affected files、new files、export targets 作为本次 execution scope。
+- 当 `plan_ref` 不存在时，Agent 可以从当前用户请求和 refs 形成 execution scope，但仍受 path policy、CadQuery staging、outputs 目录和单次成功 CadQuery commit 约束。
+- `.py` CadQuery 模型源不得通过普通 `write_file` / `patch_file` 改写；模型修改必须通过 CadQuery 专用工具和 staging。
+- `outputs/` 仍只存放 runner / export 生成的派生文件，前端和 Agent 都不得绕过 app server protocol 自行写入。
+- 删除“自然语言确认”“confirmed_cadquery”“confirmation items”“Execute after confirmation”作为当前流程规则；这些词只能在 deprecated 或历史说明中出现。
+- 将原 “Structured Execute Output” 改为 “Structured Agent Action Output”，字段围绕 `mode`、`plan_ref`、`execution_scope`、`changed_files`、`outputs`、`plan_result_path` 表达，不再要求 `cadquery_code` 只有确认后才出现。
+- Response Rules 需要按模式区分：
+  - `Plan`：报告已创建或更新的 plan package 文件、未修改模型、未生成 outputs、下一步是切换到 Agent 模式或从 plan preview 运行。
+  - `Agent`：报告实际修改文件、生成 outputs、是否更新 `plan-result.md`、剩余风险和需要用户决策的问题。
+
+后端 prompt 上下文也必须同步更新：
+
+- `build_turn_context()` 输出 `Mode: Agent|Plan`，不再输出 `Operation level`。
+- `AgentTurnInput` 不再携带 `confirmed_target_path`，改为可选 `plan_ref`、`execution_scope` 或等价结构。
+- `cadquery_execute_context_for_llm()` 和 `llm_request_for_cadquery_execute()` 不再写入 `Operation: Execute`，改为 Agent mode 的 CadQuery generation context。
+- 本地 fallback 的 `draft_local_turn()` 和 `draft_cad_plan()` 不再输出 `Confirmed target` 或 `Confirmation: ...`，Plan fallback 应输出 plan package 所需字段和执行范围。
+- `crates/app-server-core/tests/agent_tests.rs` 与 `crates/app-server-core/tests/llm_tests.rs` 必须从旧 operation / confirmation 断言迁移到 Agent / Plan mode 断言。
+
 ## Phase 1 — 文档与产品语义更新
 
 ### 输入
@@ -119,7 +147,15 @@ Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后
 5. 更新 `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md`：
    - 将 Agent Mode 从“自动判断 + Plan 确认后执行”改为“读写执行，可直接使用当前请求或已有 plan”。
    - 将 Plan Mode 从“确认卡片”改为“生成 workspace plan package”。
-6. 将 `docs/cadquery-mvp/agent-system-prompt.md` 中 “Execution happens only after confirmation” 改为 “Execution happens only in Agent mode”，并删除 Execute operation 章节。
+6. 重写 `docs/cadquery-mvp/agent-system-prompt.md` 的运行时契约：
+   - Role 改为 “Agent / Plan 两模式的 budn' CAD collaboration Agent”。
+   - Core Principles 删除 “Execution happens only after confirmation”，替换为 “Plan mode never modifies CAD source or outputs” 与 “Agent mode is the only write / execute mode”。
+   - 将 `Operation Levels` 章节改为 `Modes`，只保留 `Agent` 和 `Plan`。
+   - 将 `CAD Plan Rules` 改为 `Workspace Plan Package Rules`，明确三文件结构、命名规则、front matter、`plan-result.md` 初始状态和 legacy `plans/*.md` 只读策略。
+   - 将 `Tool Permission Rules` 改为 Agent / Plan mode 权限表；删除 Inform / Execute / Auto。
+   - 将 `Structured Execute Output` 改为 `Structured Agent Action Output`，字段围绕 `mode`、`plan_ref`、`execution_scope`、`changed_files`、`outputs`、`plan_result_path` 表达。
+   - 将 Response Rules 改为按模式输出，不再要求用户“确认执行”。
+   - 删除 `confirmed_cadquery`、`confirmation scope`、`confirmation items` 作为当前规则；如果需要保留历史说明，必须标为 deprecated。
 7. 将 `docs/cadquery-mvp/agent-tool-contract.md` 的 Operation 权限表改成 Agent / Plan mode 权限表；删除或标记废弃 `AgentPlanConfirm`、`AgentPlanReject`、`confirmed_cadquery` 相关说明。
 8. 将 `save_cad_plan` 从单文件 `plans/*.md` 改为 plan package：`plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
 9. 增加 plan package 的 machine-readable front matter 规范和 `plan-result.md` 更新规范。
@@ -254,22 +290,34 @@ Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后
 1. 删除 `operation_for_tool_loop` 的四模式判定，改为 `mode_for_tool_loop`：
    - `Plan`：只读工具 + `save_cad_plan`。
    - `Agent`：只读工具 + 写入工具 + CadQuery dry run / execute + plan result update。
-2. 删除 `confirmed_cadquery` 作为执行前提，改为 `execution_scope`：
+2. 更新运行时 prompt 输入结构：
+   - `AgentTurnInput.operation` 改为 `AgentTurnInput.mode`。
+   - 移除 `confirmed_target_path`。
+   - 增加可选 `plan_ref` 和 `execution_scope`，或使用等价结构承载从 plan package 解析出的 target、affected files、new files、export targets。
+   - `build_turn_context()` 输出 `Mode: Agent|Plan`、`Plan ref`、`Execution scope`、`User-attached context refs`、`Current Viewer selection`，不再输出 `Operation level` 或 `Confirmed target`。
+3. 更新 CadQuery 代码生成上下文：
+   - `cadquery_execute_context_for_llm()` 不再输出 `Operation: Execute`。
+   - `llm_request_for_cadquery_execute()` 改名或调整语义为 Agent mode CadQuery generation request。
+   - 上下文必须写明 `.py` 修改仍由 CadQuery 专用工具和 staging 完成，并包含当前 execution scope。
+4. 更新本地 fallback：
+   - `draft_local_turn()` 不再输出 `Execute turn`、`Auto turn` 或“未确认 CadQuery 目标文件”。
+   - `draft_cad_plan()` 输出 plan package 需要的 request、target、affected files、export targets 和 verification，不再输出 `Confirmation: ...`。
+5. 删除 `confirmed_cadquery` 作为执行前提，改为 `execution_scope`：
    - `plan_ref` 存在时，从 `plans/<id>/plan.md` 解析。
    - `plan_ref` 不存在时，由 Agent run 根据当前用户指令和工具参数形成 scope，但仍受 registry path policy 限制。
-3. 将 `write_file` / `patch_file` 的 confirmation scope 校验替换为 Agent mode path policy：
+6. 将 `write_file` / `patch_file` 的 confirmation scope 校验替换为 Agent mode path policy：
    - 允许 Agent mode 写安全文本根。
    - 禁止普通工具写 `.py` 模型源。
    - 禁止直接写 `chats/` 和 `outputs/`。
    - 允许更新当前 plan 的 `plan-result.md`。
-4. 将 `cadquery_execute` 的 confirmation scope 校验替换为 execution scope 校验：
+7. 将 `cadquery_execute` 的 confirmation scope 校验替换为 execution scope 校验：
    - 带 `plan_ref` 时 target / affected / new / exports 必须匹配 plan。
    - 不带 `plan_ref` 时 target 必须在 `components/`、`parts/`、`assemblies/`，exports 必须是 runner 允许的默认 outputs。
-5. 增加 `update_plan_result` 语义工具或在 `cadquery_execute` 成功 / 失败后由 host 写入 `plan-result.md`。
-6. 废弃 `agent.plan.confirm` / `agent.plan.reject` dispatcher 分支：
+8. 增加 `update_plan_result` 语义工具或在 `cadquery_execute` 成功 / 失败后由 host 写入 `plan-result.md`。
+9. 废弃 `agent.plan.confirm` / `agent.plan.reject` dispatcher 分支：
    - 移除主流程调用。
    - 如果保留 protocol 兼容，返回 deprecated error，并提示使用 Agent mode 执行 plan。
-7. 更新错误文案：
+10. 更新错误文案：
    - 不再出现 “Ensure you have confirmed the plan”。
    - 改为 “Switch to Agent mode or run an existing plan.”。
 
@@ -383,6 +431,8 @@ Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后
    - Agent mode plan 执行。
    - Plan mode 写源文件拒绝。
    - `.py` 普通写入拒绝。
+   - system prompt 只包含 Agent / Plan 两模式的当前契约。
+   - LLM turn context 输出 `Mode`、`Plan ref` 和 `Execution scope`，不再输出 `Operation level`、`Operation: Execute` 或 `Confirmed target`。
 2. Web 聚焦回归：
    - Chat 模式。
    - Plan package card。
@@ -396,7 +446,7 @@ Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后
    - 关闭 confirmation 流造成 `/execute` 必然失败的问题。
    - 记录 legacy `plans/*.md` 兼容范围。
 5. 增加文档一致性检查：
-   - `rg -n "Inform / Plan / Execute|确认执行|AgentPlanConfirm|AgentCadQueryConfirmation|confirmed_cadquery|Plan 确认卡片" docs`
+   - `rg -n "Inform / Plan / Execute|Operation level|Operation: Execute|确认执行|AgentPlanConfirm|AgentCadQueryConfirmation|confirmed_cadquery|Confirmed target|confirmation scope|Plan 确认卡片" docs crates/app-server-core/src crates/app-server-core/tests`
    - 检查命中项是否只存在于历史设计、deprecated 说明或 known issues 中。
 6. 更新 `plan-00-result.md`，逐 Phase 记录实现、review 和验证。
 
