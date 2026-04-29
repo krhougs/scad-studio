@@ -155,3 +155,24 @@
   - `rg -n "Confirm Execute|Plan Confirmation|agent\\.plan\\.confirm|agent\\.plan\\.reject|AgentOperationLevel|operation_for_tool_loop|confirmed_cadquery|Confirmed target|Operation level|Operation: Execute|/inform" packages/studio-web/src packages/studio-web/tests packages/studio-web-wasm/generated -S`：无命中。
 - 遗留问题：
   - Phase 5 未处理 Markdown Plan Preview 顶部执行入口；Phase 6 将实现打开 `plans/<id>/plan.md` 后直接运行 plan。
+
+### Phase 6 — Markdown Plan Preview 执行入口
+
+- 完成情况：
+  - 新增 plan preview 路径识别逻辑，只将 `plans/YYYYmmddnn-name/{plan.md,request.md,plan-result.md}` 识别为可执行 plan package，并生成目录级 `plan_ref`。
+  - `MarkdownViewer` 在识别到 plan package Markdown 时显示 `Run Plan` 操作；普通 Markdown 不显示执行入口，原有 `rehypeSanitize` 渲染链路保持不变。
+  - Workbench 将 Markdown preview 的 `Run Plan` 接入既有 `runSavedPlan()`，确保创建或复用当前 Chat session 后发送 `agent.invoke { mode: "agent", plan_ref }`，并通过 busy / agent run 状态避免重复触发。
+  - 保持已有 watch refresh 机制，plan 执行完成并更新 `plan-result.md` 后，当前 active Markdown tab 可通过 refresh signal 重新读取内容；未激活 tab 在切换时重新读取。
+  - 补充 unit 和 Playwright 覆盖：plan path 识别、普通 Markdown 不显示按钮、Markdown 安全渲染不受影响、从 `plans/<id>/plan.md` 点击 `Run Plan` 会发送 Agent mode 请求和正确的 `plan_ref`。
+- Review：
+  - Phase 6 独立 review 未发现阻塞问题或高风险问题；review 确认路径识别、Markdown 安全渲染、执行入口复用 `runSavedPlan()`、watch refresh 和测试覆盖符合 Phase 6 验收标准。
+- 验证：
+  - `cd packages/studio-web && bun run test:unit -- tests/unit/plan-preview-path.test.ts tests/unit/markdown-viewer.test.tsx`：2 个测试文件、5 个测试通过。
+  - `cd packages/studio-web && bun run typecheck`：通过。
+  - `cd packages/studio-web && bun run test:e2e -- tests/playwright/markdown-preview.spec.ts`：2 个测试通过。
+  - `cd packages/studio-web && bun run test:unit -- tests/unit/plan-preview-path.test.ts tests/unit/markdown-viewer.test.tsx tests/unit/markdown-preview-security.test.ts tests/unit/chat-zone.test.tsx tests/unit/chat-actions.test.ts tests/unit/workbench-wiring.test.ts tests/unit/protocol-package-import.test.ts`：7 个测试文件、32 个测试通过。
+  - `cd packages/studio-web && bun run test:e2e -- tests/playwright/agent-chat-interaction.spec.ts`：10 个测试通过。
+  - `git diff --check`：通过。
+  - `rg -n "Confirm Execute|Plan Confirmation|agent\\.plan\\.confirm|agent\\.plan\\.reject|AgentOperationLevel|operation_for_tool_loop|confirmed_cadquery|Confirmed target|Operation level|Operation: Execute|/inform" packages/studio-web/src packages/studio-web/tests -S`：无命中。
+- 遗留问题：
+  - Phase 6 未处理最终跨 Phase 回归和整体交付 review；Phase 7 将补充端到端验收与清理。

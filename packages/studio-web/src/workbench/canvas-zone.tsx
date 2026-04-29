@@ -14,6 +14,7 @@ import type { DocumentTab } from "../state/ui-store";
 import type { WasmClient } from "../wasm-bridge";
 import { ImageViewer } from "../viewers/image-viewer";
 import { MarkdownViewer } from "../viewers/markdown-viewer";
+import type { PlanRunTarget } from "../viewers/plan-preview-path";
 import type { MeshInfo } from "../viewers/mesh-info";
 import { CadQueryViewer } from "../viewers/cadquery-viewer";
 import type { CadQuerySelectionMode } from "../viewers/cadquery-selection";
@@ -61,6 +62,8 @@ type CanvasZoneProps = {
   cameraOverride: CameraState | null;
   onCameraChange: (camera: CameraState) => void;
   scadWorkbenchState: ScadWorkbenchState;
+  planRunDisabled: boolean;
+  onRunPlan: (target: PlanRunTarget) => void;
 };
 
 export function CanvasZone(props: CanvasZoneProps) {
@@ -83,6 +86,8 @@ export function CanvasZone(props: CanvasZoneProps) {
     cameraOverride,
     onCameraChange,
     scadWorkbenchState,
+    planRunDisabled,
+    onRunPlan,
   } = props;
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
@@ -202,6 +207,8 @@ export function CanvasZone(props: CanvasZoneProps) {
                 cameraOverride={cameraOverride}
                 onCameraChange={onCameraChange}
                 scadWorkbenchState={scadWorkbenchState}
+                planRunDisabled={planRunDisabled}
+                onRunPlan={onRunPlan}
               />
             ) : (
               <EmptyStagePlaceholder />
@@ -271,6 +278,8 @@ type ActiveViewerProps = {
   cameraOverride: CameraState | null;
   onCameraChange: (camera: CameraState) => void;
   scadWorkbenchState: ScadWorkbenchState;
+  planRunDisabled: boolean;
+  onRunPlan: (target: PlanRunTarget) => void;
 };
 
 function ActiveViewer({
@@ -286,6 +295,8 @@ function ActiveViewer({
   cameraOverride,
   onCameraChange,
   scadWorkbenchState,
+  planRunDisabled,
+  onRunPlan,
 }: ActiveViewerProps) {
   useEffect(() => {
     if (tab.kind !== "mesh" && tab.kind !== "scad") {
@@ -306,6 +317,8 @@ function ActiveViewer({
         path={tab.path}
         client={client}
         refreshSignal={refreshSignal}
+        planRunDisabled={planRunDisabled}
+        onRunPlan={onRunPlan}
       />
     );
   }

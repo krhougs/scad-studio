@@ -27,6 +27,7 @@ import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
 import type { ChatSnapshot } from "./chat-zone";
+import { runSavedPlan } from "./chat-actions";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
 import {
@@ -48,6 +49,7 @@ import { derivePresetPath } from "./preset-io";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
 import type { MeshInfo } from "../viewers/mesh-info";
+import type { PlanRunTarget } from "../viewers/plan-preview-path";
 import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 import {
   createTransport,
@@ -139,6 +141,7 @@ export function WorkbenchLayout() {
   const [cameraOverride, setCameraOverride] = useState<CameraState | null>(
     null,
   );
+  const [markdownPlanBusy, setMarkdownPlanBusy] = useState(false);
   const [activeDefines, setActiveDefines] = useState<string[]>([]);
   const [panelWidths, setPanelWidths] = useState({
     left: 360,
@@ -177,6 +180,7 @@ export function WorkbenchLayout() {
   const routePanel = normalizeLeftPanelId(routePanelValue);
   const activeTab = openTabs.find((tab) => tab.id === activeTabId) ?? null;
   const client = clientReady ? clientRef.current : null;
+  const agentRun = snapshot?.agent_run ?? null;
   const scadWorkbenchState = useScadWorkbenchState({
     path: activeTab?.kind === "scad" ? activeTab.path : null,
     client,
@@ -593,6 +597,31 @@ export function WorkbenchLayout() {
     [handleOpenPath],
   );
 
+  const handleRunMarkdownPlan = useCallback(
+    (target: PlanRunTarget) => {
+      const activeClient = clientRef.current;
+      if (!activeClient || markdownPlanBusy || agentRun) return;
+      void runSavedPlan({
+        client: activeClient,
+        planId: target.planId,
+        planRef: target.planRef,
+        currentSessionId: snapshot?.current_chat_session ?? null,
+        sessions: snapshot?.chat_sessions ?? [],
+        agentRun,
+        busy: markdownPlanBusy,
+        contextPills: [],
+        onStatus: setMessage,
+        setBusy: setMarkdownPlanBusy,
+      });
+    },
+    [
+      agentRun,
+      markdownPlanBusy,
+      snapshot?.chat_sessions,
+      snapshot?.current_chat_session,
+    ],
+  );
+
   const previewTargetLabel = activeTab ? activeTab.label : "—";
   const meshSummary = meshInfo
     ? { label: activeTab?.label ?? "mesh", ...meshInfo }
@@ -676,6 +705,8 @@ export function WorkbenchLayout() {
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
         scadWorkbenchState={scadWorkbenchState}
+        planRunDisabled={!client || markdownPlanBusy || Boolean(agentRun)}
+        onRunPlan={handleRunMarkdownPlan}
       />
       <Inspector
         rootName={rootName}

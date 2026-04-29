@@ -16,11 +16,17 @@ import {
   mermaidSecurityConfig,
   sanitizeMermaidSvg,
 } from "./markdown-security";
+import {
+  planRunTargetForPath,
+  type PlanRunTarget,
+} from "./plan-preview-path";
 
 type MarkdownViewerProps = {
   path: unknown;
   client: WasmClient;
   refreshSignal?: number;
+  planRunDisabled?: boolean;
+  onRunPlan?: (target: PlanRunTarget) => void;
 };
 
 let mermaidCounter = 0;
@@ -34,9 +40,12 @@ export function MarkdownViewer({
   path,
   client,
   refreshSignal,
+  planRunDisabled = false,
+  onRunPlan,
 }: MarkdownViewerProps) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const planRunTarget = planRunTargetForPath(path);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +77,18 @@ export function MarkdownViewer({
 
   return (
     <div className="viewer viewer--markdown" data-testid="markdown-viewer">
+      {planRunTarget ? (
+        <div className="markdown-plan-actions" data-testid="markdown-plan-actions">
+          <span>{planRunTarget.planId}</span>
+          <button
+            type="button"
+            disabled={planRunDisabled}
+            onClick={() => onRunPlan?.(planRunTarget)}
+          >
+            Run Plan
+          </button>
+        </div>
+      ) : null}
       {error ? (
         <p className="viewer__error" data-testid="markdown-error">
           {error}
