@@ -829,6 +829,104 @@ fn chat_history_response_replaces_snapshot_history() {
 }
 
 #[test]
+fn chat_created_clears_previous_session_history() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let history_request_id = client
+        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
+            session_id: ChatSessionId("main".into()),
+            limit: Some(50),
+        })
+        .expect("dispatch chat.history");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: history_request_id,
+            result: Ok(CommandSuccess::ChatHistory(ChatHistoryResponse {
+                session_id: ChatSessionId("main".into()),
+                messages: vec![chat_message("msg-1", ChatRole::User, "old chat")],
+            })),
+        }))
+        .unwrap();
+
+    let create_request_id = client
+        .dispatch_chat_create(app_server_protocol::ChatCreateRequest {
+            title: "new chat".into(),
+            goal: None,
+            related_files: Vec::new(),
+        })
+        .expect("dispatch chat.create");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: create_request_id,
+            result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+                session_id: ChatSessionId("new-chat".into()),
+                title: "new chat".into(),
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(
+        snapshot.current_chat_session,
+        Some(ChatSessionId("new-chat".into()))
+    );
+    assert!(
+        snapshot.current_chat_history.is_empty(),
+        "new chat should not render the previous session history",
+    );
+}
+
+#[test]
+fn stale_chat_history_response_does_not_replace_newer_selection() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let main_request_id = client
+        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
+            session_id: ChatSessionId("main".into()),
+            limit: Some(50),
+        })
+        .expect("dispatch main chat.history");
+    let other_request_id = client
+        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
+            session_id: ChatSessionId("other".into()),
+            limit: Some(50),
+        })
+        .expect("dispatch other chat.history");
+    let _ = drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: other_request_id,
+            result: Ok(CommandSuccess::ChatHistory(ChatHistoryResponse {
+                session_id: ChatSessionId("other".into()),
+                messages: vec![chat_message("msg-other", ChatRole::User, "newer chat")],
+            })),
+        }))
+        .unwrap();
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: main_request_id,
+            result: Ok(CommandSuccess::ChatHistory(ChatHistoryResponse {
+                session_id: ChatSessionId("main".into()),
+                messages: vec![chat_message("msg-main", ChatRole::User, "stale chat")],
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(
+        snapshot.current_chat_session,
+        Some(ChatSessionId("other".into()))
+    );
+    assert_eq!(snapshot.current_chat_history.len(), 1);
+    assert_eq!(snapshot.current_chat_history[0].content, "newer chat");
+}
+
+#[test]
 fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
     let mut client = ManagedClient::new(FakeTransport::default());
     open_client_with_handshake(&mut client);

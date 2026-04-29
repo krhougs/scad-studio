@@ -114,6 +114,27 @@ describe("ChatZone", () => {
     });
   });
 
+  it("loads the first chat history after a cold-start chat list", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_session: null,
+          current_chat_history: [],
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(client.dispatchChatHistory).toHaveBeenCalledWith({
+        session_id: "main",
+        limit: 100,
+      });
+    });
+  });
+
   it("shows context pills from viewer selection and includes refs in invoke", async () => {
     const client = fakeClient();
     render(

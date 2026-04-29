@@ -192,11 +192,13 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         &mut self,
         params: ChatHistoryRequest,
     ) -> Result<RequestId, ClientError> {
-        self.enqueue_command(
+        let request_id = self.enqueue_command(
             ClientCommand::ChatHistory(params),
             PendingKind::Chat,
             self.timeouts.chat,
-        )
+        )?;
+        self.latest_chat_history_request = Some(request_id);
+        Ok(request_id)
     }
 
     pub fn dispatch_chat_archive(

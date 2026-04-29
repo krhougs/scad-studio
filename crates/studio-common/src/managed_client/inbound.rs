@@ -123,13 +123,18 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             }
             CommandSuccess::ChatCreated(response) => {
                 self.current_chat_session = Some(response.session_id.clone());
+                self.current_chat_history.clear();
+                self.latest_chat_history_request = None;
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();
             }
             CommandSuccess::ChatHistory(response) => {
-                self.current_chat_session = Some(response.session_id.clone());
-                self.current_chat_history = response.messages.clone();
+                if self.latest_chat_history_request == Some(request_id) {
+                    self.current_chat_session = Some(response.session_id.clone());
+                    self.current_chat_history = response.messages.clone();
+                    self.latest_chat_history_request = None;
+                }
             }
             CommandSuccess::ChatAck(response) => {
                 self.current_chat_session = Some(response.session_id.clone());

@@ -115,8 +115,9 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
   const [streamText, setStreamText] = useState("");
   const sessions = snapshot?.chat_sessions ?? [];
+  const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
   const currentSessionId =
-    snapshot?.current_chat_session ?? sessions[0]?.session_id ?? null;
+    snapshotCurrentSessionId ?? sessions[0]?.session_id ?? null;
   const messages = snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
   const rawEvents = snapshot?.agent_events ?? [];
@@ -148,6 +149,12 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   }, [snapshot?.current_selection]);
 
   useInitialChatList(client, onStatus);
+  useInitialChatHistory(
+    client,
+    sessions,
+    snapshotCurrentSessionId,
+    onStatus,
+  );
   useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
 
   const actions = useChatActions({
@@ -219,6 +226,28 @@ function useInitialChatList(
       .dispatchChatList({ include_archived: false })
       .catch(reportError(onStatus));
   }, [client, onStatus]);
+}
+
+function useInitialChatHistory(
+  client: WasmClient | null,
+  sessions: ChatSessionSummary[],
+  snapshotCurrentSessionId: string | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  const requestedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!client) return;
+    if (snapshotCurrentSessionId) {
+      requestedRef.current = null;
+      return;
+    }
+    const firstSessionId = sessions[0]?.session_id ?? null;
+    if (!firstSessionId || requestedRef.current === firstSessionId) return;
+    requestedRef.current = firstSessionId;
+    client
+      .dispatchChatHistory({ session_id: firstSessionId, limit: 100 })
+      .catch(reportError(onStatus));
+  }, [client, sessions, snapshotCurrentSessionId, onStatus]);
 }
 
 function useAgentDoneHistoryRefresh(
