@@ -56,6 +56,7 @@ export async function cancelAgentRun(
 export async function sendChatMessage(params: {
   client: WasmClient | null;
   draft: string;
+  operation: AgentOperationLevel;
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
   agentRun: AgentRun | null;
@@ -81,6 +82,7 @@ export async function sendChatMessage(params: {
 async function sendChatMessageInner(
   params: {
     client: WasmClient | null;
+    operation: AgentOperationLevel;
     currentSessionId: string | null;
     sessions: ChatSessionSummary[];
     contextPills: ContextPill[];
@@ -101,7 +103,9 @@ async function sendChatMessageInner(
       params.setBusy,
     ));
   if (!sessionId) return;
-  const { operation, prompt } = parseSlashCommand(content);
+  const explicitCommand = parseExplicitSlashCommand(content);
+  const { operation, prompt } =
+    explicitCommand ?? { operation: params.operation, prompt: content.trim() };
   const displayContent = prompt || content;
   await client.dispatchChatSend({
     session_id: sessionId,
@@ -209,6 +213,15 @@ const SLASH_COMMANDS: Record<string, AgentOperationLevel> = {
 };
 
 export function parseSlashCommand(input: string): SlashCommandResult {
+  return (
+    parseExplicitSlashCommand(input) ?? {
+      operation: "auto",
+      prompt: input.trim(),
+    }
+  );
+}
+
+function parseExplicitSlashCommand(input: string): SlashCommandResult | null {
   const trimmed = input.trimStart();
   for (const [prefix, operation] of Object.entries(SLASH_COMMANDS)) {
     if (!trimmed.startsWith(prefix)) continue;
@@ -217,7 +230,7 @@ export function parseSlashCommand(input: string): SlashCommandResult {
       return { operation, prompt: afterCmd.trim() };
     }
   }
-  return { operation: "auto", prompt: input.trim() };
+  return null;
 }
 
 function unwrapPayload(response: unknown): unknown {

@@ -1,11 +1,14 @@
 import { ArrowUp, Cube, Paperclip, Ruler, X } from "@phosphor-icons/react";
+import type { AgentOperationLevel } from "@budn/app-server-protocol";
 import type { ContextPill } from "./chat-zone";
 
 export function ChatComposer(props: {
   value: string;
   disabled: boolean;
+  operation: AgentOperationLevel;
   contextPills: ContextPill[];
   onChange: (value: string) => void;
+  onOperationChange: (value: AgentOperationLevel) => void;
   onRemovePill: (refText: string) => void;
   onSend: () => void;
 }) {
@@ -20,6 +23,8 @@ export function ChatComposer(props: {
         />
         <ChatComposerTools
           disabled={props.disabled}
+          operation={props.operation}
+          onOperationChange={props.onOperationChange}
           onSend={props.onSend}
         />
       </div>
@@ -71,11 +76,18 @@ function ChatTextarea(props: {
 
 function ChatComposerTools(props: {
   disabled: boolean;
+  operation: AgentOperationLevel;
+  onOperationChange: (value: AgentOperationLevel) => void;
   onSend: () => void;
 }) {
   return (
     <div className="tools">
       <div className="tools-left">
+        <OperationSelect
+          disabled={props.disabled}
+          value={props.operation}
+          onChange={props.onOperationChange}
+        />
         <DisabledToolButtons />
       </div>
       <button
@@ -87,6 +99,29 @@ function ChatComposerTools(props: {
         send <ArrowUp size={12} weight="bold" aria-hidden="true" />
       </button>
     </div>
+  );
+}
+
+function OperationSelect(props: {
+  disabled: boolean;
+  value: AgentOperationLevel;
+  onChange: (value: AgentOperationLevel) => void;
+}) {
+  return (
+    <select
+      aria-label="agent operation"
+      className="operation-select"
+      disabled={props.disabled}
+      value={props.value}
+      onChange={(event) =>
+        props.onChange((event.target as HTMLSelectElement).value as AgentOperationLevel)
+      }
+    >
+      <option value="auto">auto</option>
+      <option value="inform">inform</option>
+      <option value="plan">plan</option>
+      <option value="execute">execute</option>
+    </select>
   );
 }
 

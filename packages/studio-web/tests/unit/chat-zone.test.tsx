@@ -36,6 +36,59 @@ describe("ChatZone", () => {
     );
   });
 
+  it("sends the operation selected in the composer dropdown", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={chatSnapshot()}
+      />,
+    );
+
+    const operationSelect = screen.getByLabelText("agent operation");
+    expect((operationSelect as HTMLSelectElement).value).toBe("auto");
+
+    fireEvent.change(operationSelect, { target: { value: "execute" } });
+    fireEvent.change(screen.getByTestId("chat-input"), {
+      target: { value: "apply the latest plan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "execute",
+        prompt: "apply the latest plan",
+      }),
+    );
+  });
+
+  it("lets slash commands override the composer operation dropdown", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={chatSnapshot()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("agent operation"), {
+      target: { value: "plan" },
+    });
+    fireEvent.change(screen.getByTestId("chat-input"), {
+      target: { value: "/inform explain CadQuery loft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "inform",
+        prompt: "explain CadQuery loft",
+      }),
+    );
+  });
+
   it("refreshes current chat history after agent done", async () => {
     const client = fakeClient();
     render(

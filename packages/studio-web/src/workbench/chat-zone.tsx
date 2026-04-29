@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Stop } from "@phosphor-icons/react";
 import type {
+  AgentOperationLevel,
   AgentPlanProposedEvent,
   SelectionRef,
   SelectionUpdateRequest,
@@ -99,8 +100,10 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
       <ChatComposer
         value={controller.draft}
         disabled={controller.composerDisabled}
+        operation={controller.operation}
         contextPills={controller.contextPills}
         onChange={controller.setDraft}
+        onOperationChange={controller.setOperation}
         onRemovePill={controller.removePill}
         onSend={controller.send}
       />
@@ -110,6 +113,7 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
 
 function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   const [draft, setDraft] = useState("");
+  const [operation, setOperation] = useState<AgentOperationLevel>("auto");
   const [busy, setBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
   const [pendingPlan, setPendingPlan] =
@@ -159,6 +163,7 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
     agentRun,
     busy,
     draft,
+    operation,
     contextPills,
     onStatus,
     setBusy,
@@ -168,6 +173,8 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
   return {
     draft,
     setDraft,
+    operation,
+    setOperation,
     sessions,
     currentSessionId,
     messages,
@@ -294,6 +301,7 @@ function useChatActions(input: {
   agentRun: AgentRun | null;
   busy: boolean;
   draft: string;
+  operation: AgentOperationLevel;
   contextPills: ContextPill[];
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
