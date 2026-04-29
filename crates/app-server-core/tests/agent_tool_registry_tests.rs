@@ -46,25 +46,25 @@ fn registry_definitions_are_filtered_by_mode_contract() {
 }
 
 #[test]
-fn registry_permission_reports_confirmation_requirements() {
+fn registry_permission_reports_execution_scope_requirements() {
     for (tool, modes) in expected_tool_modes() {
         let spec = spec_by_name(tool);
         for mode in all_modes() {
-            let without_confirmation = agent_tool_permission(tool, mode, false);
-            let with_confirmation = agent_tool_permission(tool, mode, true);
+            let without_scope = agent_tool_permission(tool, mode, false);
+            let with_scope = agent_tool_permission(tool, mode, true);
             let allowed_by_mode = modes.contains(&mode);
             assert_eq!(
-                without_confirmation.allowed,
-                allowed_by_mode && !spec.requires_confirmation,
-                "permission without confirmation for {tool:?} in {mode:?}"
+                without_scope.allowed,
+                allowed_by_mode && !spec.requires_execution_scope,
+                "permission without execution scope for {tool:?} in {mode:?}"
             );
             assert_eq!(
-                with_confirmation.allowed, allowed_by_mode,
-                "permission with confirmation for {tool:?} in {mode:?}"
+                with_scope.allowed, allowed_by_mode,
+                "permission with execution scope for {tool:?} in {mode:?}"
             );
             assert_eq!(
-                with_confirmation.requires_confirmation, spec.requires_confirmation,
-                "confirmation flag for {tool}"
+                with_scope.requires_execution_scope, spec.requires_execution_scope,
+                "execution scope flag for {tool}"
             );
         }
     }
@@ -93,7 +93,7 @@ fn registry_declares_path_scope_contracts() {
 
     for tool in ["write_file", "patch_file"] {
         let spec = spec_by_name(tool);
-        assert!(spec.path_policy.requires_confirmation_scope);
+        assert!(spec.path_policy.uses_execution_scope);
         assert_eq!(
             spec.path_policy.cadquery_model_file,
             CadQueryModelFilePolicy::Denied
@@ -111,14 +111,14 @@ fn registry_declares_path_scope_contracts() {
     assert!(!copy_file.path_policy.allowed_roots.contains(&"plans"));
 
     let cadquery_execute = spec_by_name("cadquery_execute");
-    assert!(cadquery_execute.path_policy.requires_confirmation_scope);
+    assert!(cadquery_execute.path_policy.uses_execution_scope);
     assert_eq!(
         cadquery_execute.path_policy.cadquery_model_file,
         CadQueryModelFilePolicy::CadQueryToolOnly
     );
     assert_eq!(
         cadquery_execute.path_policy.output_paths,
-        OutputPathPolicy::ConfirmationOutputsOnly
+        OutputPathPolicy::ExecutionScopeOutputs
     );
 
     let dry_run = spec_by_name("cadquery_dry_run");
@@ -126,7 +126,7 @@ fn registry_declares_path_scope_contracts() {
         dry_run.path_policy.output_paths,
         OutputPathPolicy::TemporaryResultCacheOnly
     );
-    assert!(!dry_run.path_policy.requires_confirmation_scope);
+    assert!(!dry_run.path_policy.uses_execution_scope);
 
     for tool in ["read_file", "list_directory", "cadquery_analyze_source"] {
         assert!(

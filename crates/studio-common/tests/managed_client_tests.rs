@@ -1,17 +1,17 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest,
-    AgentOperationLevel, AgentStartedResponse, AgentTokenEvent, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
-    ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
-    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
-    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
-    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
-    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
-    decode_client_frame, encode_server_frame, web_file_read_capability,
+    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest, AgentMode,
+    AgentStartedResponse, AgentTokenEvent, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
+    ChatSessionId, ChatSessionSummary, ClientCapabilities, ClientCommand, ClientEnvelope,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequest,
+    PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId,
+    SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
+    ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
+    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
+    encode_server_frame, web_file_read_capability,
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
@@ -716,8 +716,8 @@ fn chat_agent_and_selection_successes_update_snapshot() {
         .dispatch_agent_invoke(AgentInvokeRequest {
             session_id: ChatSessionId("main".into()),
             prompt: "inspect".into(),
-            operation: AgentOperationLevel::Inform,
-            confirmed_cadquery: None,
+            mode: AgentMode::Agent,
+            plan_ref: None,
             context_refs: Vec::new(),
         })
         .expect("dispatch agent.invoke");
@@ -753,8 +753,8 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
         .dispatch_agent_invoke(AgentInvokeRequest {
             session_id: ChatSessionId("main".into()),
             prompt: "inspect".into(),
-            operation: AgentOperationLevel::Inform,
-            confirmed_cadquery: None,
+            mode: AgentMode::Agent,
+            plan_ref: None,
             context_refs: Vec::new(),
         })
         .expect("dispatch agent.invoke");

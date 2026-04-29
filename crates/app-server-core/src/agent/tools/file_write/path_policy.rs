@@ -7,7 +7,7 @@ use app_server_protocol::{PathHandle, WorkspaceId};
 
 use crate::llm::LlmToolCall;
 
-use super::super::{AgentToolConfirmationScope, AgentToolRunContext, tool_error_json};
+use super::super::{AgentExecutionScope, AgentToolRunContext, tool_error_json};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -56,10 +56,10 @@ pub(super) fn safe_write_target(
     let relative = workspace_relative_path(root, &absolute, call)?;
     validate_actual_write_path(&relative, policy.allows_model_target(), call)?;
     let existed = target_status(&absolute, call)?;
-    validate_write_confirmation(
+    validate_write_execution_scope(
         &relative,
         existed,
-        context.confirmation_scope.as_ref(),
+        context.execution_scope.as_ref(),
         policy,
         call,
     )?;
@@ -91,12 +91,8 @@ pub(super) fn validate_existing_affected_scope(
     context: &AgentToolRunContext,
     call: &LlmToolCall,
 ) -> Result<(), String> {
-    let Some(scope) = context.confirmation_scope.as_ref() else {
-        return Err(tool_error_json(
-            call,
-            "tool requires confirmed execution scope",
-            "permission_denied",
-        ));
+    let Some(scope) = context.execution_scope.as_ref() else {
+        return Ok(());
     };
     if scope.contains_affected_file(relative) {
         return Ok(());
@@ -104,13 +100,13 @@ pub(super) fn validate_existing_affected_scope(
     if scope.contains_new_file(relative) {
         return Err(tool_error_json(
             call,
-            "confirmed new_files cannot patch existing files",
+            "execution new_files cannot patch existing files",
             "file_conflict",
         ));
     }
     Err(tool_error_json(
         call,
-        "path is outside confirmed execution scope",
+        "path is outside execution scope",
         "permission_denied",
     ))
 }
@@ -256,19 +252,15 @@ fn validate_actual_write_path(
     Ok(())
 }
 
-fn validate_write_confirmation(
+fn validate_write_execution_scope(
     relative: &str,
     existed: bool,
-    scope: Option<&AgentToolConfirmationScope>,
+    scope: Option<&AgentExecutionScope>,
     policy: WriteTargetPolicy,
     call: &LlmToolCall,
 ) -> Result<(), String> {
     let Some(scope) = scope else {
-        return Err(tool_error_json(
-            call,
-            "tool requires confirmed execution scope",
-            "permission_denied",
-        ));
+        return Ok(());
     };
     match policy {
         WriteTargetPolicy::WriteFile => validate_write_file_scope(relative, existed, scope, call),
@@ -279,7 +271,7 @@ fn validate_write_confirmation(
 fn validate_write_file_scope(
     relative: &str,
     existed: bool,
-    scope: &AgentToolConfirmationScope,
+    scope: &AgentExecutionScope,
     call: &LlmToolCall,
 ) -> Result<(), String> {
     if existed && scope.contains_affected_file(relative) {
@@ -291,20 +283,20 @@ fn validate_write_file_scope(
     if scope.contains_new_file(relative) || scope.contains_affected_file(relative) {
         return Err(tool_error_json(
             call,
-            "confirmed file state does not match workspace",
+            "execution scope file state does not match workspace",
             "file_conflict",
         ));
     }
     Err(tool_error_json(
         call,
-        "path is outside confirmed execution scope",
+        "path is outside execution scope",
         "permission_denied",
     ))
 }
 
 fn validate_copy_target_scope(
     relative: &str,
-    scope: &AgentToolConfirmationScope,
+    scope: &AgentExecutionScope,
     call: &LlmToolCall,
 ) -> Result<(), String> {
     if scope.contains_new_file(relative) {
@@ -312,7 +304,7 @@ fn validate_copy_target_scope(
     } else {
         Err(tool_error_json(
             call,
-            "copy_file target must be in confirmed new_files",
+            "copy_file target must be in execution new_files",
             "permission_denied",
         ))
     }

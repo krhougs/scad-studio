@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use app_server_core::ParsedPlanPackage;
+use app_server_core::{AgentExecutionScope, ParsedPlanPackage};
 use app_server_protocol::{
     AgentCadQueryConfirmation, CadQueryObjectKind, ChatMessageRecord, PathHandle, ProtocolError,
     ProtocolErrorCode, SelectionUpdateRequest, WorkspaceId,
@@ -61,7 +61,7 @@ pub fn validate_saved_plan_confirmation(
         || !same_paths(&confirmation.new_files, &plan.new_paths)
         || !same_paths(&confirmation.export_targets, &plan.export_targets)
     {
-        return Err("Agent confirmation scope 与已保存 CAD Plan 不一致");
+        return Err("Agent execution scope 与已保存 CAD Plan 不一致");
     }
     Ok(())
 }
@@ -72,6 +72,14 @@ pub fn parse_plan_package(
 ) -> Result<ParsedPlanPackage, ProtocolError> {
     app_server_core::parse_plan_package(workspace_root, &plan_ref.display_path())
         .map_err(|error| ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.message))
+}
+
+pub fn execution_scope_from_plan_ref(
+    workspace_root: &Path,
+    plan_ref: &PathHandle,
+) -> Result<AgentExecutionScope, ProtocolError> {
+    parse_plan_package(workspace_root, plan_ref)
+        .map(|plan| AgentExecutionScope::from_plan_package(&plan))
 }
 
 fn saved_plan_from_message(message: &ChatMessageRecord, run_id: &str) -> Option<SavedCadPlan> {

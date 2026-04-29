@@ -115,7 +115,7 @@ fn affected_paths(target_path: Option<&str>) -> Vec<String> {
 
 fn edit_goal(selection: &SelectionRef) -> &'static str {
     if selection.ambiguous {
-        return "ambiguous selection confirmation required";
+        return "ambiguous selection requires explicit Agent decision";
     }
     if selection.kind == SelectionKind::Assembly {
         return "assembly coordination";

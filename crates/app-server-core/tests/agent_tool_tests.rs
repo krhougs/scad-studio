@@ -1,8 +1,8 @@
 use app_server_core::llm::{LlmError, LlmMessage, LlmResponse, LlmToolCall, LlmToolDefinition};
 use app_server_core::{
-    AgentToolConfirmationScope, AgentToolRunContext, CadQueryToolCachedResult,
-    CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
-    ChatStore, NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
+    AgentExecutionScope, AgentToolRunContext, CadQueryToolCachedResult, CadQueryToolRunRequest,
+    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore,
+    NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
     agent_tool_definitions_for_mode, run_tool_loop_with_registry,
 };
 use app_server_protocol::{
@@ -16,10 +16,10 @@ use std::sync::{Arc, Mutex};
 
 fn tool_context(
     mode: AgentMode,
-    confirmation_scope: Option<AgentToolConfirmationScope>,
+    execution_scope: Option<AgentExecutionScope>,
 ) -> AgentToolRunContext {
     let mut context = AgentToolRunContext::new(std::env::temp_dir(), mode);
-    context.confirmation_scope = confirmation_scope;
+    context.execution_scope = execution_scope;
     context
 }
 
@@ -401,7 +401,7 @@ fn workspace_tool_executor_save_cad_plan_requires_export_targets() {
 }
 
 #[test]
-fn workspace_tool_executor_save_cad_plan_requires_target_in_confirmed_scope() {
+fn workspace_tool_executor_save_cad_plan_requires_target_in_execution_scope() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
@@ -576,14 +576,13 @@ fn workspace_tool_executor_direct_call_denies_save_plan_outside_plan_mode() {
 }
 
 #[test]
-fn workspace_tool_executor_write_file_creates_confirmed_text_file() {
+fn workspace_tool_executor_write_file_creates_scoped_text_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -606,14 +605,37 @@ fn workspace_tool_executor_write_file_creates_confirmed_text_file() {
 }
 
 #[test]
+fn workspace_tool_executor_write_file_agent_mode_creates_safe_text_without_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "write_file",
+            r##"{"path":"docs/agent-note.md","contents":"# Agent note\n"}"##,
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["created"], true);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("docs/agent-note.md")).unwrap(),
+        "# Agent note\n"
+    );
+}
+
+#[test]
 fn workspace_tool_executor_write_file_allows_empty_text_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/empty.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/empty.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -635,10 +657,9 @@ fn workspace_tool_executor_write_file_overwrites_with_matching_hash() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -666,10 +687,9 @@ fn workspace_tool_executor_write_file_rejects_existing_file_without_hash() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -692,10 +712,9 @@ fn workspace_tool_executor_write_file_rejects_existing_file_without_hash() {
 fn workspace_tool_executor_write_file_rejects_path_traversal() {
     let dir = tempfile::tempdir().unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -723,10 +742,9 @@ fn workspace_tool_executor_write_file_rejects_symlink_target() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -750,10 +768,9 @@ fn workspace_tool_executor_write_file_rejects_nul_text() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -774,10 +791,9 @@ fn workspace_tool_executor_write_file_rejects_plans_root() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("plans")).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["plans/manual.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["plans/manual.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -799,10 +815,9 @@ fn workspace_tool_executor_patch_file_replaces_expected_hash_content() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -830,10 +845,9 @@ fn workspace_tool_executor_patch_file_allows_empty_replace() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -867,10 +881,9 @@ fn workspace_tool_executor_patch_file_rejects_hard_link_alias_to_model_source() 
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -905,10 +918,9 @@ fn workspace_tool_executor_patch_file_rejects_symlink_target_to_model_source() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -943,10 +955,9 @@ fn workspace_tool_executor_patch_file_rejects_symlink_target_to_chat_log() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -970,7 +981,7 @@ fn workspace_tool_executor_patch_file_rejects_symlink_target_to_chat_log() {
 
 #[cfg(unix)]
 #[test]
-fn workspace_tool_executor_patch_file_rejects_symlink_target_to_unconfirmed_file() {
+fn workspace_tool_executor_patch_file_rejects_symlink_target_to_unscoped_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/real.md"), "alpha\nbeta\n").unwrap();
@@ -980,10 +991,9 @@ fn workspace_tool_executor_patch_file_rejects_symlink_target_to_unconfirmed_file
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1011,10 +1021,9 @@ fn workspace_tool_executor_patch_file_rejects_hash_conflict() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1039,10 +1048,9 @@ fn workspace_tool_executor_patch_file_rejects_ambiguous_search_text() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "item\nitem\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1065,15 +1073,14 @@ fn workspace_tool_executor_patch_file_rejects_ambiguous_search_text() {
 }
 
 #[test]
-fn workspace_tool_executor_write_file_rejects_existing_file_confirmed_as_new_file() {
+fn workspace_tool_executor_write_file_rejects_existing_file_scoped_as_new_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "old\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1108,10 +1115,9 @@ fn workspace_tool_executor_write_file_rejects_hard_link_alias_to_chat_log() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/notes.md".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1134,15 +1140,14 @@ fn workspace_tool_executor_write_file_rejects_hard_link_alias_to_chat_log() {
 }
 
 #[test]
-fn workspace_tool_executor_patch_file_rejects_existing_file_confirmed_as_new_file() {
+fn workspace_tool_executor_patch_file_rejects_existing_file_scoped_as_new_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/notes.md"), "alpha\nbeta\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/notes.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1169,10 +1174,9 @@ fn workspace_tool_executor_direct_write_file_rejects_cadquery_model_source() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/lid.py".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["parts/lid.py".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1189,15 +1193,14 @@ fn workspace_tool_executor_direct_write_file_rejects_cadquery_model_source() {
 }
 
 #[test]
-fn workspace_tool_executor_copy_file_copies_confirmed_text_file() {
+fn workspace_tool_executor_copy_file_copies_scoped_text_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1225,10 +1228,9 @@ fn workspace_tool_executor_copy_file_rejects_binary_source() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/source.md"), b"bad\0text").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1251,10 +1253,9 @@ fn workspace_tool_executor_copy_file_rejects_existing_target() {
     std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
     std::fs::write(dir.path().join("docs/copy.md"), "existing\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1286,10 +1287,9 @@ fn workspace_tool_executor_copy_file_rejects_symlink_target() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1318,10 +1318,9 @@ fn workspace_tool_executor_copy_file_rejects_hard_link_alias_target() {
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1346,10 +1345,9 @@ fn workspace_tool_executor_copy_file_rejects_source_hash_conflict() {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/source.md"), "source\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1378,10 +1376,9 @@ fn workspace_tool_executor_copy_file_rejects_hard_link_alias_source_to_chat_log(
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/copy.md".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1398,7 +1395,7 @@ fn workspace_tool_executor_copy_file_rejects_hard_link_alias_source_to_chat_log(
 }
 
 #[test]
-fn workspace_tool_executor_copy_file_allows_model_source_to_confirmed_new_file() {
+fn workspace_tool_executor_copy_file_allows_model_source_to_scoped_new_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
@@ -1407,13 +1404,10 @@ fn workspace_tool_executor_copy_file_allows_model_source_to_confirmed_new_file()
     )
     .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope = AgentToolConfirmationScope::new(
-        Vec::new(),
-        vec!["parts/lid_variant.py".into()],
-        Vec::new(),
-    );
+    let scope =
+        AgentExecutionScope::new(Vec::new(), vec!["parts/lid_variant.py".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1437,13 +1431,10 @@ fn workspace_tool_executor_copy_file_rejects_model_target_not_in_new_files() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(dir.path().join("parts/lid.py"), "def build(): pass\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope = AgentToolConfirmationScope::new(
-        vec!["parts/lid_variant.py".into()],
-        Vec::new(),
-        Vec::new(),
-    );
+    let scope =
+        AgentExecutionScope::new(vec!["parts/lid_variant.py".into()], Vec::new(), Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1466,10 +1457,9 @@ fn workspace_tool_executor_copy_file_rejects_text_source_to_model_target() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(dir.path().join("docs/source.md"), "def build(): pass\n").unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1650,7 +1640,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_unsafe_source() {
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+    context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         Vec::new(),
@@ -1682,7 +1672,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_invalid_project_import() {
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+    context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         Vec::new(),
@@ -1716,13 +1706,13 @@ fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result(
     let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
-    let scope = AgentToolConfirmationScope::new(
+    let scope = AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         vec!["outputs/lid.step".into()],
     );
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1775,12 +1765,12 @@ fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result(
 }
 
 #[test]
-fn workspace_tool_executor_cadquery_execute_requires_confirmed_scope() {
+fn workspace_tool_executor_cadquery_execute_rejects_plan_mode() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
-    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
 
     let result = tool_json_with_context(
         &executor,
@@ -1802,18 +1792,253 @@ fn workspace_tool_executor_cadquery_execute_requires_confirmed_scope() {
 }
 
 #[test]
+fn workspace_tool_executor_cadquery_execute_allows_agent_mode_without_plan_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["result_id"], "cq_1");
+    assert_eq!(runtime.execute_requests().len(), 1);
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_updates_plan_result_for_plan_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plans/2026042900-lid")).unwrap();
+    std::fs::write(
+        dir.path().join("plans/2026042900-lid/plan-result.md"),
+        "---\nstatus: pending\n---\n",
+    )
+    .unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.run_id = Some("run-plan-1".into());
+    context.execution_scope = Some(AgentExecutionScope::for_plan(
+        "plans/2026042900-lid",
+        "plans/2026042900-lid/plan-result.md",
+        "parts/lid.py",
+        CadQueryObjectKind::Part,
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(
+        result["plan_result_path"],
+        serde_json::json!("plans/2026042900-lid/plan-result.md")
+    );
+    let plan_result =
+        std::fs::read_to_string(dir.path().join("plans/2026042900-lid/plan-result.md")).unwrap();
+    assert!(plan_result.contains("status: succeeded"));
+    assert!(plan_result.contains("run_id: `run-plan-1`"));
+    assert!(plan_result.contains("result_id: `cq_1`"));
+    assert!(plan_result.contains("outputs/lid.step"));
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_records_plan_result_for_scope_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plans/2026042900-lid")).unwrap();
+    std::fs::write(
+        dir.path().join("plans/2026042900-lid/plan-result.md"),
+        "---\nstatus: pending\n---\n",
+    )
+    .unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.run_id = Some("run-plan-1".into());
+    context.execution_scope = Some(AgentExecutionScope::for_plan(
+        "plans/2026042900-lid",
+        "plans/2026042900-lid/plan-result.md",
+        "parts/lid.py",
+        CadQueryObjectKind::Part,
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/other.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/other.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    let plan_result =
+        std::fs::read_to_string(dir.path().join("plans/2026042900-lid/plan-result.md")).unwrap();
+    assert!(plan_result.contains("status: failed"));
+    assert!(plan_result.contains("run_id: `run-plan-1`"));
+    assert!(plan_result.contains("outside execution"));
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_tool_executor_cadquery_execute_does_not_update_plan_result_through_symlink_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("2026042900-lid")).unwrap();
+    std::fs::write(
+        outside.path().join("2026042900-lid/plan-result.md"),
+        "---\nstatus: outside\n---\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("plans")).unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.run_id = Some("run-plan-1".into());
+    context.execution_scope = Some(AgentExecutionScope::for_plan(
+        "plans/2026042900-lid",
+        "plans/2026042900-lid/plan-result.md",
+        "parts/lid.py",
+        CadQueryObjectKind::Part,
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert!(result["plan_result_update_warning"].is_string());
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("2026042900-lid/plan-result.md")).unwrap(),
+        "---\nstatus: outside\n---\n"
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn workspace_tool_executor_cadquery_execute_does_not_update_hard_linked_plan_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_plan_result = outside.path().join("plan-result.md");
+    std::fs::write(&outside_plan_result, "---\nstatus: outside\n---\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("plans/2026042900-lid")).unwrap();
+    std::fs::hard_link(
+        &outside_plan_result,
+        dir.path().join("plans/2026042900-lid/plan-result.md"),
+    )
+    .unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.run_id = Some("run-plan-1".into());
+    context.execution_scope = Some(AgentExecutionScope::for_plan(
+        "plans/2026042900-lid",
+        "plans/2026042900-lid/plan-result.md",
+        "parts/lid.py",
+        CadQueryObjectKind::Part,
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    ));
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert!(result["plan_result_update_warning"].is_string());
+    assert_eq!(
+        std::fs::read_to_string(outside_plan_result).unwrap(),
+        "---\nstatus: outside\n---\n"
+    );
+}
+
+#[test]
 fn workspace_tool_executor_cadquery_execute_rejects_unmatched_export_target() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
-    let scope = AgentToolConfirmationScope::new(
+    let scope = AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         vec!["outputs/other.step".into()],
     );
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(scope);
+    context.execution_scope = Some(scope);
 
     let result = tool_json_with_context(
         &executor,
@@ -1845,7 +2070,7 @@ fn workspace_tool_executor_cadquery_execute_requires_paired_doc_in_scope() {
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+    context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         Vec::new(),
@@ -1886,7 +2111,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_hard_linked_paired_doc() {
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+    context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into(), "parts/lid.md".into()],
         Vec::new(),
         Vec::new(),
@@ -3189,7 +3414,7 @@ fn registry_tool_loop_filters_tools_for_agent_mode() {
 }
 
 #[test]
-fn registry_tool_loop_denies_unauthorized_tool_without_executing() {
+fn registry_tool_loop_denies_plan_mode_write_without_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
@@ -3208,7 +3433,7 @@ fn registry_tool_loop_denies_unauthorized_tool_without_executing() {
     let observer = RecordingObserver::default();
     let response = run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "read only")],
-        tool_context(AgentMode::Agent, None),
+        tool_context(AgentMode::Plan, None),
         &provider,
         &executor,
         &observer,
@@ -3341,7 +3566,7 @@ fn registry_tool_loop_enforces_staging_path_denial_before_executing() {
 }
 
 #[test]
-fn registry_tool_loop_enforces_confirmed_file_scope_before_executing() {
+fn registry_tool_loop_enforces_scoped_file_scope_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
@@ -3358,8 +3583,7 @@ fn registry_tool_loop_enforces_confirmed_file_scope_before_executing() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/confirmed.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/scoped.md".into()], Vec::new(), Vec::new());
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "write outside scope")],
         tool_context(AgentMode::Agent, Some(scope)),
@@ -3402,7 +3626,7 @@ fn registry_tool_loop_requires_patch_target_in_affected_files_before_executing()
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope = AgentToolConfirmationScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
 
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "patch new file")],
@@ -3446,8 +3670,7 @@ fn registry_tool_loop_requires_copy_target_in_new_files_before_executing() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/copy.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/copy.md".into()], Vec::new(), Vec::new());
 
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "copy into affected")],
@@ -3486,8 +3709,7 @@ fn registry_tool_loop_rejects_text_source_to_model_copy_before_executing() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope =
-        AgentToolConfirmationScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["parts/new.py".into()], Vec::new());
 
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "copy text to model")],
@@ -3527,7 +3749,7 @@ fn registry_tool_loop_rejects_write_file_new_file_with_expected_hash_before_exec
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope = AgentToolConfirmationScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
+    let scope = AgentExecutionScope::new(Vec::new(), vec!["docs/new.md".into()], Vec::new());
 
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "create with hash")],
@@ -3565,8 +3787,7 @@ fn registry_tool_loop_rejects_write_file_affected_without_hash_before_executing(
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope =
-        AgentToolConfirmationScope::new(vec!["docs/existing.md".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["docs/existing.md".into()], Vec::new(), Vec::new());
 
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "overwrite without hash")],
@@ -3609,8 +3830,7 @@ fn registry_tool_loop_denies_plain_file_tool_writes_to_cadquery_model_source() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope =
-        AgentToolConfirmationScope::new(vec!["parts/lid.py".into()], Vec::new(), Vec::new());
+    let scope = AgentExecutionScope::new(vec!["parts/lid.py".into()], Vec::new(), Vec::new());
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "write model source")],
         tool_context(AgentMode::Agent, Some(scope)),
@@ -3630,7 +3850,7 @@ fn registry_tool_loop_denies_plain_file_tool_writes_to_cadquery_model_source() {
 }
 
 #[test]
-fn registry_tool_loop_enforces_confirmed_export_targets_before_executing() {
+fn registry_tool_loop_enforces_scoped_export_targets_before_executing() {
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
@@ -3641,7 +3861,7 @@ fn registry_tool_loop_enforces_confirmed_export_targets_before_executing() {
                     "{\"target_path\":\"parts/lid.py\",",
                     "\"target_type\":\"part\",",
                     "\"code\":\"def build(params=None): pass\",",
-                    "\"export_targets\":[\"outputs/unconfirmed.step\"]}"
+                    "\"export_targets\":[\"outputs/unscoped.step\"]}"
                 )
                 .into(),
             }],
@@ -3653,10 +3873,10 @@ fn registry_tool_loop_enforces_confirmed_export_targets_before_executing() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope = AgentToolConfirmationScope::new(
+    let scope = AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
-        vec!["outputs/confirmed.step".into()],
+        vec!["outputs/scoped.step".into()],
     );
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "execute outside export scope")],
@@ -3705,7 +3925,7 @@ fn registry_tool_loop_requires_export_targets_when_export_formats_are_requested(
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope = AgentToolConfirmationScope::new(
+    let scope = AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         vec!["outputs/lid.step".into()],
@@ -3758,7 +3978,7 @@ fn registry_tool_loop_rejects_non_string_export_targets() {
     ]);
     let executor = CountingExecutor::new();
     let observer = RecordingObserver::default();
-    let scope = AgentToolConfirmationScope::new(
+    let scope = AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         vec!["outputs/lid.step".into()],
@@ -3821,7 +4041,7 @@ fn registry_tool_loop_executes_scoped_cadquery_tool() {
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let observer = RecordingObserver::default();
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.confirmation_scope = Some(AgentToolConfirmationScope::new(
+    context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
         vec!["outputs/lid.step".into()],
@@ -3980,7 +4200,7 @@ fn registry_tool_loop_passes_unified_context_to_executor() {
         }],
         active_selection_index: Some(0),
         context_refs: vec!["@part[lid]".into()],
-        confirmation_scope: None,
+        execution_scope: None,
     };
     run_tool_loop_with_registry(
         vec![LlmMessage::new("user", "read with context")],

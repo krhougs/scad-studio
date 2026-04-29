@@ -18,6 +18,7 @@ use app_server_protocol::{
 };
 use serde_json::json;
 
+use super::plan_package::ParsedPlanPackage;
 use crate::llm::{LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall};
 pub use registry::{
     AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission, AgentToolSpec,
@@ -102,39 +103,79 @@ impl CadQueryToolRuntimeError {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentToolConfirmationScope {
+pub struct AgentExecutionScope {
+    pub target_path: Option<String>,
+    pub target_type: Option<CadQueryObjectKind>,
     pub affected_files: Vec<String>,
     pub new_files: Vec<String>,
     pub export_targets: Vec<String>,
+    pub plan_ref: Option<String>,
+    pub plan_result_path: Option<String>,
 }
 
-impl AgentToolConfirmationScope {
+impl AgentExecutionScope {
     pub fn new(
         affected_files: Vec<String>,
         new_files: Vec<String>,
         export_targets: Vec<String>,
     ) -> Self {
         Self {
+            target_path: None,
+            target_type: None,
             affected_files: normalize_scope_paths(affected_files),
             new_files: normalize_scope_paths(new_files),
             export_targets: normalize_scope_paths(export_targets),
+            plan_ref: None,
+            plan_result_path: None,
+        }
+    }
+
+    pub fn from_plan_package(plan: &ParsedPlanPackage) -> Self {
+        Self {
+            target_path: Some(plan.target_path.clone()),
+            target_type: Some(plan.target_type),
+            affected_files: normalize_scope_paths(plan.affected_files.clone()),
+            new_files: normalize_scope_paths(plan.new_files.clone()),
+            export_targets: normalize_scope_paths(plan.export_targets.clone()),
+            plan_ref: Some(plan.plan_ref.clone()),
+            plan_result_path: Some(plan.result_path.clone()),
+        }
+    }
+
+    pub fn for_plan(
+        plan_ref: impl Into<String>,
+        plan_result_path: impl Into<String>,
+        target_path: impl Into<String>,
+        target_type: CadQueryObjectKind,
+        affected_files: Vec<String>,
+        new_files: Vec<String>,
+        export_targets: Vec<String>,
+    ) -> Self {
+        Self {
+            target_path: Some(target_path.into()),
+            target_type: Some(target_type),
+            affected_files: normalize_scope_paths(affected_files),
+            new_files: normalize_scope_paths(new_files),
+            export_targets: normalize_scope_paths(export_targets),
+            plan_ref: Some(plan_ref.into()),
+            plan_result_path: Some(plan_result_path.into()),
         }
     }
 
     pub(super) fn contains_affected_file(&self, path: &str) -> bool {
         self.affected_files
             .iter()
-            .any(|confirmed| confirmed == path)
+            .any(|candidate| candidate == path)
     }
 
     pub(super) fn contains_new_file(&self, path: &str) -> bool {
-        self.new_files.iter().any(|confirmed| confirmed == path)
+        self.new_files.iter().any(|candidate| candidate == path)
     }
 
     fn contains_export_target(&self, path: &str) -> bool {
         self.export_targets
             .iter()
-            .any(|confirmed| confirmed == path)
+            .any(|candidate| candidate == path)
     }
 }
 
@@ -147,7 +188,7 @@ pub struct AgentToolRunContext {
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
     pub context_refs: Vec<String>,
-    pub confirmation_scope: Option<AgentToolConfirmationScope>,
+    pub execution_scope: Option<AgentExecutionScope>,
 }
 
 impl AgentToolRunContext {
@@ -160,7 +201,7 @@ impl AgentToolRunContext {
             selections: Vec::new(),
             active_selection_index: None,
             context_refs: Vec::new(),
-            confirmation_scope: None,
+            execution_scope: None,
         }
     }
 }
@@ -197,7 +238,7 @@ impl WorkspaceToolExecutor {
 impl ToolExecutor for WorkspaceToolExecutor {
     fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
         if let Some(result) = validate_direct_executor_permission(call, context) {
-            return result;
+            return record_tool_error_for_context(&self.workspace_root, call, context, result);
         }
         match call.function_name.as_str() {
             "read_file" => readonly::read_file(&self.workspace_root, call),
@@ -248,7 +289,7 @@ fn validate_direct_executor_permission(
     let permission = agent_tool_permission(
         &call.function_name,
         context.mode,
-        context.confirmation_scope.is_some(),
+        context.execution_scope.is_some(),
     );
     if !permission.allowed {
         return Some(tool_error_json(
@@ -261,7 +302,7 @@ fn validate_direct_executor_permission(
         &call.function_name,
         &call.arguments,
         &spec.path_policy,
-        context.confirmation_scope.as_ref(),
+        context.execution_scope.as_ref(),
     )
     .err()
     .map(|error| tool_error_json(call, &error.message, error.error_type))
@@ -316,29 +357,57 @@ fn execute_registry_tool(
     let permission = agent_tool_permission(
         &call.function_name,
         context.mode,
-        context.confirmation_scope.is_some(),
+        context.execution_scope.is_some(),
     );
     if !permission.allowed {
-        return tool_error_json(call, permission.reason, "permission_denied");
+        return record_tool_error_for_context(
+            &context.workspace_root,
+            call,
+            context,
+            tool_error_json(call, permission.reason, "permission_denied"),
+        );
     }
     if let Some(spec) = spec
         && let Err(error) = validate_tool_path_policy(
             &call.function_name,
             &call.arguments,
             &spec.path_policy,
-            context.confirmation_scope.as_ref(),
+            context.execution_scope.as_ref(),
         )
     {
-        return tool_error_json(call, &error.message, error.error_type);
+        return record_tool_error_for_context(
+            &context.workspace_root,
+            call,
+            context,
+            tool_error_json(call, &error.message, error.error_type),
+        );
     }
     if let Err(error) = validate_registry_tool_intent(
         &call.function_name,
         &call.arguments,
-        context.confirmation_scope.as_ref(),
+        context.execution_scope.as_ref(),
     ) {
-        return tool_error_json(call, &error.message, error.error_type);
+        return record_tool_error_for_context(
+            &context.workspace_root,
+            call,
+            context,
+            tool_error_json(call, &error.message, error.error_type),
+        );
     }
     executor.execute(call, context)
+}
+
+fn record_tool_error_for_context(
+    workspace_root: &std::path::Path,
+    call: &LlmToolCall,
+    context: &AgentToolRunContext,
+    result: String,
+) -> String {
+    if call.function_name == "cadquery_execute" {
+        cadquery::record_plan_failure_for_tool_error(workspace_root, context, result)
+    } else {
+        result
+    }
 }
 
 fn tool_error_json(call: &LlmToolCall, message: &str, error_type: &str) -> String {

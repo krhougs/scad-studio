@@ -1,7 +1,7 @@
 use app_server_host::{
-    export_handle_for, extract_object_name, extract_plan_from_json_block,
-    extract_plan_from_selection, extract_plan_proposal, latest_saved_cad_plan, parse_plan_package,
-    validate_saved_plan_confirmation,
+    execution_scope_from_plan_ref, export_handle_for, extract_object_name,
+    extract_plan_from_json_block, extract_plan_from_selection, extract_plan_proposal,
+    latest_saved_cad_plan, parse_plan_package, validate_saved_plan_confirmation,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
@@ -180,6 +180,53 @@ source_chat_session: chat-1
         parsed.result_path,
         "plans/2026042900-add-lid-vents/plan-result.md"
     );
+}
+
+#[test]
+fn execution_scope_from_plan_ref_uses_parsed_plan_package() {
+    let dir = tempfile::tempdir().unwrap();
+    write_plan_package(
+        dir.path(),
+        "2026042900-add-lid-vents",
+        r#"---
+plan_id: 2026042900-add-lid-vents
+mode: plan
+target_path: parts/top_lid.py
+target_type: part
+affected_files:
+  - parts/top_lid.py
+new_files:
+  - docs/top_lid.md
+export_targets:
+  - outputs/top_lid.step
+status: planned
+created_at: 2026-04-29T14:00:00+08:00
+source_chat_session: chat-1
+---
+
+# CAD Plan: Add lid vents
+"#,
+    );
+
+    let scope = execution_scope_from_plan_ref(
+        dir.path(),
+        &path_handle(["plans", "2026042900-add-lid-vents"]),
+    )
+    .expect("plan package should become execution scope");
+
+    assert_eq!(
+        scope.plan_ref.as_deref(),
+        Some("plans/2026042900-add-lid-vents")
+    );
+    assert_eq!(
+        scope.plan_result_path.as_deref(),
+        Some("plans/2026042900-add-lid-vents/plan-result.md")
+    );
+    assert_eq!(scope.target_path.as_deref(), Some("parts/top_lid.py"));
+    assert_eq!(scope.target_type, Some(CadQueryObjectKind::Part));
+    assert_eq!(scope.affected_files, vec!["parts/top_lid.py"]);
+    assert_eq!(scope.new_files, vec!["docs/top_lid.md"]);
+    assert_eq!(scope.export_targets, vec!["outputs/top_lid.step"]);
 }
 
 #[test]
@@ -364,7 +411,8 @@ fn saved_plan_confirmation_rejects_scope_mismatch() {
         plan_confirmation(Some(path_handle(["plans", "2026042900-add-lid-vents"])));
     confirmation.export_targets = vec![path_handle(["outputs", "other.step"])];
 
-    assert!(validate_saved_plan_confirmation(&confirmation, &plan).is_err());
+    let error = validate_saved_plan_confirmation(&confirmation, &plan).unwrap_err();
+    assert!(error.contains("execution scope"));
 }
 
 #[test]

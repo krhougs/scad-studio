@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，并均通过独立 subagent review；后续 Phase 自动继续执行。
+正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，并均通过独立 subagent review；后续 Phase 自动继续执行。
 
 ## 前置提交
 
@@ -15,7 +15,7 @@
 | Phase 1 — 文档与产品语义更新 | 已完成 | 已统一 Agent / Plan 双模式文档、运行时 system prompt、tool contract、Ref PRD、Chat 交互设计和 known issues；旧 confirmation 术语仅保留在历史 / deprecated / known issues 语境 |
 | Phase 2 — Protocol 与共享数据模型收敛 | 已完成 | 已将 Agent 请求协议收敛为 Agent / Plan 双模式、加入 plan package ref / saved event、提升 protocol version 到 v4，并让旧 confirmation 命令仅保留 deprecated 兼容路径 |
 | Phase 3 — 后端 Plan Package 存储与解析 | 已完成 | 已将 `save_cad_plan` 改为 workspace plan package 三文件结构，新增 plan package parser、执行范围解析、legacy plan 只读展示和 `get_project_context` plan package 列表 |
-| Phase 4 — 后端 Agent Mode 执行模型 | 未开始 | 待执行 |
+| Phase 4 — 后端 Agent Mode 执行模型 | 已完成 | 已将后端执行模型从 confirmation precondition 切换为 Agent / Plan mode，Agent mode 支持自由请求和 plan_ref execution scope 执行，Plan mode 保持只读加 `save_cad_plan`，并在 `cadquery_execute` 成功 / 失败时安全追加 `plan-result.md` |
 | Phase 5 — Web Chat 模式简化 | 未开始 | 待执行 |
 | Phase 6 — Markdown Plan Preview 执行入口 | 未开始 | 待执行 |
 | Phase 7 — 测试、迁移和文档收敛 | 未开始 | 待执行 |
@@ -104,3 +104,30 @@
   - `git diff --check`：通过。
 - 遗留问题：
   - Phase 3 仅完成 plan package 创建、展示和解析；Phase 4 将使用 parser 输出替换旧 `confirmation_scope` / `requires_confirmation`，并在 Agent mode 执行 plan 后更新 `plan-result.md`。
+
+### Phase 4 — 后端 Agent Mode 执行模型
+
+- 完成情况：
+  - 将 core 内部执行范围从 `confirmation_scope` / `AgentToolConfirmationScope` 替换为 `execution_scope` / `AgentExecutionScope`，并支持从 Phase 3 的 plan package parser 生成 plan 执行范围。
+  - 更新 tool registry 和 path policy：`Agent` mode 可使用安全文本写入工具和 `cadquery_execute`；`Plan` mode 仍只允许只读工具与 `save_cad_plan`；普通文件工具继续拒绝直接改写 CadQuery `.py` 模型源、`chats/`、`outputs/` 和 staging 路径。
+  - 更新 `cadquery_execute`：无 `plan_ref` 时允许 Agent mode 自由请求执行，但 target 必须在 `components/`、`parts/`、`assemblies/`，导出目标必须符合 runner 默认 outputs 规则；有 `plan_ref` 时 target、target type、affected / new files 和 export targets 必须匹配 plan package execution scope。
+  - 为 `cadquery_execute` 成功和失败路径增加 `plan-result.md` 追加记录；更新失败时将 `plan_result_update_warning` 写入工具结果，不静默丢弃。
+  - 为 `plan-result.md` 更新增加路径形态、symlink component、regular file 和 hard link 防护；Unix 使用 `nlink()`，Windows 使用 `number_of_links()`，其他无法可靠判断的平台保守拒绝写入并返回 warning。
+  - 更新 host `agent.invoke`：`Agent` mode 带 `plan_ref` 时解析 plan package 并把 execution scope 同时传给 LLM turn input 和 tool executor；解析失败时返回 Agent error，不执行工具。
+  - 更新 runtime prompt 上下文、本地 fallback 和 CadQuery generation context：输出 `Mode`、`Plan ref`、`Execution scope`、context refs 和 selection，不再把 `Operation: Execute`、`Confirmed target`、`confirmed_cadquery` 作为当前执行规则。
+  - 将 `studio-common` 共享客户端测试从旧 `AgentOperationLevel` / `operation` / `confirmed_cadquery` 构造方式迁移到 `AgentMode` / `plan_ref`。
+- Review：
+  - 第一轮 Phase 4 review 发现 `cadquery_execute` 的早期参数、路径、scope、contract 和无 runtime 失败没有记录 `plan-result.md`，且 LLM CadQuery generation request 仍使用旧上下文；已修复并补充失败记录与 LLM context 测试。
+  - 第二轮 Phase 4 review 发现 `studio-common` 测试仍使用旧 protocol 字段，以及 `plan-result.md` 缺少 hard link 防护；已修复并补充 `studio-common` 回归和 hard link 测试。
+  - 第三轮 Phase 4 review 发现 hard link 防护只覆盖 Unix；已补充 Windows `number_of_links()` 路径和其他平台保守拒绝策略。
+  - 第四轮 Phase 4 review 未发现阻塞项或高风险问题。
+- 验证：
+  - `cargo test -p app-server-core --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `cargo test -p app-server-host --tests`：通过，仅有既有 `watch` dead_code warning。
+  - `cargo test -p studio-common --tests`：通过。
+  - `cargo test -p app-server-protocol --tests`：通过。
+  - `cargo fmt --check -p app-server-core -p app-server-host -p studio-common`：通过。
+  - `git diff --check`：通过。
+  - `rg -n "confirmation scope|Operation: Execute|Confirmed target|Ensure you have confirmed|confirmed_cadquery|AgentOperationLevel|operation_for_tool_loop" ...`：仅命中 deprecated 文档、protocol deprecated 字段、host deprecated compatibility tests / helper 和 prompt 反向断言。
+- 遗留问题：
+  - Phase 4 未处理 Web Chat UI 和 Markdown Plan Preview；Phase 5 将继续简化 Web Chat 模式与 Plan Package / Run Plan 入口，Phase 6 将实现 Markdown plan preview 执行入口。

@@ -16,9 +16,9 @@ pub use in_process::{
 };
 pub use mpsc_transport::{MpscTransportAdapter, MpscTransportHarness};
 pub use plan_extraction::{
-    ExtractedPlan, export_handle_for, extract_object_name, extract_plan_from_json_block,
-    extract_plan_from_selection, extract_plan_proposal, latest_saved_cad_plan, parse_plan_package,
-    validate_saved_plan_confirmation,
+    ExtractedPlan, execution_scope_from_plan_ref, export_handle_for, extract_object_name,
+    extract_plan_from_json_block, extract_plan_from_selection, extract_plan_proposal,
+    latest_saved_cad_plan, parse_plan_package, validate_saved_plan_confirmation,
 };
 pub use runtime::spawn_in_process_mpsc_host;
 pub use session::HostSession;

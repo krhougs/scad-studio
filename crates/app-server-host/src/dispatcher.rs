@@ -240,7 +240,7 @@ impl HostRequestDispatcher {
                 if !request.export_formats.is_empty() {
                     return Err(ProtocolError::new(
                         ProtocolErrorCode::InvalidCommand,
-                        "CadQuery preview 不允许 export_formats；需要写入 outputs 时必须使用 Execute confirmation",
+                        "CadQuery preview 不允许 export_formats；需要写入 outputs 时请切换到 Agent mode 执行 CadQuery",
                     ));
                 }
                 let workspace_path = self.workspace_root()?.to_path_buf();
@@ -940,7 +940,9 @@ fn path_handles_for(workspace_root: &Path, paths: &[String]) -> Vec<PathHandle> 
         .collect()
 }
 
-use crate::plan_extraction::{SavedCadPlan, latest_saved_cad_plan, plan_target_handle};
+use crate::plan_extraction::{
+    SavedCadPlan, execution_scope_from_plan_ref, latest_saved_cad_plan, plan_target_handle,
+};
 
 fn run_text_agent_llm(
     worker: &AgentWorker,
@@ -952,6 +954,18 @@ fn run_text_agent_llm(
         .map(|response| response.messages)
         .unwrap_or_default();
     let mode = app_server_core::mode_for_tool_loop(worker.mode);
+    let execution_scope = match execution_scope_for_worker(worker, mode) {
+        Ok(scope) => scope,
+        Err(error) => {
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::PermissionDenied,
+                error.message,
+            );
+            return None;
+        }
+    };
     let input = AgentTurnInput {
         mode,
         prompt: worker.prompt.clone(),
@@ -960,6 +974,7 @@ fn run_text_agent_llm(
         active_selection_index: worker.selection_snapshot.active_index,
         plan_ref: worker.plan_ref.clone(),
         context_refs: worker.context_refs.clone(),
+        execution_scope: execution_scope.clone(),
     };
     let cadquery_runtime = Arc::new(HostCadQueryToolRuntime {
         workspace_root: worker.workspace_root.clone(),
@@ -976,6 +991,7 @@ fn run_text_agent_llm(
     tool_context.selections = worker.selection_snapshot.selections.clone();
     tool_context.active_selection_index = worker.selection_snapshot.active_index;
     tool_context.context_refs = worker.context_refs.clone();
+    tool_context.execution_scope = execution_scope;
     let tool_observer = AgentToolEventRecorder {
         workspace_root: worker.workspace_root.clone(),
         push_sink: Arc::clone(&worker.push_sink),
@@ -1009,6 +1025,19 @@ fn run_text_agent_llm(
             None
         }
     }
+}
+
+fn execution_scope_for_worker(
+    worker: &AgentWorker,
+    mode: AgentMode,
+) -> Result<Option<app_server_core::AgentExecutionScope>, ProtocolError> {
+    if mode != AgentMode::Agent {
+        return Ok(None);
+    }
+    let Some(plan_ref) = &worker.plan_ref else {
+        return Ok(None);
+    };
+    execution_scope_from_plan_ref(&worker.workspace_root, plan_ref).map(Some)
 }
 
 pub fn validate_cadquery_confirmation(

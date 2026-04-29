@@ -3,8 +3,8 @@ use app_server_core::llm::{
     extract_delta_content, read_sse_stream,
 };
 use app_server_core::{
-    AgentCadQueryCodeInput, AgentTurnInput, build_execute_messages, build_turn_context,
-    build_turn_messages, extract_cadquery_code,
+    AgentCadQueryCodeInput, AgentExecutionScope, AgentTurnInput, build_execute_messages,
+    build_turn_context, build_turn_messages, extract_cadquery_code,
 };
 use app_server_protocol::{
     AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
@@ -189,6 +189,7 @@ fn build_turn_messages_includes_system_prompt_and_history() {
         active_selection_index: None,
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     };
     let messages = build_turn_messages(&input);
     assert_eq!(messages[0].role, "system");
@@ -215,6 +216,7 @@ fn build_turn_messages_skips_empty_and_tool_history() {
         active_selection_index: None,
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     };
     let messages = build_turn_messages(&input);
     let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
@@ -233,10 +235,22 @@ fn build_turn_context_includes_mode_plan_ref_and_selection() {
             PathHandle::new(WorkspaceId::new("ws"), ["plans", "2026050100-lid"]).unwrap(),
         ),
         context_refs: Vec::new(),
+        execution_scope: Some(AgentExecutionScope::for_plan(
+            "plans/2026050100-lid",
+            "plans/2026050100-lid/plan-result.md",
+            "parts/lid.py",
+            CadQueryObjectKind::Part,
+            vec!["parts/lid.py".into()],
+            Vec::new(),
+            vec!["outputs/lid.step".into()],
+        )),
     };
     let context = build_turn_context(&input);
     assert!(context.contains("Mode: Agent"));
     assert!(context.contains("Plan ref: plans/2026050100-lid"));
+    assert!(context.contains("Execution scope"));
+    assert!(context.contains("target_path=parts/lid.py"));
+    assert!(context.contains("plan_result_path=plans/2026050100-lid/plan-result.md"));
     assert!(context.contains("Viewer selection"));
 }
 
@@ -250,6 +264,7 @@ fn build_turn_context_omits_selection_when_empty() {
         active_selection_index: None,
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     };
     let context = build_turn_context(&input);
     assert!(context.contains("Mode: Agent"));
@@ -267,6 +282,7 @@ fn build_turn_context_includes_context_refs() {
         active_selection_index: None,
         plan_ref: None,
         context_refs: vec!["@face[top_lid:f_0]".into(), "@part[bottom_case]".into()],
+        execution_scope: None,
     };
     let context = build_turn_context(&input);
     assert!(context.contains("context refs"));
@@ -283,6 +299,7 @@ fn build_execute_messages_includes_structured_context() {
         active_selection_index: Some(0),
         target_display_path: "parts/box.py".into(),
         target_type: CadQueryObjectKind::Part,
+        execution_scope: None,
     };
     let messages = build_execute_messages(&input);
     assert_eq!(messages[0].role, "system");

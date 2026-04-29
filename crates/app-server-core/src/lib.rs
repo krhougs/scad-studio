@@ -24,7 +24,7 @@ pub use agent::{
     },
     rig_backend_decision, stream_agent_turn, stream_agent_turn_with_tools,
     tools::{
-        AgentSemanticStore, AgentToolCategory, AgentToolConfirmationScope, AgentToolPathPolicy,
+        AgentExecutionScope, AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy,
         AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,
         CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult,
         CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver, OutputPathPolicy,

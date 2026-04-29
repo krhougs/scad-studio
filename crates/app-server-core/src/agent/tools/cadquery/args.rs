@@ -122,21 +122,48 @@ pub(super) fn validate_execute_scope(
             "permission_denied",
         ));
     }
-    let Some(scope) = &context.confirmation_scope else {
+    let Some(scope) = &context.execution_scope else {
+        return Ok(());
+    };
+    if let Some(target_path) = &scope.target_path
+        && target_path != &request.target_path
+    {
         return Err(tool_error_json(
             call,
-            "cadquery_execute requires confirmed execution scope",
+            "target_path does not match execution scope target_path",
             "permission_denied",
         ));
-    };
+    }
+    if let Some(target_type) = scope.target_type
+        && target_type != request.target_type
+    {
+        return Err(tool_error_json(
+            call,
+            "target_type does not match execution scope target_type",
+            "permission_denied",
+        ));
+    }
     if !scope.affected_files.contains(&request.target_path)
         && !scope.new_files.contains(&request.target_path)
     {
         return Err(tool_error_json(
             call,
-            "target_path is outside confirmed affected_files / new_files",
+            "target_path is outside execution affected_files / new_files",
             "permission_denied",
         ));
+    }
+    if !scope.export_targets.is_empty() {
+        let mut requested = request.export_targets.clone();
+        let mut allowed = scope.export_targets.clone();
+        requested.sort();
+        allowed.sort();
+        if requested != allowed {
+            return Err(tool_error_json(
+                call,
+                "export_targets must match execution scope export_targets",
+                "permission_denied",
+            ));
+        }
     }
     if request
         .export_targets
@@ -145,7 +172,7 @@ pub(super) fn validate_execute_scope(
     {
         return Err(tool_error_json(
             call,
-            "export target is outside confirmed export_targets",
+            "export target is outside execution export_targets",
             "permission_denied",
         ));
     }
@@ -166,13 +193,13 @@ pub(super) fn doc_update_path_for_execute(
     if !absolute.exists() {
         return Ok(None);
     }
-    let Some(scope) = &context.confirmation_scope else {
+    let Some(scope) = &context.execution_scope else {
         return Ok(None);
     };
     if !scope.affected_files.contains(&doc_path) && !scope.new_files.contains(&doc_path) {
         return Err(tool_error_json(
             call,
-            "paired CadQuery document must be in confirmed affected_files / new_files",
+            "paired CadQuery document must be in execution affected_files / new_files",
             "permission_denied",
         ));
     }

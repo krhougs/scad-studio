@@ -1,6 +1,6 @@
 use app_server_core::{
-    AgentCadQueryCodeInput, AgentTurnInput, cadquery_agent_system_prompt, draft_agent_turn,
-    generate_cadquery_code, llm_request_for_cadquery_execute, mode_for_tool_loop,
+    AgentCadQueryCodeInput, AgentExecutionScope, AgentTurnInput, cadquery_agent_system_prompt,
+    draft_agent_turn, generate_cadquery_code, llm_request_for_cadquery_execute, mode_for_tool_loop,
     rig_backend_decision,
 };
 use app_server_protocol::{
@@ -78,18 +78,35 @@ fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
         history: vec![
             chat_message("msg-1", "initial CAD Plan: preserve head clearance"),
             chat_message("msg-2", ""),
-            chat_message("msg-3", "explicit confirmation: edit selected component"),
+            chat_message("msg-3", "explicit execution scope: edit selected component"),
         ],
         selections: vec![instance_selection()],
         active_selection_index: Some(0),
         target_display_path: "components/screw.py".into(),
         target_type: CadQueryObjectKind::Component,
+        execution_scope: Some(AgentExecutionScope::for_plan(
+            "plans/2026042900-screw",
+            "plans/2026042900-screw/plan-result.md",
+            "components/screw.py",
+            CadQueryObjectKind::Component,
+            vec!["components/screw.py".into()],
+            Vec::new(),
+            vec!["outputs/screw.step".into()],
+        )),
     });
 
     assert_eq!(request.system_prompt, cadquery_agent_system_prompt());
     assert!(request.context.contains("Mode: Agent"));
     assert!(request.context.contains("Target path: components/screw.py"));
     assert!(request.context.contains("Target type: component"));
+    assert!(request.context.contains("Execution scope"));
+    assert!(request.context.contains("plan_ref=plans/2026042900-screw"));
+    assert!(
+        request
+            .context
+            .contains("export_targets=outputs/screw.step")
+    );
+    assert!(request.context.contains("staging"));
     assert!(request.context.contains("Active selection index: 0"));
     assert!(
         request
@@ -105,7 +122,7 @@ fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
     assert!(
         request
             .context
-            .contains("explicit confirmation: edit selected component")
+            .contains("explicit execution scope: edit selected component")
     );
     assert!(!request.context.contains("assembly instance replacement"));
 }
@@ -120,6 +137,7 @@ fn draft_agent_turn_uses_prompt_history_selection_and_plan_ref() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("Agent"));
@@ -145,6 +163,7 @@ fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("## CAD Plan"));
@@ -162,6 +181,7 @@ fn local_agent_backend_refuses_part_codegen_without_llm_backend() {
         active_selection_index: Some(0),
         target_display_path: "parts/top_lid.py".into(),
         target_type: CadQueryObjectKind::Part,
+        execution_scope: None,
     })
     .expect_err("local fallback must not generate CadQuery geometry");
 
@@ -178,6 +198,7 @@ fn local_agent_backend_refuses_assembly_codegen_without_llm_backend() {
         active_selection_index: Some(0),
         target_display_path: "assemblies/full_enclosure.py".into(),
         target_type: CadQueryObjectKind::Assembly,
+        execution_scope: None,
     })
     .expect_err("local fallback must not generate assembly geometry");
 
@@ -195,6 +216,7 @@ fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -213,6 +235,7 @@ fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -231,6 +254,7 @@ fn plan_turn_labels_component_body_edit_as_component_geometry() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -248,6 +272,7 @@ fn plan_turn_labels_instance_body_edit_as_component_geometry() {
         active_selection_index: Some(0),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("Target: components/screw.py"));
@@ -265,6 +290,7 @@ fn plan_turn_uses_active_selection_and_keeps_ambiguous_raw_ref() {
         active_selection_index: Some(1),
         plan_ref: None,
         context_refs: Vec::new(),
+        execution_scope: None,
     });
 
     assert!(draft.text.contains("@face[top_lid:f_1]"));

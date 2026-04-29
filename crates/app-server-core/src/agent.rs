@@ -30,6 +30,7 @@ pub struct AgentTurnInput {
     pub active_selection_index: Option<u32>,
     pub plan_ref: Option<PathHandle>,
     pub context_refs: Vec<String>,
+    pub execution_scope: Option<tools::AgentExecutionScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +46,7 @@ pub struct AgentCadQueryCodeInput {
     pub active_selection_index: Option<u32>,
     pub target_display_path: String,
     pub target_type: CadQueryObjectKind,
+    pub execution_scope: Option<tools::AgentExecutionScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +108,7 @@ pub fn cadquery_agent_system_prompt() -> &'static str {
 pub fn llm_request_for_cadquery_execute(input: AgentCadQueryCodeInput) -> AgentLlmRequest {
     AgentLlmRequest {
         system_prompt: cadquery_agent_system_prompt(),
-        context: cadquery_execute_context(input),
+        context: cadquery_execute_context_for_llm(&input),
     }
 }
 
@@ -131,21 +133,6 @@ impl AgentBackend for LocalAgentBackend {
     }
 }
 
-fn cadquery_execute_context(input: AgentCadQueryCodeInput) -> String {
-    let history = history_context(&input.history);
-    let selections = selection_context(&input.selections);
-    format!(
-        "Mode: Agent\nUser request: {}\nHistory: {history}\nTarget path: {}\nTarget type: {}\nActive selection index: {}\nSelections:\n{selections}",
-        non_empty(input.prompt.trim(), "未提供具体问题"),
-        input.target_display_path,
-        object_kind_label(input.target_type),
-        input
-            .active_selection_index
-            .map(|index| index.to_string())
-            .unwrap_or_else(|| "none".into())
-    )
-}
-
 fn draft_local_turn(input: AgentTurnInput) -> AgentTurnDraft {
     if input.mode == AgentMode::Plan {
         return draft_cad_plan(input);
@@ -159,9 +146,14 @@ fn draft_local_turn(input: AgentTurnInput) -> AgentTurnDraft {
         .as_ref()
         .map(PathHandle::display_path)
         .unwrap_or_else(|| "none".into());
+    let execution_scope = input
+        .execution_scope
+        .as_ref()
+        .map(execution_scope_context)
+        .unwrap_or_else(|| "none".into());
     AgentTurnDraft {
         text: format!(
-            "{mode} turn\nPrompt: {prompt}\nContext: {history}\nSelection: {selections}\nPlan ref: {plan_ref}"
+            "{mode} turn\nPrompt: {prompt}\nContext: {history}\nSelection: {selections}\nPlan ref: {plan_ref}\nExecution scope: {execution_scope}"
         ),
     }
 }
@@ -430,6 +422,12 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
             input.context_refs.join(", ")
         ));
     }
+    if let Some(scope) = &input.execution_scope {
+        parts.push(format!(
+            "Execution scope:\n{}",
+            execution_scope_context(scope)
+        ));
+    }
     if !input.selections.is_empty() {
         parts.push(format!(
             "Current Viewer selection:\n{}",
@@ -440,24 +438,47 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
 }
 
 fn cadquery_execute_context_for_llm(input: &AgentCadQueryCodeInput) -> String {
+    let history = history_context(&input.history);
     let selections = selection_context(&input.selections);
+    let execution_scope = input
+        .execution_scope
+        .as_ref()
+        .map(execution_scope_context)
+        .unwrap_or_else(|| "none".into());
     format!(
         "Mode: Agent\n\
          User request: {}\n\
+         History:\n{history}\n\
          Target path: {}\n\
          Target type: {}\n\
+         Execution scope:\n{}\n\
          Active selection index: {}\n\
          Selections:\n{selections}\n\n\
          You must respond with a complete CadQuery Python script that implements the user's request. \
+         CadQuery model .py changes must be committed through the CadQuery tool and staging, not ordinary file tools. \
          Include the REFS dict and build() function. \
          Wrap the code in a ```python code block.",
         non_empty(input.prompt.trim(), "未提供具体问题"),
         input.target_display_path,
         object_kind_label(input.target_type),
+        execution_scope,
         input
             .active_selection_index
             .map(|index| index.to_string())
             .unwrap_or_else(|| "none".into())
+    )
+}
+
+fn execution_scope_context(scope: &tools::AgentExecutionScope) -> String {
+    let target_path = scope.target_path.as_deref().unwrap_or("none");
+    let target_type = scope.target_type.map(object_kind_label).unwrap_or("none");
+    let plan_ref = scope.plan_ref.as_deref().unwrap_or("none");
+    let plan_result_path = scope.plan_result_path.as_deref().unwrap_or("none");
+    format!(
+        "- plan_ref={plan_ref}\n- target_path={target_path}\n- target_type={target_type}\n- affected_files={}\n- new_files={}\n- export_targets={}\n- plan_result_path={plan_result_path}",
+        scope.affected_files.join(", "),
+        scope.new_files.join(", "),
+        scope.export_targets.join(", ")
     )
 }
 
