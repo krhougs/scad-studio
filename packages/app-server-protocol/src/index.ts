@@ -385,6 +385,7 @@ export interface ChatMessageRecord {
   tool_calls: ChatToolCallRecord[];
   tool_result: ChatToolResultRecord | null;
   mesh_result: CadQueryResultReady | null;
+  run_id: string | null;
 }
 
 export interface ChatToolCallRecord {

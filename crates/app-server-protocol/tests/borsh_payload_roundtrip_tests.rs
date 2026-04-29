@@ -436,6 +436,7 @@ fn chat_agent_and_selection_payloads_roundtrip() {
                 result_json: "{\"ok\":true}".into(),
             }),
             mesh_result: None,
+            run_id: Some("agent-1".into()),
         }],
     };
     let response = ServerEnvelope::Response(ServerResponseEnvelope {
@@ -685,4 +686,24 @@ fn selection_update_payload_roundtrips() {
     let decoded: ChatHistoryRequest =
         borsh::from_slice(&borsh::to_vec(&history_request).unwrap()).unwrap();
     assert_eq!(decoded, history_request);
+}
+
+#[test]
+fn chat_message_record_run_id_none_borsh_roundtrip() {
+    let record = ChatMessageRecord {
+        message_id: "msg-1".into(),
+        ts_ms: 100,
+        role: ChatRole::User,
+        content: "hello".into(),
+        related_files: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        tool_result: None,
+        mesh_result: None,
+        run_id: None,
+    };
+    let bytes = borsh::to_vec(&record).unwrap();
+    let decoded: ChatMessageRecord = borsh::from_slice(&bytes).unwrap();
+    assert_eq!(decoded, record);
+    assert_eq!(decoded.run_id, None);
 }

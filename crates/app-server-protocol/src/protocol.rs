@@ -572,6 +572,8 @@ pub struct ChatMessageRecord {
     pub tool_calls: Vec<ChatToolCallRecord>,
     pub tool_result: Option<ChatToolResultRecord>,
     pub mesh_result: Option<CadQueryResultReady>,
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

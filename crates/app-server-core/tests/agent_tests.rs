@@ -309,6 +309,7 @@ fn chat_message(id: &str, content: &str) -> ChatMessageRecord {
         tool_calls: Vec::new(),
         tool_result: None,
         mesh_result: None,
+        run_id: None,
     }
 }
 

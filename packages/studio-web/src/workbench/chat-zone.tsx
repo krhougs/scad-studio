@@ -51,6 +51,7 @@ export type ChatMessageRecord = {
   tool_calls?: unknown[];
   tool_result?: unknown | null;
   mesh_result?: unknown | null;
+  run_id?: string | null;
 };
 
 export type AgentRun = {

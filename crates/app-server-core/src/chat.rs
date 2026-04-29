@@ -39,6 +39,8 @@ struct JsonlMessage {
     tool_result: Option<ChatToolResultRecord>,
     #[serde(default)]
     mesh_result: Option<app_server_protocol::CadQueryResultReady>,
+    #[serde(default)]
+    run_id: Option<String>,
 }
 
 impl ChatStore {
@@ -81,6 +83,18 @@ impl ChatStore {
         related_files: Vec<PathHandle>,
         tool_call_id: Option<String>,
     ) -> Result<ChatAckResponse, ProtocolError> {
+        self.append_message_with_run_id(session_id, role, content, related_files, tool_call_id, None)
+    }
+
+    pub fn append_message_with_run_id(
+        &self,
+        session_id: &ChatSessionId,
+        role: ChatRole,
+        content: &str,
+        related_files: Vec<PathHandle>,
+        tool_call_id: Option<String>,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
         validate_session_id(session_id)?;
         let path = self.session_path(session_id)?;
         let message_count = read_messages(&self.workspace_root, &path)?.len();
@@ -91,7 +105,8 @@ impl ChatStore {
             content.to_owned(),
             related_files,
             tool_call_id,
-        );
+        )
+        .with_run_id(run_id);
         append_jsonl(&self.workspace_root, &path, &message)?;
         Ok(ChatAckResponse {
             session_id: session_id.clone(),
@@ -105,7 +120,17 @@ impl ChatStore {
         content: &str,
         tool_call: ChatToolCallRecord,
     ) -> Result<ChatAckResponse, ProtocolError> {
-        let mut message = self.next_message(session_id, ChatRole::Assistant, content)?;
+        self.append_tool_call_with_run_id(session_id, content, tool_call, None)
+    }
+
+    pub fn append_tool_call_with_run_id(
+        &self,
+        session_id: &ChatSessionId,
+        content: &str,
+        tool_call: ChatToolCallRecord,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        let mut message = self.next_message_with_run_id(session_id, ChatRole::Assistant, content, run_id)?;
         message.tool_call_id = Some(tool_call.tool_call_id.clone());
         message.tool_calls.push(tool_call);
         self.append_record(session_id, message)
@@ -118,7 +143,18 @@ impl ChatStore {
         tool_result: ChatToolResultRecord,
         mesh_result: Option<app_server_protocol::CadQueryResultReady>,
     ) -> Result<ChatAckResponse, ProtocolError> {
-        let mut message = self.next_message(session_id, ChatRole::Tool, content)?;
+        self.append_tool_result_with_run_id(session_id, content, tool_result, mesh_result, None)
+    }
+
+    pub fn append_tool_result_with_run_id(
+        &self,
+        session_id: &ChatSessionId,
+        content: &str,
+        tool_result: ChatToolResultRecord,
+        mesh_result: Option<app_server_protocol::CadQueryResultReady>,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        let mut message = self.next_message_with_run_id(session_id, ChatRole::Tool, content, run_id)?;
         message.tool_call_id = Some(tool_result.tool_call_id.clone());
         message.tool_result = Some(tool_result);
         message.mesh_result = mesh_result;
@@ -251,6 +287,16 @@ impl ChatStore {
         role: ChatRole,
         content: &str,
     ) -> Result<JsonlMessage, ProtocolError> {
+        self.next_message_with_run_id(session_id, role, content, None)
+    }
+
+    fn next_message_with_run_id(
+        &self,
+        session_id: &ChatSessionId,
+        role: ChatRole,
+        content: &str,
+        run_id: Option<String>,
+    ) -> Result<JsonlMessage, ProtocolError> {
         validate_session_id(session_id)?;
         let path = self.session_path(session_id)?;
         let message_count = read_messages(&self.workspace_root, &path)?.len();
@@ -260,7 +306,8 @@ impl ChatStore {
             content.to_owned(),
             Vec::new(),
             None,
-        ))
+        )
+        .with_run_id(run_id))
     }
 
     fn append_record(
@@ -296,7 +343,13 @@ impl JsonlMessage {
             tool_calls: Vec::new(),
             tool_result: None,
             mesh_result: None,
+            run_id: None,
         }
+    }
+
+    fn with_run_id(mut self, run_id: Option<String>) -> Self {
+        self.run_id = run_id;
+        self
     }
 }
 
@@ -312,6 +365,7 @@ impl From<JsonlMessage> for ChatMessageRecord {
             tool_calls: value.tool_calls,
             tool_result: value.tool_result,
             mesh_result: value.mesh_result,
+            run_id: value.run_id,
         }
     }
 }

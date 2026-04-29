@@ -1143,12 +1143,13 @@ fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
 }
 
 fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_message(
+    let _ = ChatStore::new(workspace_root.to_path_buf()).append_message_with_run_id(
         &run.session_id,
         ChatRole::Assistant,
         content,
         Vec::new(),
         None,
+        Some(run.run_id.clone()),
     );
 }
 

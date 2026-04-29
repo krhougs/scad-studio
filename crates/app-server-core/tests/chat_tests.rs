@@ -233,6 +233,52 @@ fn chat_store_rejects_jsonl_file_symlink_escape() {
     let _ = fs::remove_dir_all(outside);
 }
 
+#[test]
+fn old_jsonl_without_run_id_deserializes_with_none() {
+    let root = temp_dir("chat-store-old-jsonl");
+    fs::create_dir_all(root.join("chats")).unwrap();
+    let jsonl_path = root.join("chats/old-session.jsonl");
+    fs::write(
+        &jsonl_path,
+        "{\"message_id\":\"msg-1\",\"ts_ms\":100,\"role\":\"user\",\"content\":\"hello\",\"related_files\":[]}\n",
+    )
+    .unwrap();
+    let store = ChatStore::new(root.clone());
+    let history = store
+        .history(&ChatSessionId("old-session".into()), None)
+        .expect("should read old JSONL without run_id");
+    assert_eq!(history.messages.len(), 1);
+    assert_eq!(history.messages[0].run_id, None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn run_id_roundtrips_through_jsonl() {
+    let root = temp_dir("chat-store-run-id");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store.create("run-id test", None, Vec::new()).unwrap();
+
+    store
+        .append_message_with_run_id(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            Vec::new(),
+            None,
+            Some("agent-7".into()),
+        )
+        .expect("append with run_id");
+
+    let history = store
+        .history(&created.session_id, Some(10))
+        .expect("read history");
+    assert_eq!(history.messages.len(), 2);
+    assert_eq!(history.messages[0].run_id, None); // Meta message
+    assert_eq!(history.messages[1].run_id, Some("agent-7".into()));
+    let _ = fs::remove_dir_all(root);
+}
+
 fn temp_dir(label: &str) -> std::path::PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
