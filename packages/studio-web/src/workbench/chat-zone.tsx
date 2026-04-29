@@ -89,7 +89,6 @@ export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZonePro
         agentEvents={controller.agentEvents}
         llmConfigured={snapshot?.llm_configured ?? true}
         streaming={Boolean(controller.agentRun)}
-        streamText={controller.streamText}
         planActionDisabled={controller.composerDisabled}
         onOpenPlan={controller.openPlan}
         onRunPlan={controller.runPlan}
@@ -113,7 +112,6 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
-  const [streamText, setStreamText] = useState("");
   const sessions = snapshot?.chat_sessions ?? [];
   const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
   const currentSessionId =
@@ -129,11 +127,9 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     [rawEvents, currentSessionId],
   );
   const agentEvents = useMemo(
-    () => recentNonTokenEvents(sessionEvents),
-    [sessionEvents],
+    () => recentAgentEvents(sessionEvents, agentRun),
+    [sessionEvents, agentRun],
   );
-
-  useStreamAccumulator(sessionEvents, currentSessionId, setStreamText);
 
   const contextPills = useMemo(() => {
     const selections = snapshot?.current_selection?.selections ?? [];
@@ -181,7 +177,6 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     messages,
     agentRun,
     agentEvents,
-    streamText,
     contextPills,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
@@ -363,43 +358,30 @@ function ChatHeader(props: {
   );
 }
 
-function recentNonTokenEvents(events: AgentEvent[]): AgentEvent[] {
-  return events
-    .filter((event) => event.event.startsWith("agent.") && event.event !== "agent.token")
-    .slice(-10);
+function recentAgentEvents(
+  events: AgentEvent[],
+  agentRun: AgentRun | null,
+): AgentEvent[] {
+  const agentEvents = events.filter((event) => event.event.startsWith("agent."));
+  const visibleRunId = agentRun?.run_id ?? latestAgentRunId(agentEvents);
+  if (!visibleRunId) return agentEvents;
+  return agentEvents.filter((event) => {
+    const runId = agentEventRunId(event);
+    return !runId || runId === visibleRunId;
+  });
 }
 
-function useStreamAccumulator(
-  rawEvents: AgentEvent[],
-  resetKey: string | null,
-  setStreamText: (value: string | ((prev: string) => string)) => void,
-) {
-  const countRef = useRef(0);
-  const resetKeyRef = useRef<string | null>(resetKey);
-  useEffect(() => {
-    if (resetKeyRef.current !== resetKey) {
-      resetKeyRef.current = resetKey;
-      countRef.current = 0;
-      setStreamText("");
-    }
-    const prevCount = countRef.current;
-    countRef.current = rawEvents.length;
-    if (rawEvents.length < prevCount) {
-      setStreamText("");
-      return;
-    }
-    for (let i = prevCount; i < rawEvents.length; i++) {
-      const ev = rawEvents[i];
-      if (!ev) continue;
-      if (ev.event === "agent.token") {
-        const text = ev.payload && typeof ev.payload["text"] === "string" ? ev.payload["text"] : "";
-        if (text) setStreamText((prev) => prev + text);
-      }
-      if (ev.event === "agent.done") {
-        setStreamText("");
-      }
-    }
-  }, [rawEvents, resetKey, setStreamText]);
+function latestAgentRunId(events: AgentEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const runId = agentEventRunId(events[index] as AgentEvent | undefined);
+    if (runId) return runId;
+  }
+  return null;
+}
+
+function agentEventRunId(event: AgentEvent | undefined): string | null {
+  const runId = event?.payload?.["run_id"];
+  return typeof runId === "string" ? runId : null;
 }
 
 function lastAgentDoneKey(events: AgentEvent[]): string | null {

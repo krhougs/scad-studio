@@ -10,7 +10,10 @@ import { ChatZone, type ChatSnapshot } from "../../src/workbench/chat-zone";
 import type { WasmClient } from "../../src/wasm-bridge";
 
 describe("ChatZone", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("sends agent invoke without plan_ref", async () => {
     const client = fakeClient();
@@ -319,6 +322,261 @@ describe("ChatZone", () => {
     expect(screen.queryByText("other text")).toBeNull();
   });
 
+  it("renders live agent tokens and tool events in arrival order", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "First answer." },
+            },
+            {
+              event: "agent.tool_start",
+              payload: {
+                session_id: "main",
+                run_id: "run-main",
+                tool_name: "read_file",
+              },
+            },
+            {
+              event: "agent.tool_result",
+              payload: {
+                session_id: "main",
+                run_id: "run-main",
+                tool_name: "read_file",
+                result_json: "{\"ok\":true}",
+              },
+            },
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "Second answer." },
+            },
+          ],
+        }}
+      />,
+    );
+
+    const first = await screen.findByText(/First answer/);
+    const tool = screen.getByText("read_file");
+    const second = screen.getByText(/Second answer/);
+    expect(isBefore(first, tool)).toBe(true);
+    expect(isBefore(tool, second)).toBe(true);
+  });
+
+  it("keeps streamed text visible after done until history covers it", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: null,
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "Final answer." },
+            },
+            {
+              event: "agent.done",
+              payload: { session_id: "main", run_id: "run-main", cancelled: false },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/Final answer/)).toBeTruthy());
+  });
+
+  it("keeps every live token chunk for long running answers", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: Array.from({ length: 90 }, (_, index) => ({
+            event: "agent.token",
+            payload: {
+              session_id: "main",
+              run_id: "run-main",
+              text: `chunk-${index} `,
+            },
+          })),
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/chunk-0/)).toBeTruthy());
+    expect(screen.getByText(/chunk-89/)).toBeTruthy();
+  });
+
+  it("does not hide current live tokens when old assistant text matches", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_history: [
+            chatMessage("old-answer", "assistant", "Done."),
+          ],
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "Done." },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getAllByText(/Done\./).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("keeps done text visible when old assistant text matches before refresh", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_history: [
+            chatMessage("old-question", "user", "previous request"),
+            chatMessage("old-answer", "assistant", "Done."),
+          ],
+          agent_run: null,
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "Done." },
+            },
+            {
+              event: "agent.done",
+              payload: { session_id: "main", run_id: "run-main", cancelled: false },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getAllByText(/Done\./).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("hides live tokens after refreshed history covers the current run", async () => {
+    const client = fakeClient();
+    const { rerender } = render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_history: [
+            chatMessage("current-question", "user", "current request"),
+          ],
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: {
+                session_id: "main",
+                run_id: "run-main",
+                text: "Fresh answer.",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/Fresh answer/)).toBeTruthy());
+
+    rerender(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_history: [
+            chatMessage("current-question", "user", "current request"),
+            chatMessage("current-answer", "assistant", "Fresh answer."),
+          ],
+          agent_run: null,
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: {
+                session_id: "main",
+                run_id: "run-main",
+                text: "Fresh answer.",
+              },
+            },
+            {
+              event: "agent.done",
+              payload: { session_id: "main", run_id: "run-main", cancelled: false },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getAllByText(/Fresh answer\./)).toHaveLength(1));
+  });
+
+  it("keeps the thinking indicator visible while a tool call is in progress", async () => {
+    const client = fakeClient();
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          agent_run: { session_id: "main", run_id: "run-main" },
+          agent_events: [
+            {
+              event: "agent.token",
+              payload: { session_id: "main", run_id: "run-main", text: "Checking files." },
+            },
+            {
+              event: "agent.tool_start",
+              payload: {
+                session_id: "main",
+                run_id: "run-main",
+                tool_name: "read_file",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("agent-thinking")).toBeTruthy());
+  });
+
+  it("scrolls chat body to the newest live content", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    render(
+      <ChatZone
+        client={fakeClient() as unknown as WasmClient}
+        snapshot={{
+          ...chatSnapshot(),
+          current_chat_history: [
+            chatMessage("msg-1", "user", "make a box"),
+            chatMessage("msg-2", "assistant", "done"),
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+
   it("resets streaming text when switching chat sessions", async () => {
     const client = fakeClient();
     const { rerender } = render(
@@ -374,6 +632,10 @@ describe("ChatZone", () => {
     expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
   });
 });
+
+function isBefore(left: Element, right: Element): boolean {
+  return Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
 
 function chatSnapshot(
   currentSelection: ChatSnapshot["current_selection"] = null,
@@ -448,6 +710,22 @@ function planSavedEvent() {
         { workspace_id: "ws", path_segments: ["outputs", "top_lid.step"] },
       ],
     },
+  };
+}
+
+function chatMessage(
+  message_id: string,
+  role: "user" | "assistant" | "tool" | "meta",
+  content: string,
+) {
+  return {
+    message_id,
+    ts_ms: 1,
+    role,
+    content,
+    tool_calls: [],
+    tool_result: null,
+    mesh_result: null,
   };
 }
 

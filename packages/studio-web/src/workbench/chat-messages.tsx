@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef } from "react";
 import MarkdownPreview from "@uiw/react-markdown-preview";
 import rehypeSanitize from "rehype-sanitize";
 import type { AgentErrorType } from "@budn/app-server-protocol";
@@ -12,14 +13,59 @@ export function ChatBody(props: {
   agentEvents: AgentEvent[];
   llmConfigured: boolean;
   streaming: boolean;
-  streamText: string;
   planActionDisabled: boolean;
   onOpenPlan?: (path: unknown) => void;
   onRunPlan?: (plan: PlanRunAction) => void;
 }) {
+  const visibleRunId = useMemo(
+    () => latestAgentRunId(props.agentEvents),
+    [props.agentEvents],
+  );
+  const assistantMessageCount = useMemo(
+    () => countMessagesByRole(props.messages, "assistant"),
+    [props.messages],
+  );
+  const runHistoryBaselineRef = useRef<RunHistoryBaseline | null>(null);
+  const runHistoryBaseline = runHistoryBaselineRef.current;
+  const historyCoversLiveRun = Boolean(
+    visibleRunId &&
+    !props.streaming &&
+    runHistoryBaseline?.runId === visibleRunId &&
+    props.messages.length > runHistoryBaseline.messageCount &&
+    assistantMessageCount > runHistoryBaseline.assistantCount,
+  );
+  const timeline = useMemo(
+    () => buildAgentTimeline(props.agentEvents, props.messages, historyCoversLiveRun),
+    [props.agentEvents, props.messages, historyCoversLiveRun],
+  );
+  const timelineKey = timeline.map(timelineItemKey).join("|");
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!visibleRunId) {
+      runHistoryBaselineRef.current = null;
+      return;
+    }
+    if (
+      props.streaming &&
+      runHistoryBaselineRef.current?.runId !== visibleRunId
+    ) {
+      runHistoryBaselineRef.current = {
+        runId: visibleRunId,
+        messageCount: props.messages.length,
+        assistantCount: assistantMessageCount,
+      };
+    }
+  }, [visibleRunId, props.streaming, props.messages.length, assistantMessageCount]);
+  useEffect(() => {
+    const scrollIntoView = scrollAnchorRef.current?.scrollIntoView;
+    if (typeof scrollIntoView === "function") {
+      scrollIntoView.call(scrollAnchorRef.current, { block: "end" });
+    }
+  }, [props.messages.length, props.streaming, timelineKey]);
+
   if (
     props.messages.length === 0 &&
-    props.agentEvents.length === 0 &&
+    timeline.length === 0 &&
     !props.streaming
   ) {
     if (!props.llmConfigured) return <LlmSetupGuide />;
@@ -30,17 +76,21 @@ export function ChatBody(props: {
       {props.messages.map((message) => (
         <ChatMessage key={message.message_id} message={message} />
       ))}
-      {props.agentEvents.map((event, index) => (
-        <AgentEventRow
-          key={`${event.event}-${index}`}
-          event={event}
-          planActionDisabled={props.planActionDisabled}
-          onOpenPlan={props.onOpenPlan}
-          onRunPlan={props.onRunPlan}
-        />
+      {timeline.map((item) => (
+        item.kind === "stream" ? (
+          <StreamingMessage key={item.key} text={item.text} />
+        ) : (
+          <AgentEventRow
+            key={item.key}
+            event={item.event}
+            planActionDisabled={props.planActionDisabled}
+            onOpenPlan={props.onOpenPlan}
+            onRunPlan={props.onRunPlan}
+          />
+        )
       ))}
-      {props.streamText && <StreamingMessage text={props.streamText} />}
-      {!props.streamText && props.streaming && <ThinkingIndicator />}
+      {props.streaming && <ThinkingIndicator />}
+      <div ref={scrollAnchorRef} data-testid="chat-scroll-anchor" />
     </div>
   );
 }
@@ -289,6 +339,97 @@ function parsePlanSavedEvent(event: AgentEvent): PlanPackageCardData | null {
 
 export function findAffectedAssemblies(paths: string[]): string[] {
   return paths.filter((p) => p.startsWith("assemblies/") || p.includes("/assemblies/"));
+}
+
+type TimelineItem =
+  | { kind: "stream"; key: string; text: string }
+  | { kind: "event"; key: string; event: AgentEvent };
+
+type RunHistoryBaseline = {
+  runId: string;
+  messageCount: number;
+  assistantCount: number;
+};
+
+function buildAgentTimeline(
+  events: AgentEvent[],
+  messages: ChatMessageRecord[],
+  historyCoversLiveRun: boolean,
+): TimelineItem[] {
+  const fullTokenText = events.map(tokenText).join("");
+  const coveredAssistant = latestAssistantMessage(messages);
+  const hideTokenSegments =
+    historyCoversLiveRun &&
+    fullTokenText.length > 0 &&
+    Boolean(coveredAssistant?.content.includes(fullTokenText));
+  const timeline: TimelineItem[] = [];
+  let pendingText = "";
+  let streamIndex = 0;
+
+  const flushText = () => {
+    if (!pendingText) return;
+    if (!hideTokenSegments) {
+      timeline.push({
+        kind: "stream",
+        key: `stream-${streamIndex}`,
+        text: pendingText,
+      });
+      streamIndex += 1;
+    }
+    pendingText = "";
+  };
+
+  events.forEach((event, index) => {
+    const text = tokenText(event);
+    if (text) {
+      pendingText += text;
+      return;
+    }
+    flushText();
+    timeline.push({ kind: "event", key: `event-${index}-${event.event}`, event });
+  });
+  flushText();
+
+  return timeline;
+}
+
+function latestAssistantMessage(messages: ChatMessageRecord[]): ChatMessageRecord | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as ChatMessageRecord | undefined;
+    if (message?.role === "assistant") return message;
+  }
+  return null;
+}
+
+function countMessagesByRole(
+  messages: ChatMessageRecord[],
+  role: ChatMessageRecord["role"],
+): number {
+  return messages.filter((message) => message.role === role).length;
+}
+
+function latestAgentRunId(events: AgentEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const runId = agentEventRunId(events[index] as AgentEvent | undefined);
+    if (runId) return runId;
+  }
+  return null;
+}
+
+function agentEventRunId(event: AgentEvent | undefined): string | null {
+  const runId = event?.payload?.["run_id"];
+  return typeof runId === "string" ? runId : null;
+}
+
+function timelineItemKey(item: TimelineItem): string {
+  if (item.kind === "stream") return `${item.key}:${item.text}`;
+  return `${item.key}:${JSON.stringify(item.event.payload ?? {})}`;
+}
+
+function tokenText(event: AgentEvent): string {
+  if (event.event !== "agent.token") return "";
+  const text = event.payload?.["text"];
+  return typeof text === "string" ? text : "";
 }
 
 type FriendlyError = { title: string; hint: string };
