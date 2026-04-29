@@ -1,10 +1,10 @@
+use app_server_core::llm::{
+    LlmConfig, LlmMessage, LlmToolCall, LlmToolDefinition, build_model_string, build_request_body,
+    extract_delta_content, read_sse_stream,
+};
 use app_server_core::{
     AgentCadQueryCodeInput, AgentTurnInput, build_execute_messages, build_turn_context,
     build_turn_messages, extract_cadquery_code,
-};
-use app_server_core::llm::{
-    LlmConfig, LlmMessage, LlmToolCall, LlmToolDefinition, build_model_string,
-    build_request_body, extract_delta_content, read_sse_stream,
 };
 use app_server_protocol::{
     AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
@@ -264,10 +264,7 @@ fn build_turn_context_includes_context_refs() {
         selections: Vec::new(),
         active_selection_index: None,
         confirmed_target_path: None,
-        context_refs: vec![
-            "@face[top_lid:f_0]".into(),
-            "@part[bottom_case]".into(),
-        ],
+        context_refs: vec!["@face[top_lid:f_0]".into(), "@part[bottom_case]".into()],
     };
     let context = build_turn_context(&input);
     assert!(context.contains("context refs"));
@@ -369,17 +366,26 @@ fn build_model_string_base_only() {
 
 #[test]
 fn build_model_string_with_variant() {
-    assert_eq!(build_model_string("gpt-5.5", Some("mini"), None), "gpt-5.5:mini");
+    assert_eq!(
+        build_model_string("gpt-5.5", Some("mini"), None),
+        "gpt-5.5:mini"
+    );
 }
 
 #[test]
 fn build_model_string_with_service_level() {
-    assert_eq!(build_model_string("gpt-5.5", None, Some("high")), "gpt-5.5:high");
+    assert_eq!(
+        build_model_string("gpt-5.5", None, Some("high")),
+        "gpt-5.5:high"
+    );
 }
 
 #[test]
 fn build_model_string_with_both() {
-    assert_eq!(build_model_string("gpt-5.5", Some("mini"), Some("low")), "gpt-5.5:mini:low");
+    assert_eq!(
+        build_model_string("gpt-5.5", Some("mini"), Some("low")),
+        "gpt-5.5:mini:low"
+    );
 }
 
 #[test]

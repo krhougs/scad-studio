@@ -50,13 +50,21 @@ struct LlmConfigFile {
 impl LlmConfigFile {
     fn into_config(self) -> Result<LlmConfig, LlmConfigError> {
         if self.base_url.is_empty() {
-            return Err(LlmConfigError { message: "base_url is empty".into() });
+            return Err(LlmConfigError {
+                message: "base_url is empty".into(),
+            });
         }
         if self.api_key.is_empty() {
-            return Err(LlmConfigError { message: "api_key is empty".into() });
+            return Err(LlmConfigError {
+                message: "api_key is empty".into(),
+            });
         }
         let base_model = self.model.unwrap_or_else(|| "gpt-4o".into());
-        let model = build_model_string(&base_model, self.variant.as_deref(), self.service_level.as_deref());
+        let model = build_model_string(
+            &base_model,
+            self.variant.as_deref(),
+            self.service_level.as_deref(),
+        );
         Ok(LlmConfig {
             base_url: self.base_url,
             api_key: self.api_key,
@@ -68,7 +76,11 @@ impl LlmConfigFile {
     }
 }
 
-pub fn build_model_string(base: &str, variant: Option<&str>, service_level: Option<&str>) -> String {
+pub fn build_model_string(
+    base: &str,
+    variant: Option<&str>,
+    service_level: Option<&str>,
+) -> String {
     let mut model = base.to_string();
     if let Some(v) = variant {
         if !v.is_empty() {

@@ -92,7 +92,9 @@ fn parameter_entries_format_cli_defines_like_store() {
     store
         .set_value("size", ParameterValue::Number(12.5))
         .unwrap();
-    store.set_value("enabled", ParameterValue::Bool(true)).unwrap();
+    store
+        .set_value("enabled", ParameterValue::Bool(true))
+        .unwrap();
     store
         .set_value("mode", ParameterValue::Text("fine".into()))
         .unwrap();

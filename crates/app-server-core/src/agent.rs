@@ -439,7 +439,10 @@ fn append_history_messages(messages: &mut Vec<LlmMessage>, history: &[ChatMessag
 
 pub fn build_turn_context(input: &AgentTurnInput) -> String {
     let mut parts = Vec::new();
-    parts.push(format!("Operation level: {}", operation_label(input.operation)));
+    parts.push(format!(
+        "Operation level: {}",
+        operation_label(input.operation)
+    ));
     if !input.context_refs.is_empty() {
         parts.push(format!(
             "User-attached context refs: {}",

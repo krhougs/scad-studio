@@ -98,7 +98,10 @@ fn load_3mf_from_reader_supports_colorgroup_vertex_colors() {
     assert_eq!(mesh.vertices[0].position, [2.0, 3.0, 5.0]);
     assert_eq!(mesh.vertices[1].position, [7.0, 11.0, 13.0]);
     assert_eq!(mesh.vertices[2].position, [17.0, 19.0, 29.0]);
-    assert!(approx_eq_normal(mesh.vertices[0].normal, triangle_normal(positions)));
+    assert!(approx_eq_normal(
+        mesh.vertices[0].normal,
+        triangle_normal(positions)
+    ));
 }
 
 #[test]

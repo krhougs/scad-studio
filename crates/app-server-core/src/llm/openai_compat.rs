@@ -1,7 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
 
-use super::{LlmConfig, LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall, LlmToolDefinition};
+use super::{
+    LlmConfig, LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall, LlmToolDefinition,
+};
 
 pub struct OpenAiCompatibleProvider {
     config: LlmConfig,
@@ -182,11 +184,7 @@ pub fn read_sse_stream(
 }
 
 fn first_choice_delta(value: &serde_json::Value) -> Option<&serde_json::Value> {
-    value
-        .get("choices")?
-        .as_array()?
-        .first()?
-        .get("delta")
+    value.get("choices")?.as_array()?.first()?.get("delta")
 }
 
 pub fn extract_delta_content(json_str: &str) -> Option<String> {
@@ -215,7 +213,8 @@ impl ToolCallAccumulator {
         for tc in tc_array {
             let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
             while self.entries.len() <= index {
-                self.entries.push((String::new(), String::new(), String::new()));
+                self.entries
+                    .push((String::new(), String::new(), String::new()));
             }
             let entry = &mut self.entries[index];
             if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {

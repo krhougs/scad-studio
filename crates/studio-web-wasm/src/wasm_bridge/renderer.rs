@@ -6,8 +6,8 @@
 //! 实现推到 Phase 3（由 TS 侧管理异步 create，或在 `scad_scene` 补充同步
 //! instance API 后再落地）。
 
-use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use super::mesh::MeshHandle;
 

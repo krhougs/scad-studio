@@ -257,7 +257,10 @@ fn load_stl_from_reader_preserves_project_coordinates() {
     assert_eq!(mesh.vertices[0].position, [2.0, 3.0, 5.0]);
     assert_eq!(mesh.vertices[1].position, [7.0, 11.0, 13.0]);
     assert_eq!(mesh.vertices[2].position, [17.0, 19.0, 29.0]);
-    assert!(approx_eq_normal(mesh.vertices[0].normal, triangle_normal(positions)));
+    assert!(approx_eq_normal(
+        mesh.vertices[0].normal,
+        triangle_normal(positions)
+    ));
     assert_eq!(mesh.bounds.min, Vec3::new(2.0, 3.0, 5.0));
     assert_eq!(mesh.bounds.max, Vec3::new(17.0, 19.0, 29.0));
     assert!(

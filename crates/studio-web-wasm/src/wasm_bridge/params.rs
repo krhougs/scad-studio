@@ -5,9 +5,7 @@
 
 use app_server_protocol::{ParameterEntry, PresetFile};
 use serde::Serialize;
-use studio_common::{
-    ParameterStore, parameter_entries_to_cli_defines, parse_parameters,
-};
+use studio_common::{ParameterStore, parameter_entries_to_cli_defines, parse_parameters};
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -40,8 +38,7 @@ pub fn parameters_format_defines(entries: JsValue) -> Result<JsValue, JsValue> {
 pub fn presets_parse_shared_file(text: &str) -> Result<JsValue, JsValue> {
     let parsed: PresetFile = serde_json::from_str(text)
         .map_err(|err| JsValue::from_str(&format!("preset parse failed: {err}")))?;
-    to_json_value(&parsed)
-        .map_err(|err| JsValue::from_str(&format!("preset serialize: {err}")))
+    to_json_value(&parsed).map_err(|err| JsValue::from_str(&format!("preset serialize: {err}")))
 }
 
 #[wasm_bindgen]

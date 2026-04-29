@@ -10,12 +10,11 @@ use std::io::Cursor;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
-    CadQueryExecuteRequest, CadQueryMeshPayload,
-    CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
-    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatSendRequest, CommandSuccess, ConfigSaveRequest, ExportRunRequest,
-    FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact, PreviewRequest, RequestId,
-    SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
+    CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest,
+    CadQueryResultReady, CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest,
+    ChatHistoryRequest, ChatListRequest, ChatSendRequest, CommandSuccess, ConfigSaveRequest,
+    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
+    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
