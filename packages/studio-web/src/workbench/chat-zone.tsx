@@ -5,10 +5,12 @@ import type {
   SelectionRef,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
+import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import type { WasmClient } from "../wasm-bridge";
 import { preferredRefText } from "./cadquery-agent-scope";
 import { ChatBody } from "./chat-messages";
 import { ChatComposer } from "./chat-composer";
+import { useChatRuntime } from "./chat-runtime";
 import {
   cancelAgentRun,
   createChatSession,
@@ -73,6 +75,15 @@ const MAX_CONTEXT_PILLS = 3;
 
 export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
   const controller = useChatController({ client, snapshot, onStatus, onOpenPlan });
+  const runtime = useChatRuntime({
+    messages: controller.messages,
+    agentEvents: controller.agentEvents,
+    agentRun: controller.agentRun,
+    onNew: controller.send,
+    onCancel: controller.cancelAgent,
+    disabled: controller.composerDisabled,
+  });
+
   return (
     <section className="chat" data-testid="workbench-chat" aria-label="agent">
       <ChatHeader
@@ -85,31 +96,26 @@ export function ChatZone({ client, snapshot, onStatus, onOpenPlan }: ChatZonePro
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
       />
-      <ChatBody
-        messages={controller.messages}
-        agentEvents={controller.agentEvents}
-        llmConfigured={snapshot?.llm_configured ?? true}
-        streaming={Boolean(controller.agentRun)}
-        planActionDisabled={controller.composerDisabled}
-        onOpenPlan={controller.openPlan}
-        onRunPlan={controller.runPlan}
-      />
-      <ChatComposer
-        value={controller.draft}
-        disabled={controller.composerDisabled}
-        mode={controller.mode}
-        contextPills={controller.contextPills}
-        onChange={controller.setDraft}
-        onModeChange={controller.setMode}
-        onRemovePill={controller.removePill}
-        onSend={controller.send}
-      />
+      <AssistantRuntimeProvider runtime={runtime}>
+        <ChatBody
+          llmConfigured={snapshot?.llm_configured ?? true}
+          planActionDisabled={controller.composerDisabled}
+          onOpenPlan={controller.openPlan}
+          onRunPlan={controller.runPlan}
+        />
+        <ChatComposer
+          disabled={controller.composerDisabled}
+          mode={controller.mode}
+          contextPills={controller.contextPills}
+          onModeChange={controller.setMode}
+          onRemovePill={controller.removePill}
+        />
+      </AssistantRuntimeProvider>
     </section>
   );
 }
 
 function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps) {
-  const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
@@ -160,17 +166,13 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     currentSessionId,
     agentRun,
     busy,
-    draft,
     mode,
     contextPills,
     onStatus,
     setBusy,
-    setDraft,
   });
 
   return {
-    draft,
-    setDraft,
     mode,
     setMode,
     sessions,
@@ -267,12 +269,10 @@ function useChatActions(input: {
   currentSessionId: string | null;
   agentRun: AgentRun | null;
   busy: boolean;
-  draft: string;
   mode: AgentMode;
   contextPills: ContextPill[];
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
-  setDraft: (value: string) => void;
 }) {
   return {
     createSession: () =>
@@ -286,7 +286,7 @@ function useChatActions(input: {
       void selectChatSession(input.client, id, input.onStatus),
     cancelAgent: () =>
       void cancelAgentRun(input.client, input.agentRun, input.onStatus),
-    send: () => void sendChatMessage(input),
+    send: (text: string) => void sendChatMessage(input, text),
     runPlan: (plan: { planId: string; planRef: unknown }) =>
       void runSavedPlan({
         ...input,

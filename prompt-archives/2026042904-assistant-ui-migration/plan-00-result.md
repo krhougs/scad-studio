@@ -43,7 +43,30 @@
 - Composer 支持 `submitMode="ctrlEnter"` 确认 Cmd/Ctrl+Enter 发送
 - Tailwind 风险已解除
 
+## Phase 1 — 替换核心 UI
+
+**状态**：已完成
+
+**变更摘要**：
+- 新增 `chat-runtime.tsx`：运行时桥接层，将历史消息 + agent events + token 流转换为 `ThreadMessageLike`，通过 `useExternalStoreRuntime` 接入 assistant-ui
+- 重写 `chat-zone.tsx`：使用 `AssistantRuntimeProvider` 包裹 `ChatBody` + `ChatComposer`，保留 `ChatHeader` 和 controller 逻辑
+- 重写 `chat-messages.tsx`：使用 `ThreadPrimitive.Viewport` + `ThreadPrimitive.Messages` + `MessagePrimitive.Content`，通过 `data.by_name` 接入 agent event 卡片
+- 重写 `chat-composer.tsx`：使用 `ComposerPrimitive.Root` + `ComposerPrimitive.Input`（`submitMode="ctrlEnter"`）+ `ComposerPrimitive.Send`
+- 更新 `chat-actions.ts`：`sendChatMessage` 改为接收 `text` 参数，移除 `draft`/`setDraft`
+- 更新 `setup.ts`：添加 `ResizeObserver` 和 `scrollTo` polyfill（jsdom 兼容）
+
+**Review 修复**：
+- Issue #1：`@assistant-ui/react` 写入 `packages/studio-web/package.json` 依赖
+- Issue #2：`planActionDisabled` 通过 React Context 传递到 data 组件
+- Issue #3：`OperationSelect` 恢复 `disabled` 属性
+- Issue #4：清理 `draft`/`setDraft` 僵尸状态
+- Issue #5：`RuntimeMessage` 改为非导出类型
+- Issue #6：`ComposerPrimitive.Input` 添加 `aria-label="chat message"`
+
+**验证结果**：
+- `npx tsc --noEmit`：chat 文件零新增错误（仅有既有 DOM lib 问题）
+- `bun run test:unit`：160/160 测试通过，0 错误
+
 ## 待执行 Phase
 
-3. Phase 1 — 替换核心 UI
 4. Phase 2 — 清理与集成

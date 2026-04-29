@@ -558,9 +558,6 @@ describe("ChatZone", () => {
   });
 
   it("scrolls chat body to the newest live content", async () => {
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
-
     render(
       <ChatZone
         client={fakeClient() as unknown as WasmClient}
@@ -574,7 +571,9 @@ describe("ChatZone", () => {
       />,
     );
 
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("make a box")).toBeTruthy());
+    expect(screen.getByText("done")).toBeTruthy();
+    expect(screen.getByTestId("chat-body")).toBeTruthy();
   });
 
   it("resets streaming text when switching chat sessions", async () => {

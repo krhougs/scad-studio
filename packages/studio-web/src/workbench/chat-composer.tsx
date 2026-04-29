@@ -1,34 +1,32 @@
 import { ArrowUp, Cube, Paperclip, Ruler, X } from "@phosphor-icons/react";
 import type { AgentMode } from "@budn/app-server-protocol";
+import { ComposerPrimitive } from "@assistant-ui/react";
 import type { ContextPill } from "./chat-zone";
 
 export function ChatComposer(props: {
-  value: string;
   disabled: boolean;
   mode: AgentMode;
   contextPills: ContextPill[];
-  onChange: (value: string) => void;
   onModeChange: (value: AgentMode) => void;
   onRemovePill: (refText: string) => void;
-  onSend: () => void;
 }) {
   return (
-    <footer className="chat-input">
+    <ComposerPrimitive.Root className="chat-input">
       <div className="wrap">
         <ContextPillBar pills={props.contextPills} onRemove={props.onRemovePill} />
-        <ChatTextarea
-          value={props.value}
-          onChange={props.onChange}
-          onSend={props.onSend}
+        <ComposerPrimitive.Input
+          placeholder="Describe what you want to build or change..."
+          submitMode="ctrlEnter"
+          data-testid="chat-input"
+          aria-label="chat message"
         />
         <ChatComposerTools
           disabled={props.disabled}
           mode={props.mode}
           onModeChange={props.onModeChange}
-          onSend={props.onSend}
         />
       </div>
-    </footer>
+    </ComposerPrimitive.Root>
   );
 }
 
@@ -56,29 +54,10 @@ function ContextPillBar(props: {
   );
 }
 
-function ChatTextarea(props: {
-  value: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
-}) {
-  return (
-    <textarea
-      placeholder="Describe what you want to build or change..."
-      value={props.value}
-      onChange={(ev) => props.onChange((ev.target as HTMLTextAreaElement).value)}
-      onKeyDown={(ev) => {
-        if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) props.onSend();
-      }}
-      data-testid="chat-input"
-    />
-  );
-}
-
 function ChatComposerTools(props: {
   disabled: boolean;
   mode: AgentMode;
   onModeChange: (value: AgentMode) => void;
-  onSend: () => void;
 }) {
   return (
     <div className="tools">
@@ -90,14 +69,9 @@ function ChatComposerTools(props: {
         />
         <DisabledToolButtons />
       </div>
-      <button
-        type="button"
-        className="send"
-        disabled={props.disabled}
-        onClick={props.onSend}
-      >
+      <ComposerPrimitive.Send className="send">
         send <ArrowUp size={12} weight="bold" aria-hidden="true" />
-      </button>
+      </ComposerPrimitive.Send>
     </div>
   );
 }

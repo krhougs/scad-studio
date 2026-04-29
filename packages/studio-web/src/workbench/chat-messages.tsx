@@ -1,123 +1,141 @@
-import { useEffect, useMemo, useRef } from "react";
+import { createContext, useContext } from "react";
 import MarkdownPreview from "@uiw/react-markdown-preview";
 import rehypeSanitize from "rehype-sanitize";
 import type { AgentErrorType } from "@budn/app-server-protocol";
+import {
+  ThreadPrimitive,
+  MessagePrimitive,
+  useMessage,
+} from "@assistant-ui/react";
+import type {
+  DataMessagePartProps,
+  TextMessagePartProps,
+} from "@assistant-ui/react";
 import { markdownSanitizeSchema } from "../viewers/markdown-security";
-import type { ChatMessageRecord, AgentEvent } from "./chat-zone";
+import type { AgentEvent } from "./chat-zone";
 import { pathSegments } from "./path-utils";
 
 const mdWrapperElement = { "data-color-mode": "dark" } as const;
 
+const ChatBodyCtx = createContext<{
+  planActionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
+}>({ planActionDisabled: false });
+
 export function ChatBody(props: {
-  messages: ChatMessageRecord[];
-  agentEvents: AgentEvent[];
   llmConfigured: boolean;
-  streaming: boolean;
   planActionDisabled: boolean;
   onOpenPlan?: (path: unknown) => void;
   onRunPlan?: (plan: PlanRunAction) => void;
 }) {
-  const visibleRunId = useMemo(
-    () => latestAgentRunId(props.agentEvents),
-    [props.agentEvents],
-  );
-  const assistantMessageCount = useMemo(
-    () => countMessagesByRole(props.messages, "assistant"),
-    [props.messages],
-  );
-  const runHistoryBaselineRef = useRef<RunHistoryBaseline | null>(null);
-  const runHistoryBaseline = runHistoryBaselineRef.current;
-  const historyCoversLiveRun = Boolean(
-    visibleRunId &&
-    !props.streaming &&
-    runHistoryBaseline?.runId === visibleRunId &&
-    props.messages.length > runHistoryBaseline.messageCount &&
-    assistantMessageCount > runHistoryBaseline.assistantCount,
-  );
-  const timeline = useMemo(
-    () => buildAgentTimeline(props.agentEvents, props.messages, historyCoversLiveRun),
-    [props.agentEvents, props.messages, historyCoversLiveRun],
-  );
-  const timelineKey = timeline.map(timelineItemKey).join("|");
-  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!visibleRunId) {
-      runHistoryBaselineRef.current = null;
-      return;
-    }
-    if (
-      props.streaming &&
-      runHistoryBaselineRef.current?.runId !== visibleRunId
-    ) {
-      runHistoryBaselineRef.current = {
-        runId: visibleRunId,
-        messageCount: props.messages.length,
-        assistantCount: assistantMessageCount,
-      };
-    }
-  }, [visibleRunId, props.streaming, props.messages.length, assistantMessageCount]);
-  useEffect(() => {
-    const scrollIntoView = scrollAnchorRef.current?.scrollIntoView;
-    if (typeof scrollIntoView === "function") {
-      scrollIntoView.call(scrollAnchorRef.current, { block: "end" });
-    }
-  }, [props.messages.length, props.streaming, timelineKey]);
-
-  if (
-    props.messages.length === 0 &&
-    timeline.length === 0 &&
-    !props.streaming
-  ) {
-    if (!props.llmConfigured) return <LlmSetupGuide />;
-    return <WelcomeEmptyState />;
-  }
   return (
-    <div className="chat-body" data-testid="chat-body">
-      {props.messages.map((message) => (
-        <ChatMessage key={message.message_id} message={message} />
-      ))}
-      {timeline.map((item) => (
-        item.kind === "stream" ? (
-          <StreamingMessage key={item.key} text={item.text} />
-        ) : (
-          <AgentEventRow
-            key={item.key}
-            event={item.event}
-            planActionDisabled={props.planActionDisabled}
-            onOpenPlan={props.onOpenPlan}
-            onRunPlan={props.onRunPlan}
-          />
-        )
-      ))}
-      {props.streaming && <ThinkingIndicator />}
-      <div ref={scrollAnchorRef} data-testid="chat-scroll-anchor" />
+    <ChatBodyCtx.Provider
+      value={{
+        planActionDisabled: props.planActionDisabled,
+        onOpenPlan: props.onOpenPlan,
+        onRunPlan: props.onRunPlan,
+      }}
+    >
+      <ThreadPrimitive.Viewport
+        className="chat-body"
+        data-testid="chat-body"
+        autoScroll
+      >
+        <ThreadPrimitive.If empty>
+          {props.llmConfigured ? <WelcomeEmptyState /> : <LlmSetupGuide />}
+        </ThreadPrimitive.If>
+        <ThreadPrimitive.Messages>
+          {() => <ChatMessageItem />}
+        </ThreadPrimitive.Messages>
+        <ThinkingIndicator />
+        <div data-testid="chat-scroll-anchor" />
+      </ThreadPrimitive.Viewport>
+    </ChatBodyCtx.Provider>
+  );
+}
+
+function ChatMessageItem() {
+  const role = useMessage((s) => s.role);
+  const cls = role === "user" ? "msg user" : "msg agent";
+  return (
+    <MessagePrimitive.Root className={cls}>
+      <div className="who">
+        <b>{role}</b>
+      </div>
+      <MessagePrimitive.Content
+        components={{
+          Text: MarkdownText,
+          data: {
+            by_name: {
+              "agent.error": AgentErrorPart,
+              "agent.plan_saved": PlanSavedPart,
+            },
+            Fallback: AgentEventPart,
+          },
+        }}
+      />
+    </MessagePrimitive.Root>
+  );
+}
+
+function MarkdownText(props: TextMessagePartProps) {
+  return (
+    <div className="bubble">
+      <MarkdownPreview
+        source={props.text}
+        wrapperElement={mdWrapperElement}
+        className="chat-markdown"
+        rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
+      />
     </div>
   );
 }
 
-function StreamingMessage({ text }: { text: string }) {
+function AgentEventPart(props: DataMessagePartProps) {
+  const { planActionDisabled } = useContext(ChatBodyCtx);
+  const event = reconstructAgentEvent(props.name, props.data);
+  return <AgentEventRow event={event} planActionDisabled={planActionDisabled} />;
+}
+
+function AgentErrorPart(props: DataMessagePartProps) {
+  const event = reconstructAgentEvent(props.name, props.data);
+  return <AgentEventRow event={event} />;
+}
+
+function PlanSavedPart(props: DataMessagePartProps) {
+  const { planActionDisabled, onOpenPlan, onRunPlan } = useContext(ChatBodyCtx);
+  const event = reconstructAgentEvent(props.name, props.data);
   return (
-    <article className="msg agent">
-      <div className="who"><b>assistant</b></div>
-      <div className="bubble">
-        <MarkdownPreview
-          source={text}
-          wrapperElement={mdWrapperElement}
-          className="chat-markdown"
-          rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-        />
-      </div>
-    </article>
+    <AgentEventRow
+      event={event}
+      planActionDisabled={planActionDisabled}
+      onOpenPlan={onOpenPlan}
+      onRunPlan={onRunPlan}
+    />
   );
+}
+
+function reconstructAgentEvent(
+  name: string,
+  data: Record<string, unknown>,
+): AgentEvent {
+  const { event: eventName, ...payload } = data;
+  return {
+    event: typeof eventName === "string" ? eventName : name,
+    payload,
+  };
 }
 
 function ThinkingIndicator() {
   return (
-    <div className="agent-thinking" data-testid="agent-thinking">
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-    </div>
+    <ThreadPrimitive.If running>
+      <div className="agent-thinking" data-testid="agent-thinking">
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+      </div>
+    </ThreadPrimitive.If>
   );
 }
 
@@ -156,31 +174,6 @@ function WelcomeEmptyState() {
         Select parts in the Viewer to add context to your message.
       </p>
     </div>
-  );
-}
-
-function ChatMessage({ message }: { message: ChatMessageRecord }) {
-  if (message.role === "meta") return null;
-  const role = message.role === "user" ? "user" : "agent";
-  return (
-    <article className={`msg ${role}`}>
-      <div className="who">
-        <b>{message.role}</b>
-        <time>{formatTime(message.ts_ms)}</time>
-      </div>
-      <div className="bubble">
-        {role === "agent" ? (
-          <MarkdownPreview
-            source={message.content}
-            wrapperElement={mdWrapperElement}
-            className="chat-markdown"
-            rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-          />
-        ) : (
-          message.content
-        )}
-      </div>
-    </article>
   );
 }
 
@@ -341,97 +334,6 @@ export function findAffectedAssemblies(paths: string[]): string[] {
   return paths.filter((p) => p.startsWith("assemblies/") || p.includes("/assemblies/"));
 }
 
-type TimelineItem =
-  | { kind: "stream"; key: string; text: string }
-  | { kind: "event"; key: string; event: AgentEvent };
-
-type RunHistoryBaseline = {
-  runId: string;
-  messageCount: number;
-  assistantCount: number;
-};
-
-function buildAgentTimeline(
-  events: AgentEvent[],
-  messages: ChatMessageRecord[],
-  historyCoversLiveRun: boolean,
-): TimelineItem[] {
-  const fullTokenText = events.map(tokenText).join("");
-  const coveredAssistant = latestAssistantMessage(messages);
-  const hideTokenSegments =
-    historyCoversLiveRun &&
-    fullTokenText.length > 0 &&
-    Boolean(coveredAssistant?.content.includes(fullTokenText));
-  const timeline: TimelineItem[] = [];
-  let pendingText = "";
-  let streamIndex = 0;
-
-  const flushText = () => {
-    if (!pendingText) return;
-    if (!hideTokenSegments) {
-      timeline.push({
-        kind: "stream",
-        key: `stream-${streamIndex}`,
-        text: pendingText,
-      });
-      streamIndex += 1;
-    }
-    pendingText = "";
-  };
-
-  events.forEach((event, index) => {
-    const text = tokenText(event);
-    if (text) {
-      pendingText += text;
-      return;
-    }
-    flushText();
-    timeline.push({ kind: "event", key: `event-${index}-${event.event}`, event });
-  });
-  flushText();
-
-  return timeline;
-}
-
-function latestAssistantMessage(messages: ChatMessageRecord[]): ChatMessageRecord | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as ChatMessageRecord | undefined;
-    if (message?.role === "assistant") return message;
-  }
-  return null;
-}
-
-function countMessagesByRole(
-  messages: ChatMessageRecord[],
-  role: ChatMessageRecord["role"],
-): number {
-  return messages.filter((message) => message.role === role).length;
-}
-
-function latestAgentRunId(events: AgentEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const runId = agentEventRunId(events[index] as AgentEvent | undefined);
-    if (runId) return runId;
-  }
-  return null;
-}
-
-function agentEventRunId(event: AgentEvent | undefined): string | null {
-  const runId = event?.payload?.["run_id"];
-  return typeof runId === "string" ? runId : null;
-}
-
-function timelineItemKey(item: TimelineItem): string {
-  if (item.kind === "stream") return `${item.key}:${item.text}`;
-  return `${item.key}:${JSON.stringify(item.event.payload ?? {})}`;
-}
-
-function tokenText(event: AgentEvent): string {
-  if (event.event !== "agent.token") return "";
-  const text = event.payload?.["text"];
-  return typeof text === "string" ? text : "";
-}
-
 type FriendlyError = { title: string; hint: string };
 
 const ERROR_MESSAGES: Record<string, FriendlyError> = {
@@ -530,12 +432,4 @@ function workspaceIdKey(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   if (!("workspace_id" in record)) return null;
   return JSON.stringify(record["workspace_id"]);
-}
-
-function formatTime(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

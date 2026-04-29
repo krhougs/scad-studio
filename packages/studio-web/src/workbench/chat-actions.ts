@@ -51,7 +51,6 @@ export async function cancelAgentRun(
 
 export async function sendChatMessage(params: {
   client: WasmClient | null;
-  draft: string;
   mode: AgentMode;
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
@@ -60,10 +59,9 @@ export async function sendChatMessage(params: {
   contextPills: ContextPill[];
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
-  setDraft: (value: string) => void;
-}): Promise<void> {
+}, text: string): Promise<void> {
   if (!params.client || params.busy || params.agentRun) return;
-  const content = params.draft.trim();
+  const content = text.trim();
   if (!content) return;
   params.setBusy(true);
   try {
@@ -107,7 +105,6 @@ async function sendChatMessageInner(
     contextPills: ContextPill[];
     onStatus?: (message: string) => void;
     setBusy: (value: boolean) => void;
-    setDraft: (value: string) => void;
   },
   content: string,
 ): Promise<void> {
@@ -131,7 +128,6 @@ async function sendChatMessageInner(
     content: displayContent,
     related_files: [],
   });
-  params.setDraft("");
   const context_refs = params.contextPills.map((pill) => pill.ref_text);
   await client.dispatchAgentInvoke({
     session_id: sessionId,

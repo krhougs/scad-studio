@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.12.27",
     "@base-ui/react": "^1.4.1",
     "@budn/app-server-protocol": "workspace:*",
     "@phosphor-icons/react": "^2.1.10",
