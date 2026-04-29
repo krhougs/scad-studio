@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-正在执行计划。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，Phase 5 已完成 Web Chat 模式简化，Phase 6 已完成 Markdown Plan Preview 执行入口，Phase 7 已完成测试、迁移和文档收敛；所有 Phase 均已通过独立 subagent review，下一步进入 Plan 级独立 review。
+计划执行完成。Phase 1 已完成文档与产品语义更新，Phase 2 已完成 protocol 与共享数据模型收敛，Phase 3 已完成后端 Plan Package 存储与解析，Phase 4 已完成后端 Agent Mode 执行模型，Phase 5 已完成 Web Chat 模式简化，Phase 6 已完成 Markdown Plan Preview 执行入口，Phase 7 已完成测试、迁移和文档收敛；所有 Phase 均已通过独立 subagent review，Plan 级独立 review 未发现阻塞问题或高风险问题。
 
 ## 前置提交
 
@@ -203,4 +203,18 @@
   - `git diff --check`：通过。
   - `rg -n "Inform / Plan / Execute|Operation level|Operation: Execute|确认执行|AgentPlanConfirm|AgentCadQueryConfirmation|confirmed_cadquery|Confirmed target|confirmation scope|Plan 确认卡片" docs crates/app-server-core/src crates/app-server-core/tests`：仅命中 deprecated 说明、known issues 历史记录和反向断言测试。
 - 遗留问题：
-  - Phase 7 当前无新增代码遗留问题；下一步进入 Plan 级独立 review。
+  - Phase 7 当前无新增代码遗留问题；已进入并通过 Plan 级独立 review。
+
+## Plan 级独立 Review
+
+- 完成情况：
+  - 已启动独立 subagent 对完整 plan 进行最终 review，覆盖每个 Phase 是否满足原计划验收标准、Phase 之间是否存在行为冲突或重复实现、前序目标是否被后续 Phase 破坏、测试 / 编译验证是否覆盖整体交付标准、结果文档是否准确记录执行情况。
+- Review 结论：
+  - 未发现阻塞问题或高风险问题。
+- Review 证据摘要：
+  - 结果存档已记录 Phase 1 至 Phase 7 均已完成，Phase 7 已通过第二轮独立 review，并列出完整验证命令。
+  - 协议主路径已收敛为 `AgentMode`、`AgentInvokeRequest { mode, plan_ref, context_refs }`，旧 confirmation 类型只保留 deprecated 说明。
+  - 后端保留 plan package 创建 / 解析、execution scope 和 `plan-result.md` 安全更新边界；普通 `.py` 写入、staging、outputs 边界未被后续 Phase 放宽。
+  - Web Chat 和 Markdown preview 的 `Run Plan` 均走 `agent.invoke` + `mode: "agent"` + `plan_ref`，Markdown 仍使用 `rehypeSanitize`。
+  - `docs/known_issues.md` 已关闭旧 confirmation 主流程问题，并明确 legacy `plans/*.md` 只读展示、不生成可执行 `plan_ref`。
+  - 旧流程关键词扫描只命中 deprecated 说明、known issues 历史记录和反向断言测试；最终工作树只剩用户既有未跟踪文件 `AGENTS.new.md`。
