@@ -23,5 +23,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@assistant-ui/react": "^0.12.27"
   }
 }

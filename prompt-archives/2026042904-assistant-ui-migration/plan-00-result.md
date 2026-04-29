@@ -26,8 +26,24 @@
 
 **独立 review**：通过，无 P1 问题。P2/P3 已修复（Borsh None 测试、serde default）。
 
+## Phase 0b — API 验证与决策确认
+
+**状态**：已完成
+
+**变更摘要**：
+- 安装 `@assistant-ui/react@0.12.27`
+- 逐项验证全部 8 项已锁定设计决策，均标注「通过」
+- 关键发现：@assistant-ui/react 不依赖 Tailwind（Radix UI + zustand，无样式原语）
+- 验证结果文档：`phase-0b-verification.md`
+
+**验证结论**：
+- External store 运行时模式确认可用（`useExternalStoreRuntime`）
+- 消息不合并行为确认（`ThreadPrimitive.Messages` 逐条独立渲染）
+- 自定义渲染插槽确认可用（`MessagePrimitive.Parts` 支持 `part.type` 分支）
+- Composer 支持 `submitMode="ctrlEnter"` 确认 Cmd/Ctrl+Enter 发送
+- Tailwind 风险已解除
+
 ## 待执行 Phase
 
-2. Phase 0b — API 验证与决策确认
 3. Phase 1 — 替换核心 UI
 4. Phase 2 — 清理与集成
