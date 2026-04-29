@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-计划已创建。本轮仅按用户要求完成设计和实施计划，没有修改前端或后端产品代码。
+计划已创建。本轮仅按用户要求完成设计和实施计划，没有修改前端或后端产品代码。根据后续反馈，计划已补充“现有 Agent 流程文档对齐”要求，明确 `init.md`、Ref PRD、Agent Chat 交互设计、system prompt、tool contract 和 known issues 必须一起更新。
 
 ## 前置提交
 
@@ -24,3 +24,11 @@
 
 - 已创建 `plan-prompt.md`，记录用户输入、前置提交和当前代码 / 文档背景。
 - 已创建 `plan-00.md`，覆盖文档、协议、后端、前端、Markdown preview、测试和迁移策略。
+- 已根据反馈补充文档对齐范围：
+  - `docs/cadquery-mvp/init.md`
+  - `docs/cadquery-mvp/ref_components_parts_assemblies.md`
+  - `docs/2026042801-agent-chat-interaction-design/README.md`
+  - `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md`
+  - `docs/cadquery-mvp/agent-system-prompt.md`
+  - `docs/cadquery-mvp/agent-tool-contract.md`
+  - `docs/known_issues.md`

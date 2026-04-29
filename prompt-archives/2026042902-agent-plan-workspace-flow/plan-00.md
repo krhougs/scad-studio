@@ -67,13 +67,28 @@ source_chat_session: chat-1
 
 `plan-result.md` 初始内容应写入 `status: pending`，执行后追加 Agent run、提交文件、生成 outputs、失败诊断和剩余风险。
 
+### 现有 Agent 流程文档对齐
+
+这次不能只改 `agent-system-prompt.md` 和 `agent-tool-contract.md`。当前仓库里有多份文档定义 Agent 流程，且它们会互相影响后续实现判断：
+
+- `docs/cadquery-mvp/init.md` 是 MVP 主 PRD，当前写的是 “Markdown CAD Plan → 用户确认执行 → CadQuery 生成 / 修改模型”，并要求 Agent 支持 Inform / Plan / Execute。
+- `docs/cadquery-mvp/ref_components_parts_assemblies.md` 定义 Ref 到 Agent 的流程，当前原则中仍要求“用户只是讨论时不改文件；用户要方案时输出 Plan；用户确认后才执行”。
+- `docs/2026042801-agent-chat-interaction-design/README.md` 是 Web Chat 产品交互约束，当前把 Plan 确认卡片、自然语言确认、`AgentPlanConfirm` 和 `AgentCadQueryConfirmation` 作为主安全模型。
+- `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md` 当前把 Agent Mode 描述成 “Agent 自动判断 + Plan 确认后执行”。
+- `docs/known_issues.md` 中已有关于 CadQuery Execute confirmation、Plan 绑定和缺少结构化 edit intent 的历史记录，不能只改新计划而不更新这些状态。
+
+Phase 1 必须先统一这些文档，再进入协议和代码改造。否则后续实现会同时面对旧 PRD、旧交互设计和新计划三套互相冲突的约束。
+
 ## Phase 1 — 文档与产品语义更新
 
 ### 输入
 
+- `docs/cadquery-mvp/init.md`
 - `docs/cadquery-mvp/agent-tool-contract.md`
 - `docs/cadquery-mvp/agent-system-prompt.md`
 - `docs/cadquery-mvp/ref_components_parts_assemblies.md`
+- `docs/2026042801-agent-chat-interaction-design/README.md`
+- `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md`
 - `docs/known_issues.md`
 
 ### 前序目标保护
@@ -87,11 +102,35 @@ source_chat_session: chat-1
 1. 新增或更新文档，明确 `Plan` 和 `Agent` 两个模式：
    - `Plan`：只读分析和计划档案创建。
    - `Agent`：读写执行，可直接执行已有 plan。
-2. 将现有 “Execution happens only after confirmation” 改为 “Execution happens only in Agent mode”。
-3. 将 `save_cad_plan` 从单文件 `plans/*.md` 改为 plan package：`plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
-4. 删除或标记废弃 `AgentPlanConfirm`、`AgentPlanReject`、`confirmed_cadquery` 相关产品说明。
-5. 增加 plan package 的 machine-readable front matter 规范和 `plan-result.md` 更新规范。
-6. 更新 known issues：记录旧 confirmation 流与新 Agent / Plan 模式冲突，并在实现完成后关闭。
+2. 更新 `docs/cadquery-mvp/init.md`：
+   - 将 MVP 主链路改为 “Markdown CAD Plan package → Agent mode 执行 plan → CadQuery 生成 / 修改模型”。
+   - 将 “Agent 支持 Inform / Plan / Execute” 改为 “Agent 支持 Agent / Plan 两个模式”。
+   - 将用户关键流程中的“确认，生成这个滑盖版本”改为“在 Agent 模式运行该 plan”或“打开 plan 后运行”。
+   - 将验收标准中的 Inform / Plan / Execute 改为 Agent / Plan，并明确 `plans/<id>/plan-result.md` 是执行记录。
+3. 更新 `docs/cadquery-mvp/ref_components_parts_assemblies.md`：
+   - 保留 Ref 定位、component / part / assembly 判断、face / edge / vertex 稳定性说明。
+   - 将“用户确认后才执行”改为“只有 Agent mode 执行会修改文件；Plan mode 只创建计划档案”。
+   - 将 `Confirmation Needed` 章节改为 `Execution Mode / Plan Run`，说明该 Ref 修改应由 Agent 直接执行还是先生成 plan package。
+4. 更新 `docs/2026042801-agent-chat-interaction-design/README.md`：
+   - 将交互模型从 Agent 自动判定 Inform / Plan / Execute 改为用户可见 `Agent / Plan` 双模式。
+   - 删除 Plan 确认卡片状态机，替换为 Plan Package 卡片和 `Run Plan` 动作。
+   - 删除 `/execute`、自然语言确认、轻量确认卡片和 `AgentCadQueryConfirmation` 作为主安全门禁的描述。
+   - 将安全风险缓解改为 Agent mode path policy、CadQuery staging、`.py` 专用工具边界和 plan execution scope。
+5. 更新 `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md`：
+   - 将 Agent Mode 从“自动判断 + Plan 确认后执行”改为“读写执行，可直接使用当前请求或已有 plan”。
+   - 将 Plan Mode 从“确认卡片”改为“生成 workspace plan package”。
+6. 将 `docs/cadquery-mvp/agent-system-prompt.md` 中 “Execution happens only after confirmation” 改为 “Execution happens only in Agent mode”，并删除 Execute operation 章节。
+7. 将 `docs/cadquery-mvp/agent-tool-contract.md` 的 Operation 权限表改成 Agent / Plan mode 权限表；删除或标记废弃 `AgentPlanConfirm`、`AgentPlanReject`、`confirmed_cadquery` 相关说明。
+8. 将 `save_cad_plan` 从单文件 `plans/*.md` 改为 plan package：`plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
+9. 增加 plan package 的 machine-readable front matter 规范和 `plan-result.md` 更新规范。
+10. 更新 `docs/known_issues.md`：记录旧 confirmation 流与新 Agent / Plan 模式冲突，并在实现完成后关闭。
+11. 对上述文档做一次全文搜索，确保旧主流程关键词不再作为当前方案出现：
+   - `Inform / Plan / Execute`
+   - `确认执行`
+   - `AgentPlanConfirm`
+   - `AgentCadQueryConfirmation`
+   - `confirmed_cadquery`
+   - `Plan 确认卡片`
 
 ### 验收标准
 
@@ -99,6 +138,8 @@ source_chat_session: chat-1
 - 文档清楚区分 `Plan` 只读边界和 `Agent` 读写边界。
 - plan package 三文件结构和命名规则可由后端直接实现。
 - 文档明确 legacy `plans/*.md` 的兼容策略。
+- `init.md`、Ref PRD、Agent Chat 交互设计、system prompt 和 tool contract 对 Agent 流程的描述一致。
+- 旧 confirmation 术语只允许出现在“历史设计 / deprecated / known issues”上下文中，不能作为当前产品主流程出现。
 
 ## Phase 2 — Protocol 与共享数据模型收敛
 
@@ -354,13 +395,17 @@ source_chat_session: chat-1
 4. 更新 `docs/known_issues.md`：
    - 关闭 confirmation 流造成 `/execute` 必然失败的问题。
    - 记录 legacy `plans/*.md` 兼容范围。
-5. 更新 `plan-00-result.md`，逐 Phase 记录实现、review 和验证。
+5. 增加文档一致性检查：
+   - `rg -n "Inform / Plan / Execute|确认执行|AgentPlanConfirm|AgentCadQueryConfirmation|confirmed_cadquery|Plan 确认卡片" docs`
+   - 检查命中项是否只存在于历史设计、deprecated 说明或 known issues 中。
+6. 更新 `plan-00-result.md`，逐 Phase 记录实现、review 和验证。
 
 ### 验收标准
 
 - 旧 confirmation 流从产品主路径中移除。
 - 新 Agent / Plan 双模式在文档、协议、后端和前端中一致。
 - plan package 三文件结构可被创建、预览、执行和记录结果。
+- 所有现有 Agent 流程文档与新产品流一致，不再留下旧流程作为当前实现依据。
 - 回归测试通过。
 
 ## 风险与处理方式

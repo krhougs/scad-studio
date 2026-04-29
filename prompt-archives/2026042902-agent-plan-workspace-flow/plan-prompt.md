@@ -27,6 +27,10 @@
 - `packages/studio-web/src/workbench/chat-composer.tsx` 当前有 `auto / inform / plan / execute` 下拉框。
 - `packages/studio-web/src/workbench/chat-messages.tsx` 当前渲染 Plan Confirmation 卡片，包含 Preview / Confirm Execute / Cancel。
 - `packages/studio-web/src/viewers/markdown-viewer.tsx` 当前只负责 Markdown 读取和安全预览，没有 plan 专属动作入口。
+- `docs/cadquery-mvp/init.md` 当前 MVP 主流程仍是 “Markdown CAD Plan → 用户确认执行 → CadQuery 生成 / 修改模型”，并要求 Agent 支持 Inform / Plan / Execute 三种行为。
+- `docs/cadquery-mvp/ref_components_parts_assemblies.md` 当前 Ref 流程仍写作 “Agent 讨论 / 出 Plan / 执行修改”，并在原则中要求“用户确认后才执行”。
+- `docs/2026042801-agent-chat-interaction-design/README.md` 当前 Chat 交互设计把 Plan 确认卡片、`AgentPlanConfirm`、`AgentCadQueryConfirmation` 作为安全门禁。
+- `docs/2026042801-agent-chat-interaction-design/competitive-analysis.md` 当前仍用 Agent 自动判断 + Plan 确认后执行来描述 Agent Mode。
 
 ## 本计划目标
 
