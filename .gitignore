@@ -18,3 +18,4 @@ packages/studio-web/playwright-report/
 .env
 .env.local
 llm.toml
+.gstack/

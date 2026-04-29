@@ -159,6 +159,10 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_chat_history(h, params));
   }
 
+  dispatchChatSelect(sessionId: string, params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_select(h, sessionId, params));
+  }
+
   dispatchChatArchive(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_chat_archive(h, params));
   }

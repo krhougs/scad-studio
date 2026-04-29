@@ -1,9 +1,9 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
     CadQueryExecuteRequest, CadQueryPreviewRequest, CadQueryResultGetRequest, ChatArchiveRequest,
-    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatSendRequest, ClientCommand,
-    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
-    RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
+    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId,
+    ClientCommand, ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest,
+    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
@@ -199,6 +199,15 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         )?;
         self.latest_chat_history_request = Some(request_id);
         Ok(request_id)
+    }
+
+    pub fn dispatch_chat_select(
+        &mut self,
+        session_id: ChatSessionId,
+        params: ChatHistoryRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.pending_chat_session = Some(session_id);
+        self.dispatch_chat_history(params)
     }
 
     pub fn dispatch_chat_archive(

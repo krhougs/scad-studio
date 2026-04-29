@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    env_logger::init();
     if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);

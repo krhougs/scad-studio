@@ -125,13 +125,17 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 self.current_chat_session = Some(response.session_id.clone());
                 self.current_chat_history.clear();
                 self.latest_chat_history_request = None;
+                self.pending_chat_session = None;
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();
             }
             CommandSuccess::ChatHistory(response) => {
-                if self.latest_chat_history_request == Some(request_id) {
+                if self.pending_chat_session.as_ref() == Some(&response.session_id) {
                     self.current_chat_session = Some(response.session_id.clone());
+                    self.pending_chat_session = None;
+                }
+                if self.latest_chat_history_request == Some(request_id) {
                     self.current_chat_history = response.messages.clone();
                     self.latest_chat_history_request = None;
                 }

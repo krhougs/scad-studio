@@ -891,11 +891,14 @@ fn stale_chat_history_response_does_not_replace_newer_selection() {
         })
         .expect("dispatch main chat.history");
     let other_request_id = client
-        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
-            session_id: ChatSessionId("other".into()),
-            limit: Some(50),
-        })
-        .expect("dispatch other chat.history");
+        .dispatch_chat_select(
+            ChatSessionId("other".into()),
+            app_server_protocol::ChatHistoryRequest {
+                session_id: ChatSessionId("other".into()),
+                limit: Some(50),
+            },
+        )
+        .expect("dispatch other chat.select");
     let _ = drain_outbound(&mut client);
 
     client

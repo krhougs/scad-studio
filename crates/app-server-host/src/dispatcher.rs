@@ -1241,12 +1241,19 @@ fn push_agent_error(
     error_type: AgentErrorType,
     message: impl Into<String>,
 ) {
+    let msg = message.into();
+    log::error!(
+        "[agent run={}] {:?}: {}",
+        run.run_id,
+        error_type,
+        msg
+    );
     (push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentError(AgentErrorEvent {
             session_id: run.session_id.clone(),
             run_id: Some(run.run_id.clone()),
             error_type,
-            message: message.into(),
+            message: msg,
         }),
     });
 }
@@ -1276,6 +1283,7 @@ pub fn agent_error_type(kind: &CadQueryRunnerErrorKind) -> AgentErrorType {
 }
 
 fn cadquery_tool_error(error: CadQueryRunnerError) -> CadQueryToolRuntimeError {
+    log::error!("[cadquery] {:?}: {}", error.kind, error.message);
     let retry_allowed = matches!(
         error.kind,
         CadQueryRunnerErrorKind::Build

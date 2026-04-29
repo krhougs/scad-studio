@@ -164,6 +164,7 @@ dependencies = [
  "app-server-protocol",
  "app-server-transport",
  "bytes",
+ "env_logger",
  "futures-util",
  "http-body-util",
  "hyper",

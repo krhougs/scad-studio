@@ -92,6 +92,8 @@ export function client_dispatch_chat_history(handle: ClientHandle, params: any):
 
 export function client_dispatch_chat_list(handle: ClientHandle, params: any): bigint;
 
+export function client_dispatch_chat_select(handle: ClientHandle, session_id: string, params: any): bigint;
+
 export function client_dispatch_chat_send(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_config_load(handle: ClientHandle): bigint;

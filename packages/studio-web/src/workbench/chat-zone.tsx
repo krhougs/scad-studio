@@ -230,19 +230,16 @@ function useInitialChatHistory(
   onStatus: ((message: string) => void) | undefined,
 ) {
   const requestedRef = useRef<string | null>(null);
+  const targetSessionId =
+    snapshotCurrentSessionId ?? sessions[0]?.session_id ?? null;
   useEffect(() => {
-    if (!client) return;
-    if (snapshotCurrentSessionId) {
-      requestedRef.current = null;
-      return;
-    }
-    const firstSessionId = sessions[0]?.session_id ?? null;
-    if (!firstSessionId || requestedRef.current === firstSessionId) return;
-    requestedRef.current = firstSessionId;
+    if (!client || !targetSessionId) return;
+    if (requestedRef.current === targetSessionId) return;
+    requestedRef.current = targetSessionId;
     client
-      .dispatchChatHistory({ session_id: firstSessionId, limit: 100 })
+      .dispatchChatHistory({ session_id: targetSessionId, limit: 100 })
       .catch(reportError(onStatus));
-  }, [client, sessions, snapshotCurrentSessionId, onStatus]);
+  }, [client, targetSessionId, onStatus]);
 }
 
 function useAgentDoneHistoryRefresh(

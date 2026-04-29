@@ -46,6 +46,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) current_chat_session: Option<ChatSessionId>,
     pub(super) current_chat_history: Vec<ChatMessageRecord>,
     pub(super) latest_chat_history_request: Option<RequestId>,
+    pub(super) pending_chat_session: Option<ChatSessionId>,
     pub(super) agent_run: Option<AgentStartedResponse>,
     pub(super) agent_events: Vec<ServerPushEvent>,
     pub(super) current_selection: SelectionUpdateRequest,
@@ -82,6 +83,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             current_chat_session: None,
             current_chat_history: Vec::new(),
             latest_chat_history_request: None,
+            pending_chat_session: None,
             agent_run: None,
             agent_events: Vec::new(),
             current_selection: SelectionUpdateRequest {

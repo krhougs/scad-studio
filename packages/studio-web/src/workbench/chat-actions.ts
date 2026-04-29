@@ -34,7 +34,7 @@ export async function selectChatSession(
 ): Promise<void> {
   if (!client) return;
   await client
-    .dispatchChatHistory({ session_id: sessionId, limit: 100 })
+    .dispatchChatSelect(sessionId, { session_id: sessionId, limit: 100 })
     .catch(reportError(onStatus));
 }
 

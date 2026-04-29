@@ -39,10 +39,24 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .post(&url)
             .header("Authorization", &format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
+            .config()
+            .http_status_as_error(false)
+            .build()
             .send_json(&body)
             .map_err(|err| LlmError {
                 message: format!("LLM HTTP request failed: {err}"),
             })?;
+
+        let status = response.status();
+        if status.as_u16() >= 400 {
+            let error_body = response
+                .into_body()
+                .read_to_string()
+                .unwrap_or_else(|err| format!("(failed to read error body: {err})"));
+            return Err(LlmError {
+                message: format!("LLM HTTP {status}: {error_body}"),
+            });
+        }
 
         let reader = BufReader::new(response.into_body().into_reader());
         let result = read_sse_stream(reader, on_token)?;

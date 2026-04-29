@@ -11,6 +11,7 @@ path = "src/lib.rs"
 app-server-core = { path = "../app-server-core" }
 app-server-protocol = { path = "../app-server-protocol" }
 app-server-transport = { path = "../app-server-transport" }
+env_logger = "0.11"
 futures-util = "0.3"
 log.workspace = true
 bytes = "1"

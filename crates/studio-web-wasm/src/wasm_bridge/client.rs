@@ -12,7 +12,8 @@ use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
     CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest,
     CadQueryResultReady, CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest,
-    ChatHistoryRequest, ChatListRequest, ChatSendRequest, CommandSuccess, ConfigSaveRequest,
+    ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId, CommandSuccess,
+    ConfigSaveRequest,
     ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
     PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
@@ -349,6 +350,22 @@ pub fn client_dispatch_chat_history(
     handle
         .borrow_mut()?
         .dispatch_chat_history(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_chat_select(
+    handle: &mut ClientHandle,
+    session_id: &str,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: ChatHistoryRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid chat_select params: {err}")))?;
+    let sid = ChatSessionId(session_id.to_owned());
+    handle
+        .borrow_mut()?
+        .dispatch_chat_select(sid, parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

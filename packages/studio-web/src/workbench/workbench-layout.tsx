@@ -519,10 +519,14 @@ export function WorkbenchLayout() {
           if (disposed) return;
           const ready = extractCadQueryReadyFromAgentEvent(payload);
           if (ready) openTab(cadQueryResultTab(ready));
-          logRef.current.append(
-            "info",
-            `agent event: ${describeAgentEvent(payload)}`,
-          );
+          const eventName = describeAgentEvent(payload);
+          logRef.current.append("info", `agent event: ${eventName}`);
+          if (eventName === "error") {
+            const p = payload as Record<string, unknown>;
+            console.error(
+              `[agent error] ${p["error_type"] ?? "unknown"}: ${p["message"] ?? "(no message)"}`,
+            );
+          }
         },
       }),
     );
@@ -838,6 +842,11 @@ async function onHandshakeAck(
   }
   if (ctx.disposedRef()) return;
   ctx.refreshRoot();
+  client
+    .dispatchChatList({ include_archived: false })
+    .catch((err) => {
+      ctx.setMessage(`chat list failed: ${describeError(err)}`);
+    });
   ctx.setPhase("ready");
   ctx.setMessage("workspace ready");
   if (!ctx.watchActiveRef.current) {
