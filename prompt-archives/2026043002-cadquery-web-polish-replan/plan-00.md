@@ -22,12 +22,25 @@
 - 预览模式保留 axis、底板、gizmo、灯光、相机和渲染设置，只隐藏选择线框、anchor、hover/selected 高亮、选择 dock/status 和选择交互。
 - 具体 AirPods 垫子语义只能作为真实用户输入、prompt archive、测试 fixture、测试断言、真实验收记录或生成 workspace 模型存在；不得进入前端、后端、`app-server`、protocol、tool schema 或产品 prompt 的通用实现。
 
+## 全局输入基准
+
+以下输入适用于 Phase -1 到 Phase 6：
+
+- `prompt-archives/2026043002-cadquery-web-polish-replan/plan-prompt.md` 中记录的原始需求、用户澄清和补充。
+- `AGENTS.md` 中的长期架构、沟通、Plan Mode、工具链和边界约束。
+- `docs/cadquery-mvp/` 作为 CadQuery MVP 产品、Ref、tool contract、Agent 行为和验收语义的基准文档。
+- 当前源码、当前未提交 diff、上一轮已提交 checkpoint 和本计划的 `plan-00-result.md`。
+
+执行任一 Phase 时，如果发现当前 system prompt、tool guidance 或 Agent 行为与 `docs/cadquery-mvp/`、本计划或真实验收需求不一致，必须把 system prompt / guidance 修改纳入该 Phase 的修复范围，而不是推迟到 Phase 3。
+
+若 `docs/cadquery-mvp/`、`plan-prompt.md`、`AGENTS.md`、现有代码和用户原始需求之间出现无法依据明确优先级自行消解的冲突，必须停止当前 Phase，记录冲突来源、影响范围和可选处理方向，并请求用户干预；在冲突被确认前不得继续编码、重构、删除文件或调整测试。
+
 ## 全局执行协议
 
 以下规则适用于 Phase -1 到 Phase 6：
 
-1. 每个 Phase 开始前重新读取 `plan-prompt.md`、本计划和当前 `plan-00-result.md`，确认没有新增待确定项、未解决阻塞项或与前序成果冲突的改动。
-2. 每个 Phase 先做只读审计，识别当前 diff 中属于用户已有改动、上一轮有效成果、本轮半成品和需要修正的边界问题；不得覆盖或回退用户已有改动。
+1. 每个 Phase 开始前重新读取全局输入基准、本计划和当前 `plan-00-result.md`，确认没有新增待确定项、未解决阻塞项或与前序成果冲突的改动。
+2. 每个 Phase 先明确模块边界和可修改范围；涉及跨模块或污染清理时，优先按模块派发独立 subagent 做全局检索与只读审计，再由主执行者汇总结果、分类风险并制定修复顺序；不得覆盖或回退用户已有改动。
 3. 每个 Phase 执行时必须保护本计划中列出的前序成果和该 Phase 的“前序目标保护”。
 4. 每个 Phase 实现完成后，必须启动独立 reviewer 审查该 Phase。review 输入必须包含：完整 `plan-00.md`、当前 Phase 目标与验收标准、前序目标保护、本 Phase diff 或涉及文件清单、已运行验证命令和结果。
 5. 若 Phase review 发现阻塞项或高风险问题，必须修复、补充验证并再次发起独立 review；只有 review 无阻塞项后才能进入下一个 Phase。
@@ -66,21 +79,25 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - 当前未提交 diff。
 - 前端、后端、`app-server`、protocol、tool schema、产品 prompt 和 docs 中与 CadQuery Web / Agent 相关的改动。
+- `docs/cadquery-mvp/` 中与 CadQuery MVP、Ref、Agent tool contract、system prompt 和验收语义相关的基准。
 - `AGENTS.md` 中“禁止测试场景污染产品代码”的长期约束。
 
 操作步骤：
 
-1. 只读审计当前 diff，识别用户已有改动、上一轮有效成果、本轮半成品和可修改范围。
-2. 全局检索当前验收 case 和任务语义相关词，包括但不限于 AirPods、车载无线充电板、无线充电、charging pad、airpods、具体垫子模型名和本轮 prompt 专用对象名。
-3. 进行语义审计：检查新增默认 prompt、schema 示例、tool fallback、前端展示分支、后端路由、测试专用常量、模型结构默认值等是否只服务本轮验收，即使命中内容不包含上述关键词也要纳入判断。
-4. 将命中结果分类为：产品代码路径、通用契约或 schema、产品 prompt / guidance、测试 fixture、prompt archive、真实验收记录、生成 workspace 模型。
-5. 对产品代码路径、通用契约或 schema、产品 prompt / guidance 中的具体 case 语义进行清理，改为领域无关的产品契约、能力描述或通用示例。
-6. 保留测试 fixture、prompt archive、真实验收记录和生成 workspace 模型中的具体 case，但确认它们不会被产品运行路径读取为默认逻辑或通用提示。
-7. 为清理后的边界补充或调整验证，确保后续新增功能不能再次依赖具体 case 文案或对象名通过测试。
+1. 主执行者先划分审计模块并记录预期边界，至少包含：前端产品代码、后端 / `app-server`、protocol / wasm 生成产物、CadQuery tool schema 与 system prompt、测试 fixture、prompt archive 与真实验收记录。
+2. 按模块派发独立 subagent 做全局语义审计与只读检索。每个 subagent 负责一个互不重叠的模块范围，先理解该模块新增或修改内容的产品意图、默认行为、数据流和运行入口，再判断是否存在只服务当前验收任务的语义耦合，不直接修改文件。
+3. 每个 subagent 以语义识别为主，搜索只作为辅助发现手段。审计范围包括新增默认 prompt、schema 示例、tool fallback、前端展示分支、后端路由、测试专用常量、模型结构默认值、文件路由、selection 逻辑、artifact 映射和 UI 文案等是否只服务本轮验收；不得把关键词命中作为唯一依据，也不得因为没有关键词命中就判定无污染。
+4. 每个 subagent 输出疑似污染位置、对应代码或文案的实际语义、为什么它只服务当前验收任务或为什么可以保留、是否属于产品运行路径、建议处理方式和风险。
+5. 主执行者汇总所有 subagent 结果，将疑似污染内容分类为：必须清理的产品代码路径、必须清理的通用契约或 schema、必须清理的产品 prompt / guidance、可保留的测试 fixture、可保留的 prompt archive、可保留的真实验收记录、可保留的生成 workspace 模型。
+6. 主执行者根据汇总结果制定修复顺序，并只清理必须清理的产品路径或通用契约污染；可保留类别不得因清理动作被删除或改写成失去验收价值。
+7. 对产品代码路径、通用契约或 schema、产品 prompt / guidance 中的当前验收任务语义进行清理，改为领域无关的产品契约、能力描述或通用示例。
+8. 保留测试 fixture、prompt archive、真实验收记录和生成 workspace 模型中的具体 case，但确认它们不会被产品运行路径读取为默认逻辑或通用提示。
+9. 为清理后的边界补充或调整验证，确保后续新增功能不能再次依赖当前验收任务语义通过测试。
 
 验收标准：
 
 - 前端、后端、`app-server`、protocol、tool schema 和产品 prompt 中不存在当前验收 case 专属对象名、任务 prompt 专用语义或无关键词的一次性验收逻辑。
+- 每个审计模块都有独立 subagent 输出，主执行者已在 `plan-00-result.md` 汇总语义审计结论、疑似污染分类、修复决策和保留理由。
 - 保留下来的具体 case 只存在于测试 fixture、prompt archive、真实验收记录或生成 workspace 模型中。
 - 清理后不破坏已完成的 CadQuery 建模、预览、selection、reasoning 和 staging 语义。
 - 已按“全局执行协议”完成本 Phase 独立 review、收敛和 `plan-00-result.md` 更新。
@@ -96,6 +113,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - Phase -1 清理后的当前未提交 diff。
 - `prompt-archives/2026043000-cadquery-web-e2e-gapfill/` 与 `prompt-archives/2026043001-cadquery-preview-ref-layer-polish/`。
+- `docs/cadquery-mvp/` 基准文档。
 - 当前 dev server 与被中断的测试命令状态。
 
 操作步骤：
@@ -122,6 +140,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - CadQuery scene payload、topology、feature map、当前 selection snapshot。
 - 当前 Canvas / Inspector / CadQuery Viewer 交互。
+- `docs/cadquery-mvp/` 中 Ref 层级、selection、tool contract 和用户可见 Ref 范围。
 - GUI 共享边界约束。
 
 操作步骤：
@@ -157,6 +176,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 - 文件列表打开 `.py` / `.step` 的行为。
 - CadQuery Agent 执行完成事件。
 - app-server 维护并通过 protocol 暴露的 CadQuery manifest / artifact relation。
+- `docs/cadquery-mvp/` 中 CadQuery 执行、导出、manifest、Ref 和 selection 边界。
 - 当前 tab 与 preview refresh 状态。
 
 操作步骤：
@@ -188,6 +208,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - CadQuery Agent system prompt。
 - CadQuery tool schema、contract check、runtime warning。
+- `docs/cadquery-mvp/` 中 Agent system prompt、tool contract、Ref 命名和模型产物要求。
 - 真实 Web Chat 生成或修改的模型源码。
 
 操作步骤：
@@ -216,6 +237,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 - Viewer toolbar。
 - Three.js CadQuery mesh 渲染状态。
 - Chat message、Agent event、tool event、done event 和 reasoning event。
+- `docs/cadquery-mvp/` 中与 Agent 事件、selection 和用户可见预览相关的要求。
 - GUI 共享边界约束。
 
 操作步骤：
@@ -249,6 +271,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 - 本轮可控 Web dev server。
 - 真实 Web 页面。
 - CadQuery runner 与 LLM 配置。
+- `docs/cadquery-mvp/` 中真实 CadQuery Agent、tool call、Ref 修改和验收语义。
 - Phase 1 到 Phase 4 已通过 review 的功能。
 
 操作步骤：
@@ -280,6 +303,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - `plan-prompt.md` 中记录的原始需求、用户澄清和补充。
 - 本计划的“完整需求覆盖清单”。
+- `docs/cadquery-mvp/` 基准文档。
 - 所有代码与文档改动。
 - 本轮测试结果。
 - 真实网页验收记录。
