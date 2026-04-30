@@ -23,6 +23,7 @@ pub use agent::{
         save_plan_package, save_plan_package_with_timestamp, slugify_plan_title,
     },
     rig_backend_decision, stream_agent_turn, stream_agent_turn_with_tools,
+    stream_agent_turn_with_tools_and_reasoning,
     tools::{
         AgentExecutionScope, AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy,
         AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,
@@ -30,6 +31,7 @@ pub use agent::{
         CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver, OutputPathPolicy,
         ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor, agent_tool_definitions_for_mode,
         agent_tool_permission, agent_tool_specs, run_tool_loop_with_registry,
+        run_tool_loop_with_registry_and_reasoning,
     },
 };
 pub use cadquery::{

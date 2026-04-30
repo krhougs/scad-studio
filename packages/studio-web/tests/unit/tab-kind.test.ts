@@ -23,6 +23,8 @@ describe("resolveTabKind", () => {
 
   it("routes scad and meshes", () => {
     expect(resolveTabKind("cube.scad")).toBe("scad");
+    expect(resolveTabKind("airpods_charging_pad.py")).toBe("cadquery");
+    expect(resolveTabKind("airpods_charging_pad.step")).toBe("cadquery");
     expect(resolveTabKind("part.stl")).toBe("mesh");
     expect(resolveTabKind("assembly.3mf")).toBe("mesh");
   });

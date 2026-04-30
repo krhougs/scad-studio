@@ -5,6 +5,7 @@ export type FileKindEntry = {
 
 const KNOWN_EXTENSIONS = new Map<string, string>([
   ["scad", "SCAD"],
+  ["py", "PY"],
   ["stl", "STL"],
   ["3mf", "3MF"],
   ["md", "MD"],

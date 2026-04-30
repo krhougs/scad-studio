@@ -4,6 +4,7 @@ mod openai_compat;
 pub use config::{LlmConfig, LlmConfigError, build_model_string, load_llm_config};
 pub use openai_compat::{
     OpenAiCompatibleProvider, build_request_body, extract_delta_content, read_sse_stream,
+    read_sse_stream_with_reasoning,
 };
 
 #[derive(Debug, Clone)]
@@ -108,6 +109,17 @@ pub trait LlmProvider: Send + Sync {
         tools: &[LlmToolDefinition],
         on_token: &dyn Fn(&str) -> bool,
     ) -> Result<LlmResponse, LlmError>;
+
+    fn stream_chat_with_reasoning(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: &[LlmToolDefinition],
+        on_token: &dyn Fn(&str) -> bool,
+        on_reasoning: &dyn Fn(&str) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
+        let _ = on_reasoning;
+        self.stream_chat(messages, tools, on_token)
+    }
 }
 
 pub fn create_provider() -> Result<Box<dyn LlmProvider>, LlmError> {

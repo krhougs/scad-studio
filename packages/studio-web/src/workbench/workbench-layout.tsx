@@ -40,6 +40,7 @@ import {
   cadQueryResultTab,
   extractCadQueryReadyFromAgentEvent,
 } from "./cadquery-result-tab";
+import { CadQueryRefTree } from "./cadquery-ref-tree";
 import { documentTitleForFile } from "./document-title";
 import { Inspector } from "./inspector";
 import { LeftPanel } from "./left-panel";
@@ -55,7 +56,9 @@ import { derivePresetPath } from "./preset-io";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
 import type { MeshInfo } from "../viewers/mesh-info";
+import type { CadQueryScenePayload } from "../viewers/cadquery-mesh";
 import type { PlanRunTarget } from "../viewers/plan-preview-path";
+import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
 import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 import {
   createTransport,
@@ -123,6 +126,7 @@ export function WorkbenchLayout() {
   const agentRun = useAgentRun();
   const chatSessions = useChatSessions();
   const currentChatSession = useCurrentChatSession();
+  const currentSelection = useProtocolStore((s) => s.current_selection);
   const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
@@ -131,6 +135,8 @@ export function WorkbenchLayout() {
   const [clientReady, setClientReady] = useState(false);
   const activeView: ViewPreset = "iso";
   const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
+  const [cadQueryScene, setCadQueryScene] =
+    useState<CadQueryScenePayload | null>(null);
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
   const [cameraOverride, setCameraOverride] = useState<CameraState | null>(
     null,
@@ -470,11 +476,13 @@ export function WorkbenchLayout() {
               activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
             const refreshableDocument =
               activeTab.kind === "scad" ||
+              activeTab.kind === "cadquery" ||
               activeTab.kind === "mesh" ||
               activeTab.kind === "markdown" ||
               activeTab.kind === "image";
             const directoryRefreshableDocument =
               activeTab.kind === "mesh" ||
+              activeTab.kind === "cadquery" ||
               activeTab.kind === "markdown" ||
               activeTab.kind === "image";
             if (
@@ -513,7 +521,17 @@ export function WorkbenchLayout() {
         onAgentEvent: (payload) => {
           if (disposed) return;
           const ready = extractCadQueryReadyFromAgentEvent(payload);
-          if (ready) openTab(cadQueryResultTab(ready));
+          if (ready) {
+            const activeId = activeTabIdRef.current;
+            const activeTab =
+              openTabsRef.current.find((tab) => tab.id === activeId) ?? null;
+            if (activeTab?.kind === "cadquery") {
+              setDocumentRefreshSignal((n) => n + 1);
+              setMessage(`cadquery ready ${ready.result_id}`);
+            } else {
+              openTab(cadQueryResultTab(ready));
+            }
+          }
           const eventName = describeAgentEvent(payload);
           logRef.current.append("info", `agent event: ${eventName}`);
           if (eventName === "error") {
@@ -648,6 +666,17 @@ export function WorkbenchLayout() {
     setCameraState(null);
   }, [activeTab?.kind, activeTab?.path]);
 
+  useEffect(() => {
+    if (activeTab?.kind !== "cadquery") setCadQueryScene(null);
+  }, [activeTab?.kind, activeTab?.path]);
+
+  const handleCadQuerySelectionChange = useCallback(
+    (next: SelectionUpdateRequest) => {
+      void clientRef.current?.dispatchSelectionUpdate(next);
+    },
+    [],
+  );
+
   const scadInspectorPanels =
     activeTab?.kind === "scad"
       ? scadInspectorPanelsForState(scadWorkbenchState)
@@ -706,6 +735,8 @@ export function WorkbenchLayout() {
         meshInfo={meshInfo}
         activeView={activeView}
         onMeshInfo={setMeshInfo}
+        onCadQueryScene={setCadQueryScene}
+        cadQuerySelection={currentSelection}
         cameraState={cameraState}
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
@@ -724,6 +755,15 @@ export function WorkbenchLayout() {
         exportDefines={activeTab?.kind === "scad" ? activeDefines : []}
         appConfig={appConfig}
         onExportStatus={setMessage}
+        refTreeSlot={
+          activeTab?.kind === "cadquery" ? (
+            <CadQueryRefTree
+              scene={cadQueryScene}
+              selection={currentSelection}
+              onSelectionChange={handleCadQuerySelectionChange}
+            />
+          ) : null
+        }
         cameraSlot={
           showMeshPanels ? (
             <CameraInspector

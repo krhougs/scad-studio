@@ -4,6 +4,7 @@ use app_server_core::{
     CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore,
     NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
     agent_tool_definitions_for_mode, run_tool_loop_with_registry,
+    run_tool_loop_with_registry_and_reasoning,
 };
 use app_server_protocol::{
     AgentMode, CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
@@ -1567,6 +1568,101 @@ fn workspace_tool_executor_cadquery_check_source_reports_contract() {
         result["contract"]["unsafe_calls"],
         serde_json::json!(["open"])
     );
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_check_source_explains_refs_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_check_source",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["contract"]["has_refs"], false);
+    assert!(
+        result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("REFS ="))
+    );
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_check_source_warns_about_missing_model_description() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_check_source",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top_surface\\\":{}}}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["contract"]["has_model_description"], false);
+    assert!(
+        result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("MODEL_DESCRIPTION"))
+    );
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_explains_missing_refs_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"base\\\": \\\"body\\\"}\\n",
+                "def build(params=None): pass\"}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("REFS.features")
+    );
+    assert!(result["message"].as_str().unwrap().contains("\"features\""));
+    assert!(runtime.execute_requests().is_empty());
 }
 
 #[test]
@@ -3247,6 +3343,24 @@ impl app_server_core::llm::LlmProvider for MockProvider {
             Ok(responses.remove(0))
         }
     }
+
+    fn stream_chat_with_reasoning(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: &[LlmToolDefinition],
+        on_token: &dyn Fn(&str) -> bool,
+        on_reasoning: &dyn Fn(&str) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
+        let response = self.stream_chat(messages, tools, on_token)?;
+        if let Some(reasoning) = response.reasoning_content.as_deref() {
+            if !on_reasoning(reasoning) {
+                return Err(LlmError {
+                    message: "stream cancelled".into(),
+                });
+            }
+        }
+        Ok(response)
+    }
 }
 
 struct EchoExecutor;
@@ -3401,6 +3515,65 @@ fn run_tool_loop_replays_reasoning_content_after_tool_call() {
     assert_eq!(
         assistant_tool_call.reasoning_content.as_deref(),
         Some("Need the source before answering.")
+    );
+}
+
+#[test]
+fn run_tool_loop_forwards_reasoning_callback() {
+    let provider = MockProvider::new(vec![LlmResponse {
+        content: "Answer.".into(),
+        reasoning_content: Some("Checking dimensions.".into()),
+        tool_calls: Vec::new(),
+    }]);
+    let reasoning = Mutex::new(String::new());
+    let result = run_tool_loop_with_registry_and_reasoning(
+        vec![LlmMessage::new("user", "design the pad")],
+        tool_context(AgentMode::Agent, None),
+        &provider,
+        &EchoExecutor,
+        &NoopToolLoopObserver,
+        &|_| true,
+        &|chunk| {
+            reasoning.lock().unwrap().push_str(chunk);
+            true
+        },
+    );
+
+    assert_eq!(result.unwrap().content, "Answer.");
+    assert_eq!(reasoning.lock().unwrap().as_str(), "Checking dimensions.");
+}
+
+#[test]
+fn run_tool_loop_retries_reasoning_only_response() {
+    let provider = MockProvider::new(vec![
+        LlmResponse {
+            content: String::new(),
+            reasoning_content: Some("Thinking without action.".into()),
+            tool_calls: Vec::new(),
+        },
+        LlmResponse {
+            content: "Now visible.".into(),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+        },
+    ]);
+    let result = run_tool_loop_with_registry_and_reasoning(
+        vec![LlmMessage::new("user", "design the pad")],
+        tool_context(AgentMode::Agent, None),
+        &provider,
+        &EchoExecutor,
+        &NoopToolLoopObserver,
+        &|_| true,
+        &|_| true,
+    );
+
+    assert_eq!(result.unwrap().content, "Now visible.");
+    let seen = provider.messages_seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen[1]
+            .iter()
+            .any(|message| message.role == "user" && message.content.contains("必须调用可用工具"))
     );
 }
 

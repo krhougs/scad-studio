@@ -11,10 +11,11 @@ import type {
 } from "./chat-zone";
 
 export type RuntimeMessage = {
-  readonly source: "history" | "stream" | "event";
+  readonly source: "history" | "stream" | "event" | "reasoning";
   readonly id: string;
   readonly record?: ChatMessageRecord;
   readonly streamText?: string;
+  readonly reasoningText?: string;
   readonly event?: AgentEvent;
 };
 
@@ -82,7 +83,9 @@ export function convertAll(
   if (!hasEvents) return result;
 
   let pendingText = "";
+  let pendingReasoning = "";
   let streamIndex = 0;
+  let reasoningIndex = 0;
   const flushStream = () => {
     if (!pendingText) return;
     result.push({
@@ -93,15 +96,33 @@ export function convertAll(
     streamIndex += 1;
     pendingText = "";
   };
+  const flushReasoning = () => {
+    if (!pendingReasoning) return;
+    result.push({
+      source: "reasoning",
+      id: `reasoning-${reasoningIndex}`,
+      reasoningText: pendingReasoning,
+    });
+    reasoningIndex += 1;
+    pendingReasoning = "";
+  };
 
   for (let i = 0; i < events.length; i++) {
     const event = events[i]!;
+    const reasoning = agentEventReasoning(event);
+    if (reasoning) {
+      flushStream();
+      pendingReasoning += reasoning;
+      continue;
+    }
     const token = agentEventToken(event);
     if (token) {
+      flushReasoning();
       pendingText += token;
       continue;
     }
     flushStream();
+    flushReasoning();
     result.push({
       source: "event",
       id: `evt-${i}-${event.event}`,
@@ -109,8 +130,9 @@ export function convertAll(
     });
   }
   flushStream();
+  flushReasoning();
 
-  return result;
+  return keepLatestReasoning(result);
 }
 
 export function historyHasRun(
@@ -139,6 +161,23 @@ function latestRunIdFromEvents(events: AgentEvent[]): string | null {
 export function convertMessage(msg: RuntimeMessage): ThreadMessageLike {
   if (msg.source === "history" && msg.record) {
     const r = msg.record;
+    const event = historyToolEvent(r);
+    if (event) {
+      return {
+        role: "assistant",
+        content: [
+          {
+            type: `data-${event.event}` as `data-${string}`,
+            data: extractEventPayload(event),
+          },
+        ],
+        id: r.message_id,
+        createdAt: new Date(r.ts_ms),
+        metadata: {
+          custom: { run_id: r.run_id ?? undefined },
+        },
+      };
+    }
     return {
       role: r.role === "user" ? "user" : "assistant",
       content: r.content,
@@ -171,7 +210,48 @@ export function convertMessage(msg: RuntimeMessage): ThreadMessageLike {
     };
   }
 
+  if (msg.source === "reasoning") {
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "data-agent.reasoning" as const,
+          data: {
+            event: "agent.reasoning",
+            text: msg.reasoningText ?? "",
+          },
+        },
+      ],
+      id: msg.id,
+    };
+  }
+
   return { role: "assistant", content: "", id: msg.id };
+}
+
+function historyToolEvent(record: ChatMessageRecord): AgentEvent | null {
+  const toolResult = record.tool_result;
+  if (toolResult && typeof toolResult === "object") {
+    return {
+      event: "agent.tool_result",
+      payload: objectPayload(toolResult),
+    };
+  }
+
+  const firstToolCall = Array.isArray(record.tool_calls)
+    ? record.tool_calls[0]
+    : null;
+  if (firstToolCall && typeof firstToolCall === "object") {
+    return {
+      event: "agent.tool_start",
+      payload: objectPayload(firstToolCall),
+    };
+  }
+  return null;
+}
+
+function objectPayload(value: object): Record<string, unknown> {
+  return value as Record<string, unknown>;
 }
 
 function extractEventPayload(
@@ -188,4 +268,24 @@ export function agentEventToken(event: AgentEvent): string | null {
   if (event.event !== "agent.token") return null;
   const text = event.payload?.["text"];
   return typeof text === "string" ? text : null;
+}
+
+export function agentEventReasoning(event: AgentEvent): string | null {
+  if (event.event !== "agent.reasoning") return null;
+  const text = event.payload?.["text"];
+  return typeof text === "string" ? text : null;
+}
+
+function keepLatestReasoning(messages: RuntimeMessage[]): RuntimeMessage[] {
+  let latestReasoning = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.source === "reasoning") {
+      latestReasoning = index;
+      break;
+    }
+  }
+  if (latestReasoning < 0) return messages;
+  return messages.filter(
+    (message, index) => message.source !== "reasoning" || index === latestReasoning,
+  );
 }

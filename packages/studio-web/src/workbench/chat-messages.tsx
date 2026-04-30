@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useState } from "react";
 import MarkdownPreview from "@uiw/react-markdown-preview";
 import rehypeSanitize from "rehype-sanitize";
 import type { AgentErrorType } from "@budn/app-server-protocol";
@@ -70,6 +70,7 @@ function ChatMessageItem() {
             by_name: {
               "agent.error": AgentErrorPart,
               "agent.plan_saved": PlanSavedPart,
+              "agent.reasoning": ReasoningPart,
             },
             Fallback: AgentEventPart,
           },
@@ -116,6 +117,19 @@ function PlanSavedPart(props: DataMessagePartProps) {
   );
 }
 
+function ReasoningPart(props: DataMessagePartProps) {
+  const text = stringField(props.data, "text");
+  return (
+    <div className="agent-reasoning" data-testid="agent-reasoning">
+      <div className="agent-reasoning__head">
+        <span className="agent-reasoning__pulse" />
+        <span>Thinking</span>
+      </div>
+      <div className="agent-reasoning__body">{text}</div>
+    </div>
+  );
+}
+
 function reconstructAgentEvent(
   name: string,
   data: Record<string, unknown>,
@@ -131,6 +145,7 @@ function ThinkingIndicator() {
   return (
     <ThreadPrimitive.If running>
       <div className="agent-thinking" data-testid="agent-thinking">
+        <span className="agent-thinking__label">Thinking</span>
         <span className="thinking-dot" />
         <span className="thinking-dot" />
         <span className="thinking-dot" />
@@ -193,8 +208,12 @@ export function AgentEventRow({
   onOpenPlan?: (path: unknown) => void;
   onRunPlan?: (plan: PlanRunAction) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (event.event === "agent.error") {
     return <AgentErrorCard event={event} />;
+  }
+  if (event.event === "agent.done") {
+    return <AgentDoneMark cancelled={event.payload?.["cancelled"] === true} />;
   }
   if (event.event === "agent.plan_saved") {
     const plan = parsePlanSavedEvent(event);
@@ -212,13 +231,55 @@ export function AgentEventRow({
   const label = event.event.replace("agent.", "");
   const detail = agentEventDetail(event);
   return (
-    <div className="agent-op">
-      <div className="op-head">
-        <span className={event.event === "agent.done" ? "ok" : undefined}>
-          {label}
-        </span>
+    <>
+      <button
+        type="button"
+        className="agent-op-line"
+        data-testid="agent-event-row"
+        onClick={() => setExpanded(true)}
+      >
+        <span>{label}</span>
+        <code>{agentEventSummary(event, detail)}</code>
+      </button>
+      {expanded ? (
+        <AgentEventModal
+          title={label}
+          detail={agentEventModalDetail(event)}
+          onClose={() => setExpanded(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function AgentDoneMark({ cancelled }: { cancelled: boolean }) {
+  return (
+    <div
+      className={`agent-done-mark${cancelled ? " is-cancelled" : ""}`}
+      data-testid="agent-done-mark"
+      aria-label={cancelled ? "assistant cancelled" : "assistant done"}
+    >
+      budn&apos;
+    </div>
+  );
+}
+
+function AgentEventModal(props: {
+  title: string;
+  detail: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="agent-event-modal-backdrop" data-testid="agent-event-modal">
+      <div className="agent-event-modal" role="dialog" aria-modal="true">
+        <div className="agent-event-modal__head">
+          <span>{props.title}</span>
+          <button type="button" onClick={props.onClose}>
+            close
+          </button>
+        </div>
+        <pre>{props.detail}</pre>
       </div>
-      <div className="op-detail">{detail}</div>
     </div>
   );
 }
@@ -308,6 +369,27 @@ function agentEventDetail(event: AgentEvent): string {
     return stringField(payload, "change_description") || "plan proposed";
   }
   return event.event;
+}
+
+function agentEventSummary(event: AgentEvent, detail: string): string {
+  const payload = event.payload ?? {};
+  const tool = stringField(payload, "tool_name");
+  if (tool) return tool;
+  if (event.event === "agent.tool_start") return detail || "started";
+  if (event.event === "agent.tool_result") return "result ready";
+  if (event.event === "agent.mesh_ready") return "mesh ready";
+  return detail || event.event;
+}
+
+function agentEventModalDetail(event: AgentEvent): string {
+  const payload = event.payload ?? {};
+  if (event.event === "agent.tool_result") return stringField(payload, "result_json");
+  if (event.event === "agent.tool_start") return stringField(payload, "args_json");
+  try {
+    return JSON.stringify({ event: event.event, ...payload }, null, 2);
+  } catch {
+    return agentEventDetail(event);
+  }
 }
 
 function parsePlanSavedEvent(event: AgentEvent): PlanPackageCardData | null {

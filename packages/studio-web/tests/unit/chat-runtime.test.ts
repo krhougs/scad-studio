@@ -5,6 +5,7 @@ import {
   convertAll,
   historyHasRun,
   agentEventToken,
+  agentEventReasoning,
   type RuntimeMessage,
 } from "../../src/workbench/chat-runtime";
 
@@ -59,6 +60,73 @@ describe("convertMessage", () => {
     expect(convertMessage(msg).role).toBe("assistant");
   });
 
+  it("converts history tool call placeholder to tool_start data", () => {
+    const msg: RuntimeMessage = {
+      source: "history",
+      id: "h-tool-start",
+      record: makeRecord({
+        message_id: "tool-start",
+        role: "assistant",
+        content: "agent tool started",
+        tool_calls: [
+          {
+            tool_call_id: "call-1",
+            tool_name: "get_project_context",
+            args_json: "{}",
+          },
+        ],
+      }),
+    };
+
+    const result = convertMessage(msg);
+
+    expect(result.role).toBe("assistant");
+    expect(result.content).toEqual([
+      {
+        type: "data-agent.tool_start",
+        data: {
+          event: "agent.tool_start",
+          tool_call_id: "call-1",
+          tool_name: "get_project_context",
+          args_json: "{}",
+        },
+      },
+    ]);
+  });
+
+  it("converts history tool result placeholder to tool_result data", () => {
+    const msg: RuntimeMessage = {
+      source: "history",
+      id: "h-tool-result",
+      record: makeRecord({
+        message_id: "tool-result",
+        role: "tool",
+        content: "agent tool completed",
+        tool_call_id: "call-1",
+        tool_result: {
+          tool_call_id: "call-1",
+          tool_name: "list_directory",
+          result_json: "{\"status\":\"error\"}",
+        },
+      }),
+    };
+
+    const result = convertMessage(msg);
+
+    expect(result.role).toBe("assistant");
+    expect(result.content).toEqual([
+      {
+        type: "data-agent.tool_result",
+        data: {
+          event: "agent.tool_result",
+          tool_call_id: "call-1",
+          tool_name: "list_directory",
+          result_json: "{\"status\":\"error\"}",
+        },
+      },
+    ]);
+  });
+
   it("includes createdAt from ts_ms", () => {
     const msg: RuntimeMessage = {
       source: "history",
@@ -102,6 +170,25 @@ describe("convertMessage", () => {
     ]);
   });
 
+  it("converts reasoning message to Thinking data part", () => {
+    const msg: RuntimeMessage = {
+      source: "reasoning",
+      id: "reasoning-0",
+      reasoningText: "Checking AirPods case dimensions.",
+    };
+    const result = convertMessage(msg);
+    expect(result.role).toBe("assistant");
+    expect(result.content).toEqual([
+      {
+        type: "data-agent.reasoning",
+        data: {
+          event: "agent.reasoning",
+          text: "Checking AirPods case dimensions.",
+        },
+      },
+    ]);
+  });
+
   it("event payload does not overwrite event name", () => {
     const msg: RuntimeMessage = {
       source: "event",
@@ -109,7 +196,9 @@ describe("convertMessage", () => {
       event: makeEvent("agent.done", { event: "should_be_overwritten" }),
     };
     const result = convertMessage(msg);
-    const data = (result.content as Array<{ data: Record<string, unknown> }>)[0]!.data;
+    const data = (
+      result.content as unknown as readonly { data: Record<string, unknown> }[]
+    )[0]!.data;
     expect(data.event).toBe("agent.done");
   });
 
@@ -161,6 +250,23 @@ describe("convertAll", () => {
     expect(result[1]!.event!.event).toBe("agent.tool_start");
     expect(result[2]!.source).toBe("stream");
     expect(result[2]!.streamText).toBe("part2");
+  });
+
+  it("shows only the latest reasoning block", () => {
+    const events: AgentEvent[] = [
+      makeEvent("agent.reasoning", { text: "older thought. " }),
+      makeEvent("agent.tool_start", { tool_name: "get_project_context" }),
+      makeEvent("agent.reasoning", { text: "newer " }),
+      makeEvent("agent.reasoning", { text: "thought." }),
+      makeEvent("agent.token", { text: "Final answer." }),
+    ];
+    const run: AgentRun = { session_id: "s", run_id: "r1" };
+    const result = convertAll([], events, run);
+    const reasoningMessages = result.filter((msg) => msg.source === "reasoning");
+
+    expect(reasoningMessages).toHaveLength(1);
+    expect(reasoningMessages[0]!.reasoningText).toBe("newer thought.");
+    expect(result.some((msg) => msg.reasoningText === "older thought. ")).toBe(false);
   });
 
   it("prefers events over history assistant for the same run", () => {
@@ -304,5 +410,15 @@ describe("agentEventToken", () => {
 
   it("returns empty string as valid token", () => {
     expect(agentEventToken(makeEvent("agent.token", { text: "" }))).toBe("");
+  });
+});
+
+describe("agentEventReasoning", () => {
+  it("extracts text from agent.reasoning event", () => {
+    expect(agentEventReasoning(makeEvent("agent.reasoning", { text: "thinking" }))).toBe("thinking");
+  });
+
+  it("returns null for non-reasoning events", () => {
+    expect(agentEventReasoning(makeEvent("agent.token", { text: "answer" }))).toBeNull();
   });
 });

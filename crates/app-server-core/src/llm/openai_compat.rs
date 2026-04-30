@@ -27,6 +27,16 @@ impl LlmProvider for OpenAiCompatibleProvider {
         tools: &[LlmToolDefinition],
         on_token: &dyn Fn(&str) -> bool,
     ) -> Result<LlmResponse, LlmError> {
+        self.stream_chat_with_reasoning(messages, tools, on_token, &|_| true)
+    }
+
+    fn stream_chat_with_reasoning(
+        &self,
+        messages: Vec<LlmMessage>,
+        tools: &[LlmToolDefinition],
+        on_token: &dyn Fn(&str) -> bool,
+        on_reasoning: &dyn Fn(&str) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
         let url = format!(
             "{}/chat/completions",
             self.config.base_url.trim_end_matches('/')
@@ -59,9 +69,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         }
 
         let reader = BufReader::new(response.into_body().into_reader());
-        let result = read_sse_stream(reader, on_token)?;
+        let result = read_sse_stream_with_reasoning(reader, on_token, on_reasoning)?;
 
-        if result.content.is_empty() && result.tool_calls.is_empty() {
+        if result.content.is_empty()
+            && result.tool_calls.is_empty()
+            && result.reasoning_content.is_none()
+        {
             return Err(LlmError {
                 message: "LLM returned empty response".into(),
             });
@@ -165,6 +178,14 @@ pub fn read_sse_stream(
     reader: BufReader<impl std::io::Read>,
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<LlmResponse, LlmError> {
+    read_sse_stream_with_reasoning(reader, on_token, &|_| true)
+}
+
+pub fn read_sse_stream_with_reasoning(
+    reader: BufReader<impl std::io::Read>,
+    on_token: &dyn Fn(&str) -> bool,
+    on_reasoning: &dyn Fn(&str) -> bool,
+) -> Result<LlmResponse, LlmError> {
     let mut content = String::new();
     let mut reasoning_content = String::new();
     let mut tool_acc = ToolCallAccumulator::new();
@@ -195,6 +216,9 @@ pub fn read_sse_stream(
         if let Some(text) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
             if !text.is_empty() {
                 reasoning_content.push_str(text);
+                if !on_reasoning(text) {
+                    break;
+                }
             }
         }
 

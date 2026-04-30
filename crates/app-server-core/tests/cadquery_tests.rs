@@ -134,6 +134,27 @@ fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
 }
 
 #[test]
+fn cadquery_runner_drains_large_stdout_before_process_exit() {
+    let root = temp_dir("cadquery-runner-large-stdout");
+    fs::create_dir_all(&root).expect("temp root");
+    let runner = fake_runner(&root, &large_success_json());
+
+    let result = run_cadquery_runner(&CadQueryRunConfig {
+        python: runner,
+        project_root: root.clone(),
+        script: "parts/top_lid.py".into(),
+        output_dir: root.join("outputs"),
+        export_formats: Vec::new(),
+        params_json: "{}".into(),
+        timeout: Duration::from_secs(2),
+    })
+    .expect("runner should drain stdout while child is running");
+
+    assert!(result.mesh.parts[0].faces[0].positions.len() > 64 * 1024);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cadquery_runner_maps_python_import_failure_to_error_kind() {
     let root = temp_dir("cadquery-python-import");
     fs::create_dir_all(&root).expect("temp root");
@@ -229,6 +250,16 @@ fn rejects_cadquery_export_hashes_that_do_not_match_exports() {
     );
     let err = parse_cadquery_success_json(&json).expect_err("missing export hash should fail");
     assert_eq!(err.code, ProtocolErrorCode::InvalidWireFrame);
+}
+
+fn large_success_json() -> String {
+    let coordinates = std::iter::repeat("0")
+        .take(90_000)
+        .collect::<Vec<_>>()
+        .join(",");
+    success_json()
+        .replace("[0,0,0,1,0,0,0,1,0]", &format!("[{coordinates}]"))
+        .replace("[0,0,1,0,0,1,0,0,1]", &format!("[{coordinates}]"))
 }
 
 fn fake_runner(root: &Path, stdout_json: &str) -> std::path::PathBuf {

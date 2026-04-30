@@ -316,11 +316,43 @@ pub fn run_tool_loop_with_registry(
     observer: &dyn ToolLoopObserver,
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<LlmResponse, LlmError> {
+    run_tool_loop_with_registry_and_reasoning(
+        initial_messages,
+        context,
+        provider,
+        executor,
+        observer,
+        on_token,
+        &|_| true,
+    )
+}
+
+pub fn run_tool_loop_with_registry_and_reasoning(
+    initial_messages: Vec<LlmMessage>,
+    context: AgentToolRunContext,
+    provider: &dyn LlmProvider,
+    executor: &dyn ToolExecutor,
+    observer: &dyn ToolLoopObserver,
+    on_token: &dyn Fn(&str) -> bool,
+    on_reasoning: &dyn Fn(&str) -> bool,
+) -> Result<LlmResponse, LlmError> {
     let tools = agent_tool_definitions_for_mode(context.mode);
     let mut messages = initial_messages;
     let mut last_content = String::new();
     for _ in 0..MAX_TOOL_ROUNDS {
-        let response = provider.stream_chat(messages.clone(), &tools, on_token)?;
+        let response = provider.stream_chat_with_reasoning(
+            messages.clone(),
+            &tools,
+            on_token,
+            on_reasoning,
+        )?;
+        if response.content.trim().is_empty()
+            && !response.has_tool_calls()
+            && response.reasoning_content.is_some()
+        {
+            messages.push(reasoning_only_retry_message());
+            continue;
+        }
         if !response.has_tool_calls() {
             return Ok(response);
         }
@@ -346,6 +378,13 @@ pub fn run_tool_loop_with_registry(
         reasoning_content: None,
         tool_calls: Vec::new(),
     })
+}
+
+fn reasoning_only_retry_message() -> LlmMessage {
+    LlmMessage::new(
+        "user",
+        "上一轮只返回了 reasoning_content，没有正文或工具调用。请现在停止只思考的输出：如果任务需要读取、生成或修改项目文件，必须调用可用工具；否则返回面向用户的正文。",
+    )
 }
 
 fn execute_registry_tool(

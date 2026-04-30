@@ -69,7 +69,12 @@ fn decode_frame<T: borsh::BorshDeserialize>(bytes: &[u8]) -> Result<T, ProtocolE
     }
     borsh::from_slice(&bytes[HEADER_LEN..]).map_err(|error| {
         let payload = &bytes[HEADER_LEN..];
-        let hex: String = payload.iter().take(80).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+        let hex: String = payload
+            .iter()
+            .take(80)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         ProtocolError::new(
             classify_decode_error(&error.to_string()),
             format!(

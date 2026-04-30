@@ -1,12 +1,12 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
-    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
-    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
-    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
-    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
-    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
+    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent, AgentReasoningEvent,
+    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
+    CURRENT_PROTOCOL_VERSION, CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind,
+    CadQueryPartMesh, CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse,
+    ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse,
+    ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
     ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
@@ -502,6 +502,16 @@ fn agent_push_events_and_busy_error_roundtrip() {
     });
     let decoded = decode_server_frame(&encode_server_frame(&token).unwrap()).unwrap();
     assert_eq!(decoded, token);
+
+    let reasoning = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentReasoning(AgentReasoningEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            text: "Checking proportions.".into(),
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&reasoning).unwrap()).unwrap();
+    assert_eq!(decoded, reasoning);
 
     let tool_start = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::AgentToolStart(AgentToolStartEvent {

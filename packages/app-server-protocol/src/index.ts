@@ -5,6 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
+export const CURRENT_PROTOCOL_VERSION = 5;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -449,6 +450,12 @@ export interface AgentTokenEvent {
   text: string;
 }
 
+export interface AgentReasoningEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  text: string;
+}
+
 export interface AgentToolStartEvent {
   session_id: ChatSessionId;
   run_id: string;
@@ -628,6 +635,7 @@ export type ServerPushEvent =
   | { event: "watch.changed"; payload: WatchChangedEvent }
   | { event: "watch.error"; payload: WatchErrorEvent }
   | { event: "agent.token"; payload: AgentTokenEvent }
+  | { event: "agent.reasoning"; payload: AgentReasoningEvent }
   | { event: "agent.tool_start"; payload: AgentToolStartEvent }
   | { event: "agent.tool_result"; payload: AgentToolResultEvent }
   | { event: "agent.mesh_ready"; payload: AgentMeshReadyEvent }

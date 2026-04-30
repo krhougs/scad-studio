@@ -50,6 +50,8 @@ export type ChatMessageRecord = {
   ts_ms: number;
   role: "user" | "assistant" | "tool" | "meta";
   content: string;
+  related_files?: unknown[];
+  tool_call_id?: string | null;
   tool_calls?: unknown[];
   tool_result?: unknown | null;
   mesh_result?: unknown | null;

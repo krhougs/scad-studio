@@ -4,14 +4,15 @@ use app_server_core::ChatStore;
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentPlanConfirmRequest, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
-    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
-    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
-    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
-    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
-    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
+    AgentPlanConfirmRequest, CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest,
+    CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest,
+    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole, ChatSendRequest,
+    ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand, ClientPlatform,
+    ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest, HostLocalPath,
+    PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
+    ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId, WorkspaceListRequest,
+    web_file_read_capability,
 };
 
 #[test]
@@ -35,7 +36,7 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         .handshake(handshake_request())
         .expect("handshake should negotiate");
     assert_eq!(handshake.session_token.0, "session-1");
-    assert_eq!(handshake.negotiated_version, 4);
+    assert_eq!(handshake.negotiated_version, CURRENT_PROTOCOL_VERSION);
 
     let current = dispatcher.dispatch_envelope(ClientRequestEnvelope {
         request_id: RequestId(1),
@@ -241,6 +242,32 @@ fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
     assert_eq!(restarted.session_id, session_id);
 
     wait_for_done(&pushes, &restarted.run_id);
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
+    let workspace = temp_workspace("dispatcher-agent-llm-error-history");
+    let _llm_env =
+        EnvGuard::unset_many(&["BUDN_LLM_CONFIG", "BUDN_LLM_BASE_URL", "BUDN_LLM_API_KEY"]);
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat(&mut dispatcher, "agent error", Vec::new()).session_id;
+
+    let started = invoke_agent(&mut dispatcher, 35, &session_id, "create a small part")
+        .expect("agent starts");
+    wait_for_done(&pushes, &started.run_id);
+
+    let history = read_chat_history(&mut dispatcher, &session_id);
+    let assistant = history
+        .iter()
+        .find(|message| {
+            message.role == ChatRole::Assistant
+                && message.run_id.as_deref() == Some(started.run_id.as_str())
+        })
+        .expect("agent failure should be persisted as assistant history");
+    assert!(assistant.content.contains("Agent run failed"));
+    assert!(assistant.content.contains("LLM not configured"));
+
     cleanup_workspace(&workspace);
 }
 
@@ -779,7 +806,10 @@ fn wait_for_done(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
 }
 
 fn handshake_request() -> CapabilityHandshakeRequest {
-    handshake_request_with_version(ProtocolVersionRange::new(4, 4))
+    handshake_request_with_version(ProtocolVersionRange::new(
+        CURRENT_PROTOCOL_VERSION,
+        CURRENT_PROTOCOL_VERSION,
+    ))
 }
 
 fn handshake_request_with_version(
@@ -922,8 +952,7 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 struct EnvGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -937,7 +966,26 @@ impl EnvGuard {
             std::env::set_var(key, value);
         }
         Self {
-            key,
+            previous: vec![(key, previous)],
+            _lock: lock,
+        }
+    }
+
+    fn unset_many(keys: &[&'static str]) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = keys
+            .iter()
+            .map(|key| {
+                let previous = std::env::var_os(key);
+                unsafe {
+                    std::env::remove_var(key);
+                }
+                (*key, previous)
+            })
+            .collect();
+        Self {
             previous,
             _lock: lock,
         }
@@ -946,11 +994,13 @@ impl EnvGuard {
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
-        unsafe {
-            if let Some(value) = &self.previous {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
+        for (key, previous) in &self.previous {
+            unsafe {
+                if let Some(value) = previous {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }

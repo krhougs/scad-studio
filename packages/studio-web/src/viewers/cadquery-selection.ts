@@ -37,6 +37,24 @@ export function selectionRefFromCadQueryPick(
   return vertexSelection(scene, part, pick.vertexIndex);
 }
 
+export function selectionRefFromCadQueryFeature(
+  scene: CadQueryScenePayload,
+  partIndex: number,
+  feature: string,
+): SelectionRef {
+  const part = scene.parts[partIndex];
+  if (!part) throw new Error("cadquery feature selection out of range");
+  return baseSelection({
+    kind: "feature",
+    refText: `@feature[${ownerIdFromRef(part.refText)}.${feature}]`,
+    ownerRefText: part.refText,
+    ownerObjectKind: part.objectKind,
+    instancePath: part.instancePath,
+    buildId: scene.buildId,
+    resultId: scene.resultId,
+  });
+}
+
 export function updateCadQuerySelection(
   previous: SelectionRef[],
   next: SelectionRef,
@@ -48,6 +66,17 @@ export function updateCadQuerySelection(
     ...previous.filter((item) => cadQuerySelectionKey(item) !== key),
     next,
   ];
+}
+
+export function toggleCadQuerySelection(
+  previous: SelectionRef[],
+  next: SelectionRef,
+): SelectionRef[] {
+  const key = cadQuerySelectionKey(next);
+  if (previous.some((item) => cadQuerySelectionKey(item) === key)) {
+    return previous.filter((item) => cadQuerySelectionKey(item) !== key);
+  }
+  return [...previous, next];
 }
 
 export function cadQuerySelectionKey(selection: SelectionRef): string {

@@ -83,7 +83,14 @@ impl ChatStore {
         related_files: Vec<PathHandle>,
         tool_call_id: Option<String>,
     ) -> Result<ChatAckResponse, ProtocolError> {
-        self.append_message_with_run_id(session_id, role, content, related_files, tool_call_id, None)
+        self.append_message_with_run_id(
+            session_id,
+            role,
+            content,
+            related_files,
+            tool_call_id,
+            None,
+        )
     }
 
     pub fn append_message_with_run_id(
@@ -130,7 +137,8 @@ impl ChatStore {
         tool_call: ChatToolCallRecord,
         run_id: Option<String>,
     ) -> Result<ChatAckResponse, ProtocolError> {
-        let mut message = self.next_message_with_run_id(session_id, ChatRole::Assistant, content, run_id)?;
+        let mut message =
+            self.next_message_with_run_id(session_id, ChatRole::Assistant, content, run_id)?;
         message.tool_call_id = Some(tool_call.tool_call_id.clone());
         message.tool_calls.push(tool_call);
         self.append_record(session_id, message)
@@ -154,7 +162,8 @@ impl ChatStore {
         mesh_result: Option<app_server_protocol::CadQueryResultReady>,
         run_id: Option<String>,
     ) -> Result<ChatAckResponse, ProtocolError> {
-        let mut message = self.next_message_with_run_id(session_id, ChatRole::Tool, content, run_id)?;
+        let mut message =
+            self.next_message_with_run_id(session_id, ChatRole::Tool, content, run_id)?;
         message.tool_call_id = Some(tool_result.tool_call_id.clone());
         message.tool_result = Some(tool_result);
         message.mesh_result = mesh_result;

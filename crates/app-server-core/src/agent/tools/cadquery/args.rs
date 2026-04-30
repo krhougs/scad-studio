@@ -104,9 +104,47 @@ pub(super) fn validate_contract_for_run(
     } else {
         Err(tool_error_json(
             call,
-            "CadQuery source contract is not satisfied",
+            &format!(
+                "CadQuery source contract is not satisfied: {}. Required source shape includes a module-level REFS dict like {} and a build(params=None) function.",
+                contract_failure_summary(&contract),
+                refs_example_for_type(request.target_type),
+            ),
             "invalid_arguments",
         ))
+    }
+}
+
+fn contract_failure_summary(contract: &super::support::SourceContract) -> String {
+    let mut missing = Vec::new();
+    if !contract.has_build_function {
+        missing.push("missing build(params=None)");
+    }
+    if !contract.has_refs {
+        missing.push("missing REFS.features");
+    }
+    if !contract.target_type_matches {
+        missing.push("REFS.type does not match target_type");
+    }
+    if !contract.invalid_imports.is_empty() {
+        missing.push("invalid imports");
+    }
+    if !contract.unsafe_calls.is_empty() {
+        missing.push("unsafe calls");
+    }
+    missing.join(", ")
+}
+
+fn refs_example_for_type(target_type: CadQueryObjectKind) -> &'static str {
+    match target_type {
+        CadQueryObjectKind::Part => {
+            r#"REFS = {"type":"part","features":{"part_body":{},"placement_pocket":{},"access_notch":{}}}"#
+        }
+        CadQueryObjectKind::Component => {
+            r#"REFS = {"type":"component","features":{"component_body":{},"mounting_feature":{}}}"#
+        }
+        CadQueryObjectKind::Assembly => {
+            r#"REFS = {"type":"assembly","features":{"primary_instance":{},"secondary_instance":{}}}"#
+        }
     }
 }
 

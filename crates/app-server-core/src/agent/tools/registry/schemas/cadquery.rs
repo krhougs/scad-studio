@@ -172,7 +172,9 @@ fn cadquery_source_properties(extra: Value) -> Value {
     );
     properties.insert(
         "code".into(),
-        string_schema("Complete CadQuery Python source."),
+        string_schema(
+            "Complete CadQuery Python source. Must include module-level MODEL_DESCRIPTION, MODEL_DETAILS, descriptive REFS = {\"type\":\"part|component|assembly\",\"features\":{\"human_readable_feature_name\":{}}}, and def build(params=None): ... returning the model.",
+        ),
     );
     Value::Object(properties)
 }
@@ -183,6 +185,7 @@ fn contract_schema() -> Value {
             "target_type_matches": {"type": "boolean"},
             "has_build_function": {"type": "boolean"},
             "has_refs": {"type": "boolean"},
+            "has_model_description": {"type": "boolean"},
             "unsafe_calls": string_array_schema(),
             "invalid_imports": string_array_schema()
         }),
@@ -190,6 +193,7 @@ fn contract_schema() -> Value {
             "target_type_matches",
             "has_build_function",
             "has_refs",
+            "has_model_description",
             "unsafe_calls",
             "invalid_imports",
         ],

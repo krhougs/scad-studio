@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CURRENT_PROTOCOL_VERSION,
   initProtocolWasm,
   protocol_decode_server_frame,
   type AgentInvokeRequest,
@@ -36,7 +37,10 @@ describe("protocol package import", () => {
 
   it("exposes CadQuery protocol types from the package entrypoint", () => {
     const capabilities: ServerCapabilities = {
-      protocol_version: { min: 4, max: 4 },
+      protocol_version: {
+        min: CURRENT_PROTOCOL_VERSION,
+        max: CURRENT_PROTOCOL_VERSION,
+      },
       reconnect_window_ms: 30_000,
       supports_watch: true,
       supported_preview_kinds: ["geometry_artifact"],

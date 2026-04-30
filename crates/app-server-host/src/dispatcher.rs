@@ -11,17 +11,17 @@ use app_server_core::{
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
-    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
-    CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
-    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
-    ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
-    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, SelectionUpdateRequest,
-    SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
-    WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
-    negotiate_protocol_version,
+    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentReasoningEvent,
+    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
+    CURRENT_PROTOCOL_VERSION, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord,
+    ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
+    DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse, FileWriteTextResponse, HostLocalPath,
+    PathHandle, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
+    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionReclaimedResponse, SessionToken,
+    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
+    WorkspaceListResponse, negotiate_protocol_version,
 };
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -38,6 +38,7 @@ use crate::HostSession;
 pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 
 const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
+const CADQUERY_RUNNER_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug)]
 struct CadQueryResultCache {
@@ -257,7 +258,7 @@ impl HostRequestDispatcher {
                     output_dir: staged.output_dir(),
                     export_formats: request.export_formats,
                     params_json: request.params_json,
-                    timeout: Duration::from_secs(60),
+                    timeout: CADQUERY_RUNNER_TIMEOUT,
                 })
                 .map_err(internal_error)?;
                 let ready = result.ready.clone();
@@ -673,7 +674,7 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
                 output_dir: staged.output_dir(),
                 export_formats: Vec::new(),
                 params_json: request.params_json,
-                timeout: Duration::from_secs(60),
+                timeout: CADQUERY_RUNNER_TIMEOUT,
             },
             &|| self.run.cancelled.load(Ordering::SeqCst),
         )
@@ -708,7 +709,7 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
                 output_dir: staged.output_dir(),
                 export_formats: request.export_formats.clone(),
                 params_json: request.params_json,
-                timeout: Duration::from_secs(60),
+                timeout: CADQUERY_RUNNER_TIMEOUT,
             },
             &|| self.run.cancelled.load(Ordering::SeqCst),
         )
@@ -851,11 +852,18 @@ fn run_text_agent(worker: AgentWorker) {
     let provider = match app_server_core::llm::create_provider() {
         Ok(p) => p,
         Err(error) => {
+            let message = error.message;
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
                 AgentErrorType::LlmError,
-                error.message,
+                message.clone(),
+            );
+            append_agent_error_message(
+                &worker.workspace_root,
+                &worker.run,
+                AgentErrorType::LlmError,
+                &message,
             );
             finish_agent_worker(worker, false);
             return;
@@ -881,7 +889,9 @@ fn run_text_agent(worker: AgentWorker) {
     if matches!(worker.mode, AgentMode::Plan) {
         try_propose_plan(&worker, saved_plan.as_ref());
     }
-    append_agent_message(&worker.workspace_root, &worker.run, &response_text);
+    if !response_text.trim().is_empty() {
+        append_agent_message(&worker.workspace_root, &worker.run, &response_text);
+    }
     finish_agent_worker(worker, false);
 }
 
@@ -957,11 +967,18 @@ fn run_text_agent_llm(
     let execution_scope = match execution_scope_for_worker(worker, mode) {
         Ok(scope) => scope,
         Err(error) => {
+            let message = error.message;
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
                 AgentErrorType::PermissionDenied,
-                error.message,
+                message.clone(),
+            );
+            append_agent_error_message(
+                &worker.workspace_root,
+                &worker.run,
+                AgentErrorType::PermissionDenied,
+                &message,
             );
             return None;
         }
@@ -1000,7 +1017,7 @@ fn run_text_agent_llm(
     let push_sink = Arc::clone(&worker.push_sink);
     let run = worker.run.clone();
     let cancelled = Arc::clone(&worker.run.cancelled);
-    match app_server_core::stream_agent_turn_with_tools(
+    match app_server_core::stream_agent_turn_with_tools_and_reasoning(
         input,
         provider,
         &tool_executor,
@@ -1013,14 +1030,28 @@ fn run_text_agent_llm(
             push_agent_token(&push_sink, &run, token);
             true
         },
+        &|delta| {
+            if cancelled.load(Ordering::SeqCst) {
+                return false;
+            }
+            push_agent_reasoning(&push_sink, &run, delta);
+            true
+        },
     ) {
         Ok(draft) => Some(draft.text),
         Err(error) => {
+            let message = error.message;
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
                 AgentErrorType::LlmError,
-                error.message,
+                message.clone(),
+            );
+            append_agent_error_message(
+                &worker.workspace_root,
+                &worker.run,
+                AgentErrorType::LlmError,
+                &message,
             );
             None
         }
@@ -1153,6 +1184,19 @@ fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &s
     );
 }
 
+fn append_agent_error_message(
+    workspace_root: &Path,
+    run: &AgentRunHandle,
+    error_type: AgentErrorType,
+    message: &str,
+) {
+    append_agent_message(
+        workspace_root,
+        run,
+        &format!("Agent run failed ({error_type:?}): {message}"),
+    );
+}
+
 fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmToolCall) {
     let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_call(
         &run.session_id,
@@ -1186,6 +1230,16 @@ fn append_llm_tool_result(
 fn push_agent_token(push_sink: &ServerPushSink, run: &AgentRunHandle, text: &str) {
     (push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentToken(AgentTokenEvent {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+            text: text.to_owned(),
+        }),
+    });
+}
+
+fn push_agent_reasoning(push_sink: &ServerPushSink, run: &AgentRunHandle, text: &str) {
+    (push_sink)(ServerPushEnvelope {
+        event: ServerPushEvent::AgentReasoning(AgentReasoningEvent {
             session_id: run.session_id.clone(),
             run_id: run.run_id.clone(),
             text: text.to_owned(),
@@ -1243,12 +1297,7 @@ fn push_agent_error(
     message: impl Into<String>,
 ) {
     let msg = message.into();
-    log::error!(
-        "[agent run={}] {:?}: {}",
-        run.run_id,
-        error_type,
-        msg
-    );
+    log::error!("[agent run={}] {:?}: {}", run.run_id, error_type, msg);
     (push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentError(AgentErrorEvent {
             session_id: run.session_id.clone(),

@@ -612,6 +612,51 @@ describe("ChatZone", () => {
     );
 
     await waitFor(() => expect(screen.getByTestId("agent-thinking")).toBeTruthy());
+    expect(screen.getByTestId("agent-thinking").textContent).toContain("Thinking");
+  });
+
+  it("renders the latest live reasoning process with a Thinking label", async () => {
+    const client = fakeClient();
+    setSnapshot({
+      ...chatSnapshot(),
+      agent_run: { session_id: "main", run_id: "run-main" },
+      agent_events: [
+        {
+          event: "agent.reasoning",
+          payload: {
+            session_id: "main",
+            run_id: "run-main",
+            text: "First reasoning step.",
+          },
+        },
+        {
+          event: "agent.tool_start",
+          payload: {
+            session_id: "main",
+            run_id: "run-main",
+            tool_name: "cadquery_execute",
+          },
+        },
+        {
+          event: "agent.reasoning",
+          payload: {
+            session_id: "main",
+            run_id: "run-main",
+            text: "Latest reasoning step.",
+          },
+        },
+      ],
+    });
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("agent-reasoning")).toBeTruthy());
+    expect(screen.getByTestId("agent-reasoning").textContent).toContain("Thinking");
+    expect(screen.getByText("Latest reasoning step.")).toBeTruthy();
+    expect(screen.queryByText("First reasoning step.")).toBeNull();
   });
 
   it("scrolls chat body to the newest live content", async () => {

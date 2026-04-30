@@ -4,7 +4,7 @@ use app_server_core::llm::{
 };
 use app_server_core::{
     AgentCadQueryCodeInput, AgentExecutionScope, AgentTurnInput, build_execute_messages,
-    build_turn_context, build_turn_messages, extract_cadquery_code,
+    build_turn_context, build_turn_messages, cadquery_agent_system_prompt, extract_cadquery_code,
 };
 use app_server_protocol::{
     AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
@@ -21,6 +21,16 @@ fn extract_cadquery_code_from_python_fenced_block() {
         code,
         "import cadquery as cq\nresult = cq.Workplane().box(10, 10, 10)"
     );
+}
+
+#[test]
+fn cadquery_agent_prompt_requires_model_description_and_named_refs() {
+    let prompt = cadquery_agent_system_prompt();
+    assert!(prompt.contains("MODEL_DESCRIPTION"));
+    assert!(prompt.contains("MODEL_DETAILS"));
+    assert!(prompt.contains("REFS.features"));
+    assert!(prompt.contains("export_formats"));
+    assert!(prompt.contains("export_targets"));
 }
 
 #[test]
@@ -166,6 +176,36 @@ fn read_sse_stream_collects_reasoning_content_without_emitting_tokens() {
     );
     assert_eq!(response.content, "Done");
     assert_eq!(tokens.into_inner(), vec!["Done"]);
+}
+
+#[test]
+fn read_sse_stream_forwards_reasoning_deltas_to_callback() {
+    let sse_data = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Thinking \"},\"index\":0}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"through dimensions.\"},\"index\":0}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"index\":0}]}\n\n\
+                    data: [DONE]\n\n";
+    let reader = Cursor::new(sse_data.as_bytes());
+
+    let reasoning = RefCell::new(Vec::new());
+    let result = app_server_core::llm::read_sse_stream_with_reasoning(
+        std::io::BufReader::new(reader),
+        &|_| true,
+        &|delta| {
+            reasoning.borrow_mut().push(delta.to_owned());
+            true
+        },
+    );
+
+    let response = result.unwrap();
+    assert_eq!(response.content, "Done");
+    assert_eq!(
+        response.reasoning_content.as_deref(),
+        Some("Thinking through dimensions.")
+    );
+    assert_eq!(
+        reasoning.into_inner(),
+        vec!["Thinking ", "through dimensions."]
+    );
 }
 
 #[test]

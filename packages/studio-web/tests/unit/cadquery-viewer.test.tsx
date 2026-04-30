@@ -13,6 +13,7 @@ import type { CadQueryPickTarget } from "../../src/viewers/cadquery-selection";
 const viewer = {
   setCadQueryMesh: vi.fn(),
   setCadQuerySelectionMode: vi.fn(),
+  setCadQuerySelectionEnabled: vi.fn(),
   setCadQuerySelectedKeys: vi.fn(),
   setOptions: vi.fn(),
   resize: vi.fn(),
@@ -119,6 +120,27 @@ describe("CadQueryViewer", () => {
         screen.getByTestId("cadquery-selection-status").textContent,
       ).toContain("@feature[top_lid.top_surface]"),
     );
+  });
+
+  it("hides selection chrome and disables CadQuery picking in preview mode", async () => {
+    const client = fakeClient({ ambiguous: false });
+
+    render(
+      <CadQueryViewer
+        resultId="cq_123"
+        client={client}
+        label="top_lid"
+        selectionMode="face"
+        interactionMode="preview"
+        onPreviewStatus={() => undefined}
+        onInfo={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(viewer.setCadQueryMesh).toHaveBeenCalled());
+    expect(viewer.setCadQuerySelectionEnabled).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId("cadquery-select-dock")).toBeNull();
+    expect(screen.queryByTestId("cadquery-selection-status")).toBeNull();
   });
 });
 

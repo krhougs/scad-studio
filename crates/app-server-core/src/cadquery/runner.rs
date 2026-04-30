@@ -1,7 +1,8 @@
 use std::{
+    io::Read,
     path::PathBuf,
-    process::{Command, Output, Stdio},
-    thread,
+    process::{Child, Command, Output, Stdio},
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -96,33 +97,79 @@ fn wait_with_timeout(
     timeout: Duration,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<Output, CadQueryRunnerError> {
+    let stdout_reader = pipe_reader(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| error_io("CadQuery runner stdout pipe was not available"))?,
+        "stdout",
+    );
+    let stderr_reader = pipe_reader(
+        child
+            .stderr
+            .take()
+            .ok_or_else(|| error_io("CadQuery runner stderr pipe was not available"))?,
+        "stderr",
+    );
     let started = Instant::now();
     while started.elapsed() < timeout {
         if is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child(child);
+            let _ = join_pipe_reader(stdout_reader, "stdout");
+            let _ = join_pipe_reader(stderr_reader, "stderr");
             return Err(CadQueryRunnerError {
                 kind: CadQueryRunnerErrorKind::Cancelled,
                 message: "CadQuery runner 已取消".into(),
             });
         }
-        if child
+        if let Some(status) = child
             .try_wait()
             .map_err(|error| error_io(format!("轮询 CadQuery runner 失败: {error}")))?
-            .is_some()
         {
-            return child
-                .wait_with_output()
-                .map_err(|error| error_io(format!("读取 CadQuery runner 输出失败: {error}")));
+            return Ok(Output {
+                status,
+                stdout: join_pipe_reader(stdout_reader, "stdout")?,
+                stderr: join_pipe_reader(stderr_reader, "stderr")?,
+            });
         }
         thread::sleep(Duration::from_millis(10));
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    terminate_child(child);
+    let _ = join_pipe_reader(stdout_reader, "stdout");
+    let _ = join_pipe_reader(stderr_reader, "stderr");
     Err(CadQueryRunnerError {
         kind: CadQueryRunnerErrorKind::Timeout,
         message: "CadQuery runner 执行超时".into(),
     })
+}
+
+fn pipe_reader<R>(mut reader: R, label: &'static str) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::Builder::new()
+        .name(format!("cadquery-runner-{label}-reader"))
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+        .expect("spawn CadQuery runner pipe reader")
+}
+
+fn join_pipe_reader(
+    handle: JoinHandle<std::io::Result<Vec<u8>>>,
+    label: &str,
+) -> Result<Vec<u8>, CadQueryRunnerError> {
+    let result = handle
+        .join()
+        .map_err(|_| error_io(format!("CadQuery runner {label} reader panicked")))?;
+    result.map_err(|error| error_io(format!("读取 CadQuery runner {label} 失败: {error}")))
+}
+
+fn terminate_child(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn parse_runner_output(output: Output) -> Result<CadQueryRunResult, CadQueryRunnerError> {

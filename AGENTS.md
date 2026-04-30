@@ -74,6 +74,7 @@
 
 - **严禁偷懒**: 不得留 TODO，不得写简化版本，不得因编译问题乱改结构。
 - **禁止猜测**: 必须查阅源码或文档（Context7），验证 API 行为后再写。
+- **禁止测试场景污染产品代码**: 产品代码、能力层代码和通用 protocol 中不得写入只服务特定测试用例、验收 prompt、演示模型或一次性业务场景的常量、命名、分支逻辑或提示文本。测试可以覆盖具体场景，但实现必须表达通用产品契约。
 
 ## 代码规模约束
 
@@ -179,6 +180,7 @@
 - transport 必须以 trait 抽象；transport 与 protocol 必须彻底分离。
 - protocol 只描述命令、事件、错误、能力与数据模型，不绑定 HTTP、WebSocket、`tokio::mpsc` 或平台私有类型。
 - protocol 设计必须显式考虑平台差异和 I/O 差异，例如：同步/异步完成、文件系统可见路径差异、能力协商、错误模型、取消语义、watch 事件节流与重连。
+- `app-server-core`、`app-server-protocol` 与 transport 层只能表达通用能力、产品契约和领域无关示例；禁止出现只属于某个验收用例、E2E 场景、临时 prompt 或演示对象的具体语义命名。若测试需要具体对象名称，应放在测试 fixture、prompt 存档、生成的 workspace 文件或测试断言中，不得反向写入能力层实现。
 
 #### 2. 根 crate 与 workspace 关系
 
@@ -242,6 +244,7 @@
 - CadQuery 执行必须使用 staging 目录保障原子性：执行成功且冲突检测通过后才能回写真实 workspace；失败、超时或取消不得污染真实文件。
 - CadQuery mesh、topology、feature map 和 selection 相关数据必须通过 `app-server-protocol` 承载；前端不得绕过 protocol 读取 runner 输出或自行从文件名、路径、instance path 推断 Ref。
 - MVP 用户可见 Ref 仅包含 component / part / assembly、instance、feature、face / edge / vertex 五类；selector 只允许作为 Agent / runner 内部查找手段，subshape 不作为 MVP 用户可见层级。
+- CadQuery Agent 的 system prompt、tool schema、contract warning 和 runner 错误信息可以要求模型包含说明文本、稳定 Ref、语义化命名和同步导出，但示例必须保持领域无关；不得把具体建模case和其他当前验收任务的对象名称固化进前端、后端、`app-server` 通用代码。
 
 ### 透明沟通与进度同步
 

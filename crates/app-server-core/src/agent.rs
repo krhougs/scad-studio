@@ -337,14 +337,35 @@ pub fn stream_agent_turn_with_tools(
     tool_observer: &dyn tools::ToolLoopObserver,
     on_token: &dyn Fn(&str) -> bool,
 ) -> Result<AgentTurnDraft, AgentBackendError> {
+    stream_agent_turn_with_tools_and_reasoning(
+        input,
+        provider,
+        tool_executor,
+        tool_context,
+        tool_observer,
+        on_token,
+        &|_| true,
+    )
+}
+
+pub fn stream_agent_turn_with_tools_and_reasoning(
+    input: AgentTurnInput,
+    provider: &dyn LlmProvider,
+    tool_executor: &dyn tools::ToolExecutor,
+    tool_context: tools::AgentToolRunContext,
+    tool_observer: &dyn tools::ToolLoopObserver,
+    on_token: &dyn Fn(&str) -> bool,
+    on_reasoning: &dyn Fn(&str) -> bool,
+) -> Result<AgentTurnDraft, AgentBackendError> {
     let messages = build_turn_messages(&input);
-    let response = tools::run_tool_loop_with_registry(
+    let response = tools::run_tool_loop_with_registry_and_reasoning(
         messages,
         tool_context,
         provider,
         tool_executor,
         tool_observer,
         on_token,
+        on_reasoning,
     )
     .map_err(|err| AgentBackendError {
         message: err.message,

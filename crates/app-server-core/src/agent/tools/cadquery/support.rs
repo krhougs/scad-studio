@@ -12,6 +12,7 @@ pub(super) struct SourceContract {
     pub(super) target_type_matches: bool,
     pub(super) has_build_function: bool,
     pub(super) has_refs: bool,
+    pub(super) has_model_description: bool,
     pub(super) unsafe_calls: Vec<&'static str>,
     pub(super) invalid_imports: Vec<String>,
 }
@@ -32,6 +33,7 @@ pub(super) fn analyze_success(
         "target_type": target_type_label(target_type_from_path(target_path)),
         "has_build_function": has_build_function(source),
         "has_refs": has_refs(source),
+        "has_model_description": has_model_description(source),
         "paired_doc_path": include_paired_doc.then(|| paired_doc_path(workspace_root, target_path)).flatten(),
         "local_dependencies": if include_dependencies { local_dependencies(source) } else { Vec::new() },
         "ref_keys": feature_keys(source),
@@ -49,6 +51,7 @@ pub(super) fn source_contract(
             == expected_type,
         has_build_function: has_build_function(source),
         has_refs: has_refs(source),
+        has_model_description: has_model_description(source),
         unsafe_calls: unsafe_calls(source),
         invalid_imports: invalid_project_imports(source),
     }
@@ -59,6 +62,7 @@ pub(super) fn contract_json(contract: &SourceContract) -> Value {
         "target_type_matches": contract.target_type_matches,
         "has_build_function": contract.has_build_function,
         "has_refs": contract.has_refs,
+        "has_model_description": contract.has_model_description,
         "unsafe_calls": contract.unsafe_calls,
         "invalid_imports": contract.invalid_imports
     })
@@ -70,7 +74,14 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
         warnings.push("missing build function");
     }
     if !contract.has_refs {
-        warnings.push("missing REFS features");
+        warnings.push(
+            "missing REFS.features; add e.g. REFS = {\"type\":\"part\",\"features\":{\"part_body\":{},\"placement_pocket\":{},\"access_notch\":{}}}",
+        );
+    }
+    if !contract.has_model_description {
+        warnings.push(
+            "missing MODEL_DESCRIPTION / MODEL_DETAILS; add a concise purpose string and structured model details for file-list preview and human review",
+        );
     }
     if !contract.target_type_matches {
         warnings.push("target type does not match REFS type");
@@ -195,6 +206,10 @@ fn has_refs(source: &str) -> bool {
     source.contains("REFS") && source.contains("features")
 }
 
+fn has_model_description(source: &str) -> bool {
+    source.contains("MODEL_DESCRIPTION") && source.contains("MODEL_DETAILS")
+}
+
 fn declared_type(source: &str) -> Option<CadQueryObjectKind> {
     for (needle, kind) in [
         ("\"type\":\"part\"", CadQueryObjectKind::Part),
@@ -284,6 +299,9 @@ fn analyze_warnings(source: &str) -> Vec<&'static str> {
     }
     if !has_refs(source) {
         warnings.push("missing REFS features");
+    }
+    if !has_model_description(source) {
+        warnings.push("missing MODEL_DESCRIPTION / MODEL_DETAILS");
     }
     warnings
 }
