@@ -137,7 +137,7 @@ where
             return;
         }
     };
-    let response = match dispatcher.handshake(request) {
+    let response = match dispatcher.handshake(request).await {
         Ok(response) => ServerEnvelope::HandshakeAck(response),
         Err(error) => {
             let _ = send_transport_error(
@@ -179,7 +179,7 @@ where
                 };
                 match request {
                     ClientEnvelope::Request(envelope) => {
-                        let response = ServerEnvelope::Response(dispatcher.dispatch_envelope(envelope));
+                        let response = ServerEnvelope::Response(dispatcher.dispatch_envelope(envelope).await);
                         if send_server_message(&mut sink, response).await.is_err() {
                             dispatcher.disconnect();
                             break;

@@ -147,7 +147,7 @@ impl HostRequestDispatcher {
         self.workspace_path = Some(workspace_path);
     }
 
-    pub fn handshake(
+    pub async fn handshake(
         &mut self,
         request: CapabilityHandshakeRequest,
     ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
@@ -165,9 +165,12 @@ impl HostRequestDispatcher {
         })
     }
 
-    pub fn dispatch_envelope(&mut self, envelope: ClientRequestEnvelope) -> ServerResponseEnvelope {
+    pub async fn dispatch_envelope(
+        &mut self,
+        envelope: ClientRequestEnvelope,
+    ) -> ServerResponseEnvelope {
         self.session.track_request(envelope.request_id);
-        let result = self.dispatch_command(envelope.command);
+        let result = self.dispatch_command(envelope.command).await;
         self.session.complete_request(&envelope.request_id);
         ServerResponseEnvelope {
             request_id: envelope.request_id,
@@ -183,7 +186,7 @@ impl HostRequestDispatcher {
         );
     }
 
-    fn dispatch_command(
+    async fn dispatch_command(
         &mut self,
         command: ClientCommand,
     ) -> Result<CommandSuccess, ProtocolError> {

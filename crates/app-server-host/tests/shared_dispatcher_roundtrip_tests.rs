@@ -23,8 +23,8 @@ use app_server_protocol::{
     web_file_read_capability,
 };
 
-#[test]
-fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
+#[tokio::test]
+async fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     let workspace = temp_workspace("shared-dispatcher");
     let pushes = Arc::new(Mutex::new(Vec::<ServerPushEnvelope>::new()));
     let push_sink = {
@@ -42,14 +42,17 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
 
     let handshake = dispatcher
         .handshake(handshake_request())
+        .await
         .expect("handshake should negotiate");
     assert_eq!(handshake.session_token.0, "session-1");
     assert_eq!(handshake.negotiated_version, CURRENT_PROTOCOL_VERSION);
 
-    let current = dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(1),
-        command: ClientCommand::WorkspaceCurrent,
-    });
+    let current = dispatcher
+        .dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(1),
+            command: ClientCommand::WorkspaceCurrent,
+        })
+        .await;
     let workspace_id = match current.result.expect("workspace current should succeed") {
         CommandSuccess::WorkspaceCurrent(response) => {
             assert_eq!(
@@ -61,10 +64,12 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         other => panic!("unexpected workspace current response: {other:?}"),
     };
 
-    let list = dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(2),
-        command: ClientCommand::WorkspaceList(WorkspaceListRequest { directory: None }),
-    });
+    let list = dispatcher
+        .dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(2),
+            command: ClientCommand::WorkspaceList(WorkspaceListRequest { directory: None }),
+        })
+        .await;
     let entries = match list.result.expect("workspace list should succeed") {
         CommandSuccess::WorkspaceList(response) => response.entries,
         other => panic!("unexpected workspace list response: {other:?}"),
@@ -97,10 +102,12 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         .clone();
     assert_eq!(readme.workspace_id().0, workspace_id.0);
 
-    let file_read = dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(3),
-        command: ClientCommand::FileRead(app_server_protocol::FileReadRequest { path: readme }),
-    });
+    let file_read = dispatcher
+        .dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(3),
+            command: ClientCommand::FileRead(app_server_protocol::FileReadRequest { path: readme }),
+        })
+        .await;
     match file_read.result.expect("file read should succeed") {
         CommandSuccess::FileRead(response) => match response.contents {
             app_server_protocol::FileReadContents::Utf8Text(text) => {
@@ -111,15 +118,17 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
         other => panic!("unexpected file read response: {other:?}"),
     }
 
-    let preview = dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(4),
-        command: ClientCommand::PreviewRequest(PreviewRequest {
-            source: model,
-            defines: vec![],
-            kind: PreviewRequestKind::GeometryArtifact,
-            configured_openscad_path: None,
-        }),
-    });
+    let preview = dispatcher
+        .dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(4),
+            command: ClientCommand::PreviewRequest(PreviewRequest {
+                source: model,
+                defines: vec![],
+                kind: PreviewRequestKind::GeometryArtifact,
+                configured_openscad_path: None,
+            }),
+        })
+        .await;
     match preview.result.expect("preview should succeed") {
         CommandSuccess::PreviewReady(response) => match response.artifact {
             PreviewArtifact::Stl(stl) => assert!(!stl.bytes.is_empty()),
@@ -132,8 +141,8 @@ fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     cleanup_workspace(&workspace);
 }
 
-#[test]
-fn shared_dispatcher_rejects_unsupported_protocol_version() {
+#[tokio::test]
+async fn shared_dispatcher_rejects_unsupported_protocol_version() {
     let workspace = temp_workspace("shared-dispatcher-protocol-version");
     let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
 
@@ -141,6 +150,7 @@ fn shared_dispatcher_rejects_unsupported_protocol_version() {
         .handshake(handshake_request_with_version(ProtocolVersionRange::new(
             2, 2,
         )))
+        .await
         .expect_err("protocol version without overlap should reject");
 
     assert_eq!(error.code, ProtocolErrorCode::UnsupportedProtocolVersion);
@@ -180,9 +190,10 @@ fn export_run_rejects_symlink_escape_output_target() {
     )
     .unwrap();
 
-    let response = dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(10),
-        command: ClientCommand::ExportRun(ExportRunRequest {
+    let response = dispatch(
+        &mut dispatcher,
+        10,
+        ClientCommand::ExportRun(ExportRunRequest {
             configured_openscad_path: Some(HostLocalPath::new("/bin/false").unwrap()),
             configured_slicers: Vec::new(),
             source,
@@ -191,7 +202,7 @@ fn export_run_rejects_symlink_escape_output_target() {
             format: ExportFormat::ThreeMf,
             slicer_name: None,
         }),
-    });
+    );
 
     let error = response
         .result
@@ -889,10 +900,12 @@ fn dispatch(
     request_id: u64,
     command: ClientCommand,
 ) -> app_server_protocol::ServerResponseEnvelope {
-    dispatcher.dispatch_envelope(ClientRequestEnvelope {
-        request_id: RequestId(request_id),
-        command,
-    })
+    tokio::runtime::Runtime::new()
+        .expect("test runtime should build")
+        .block_on(dispatcher.dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(request_id),
+            command,
+        }))
 }
 
 fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {

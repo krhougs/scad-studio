@@ -48,7 +48,24 @@
 
 ### Phase 2 — 建立 WebSocket-only async 后端服务边界
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 未重新引入 in-process / mpsc host；Phase 1 删除的桌面生产路径保持删除状态。
+  - WebSocket 仍是唯一生产 transport；protocol 与 transport 分离未改变。
+  - 现有 workspace、file、preview、CadQuery、Agent 与 session 行为继续通过原有 host roundtrip 和 WebSocket 测试覆盖。
+- 变更摘要：
+  - 将 `HostRequestDispatcher::handshake`、`HostRequestDispatcher::dispatch_envelope` 和内部 `dispatch_command` 改为 async 方法。
+  - WebSocket host 在握手和 request frame 处理中 await 同一 async dispatcher 入口，不再调用同步 dispatcher 方法。
+  - host roundtrip 测试改为覆盖 async dispatcher 入口；测试 harness 保留同步辅助函数，但其内部通过 Tokio runtime 调用 async dispatcher。
+- TDD 记录：
+  - 先将 `shared_dispatcher_roundtrips_handshake_workspace_file_and_preview` 改为 async 调用并运行 `cargo test -p app-server-host shared_dispatcher_roundtrips_handshake_workspace_file_and_preview`，确认因 `handshake` / `dispatch_envelope` 不是 future 而编译失败。
+  - 将生产入口改为 async 后，重新运行同一测试，测试通过。
+- 验证结果：
+  - `cargo test -p app-server-host` 通过；仍有既有 app-server-core dead_code warning，未在本 Phase 扩大处理范围。
+  - `cargo test -p app-server-transport` 通过。
+  - 针对同步入口的源码搜索未发现 `pub fn dispatch_envelope` 或同步 `fn dispatch_command`；仅剩 WebSocket 对 `dispatcher.dispatch_envelope(envelope).await` 的调用和 `async fn dispatch_command` 定义。
+- 独立复审记录：
+  - Phase 2 独立复审未发现阻塞项、高风险问题或普通问题；确认 WebSocket host 已 await async dispatcher，测试 harness 的 `Runtime::new().block_on(...)` 只存在于测试范围内，Phase 1 删除桌面端 / in-process / mpsc 的边界未回归。
 
 ### Phase 3 — 核心 I/O、ChatStore、预览与子进程路径 async 化
 
