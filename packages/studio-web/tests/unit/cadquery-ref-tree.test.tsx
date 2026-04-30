@@ -26,7 +26,7 @@ describe("CadQueryRefTree", () => {
       "@part[top_lid]",
     );
     expect(screen.getByTestId("cadquery-ref-tree").textContent).toContain(
-      "top_surface",
+      "lid_alignment_surface",
     );
     expect(screen.getByTestId("cadquery-ref-tree").textContent).toContain(
       "face f_2",
@@ -99,10 +99,10 @@ describe("CadQueryRefTree", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("cadquery-ref-row-feature-top_surface"));
+    fireEvent.click(screen.getByTestId("cadquery-ref-row-feature-lid_alignment_surface"));
     const first = onSelectionChange.mock.calls[0][0] as SelectionUpdateRequest;
     expect(first.selections.map((item) => item.ref_text)).toEqual([
-      "@feature[top_lid.top_surface]",
+      "@feature[top_lid.lid_alignment_surface]",
     ]);
     expect(first.active_index).toBe(0);
 
@@ -116,7 +116,7 @@ describe("CadQueryRefTree", () => {
     fireEvent.click(screen.getByTestId("cadquery-ref-row-edge-4"));
     const second = onSelectionChange.mock.calls[1][0] as SelectionUpdateRequest;
     expect(second.selections.map((item) => item.ref_text)).toEqual([
-      "@feature[top_lid.top_surface]",
+      "@feature[top_lid.lid_alignment_surface]",
       "@edge[top_lid:e_4]",
     ]);
     expect(second.active_index).toBe(1);
@@ -142,13 +142,13 @@ function sceneFixture(): CadQueryScenePayload {
             faceIndex: 2,
             positions: new Float32Array(),
             normals: new Float32Array(),
-            features: ["top_surface"],
+            features: ["lid_alignment_surface"],
             ambiguous: false,
           },
         ],
         edges: [{ edgeIndex: 4, polyline: new Float32Array(), adjacentFaces: [2] }],
         vertices: [{ vertexIndex: 7, position: [0, 0, 0], adjacentEdges: [4] }],
-        featureMap: [{ feature: "top_surface", faceIndices: [2] }],
+        featureMap: [{ feature: "lid_alignment_surface", faceIndices: [2] }],
       },
     ],
   };

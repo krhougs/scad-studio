@@ -374,21 +374,50 @@ function agentEventDetail(event: AgentEvent): string {
 function agentEventSummary(event: AgentEvent, detail: string): string {
   const payload = event.payload ?? {};
   const tool = stringField(payload, "tool_name");
+  if (event.event === "agent.tool_start") return tool || detail || "started";
+  if (event.event === "agent.tool_result")
+    return tool ? `${tool} result ready` : "result ready";
   if (tool) return tool;
-  if (event.event === "agent.tool_start") return detail || "started";
-  if (event.event === "agent.tool_result") return "result ready";
   if (event.event === "agent.mesh_ready") return "mesh ready";
   return detail || event.event;
 }
 
 function agentEventModalDetail(event: AgentEvent): string {
   const payload = event.payload ?? {};
-  if (event.event === "agent.tool_result") return stringField(payload, "result_json");
-  if (event.event === "agent.tool_start") return stringField(payload, "args_json");
   try {
-    return JSON.stringify({ event: event.event, ...payload }, null, 2);
+    return JSON.stringify(agentEventModalPayload(event, payload), null, 2);
   } catch {
     return agentEventDetail(event);
+  }
+}
+
+function agentEventModalPayload(
+  event: AgentEvent,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (event.event === "agent.tool_result") {
+    return {
+      event: event.event,
+      ...payload,
+      result: parseJsonString(stringField(payload, "result_json")),
+    };
+  }
+  if (event.event === "agent.tool_start") {
+    return {
+      event: event.event,
+      ...payload,
+      arguments: parseJsonString(stringField(payload, "args_json")),
+    };
+  }
+  return { event: event.event, ...payload };
+}
+
+function parseJsonString(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
 }
 

@@ -9,7 +9,8 @@
 - Phase 0 已完成当前状态审计、基线验证与独立 review。
 - Phase 1 已完成 Ref 图层树、预览模式、RefKind 选择模式、验证与独立 review。
 - Phase 2 已完成文件列表路由、artifact relation 与模型更新刷新。
-- Phase 3 已完成 Agent 模型产物契约、验证与独立 review。后续按计划进入 Phase 4。
+- Phase 3 已完成 Agent 模型产物契约、验证与独立 review。
+- Phase 4 已完成渲染模式与聊天流 UI、验证与独立 review。后续按计划进入 Phase 5。
 
 ## Review 结论处理
 
@@ -28,7 +29,7 @@
 - Phase 1：已完成。
 - Phase 2：已完成。
 - Phase 3：已完成。
-- Phase 4：未开始。
+- Phase 4：已完成。
 - Phase 5：未开始。
 - Phase 6：未开始。
 
@@ -241,3 +242,40 @@
 - 第一轮 Phase 3 review 结论：无阻塞项；记录高风险非阻塞项，指出合法 Python 三引号字符串与类型标注赋值会被模型契约硬校验误拒绝。
 - 已按 reviewer 结论补充失败用例并修复 `support.rs` 解析逻辑，覆盖三引号字符串和类型标注赋值成功路径，同时保留空字段、注释、字符串字面量和函数内赋值拒绝路径。
 - 第二轮 Phase 3 review 结论：无阻塞项，无高风险非阻塞项，未发现验证缺口。
+
+## Phase 4 结果
+
+### GUI 边界判断
+
+- 本 Phase 修改集中在 Web Workbench 的聊天事件呈现、Viewer toolbar 验证、CanvasZone 测试 harness 和 Web 侧 CSS 布局。当前实现依赖 `@assistant-ui/react` 消息结构、浏览器 DOM、Three.js canvas 和 Playwright 验证入口，属于 `studio-web` 壳层范围。
+- 状态和行为仍沿用既有 `CanvasZone` viewer options、`CadQueryViewer` props、`mesh-three` options 与 chat runtime；本 Phase 没有新增跨端共享状态机，也没有在 `studio-app` 与 `studio-web` 之间复制共享基础组件。
+- `tool modal`、chat event row、status bar 与错误卡片仅修正当前 Web 壳层呈现和验证缺口；没有触碰 app-server、protocol、artifact relation、CadQuery staging 或 Ref selection 契约。
+
+### 变更摘要
+
+- `AgentEventRow` 的 `agent.tool_start` 与 `agent.tool_result` 默认保持单行状态；`agent.tool_result` 单行摘要改为 `tool result ready`，避免同一工具名在 start/result 两行完全重复。
+- tool event modal 保留完整 event payload，并额外把 `args_json` / `result_json` 解析为结构化 `arguments` / `result`，确保 `tool_name`、`tool_call_id`、`run_id` 和工具详情都可查看。
+- 增加 Workbench 级 CadQuery canvas harness，Playwright 通过真实 `viewer-render-wireframe` / `viewer-render-xray` toolbar 按钮验证 `CanvasZone -> CadQueryViewer -> mesh-three` 渲染路径。
+- STL 与 CadQuery 渲染模式 E2E 均补充同尺寸截图的 RGBA 像素差异比较，避免只看 DOM attribute。
+- 补充 `agent.tool_start` modal 详情单元测试，以及连续 assistant 来源隐藏、用户来源不受影响的真实 CSS computed style 测试。
+- 调整 1280x800 下 Web canvas status bar 和 preview error card 布局：FPS 区域允许收缩，错误卡片为换行 toolbar 留出上方空间。
+- 将 Web CadQuery 测试 fixture 中的弱 feature 命名替换为 `lid_alignment_surface`，避免继续把弱语义命名作为成功样例。
+
+### 验证证据
+
+- `bun run --cwd packages/studio-web typecheck`：`tsc --noEmit` 通过，exit 0。
+- `bun run --cwd packages/studio-web test:unit tests/unit/chat-messages.test.tsx tests/unit/chat-zone.test.tsx tests/unit/chat-runtime.test.ts tests/unit/cadquery-viewer.test.tsx`：70 passed，0 failed。
+- `bun run --cwd packages/studio-web test:unit`：37 files / 260 tests passed，0 failed；保留既有 React act warning。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/canvas-interaction.spec.ts --grep "cadquery toolbar drives render state"`：1 passed，0 failed。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/canvas-interaction.spec.ts --grep "1280x800"`：2 passed，0 failed。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/canvas-interaction.spec.ts`：16 passed，0 failed。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：9 passed，0 failed。
+- `git diff --check`：无输出，exit 0。
+- `lsof -nP -iTCP:39182 -iTCP:5177 -iTCP:39193 -iTCP:5188 -sTCP:LISTEN`：无输出，exit 1，Playwright harness 未遗留监听进程。
+
+### 独立 Review 结论
+
+- 第一轮 Phase 4 review 发现阻塞项：STL 渲染模式截图比较被 viewport resize 干扰，且 PNG buffer 比较不足以证明像素变化；另记录 CadQuery canvas 路径缺少覆盖。已改为 resize 前完成截图与浏览器内 RGBA 像素比较，并新增 CadQuery canvas 像素变化验证。
+- 第二轮 Phase 4 review 结论：无阻塞项；记录两个高风险问题：tool modal 对 start/result 只显示局部 JSON，缺少完整 payload 元数据；CadQuery 渲染模式验证只覆盖底层 viewer，未覆盖 Workbench toolbar 到 CadQuery canvas 的完整路径。已修复 modal payload，并新增 Workbench 级 toolbar E2E。
+- 第三轮 Phase 4 review 结论：无阻塞项，无高风险问题；记录两个验证缺口：`agent.tool_start` modal 详情未直接测试，连续 assistant 来源隐藏与用户来源不受影响未有自动化断言。已补充对应单元测试。
+- 第四轮 Phase 4 review 结论：功能 diff 无阻塞项、无高风险问题、无验证缺口；唯一阻塞项为本结果文档尚未记录 Phase 4 状态和 GUI 边界判断。本节已按该结论补齐。

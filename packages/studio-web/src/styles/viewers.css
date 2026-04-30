@@ -50,7 +50,7 @@
 .viewer__error-card {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + 84px);
   transform: translate(-50%, -50%);
   width: min(520px, calc(100% - 48px));
   border: 1px solid color-mix(in oklab, var(--signal-err) 42%, var(--ink-4s));
@@ -59,7 +59,7 @@
   padding: 16px 18px;
   z-index: 3;
   pointer-events: auto;
-  max-height: min(420px, calc(100% - 128px));
+  max-height: min(360px, calc(100% - 260px));
   overflow: auto;
 }
 

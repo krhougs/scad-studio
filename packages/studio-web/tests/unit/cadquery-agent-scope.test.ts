@@ -17,7 +17,7 @@ describe("cadquery agent scope", () => {
     );
 
     expect(cadQuerySelectionSummary(chatSnapshot([faceSelection()]))).toEqual(
-      "@feature[top_lid.top_surface]",
+      "@feature[top_lid.lid_alignment_surface]",
     );
     expect(confirmation.request.target_type).toBe("part");
     expect(confirmation.request.target_path.path_segments).toEqual([
@@ -99,7 +99,7 @@ describe("cadquery agent scope", () => {
 
   it("preferredRefText returns feature ref for non-ambiguous face", () => {
     expect(preferredRefText(faceSelection())).toBe(
-      "@feature[top_lid.top_surface]",
+      "@feature[top_lid.lid_alignment_surface]",
     );
   });
 
@@ -143,7 +143,7 @@ function faceSelection(): SelectionRef {
     owner_ref_text: "@part[top_lid]",
     owner_object_kind: "part",
     instance_path: null,
-    candidate_feature_ref: "@feature[top_lid.top_surface]",
+    candidate_feature_ref: "@feature[top_lid.lid_alignment_surface]",
     build_id: "sha256:build",
     result_id: "cq_1",
     ambiguous: false,

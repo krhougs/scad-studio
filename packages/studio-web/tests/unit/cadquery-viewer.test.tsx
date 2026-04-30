@@ -88,7 +88,7 @@ describe("CadQueryViewer", () => {
         expect.objectContaining({
           kind: "face",
           ref_text: "@face[top_lid:f_2]",
-          candidate_feature_ref: "@feature[top_lid.top_surface]",
+          candidate_feature_ref: "@feature[top_lid.lid_alignment_surface]",
           ambiguous: true,
         }),
       ],
@@ -121,7 +121,7 @@ describe("CadQueryViewer", () => {
     await waitFor(() =>
       expect(
         screen.getByTestId("cadquery-selection-status").textContent,
-      ).toContain("@feature[top_lid.top_surface]"),
+      ).toContain("@feature[top_lid.lid_alignment_surface]"),
     );
   });
 
@@ -351,10 +351,10 @@ function cadQueryMetadataForTest(
         ref_text: "@part[top_lid]",
         instance_path: null,
         transform: null,
-        faces: [{ face_idx: 2, features: ["top_surface"], ambiguous }],
+        faces: [{ face_idx: 2, features: ["lid_alignment_surface"], ambiguous }],
         edges: [],
         vertices: [],
-        feature_map: [{ feature: "top_surface", face_indices: [2] }],
+        feature_map: [{ feature: "lid_alignment_surface", face_indices: [2] }],
       },
     ],
   };

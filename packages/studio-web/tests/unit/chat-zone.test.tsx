@@ -216,7 +216,7 @@ describe("ChatZone", () => {
 
     expect(screen.getByTestId("context-pill-bar")).toBeTruthy();
     expect(screen.getByTestId("context-pill-bar").textContent).toContain(
-      "@feature[top_lid.top_surface]",
+      "@feature[top_lid.lid_alignment_surface]",
     );
 
     const user = userEvent.setup();
@@ -771,7 +771,7 @@ function faceSelection() {
     owner_ref_text: "@part[top_lid]",
     owner_object_kind: "part" as const,
     instance_path: null,
-    candidate_feature_ref: "@feature[top_lid.top_surface]",
+    candidate_feature_ref: "@feature[top_lid.lid_alignment_surface]",
     build_id: "sha256:build",
     result_id: "cq_1",
     ambiguous: false,

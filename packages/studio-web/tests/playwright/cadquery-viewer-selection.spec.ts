@@ -83,7 +83,7 @@ test("@cadquery-viewer picks component instance and feature modes", async ({
     .toMatchObject({
       kind: "feature",
       partIndex: 0,
-      feature: "mapped_surface",
+      feature: "lid_alignment_surface",
     });
 });
 
@@ -161,6 +161,39 @@ test("@cadquery-viewer exposes hover highlight target", async ({ page }) => {
   await expect(canvas).toHaveAttribute("data-cad-query-hover-kind", "face");
   await setSelectionMode(page, "edge");
   await expect(canvas).not.toHaveAttribute("data-cad-query-hover-kind");
+});
+
+test("@cadquery-viewer render modes change canvas pixels", async ({ page }, testInfo) => {
+  await installViewer(page, cadQueryTriangleScene());
+  const canvas = page.locator("#cadquery-canvas");
+
+  await expect(canvas).toHaveAttribute("data-render-mode", "solid");
+  const solidImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-solid.png"),
+  });
+
+  await page.evaluate(() => {
+    window.__cadQueryViewer?.setOptions({ renderMode: "wireframe" });
+  });
+  await expect(canvas).toHaveAttribute("data-render-mode", "wireframe");
+  const wireframeImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-wireframe.png"),
+  });
+
+  await page.evaluate(() => {
+    window.__cadQueryViewer?.setOptions({ renderMode: "xray" });
+  });
+  await expect(canvas).toHaveAttribute("data-render-mode", "xray");
+  const xrayImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-xray.png"),
+  });
+
+  await expect(imageDifferenceRatio(page, solidImage, wireframeImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
+  await expect(imageDifferenceRatio(page, wireframeImage, xrayImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
 });
 
 async function installViewer(page: Page, scene: object) {
@@ -247,7 +280,7 @@ function cadQueryComponentInstanceScene() {
           ...face,
           features: ["raw_surface"],
         })),
-        featureMap: [{ feature: "mapped_surface", faceIndices: [0] }],
+        featureMap: [{ feature: "lid_alignment_surface", faceIndices: [0] }],
       },
     ],
   };
@@ -316,7 +349,7 @@ function cadQueryPart(partIndex: number, instancePath: string | null, x: number)
           0,
         ]),
         normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
-        features: ["top_surface"],
+        features: ["lid_alignment_surface"],
         ambiguous: false,
       },
     ],
@@ -328,12 +361,39 @@ function cadQueryPart(partIndex: number, instancePath: string | null, x: number)
       },
     ],
     vertices: [{ vertexIndex: 0, position: [x, 0, 0], adjacentEdges: [0] }],
-    featureMap: [{ feature: "top_surface", faceIndices: [0] }],
+    featureMap: [{ feature: "lid_alignment_surface", faceIndices: [0] }],
   };
 }
 
 function translationTransform(x: number, y: number, z: number) {
   return [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1];
+}
+
+async function imageDifferenceRatio(page: Page, a: Buffer, b: Buffer): Promise<number> {
+  return page.evaluate(async ({ aBase64, bBase64 }) => {
+    async function decode(base64: string) {
+      const response = await fetch(`data:image/png;base64,${base64}`);
+      const bitmap = await createImageBitmap(await response.blob());
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("2D canvas context unavailable");
+      context.drawImage(bitmap, 0, 0);
+      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      return { width: bitmap.width, height: bitmap.height, data: Array.from(data) };
+    }
+    const first = await decode(aBase64);
+    const second = await decode(bBase64);
+    if (first.width !== second.width || first.height !== second.height) {
+      throw new Error("screenshots must have matching pixel dimensions");
+    }
+    let different = 0;
+    for (let index = 0; index < first.data.length; index += 1) {
+      if (first.data[index] !== second.data[index]) different += 1;
+    }
+    return different / first.data.length;
+  }, { aBase64: a.toString("base64"), bBase64: b.toString("base64") });
 }
 
 declare global {
@@ -342,6 +402,7 @@ declare global {
     __cadQueryViewer?: {
       setCadQuerySelectionMode(mode: string): void;
       setCamera(state: unknown): void;
+      setOptions(options: unknown): void;
     };
   }
 }
