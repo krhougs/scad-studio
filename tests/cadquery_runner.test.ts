@@ -42,6 +42,7 @@ async function runRunner(
   const proc = Bun.spawn(
     [
       python,
+      "-B",
       "-m",
       "budn_cad_runner",
       "--script",
@@ -71,6 +72,145 @@ async function runRunner(
   }
   return { code, stdout, stderr, json };
 }
+
+async function runContract(code: string): Promise<RunnerResult> {
+  const contractRoot = await mkdtemp(join(tmpdir(), "budn-cq-contract-"));
+  const sourcePath = join(contractRoot, "source.py");
+  await writeFile(sourcePath, code);
+  const env = {
+    ...Bun.env,
+    PYTHONPATH: [repoRoot, Bun.env.PYTHONPATH].filter(Boolean).join(":"),
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+  const proc = Bun.spawn(
+    [python, "-B", "-m", "budn_cad_runner", "--contract-file", sourcePath],
+    { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
+  );
+  const [stdout, stderr, codeResult] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  await rm(contractRoot, { force: true, recursive: true });
+  let json: any;
+  try {
+    json = JSON.parse(stdout);
+  } catch {
+    throw new Error(`contract runner did not emit JSON; code=${codeResult}; stderr=${stderr}`);
+  }
+  return { code: codeResult, stdout, stderr, json };
+}
+
+test("cadquery runner contract analyzer uses Python AST string semantics", async () => {
+  const result = await runContract(`
+MODEL_DESCRIPTION = (
+    "Contract "
+    "model"
+)
+
+MODEL_DETAILS = {
+    "purpose": (
+        "Verify "
+        "contract"
+    ),
+    "key_dimensions": {"height": 8.0},
+    "intended_use": "automated validation",
+    "assumptions": ["no external dependencies"],
+    "interaction_notes": "select named features",
+    "manufacturing_or_placement_constraints": "print flat",
+}
+`);
+
+  expect(result.code).toBe(0);
+  expect(result.json.status).toBe("success");
+  expect(result.json.contract.has_model_description).toBe(true);
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner contract analyzer rejects non-literal model descriptions", async () => {
+  const result = await runContract(`
+MODEL_DESCRIPTION = "Tuple contract model", dynamic_description()
+
+MODEL_DETAILS = {
+    "purpose": "Verify contract",
+    "key_dimensions": "unit dimensions",
+    "intended_use": "automated validation",
+    "assumptions": "no external dependencies",
+    "interaction_notes": "select named features",
+    "manufacturing_or_placement_constraints": "print flat",
+}
+`);
+
+  expect(result.code).toBe(0);
+  expect(result.json.status).toBe("success");
+  expect(result.json.contract.has_model_description).toBe(false);
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner contract analyzer rejects non-top-level or incomplete model contracts", async () => {
+  const validDetails = `{
+    "purpose": "Verify contract",
+    "key_dimensions": "unit dimensions",
+    "intended_use": "automated validation",
+    "assumptions": "no external dependencies",
+    "interaction_notes": "select named features",
+    "manufacturing_or_placement_constraints": "print flat",
+}`;
+  const cases = [
+    {
+      name: "docstring text",
+      code: `"""MODEL_DESCRIPTION = "text"\nMODEL_DETAILS = ${validDetails}\n"""`,
+    },
+    {
+      name: "function scoped",
+      code: `MODEL_DESCRIPTION = "Contract model"\ndef details():\n    MODEL_DETAILS = ${validDetails}`,
+    },
+    {
+      name: "empty field",
+      code: `MODEL_DESCRIPTION = "Contract model"\nMODEL_DETAILS = {
+    "purpose": "",
+    "key_dimensions": "unit dimensions",
+    "intended_use": "automated validation",
+    "assumptions": "no external dependencies",
+    "interaction_notes": "select named features",
+    "manufacturing_or_placement_constraints": "print flat",
+}`,
+    },
+    {
+      name: "parenthesized expression",
+      code: `MODEL_DESCRIPTION = ("Contract model") + dynamic_description()\nMODEL_DETAILS = ${validDetails}`,
+    },
+    {
+      name: "final reassignment wins",
+      code: `MODEL_DESCRIPTION = "Contract model"\nMODEL_DESCRIPTION = ""\nMODEL_DETAILS = ${validDetails}`,
+    },
+  ];
+
+  for (const item of cases) {
+    const result = await runContract(item.code);
+    expect(result.code, item.name).toBe(0);
+    expect(result.json.status, item.name).toBe("success");
+    expect(result.json.contract.has_model_description, item.name).toBe(false);
+  }
+}, RUNNER_TEST_TIMEOUT_MS);
+
+test("cadquery runner contract analyzer keeps values across bare annotations", async () => {
+  const result = await runContract(`
+MODEL_DESCRIPTION = "Contract model"
+MODEL_DESCRIPTION: str
+
+MODEL_DETAILS = {
+    "purpose": "Verify contract",
+    "key_dimensions": "unit dimensions",
+    "intended_use": "automated validation",
+    "assumptions": "no external dependencies",
+    "interaction_notes": "select named features",
+    "manufacturing_or_placement_constraints": "print flat",
+}
+`);
+
+  expect(result.code).toBe(0);
+  expect(result.json.status).toBe("success");
+  expect(result.json.contract.has_model_description).toBe(true);
+}, RUNNER_TEST_TIMEOUT_MS);
 
 test("cadquery runner emits a single part mesh for a Workplane build", async () => {
   const projectRoot = join(repoRoot, "tests/fixtures/cadquery-runner/simple");

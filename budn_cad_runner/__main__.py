@@ -6,10 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .errors import BuildError
-from .executor import run
-from .exporter import export_artifacts, parse_export_formats
-from .loader import load
-from .manifest import build_manifest
+from .contract import analyze_source_contract
 
 
 def parse_params(raw: str) -> dict:
@@ -23,16 +20,36 @@ def parse_params(raw: str) -> dict:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="budn_cad_runner")
-    parser.add_argument("--script", required=True)
-    parser.add_argument("--project-root", required=True)
-    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--script")
+    parser.add_argument("--project-root")
+    parser.add_argument("--output-dir")
     parser.add_argument("--exports", default="")
     parser.add_argument("--params", default="{}")
-    return parser.parse_args(argv)
+    parser.add_argument("--contract-file")
+    args = parser.parse_args(argv)
+    if args.contract_file:
+        return args
+    for name in ("script", "project_root", "output_dir"):
+        if not getattr(args, name):
+            parser.error(f"--{name.replace('_', '-')} is required unless --contract-file is set")
+    return args
 
 
 def execute(args: argparse.Namespace) -> dict:
+    if args.contract_file:
+        source = Path(args.contract_file).read_text(encoding="utf-8")
+        return {
+            "status": "success",
+            "error": None,
+            "error_type": None,
+            "contract": analyze_source_contract(source),
+        }
+
     from . import schema
+    from .executor import run
+    from .exporter import export_artifacts, parse_export_formats
+    from .loader import load
+    from .manifest import build_manifest
 
     project_root = Path(args.project_root)
     output_dir = Path(args.output_dir)

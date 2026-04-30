@@ -1,8 +1,8 @@
 use app_server_core::llm::{LlmError, LlmMessage, LlmResponse, LlmToolCall, LlmToolDefinition};
 use app_server_core::{
-    AgentExecutionScope, AgentToolRunContext, CadQueryToolCachedResult, CadQueryToolRunRequest,
-    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore,
-    NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
+    AgentExecutionScope, AgentToolRunContext, CadQueryModelContract, CadQueryToolCachedResult,
+    CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
+    ChatStore, NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
     agent_tool_definitions_for_mode, run_tool_loop_with_registry,
     run_tool_loop_with_registry_and_reasoning,
 };
@@ -76,6 +76,34 @@ fn structured_model_contract_source(feature: &str) -> String {
     format!(
         "MODEL_DESCRIPTION = \"Structured contract test model\"\n\
 MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":{{\"height\":\"8 mm\",\"width\":\"20 mm\"}},\"intended_use\":\"automated contract validation\",\"assumptions\":[\"no external dependencies\"],\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":[\"print flat\"]}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn parenthesized_model_contract_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = (\n\
+    \"Contract test \"\n\
+    \"model\"\n\
+)\n\
+MODEL_DETAILS = {{\n\
+    \"purpose\": (\n\
+        \"Verify \"\n\
+        \"model contract\"\n\
+    ),\n\
+    \"key_dimensions\":\"unit dimensions\",\n\
+    \"intended_use\": (\n\
+        \"automated contract \"\n\
+        \"validation\"\n\
+    ),\n\
+    \"assumptions\":\"no external dependencies\",\n\
+    \"interaction_notes\":\"select named features\",\n\
+    \"manufacturing_or_placement_constraints\": (\n\
+        \"print \"\n\
+        \"flat\"\n\
+    ),\n\
+}}\n\
 REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
 def build(params=None): pass"
     )
@@ -159,6 +187,26 @@ fn string_literal_model_details_source(feature: &str) -> String {
 NOTE = '''\n\
 MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
 '''\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn parenthesized_expression_model_contract_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = (\n\
+    \"Expression contract test model\"\n\
+) + dynamic_description()\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn tuple_model_description_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Tuple contract test model\", dynamic_description()\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
 REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
 def build(params=None): pass"
     )
@@ -1636,6 +1684,40 @@ fn workspace_tool_executor_cadquery_analyze_source_summarizes_source() {
     );
 }
 
+#[test]
+fn workspace_tool_executor_cadquery_analyze_source_uses_runtime_warning_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(
+        dir.path().join("parts/lid.py"),
+        parenthesized_model_contract_source("lid_alignment_surface"),
+    )
+    .unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")).with_model_contract(true));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_analyze_source",
+            "{\"target_path\":\"parts/lid.py\"}",
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["has_model_description"], true);
+    assert!(
+        !result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("MODEL_DESCRIPTION"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn workspace_tool_executor_cadquery_analyze_source_rejects_symlink_model() {
@@ -1777,6 +1859,27 @@ fn workspace_tool_executor_cadquery_check_source_warns_about_missing_model_descr
 }
 
 #[test]
+fn workspace_tool_executor_cadquery_check_source_uses_runtime_model_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")).with_model_contract(true));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime);
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
+    let code = parenthesized_model_contract_source("lid_alignment_surface");
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": code,
+    })
+    .to_string();
+
+    let result = tool_json_with_context(&executor, &call("cadquery_check_source", &args), &context);
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["contract"]["has_model_description"], true);
+}
+
+#[test]
 fn workspace_tool_executor_cadquery_execute_explains_missing_refs_shape() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
@@ -1904,7 +2007,8 @@ fn workspace_tool_executor_cadquery_execute_rejects_incomplete_model_details() {
 #[test]
 fn workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_details() {
     let dir = tempfile::tempdir().unwrap();
-    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let runtime =
+        Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")).with_model_contract(false));
     let executor =
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let scope = AgentExecutionScope::new(
@@ -1937,6 +2041,14 @@ fn workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_de
             "string_literal",
             string_literal_model_details_source("lid_grip_surface"),
         ),
+        (
+            "parenthesized_expression",
+            parenthesized_expression_model_contract_source("lid_grip_surface"),
+        ),
+        (
+            "tuple_description",
+            tuple_model_description_source("lid_grip_surface"),
+        ),
     ] {
         let args = serde_json::json!({
             "target_path": "parts/lid.py",
@@ -1958,6 +2070,45 @@ fn workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_de
                 .contains("MODEL_DETAILS")
         );
     }
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_checks_model_contract_before_paired_doc_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+    std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+    std::fs::write(dir.path().join("parts/lid.md"), "# Lid\n").unwrap();
+    let runtime =
+        Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")).with_model_contract(false));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentExecutionScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    );
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.execution_scope = Some(scope);
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_grip_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("MODEL_DESCRIPTION")
+    );
     assert!(runtime.execute_requests().is_empty());
 }
 
@@ -2039,11 +2190,16 @@ fn workspace_tool_executor_cadquery_execute_accepts_python_model_contract_varian
             "structured",
             structured_model_contract_source("lid_alignment_surface"),
         ),
+        (
+            "parenthesized",
+            parenthesized_model_contract_source("lid_alignment_surface"),
+        ),
     ] {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("parts")).unwrap();
         std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
-        let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+        let runtime =
+            Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")).with_model_contract(true));
         let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf())
             .with_cadquery_runtime(runtime.clone());
         let scope = AgentExecutionScope::new(
@@ -3620,6 +3776,7 @@ struct FakeCadQueryRuntime {
     dry_runs: Mutex<Vec<CadQueryToolRunRequest>>,
     executes: Mutex<Vec<CadQueryToolRunRequest>>,
     results: Mutex<HashMap<String, CadQueryToolCachedResult>>,
+    model_contract: Option<bool>,
 }
 
 impl FakeCadQueryRuntime {
@@ -3638,7 +3795,13 @@ impl FakeCadQueryRuntime {
             dry_runs: Mutex::new(Vec::new()),
             executes: Mutex::new(Vec::new()),
             results: Mutex::new(results),
+            model_contract: None,
         }
+    }
+
+    fn with_model_contract(mut self, has_model_description: bool) -> Self {
+        self.model_contract = Some(has_model_description);
+        self
     }
 
     fn dry_run_requests(&self) -> Vec<CadQueryToolRunRequest> {
@@ -3651,6 +3814,17 @@ impl FakeCadQueryRuntime {
 }
 
 impl CadQueryToolRuntime for FakeCadQueryRuntime {
+    fn model_contract(
+        &self,
+        _request: &CadQueryToolRunRequest,
+    ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
+        self.model_contract.map(|has_model_description| {
+            Ok(CadQueryModelContract {
+                has_model_description,
+            })
+        })
+    }
+
     fn dry_run(
         &self,
         request: CadQueryToolRunRequest,

@@ -26,21 +26,21 @@ pub use agent::{
     stream_agent_turn_with_tools_and_reasoning,
     tools::{
         AgentExecutionScope, AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy,
-        AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelFilePolicy,
-        CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult,
-        CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver, OutputPathPolicy,
-        ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor, agent_tool_definitions_for_mode,
-        agent_tool_permission, agent_tool_specs, run_tool_loop_with_registry,
-        run_tool_loop_with_registry_and_reasoning,
+        AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelContract,
+        CadQueryModelFilePolicy, CadQueryToolCachedResult, CadQueryToolRunRequest,
+        CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver,
+        OutputPathPolicy, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
+        agent_tool_definitions_for_mode, agent_tool_permission, agent_tool_specs,
+        run_tool_loop_with_registry, run_tool_loop_with_registry_and_reasoning,
     },
 };
 pub use cadquery::{
-    CadQueryCommitScope, CadQueryExecuteConfig, CadQueryRunConfig, CadQueryRunResult,
-    CadQueryRunnerError, CadQueryRunnerErrorKind, StagedCadQueryProject, cadquery_result_ready,
-    execute_cadquery_with_staging, execute_cadquery_with_staging_cancellable,
-    execute_cadquery_with_staging_cancellable_scoped, parse_cadquery_success_json,
-    run_cadquery_runner, run_cadquery_runner_with_cancel, stage_cadquery_project,
-    validate_cadquery_mesh_payload,
+    CadQueryCommitScope, CadQueryContractConfig, CadQueryContractResult, CadQueryExecuteConfig,
+    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
+    StagedCadQueryProject, cadquery_result_ready, execute_cadquery_with_staging,
+    execute_cadquery_with_staging_cancellable, execute_cadquery_with_staging_cancellable_scoped,
+    parse_cadquery_success_json, run_cadquery_contract, run_cadquery_runner,
+    run_cadquery_runner_with_cancel, stage_cadquery_project, validate_cadquery_mesh_payload,
 };
 pub use chat::ChatStore;
 pub use child_terminator::{

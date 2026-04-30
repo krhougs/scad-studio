@@ -40,6 +40,13 @@ pub trait ToolLoopObserver: Send + Sync {
 }
 
 pub trait CadQueryToolRuntime: Send + Sync {
+    fn model_contract(
+        &self,
+        _request: &CadQueryToolRunRequest,
+    ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
+        None
+    }
+
     fn dry_run(
         &self,
         request: CadQueryToolRunRequest,
@@ -51,6 +58,11 @@ pub trait CadQueryToolRuntime: Send + Sync {
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError>;
 
     fn get_result(&self, result_id: &str) -> Option<CadQueryToolCachedResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadQueryModelContract {
+    pub has_model_description: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,8 +266,14 @@ impl ToolExecutor for WorkspaceToolExecutor {
             "write_file" => file_write::write_file(&self.workspace_root, call, context),
             "patch_file" => file_write::patch_file(&self.workspace_root, call, context),
             "copy_file" => file_write::copy_file(&self.workspace_root, call, context),
-            "cadquery_analyze_source" => cadquery::analyze_source(&self.workspace_root, call),
-            "cadquery_check_source" => cadquery::check_source(call),
+            "cadquery_analyze_source" => cadquery::analyze_source(
+                &self.workspace_root,
+                call,
+                self.cadquery_runtime.as_deref(),
+            ),
+            "cadquery_check_source" => {
+                cadquery::check_source(call, self.cadquery_runtime.as_deref())
+            }
             "cadquery_dry_run" => {
                 cadquery::dry_run(&self.workspace_root, call, self.cadquery_runtime.as_deref())
             }

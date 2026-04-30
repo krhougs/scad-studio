@@ -989,7 +989,7 @@ fn fake_capturing_cadquery_runner(
     std::fs::write(
         &runner,
         format!(
-            "#!/bin/sh\nproject=''\nscript=''\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --project-root) shift; project=\"$1\" ;;\n    --script) shift; script=\"$1\" ;;\n    --output-dir) shift; out=\"$1\" ;;\n  esac\n  shift\ndone\nif [ -n \"$project\" ] && [ -n \"$script\" ]; then\n  cp \"$project/$script\" '{}'\nfi\nif [ -n \"$out\" ]; then\n  mkdir -p \"$out\"\n  printf 'artifact\\n' > \"$out/top_lid.step\"\n{}fi\ncat <<'JSON'\n{}\nJSON\n",
+            "#!/bin/sh\nproject=''\nscript=''\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --contract-file) cat <<'JSON'\n{{\"status\":\"success\",\"error\":null,\"error_type\":null,\"contract\":{{\"has_model_description\":true,\"syntax_error\":null}}}}\nJSON\n      exit 0 ;;\n    --project-root) shift; project=\"$1\" ;;\n    --script) shift; script=\"$1\" ;;\n    --output-dir) shift; out=\"$1\" ;;\n  esac\n  shift\ndone\nif [ -n \"$project\" ] && [ -n \"$script\" ]; then\n  cp \"$project/$script\" '{}'\nfi\nif [ -n \"$out\" ]; then\n  mkdir -p \"$out\"\n  printf 'artifact\\n' > \"$out/top_lid.step\"\n{}fi\ncat <<'JSON'\n{}\nJSON\n",
             capture_path.display(),
             extra_output,
             cadquery_success_json()

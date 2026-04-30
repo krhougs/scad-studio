@@ -33,6 +33,7 @@ pub(super) fn analyze_success(
     include_paired_doc: bool,
     include_dependencies: bool,
     source: &str,
+    has_model_description: bool,
 ) -> Value {
     json!({
         "status": "ok",
@@ -42,11 +43,11 @@ pub(super) fn analyze_success(
         "target_type": target_type_label(target_type_from_path(target_path)),
         "has_build_function": has_build_function(source),
         "has_refs": has_refs(source),
-        "has_model_description": has_model_description(source),
+        "has_model_description": has_model_description,
         "paired_doc_path": include_paired_doc.then(|| paired_doc_path(workspace_root, target_path)).flatten(),
         "local_dependencies": if include_dependencies { local_dependencies(source) } else { Vec::new() },
         "ref_keys": feature_keys(source),
-        "warnings": analyze_warnings(source)
+        "warnings": analyze_warnings(source, has_model_description)
     })
 }
 
@@ -194,7 +195,7 @@ pub(super) fn target_type_label(kind: CadQueryObjectKind) -> &'static str {
     }
 }
 
-fn target_type_from_path(path: &str) -> CadQueryObjectKind {
+pub(super) fn target_type_from_path(path: &str) -> CadQueryObjectKind {
     match path.split('/').next().unwrap_or("") {
         "components" => CadQueryObjectKind::Component,
         "assemblies" => CadQueryObjectKind::Assembly,
@@ -570,7 +571,7 @@ fn invalid_import_root(module: &str) -> bool {
     )
 }
 
-fn analyze_warnings(source: &str) -> Vec<&'static str> {
+fn analyze_warnings(source: &str, has_model_description: bool) -> Vec<&'static str> {
     let mut warnings = Vec::new();
     if !has_build_function(source) {
         warnings.push("missing build function");
@@ -578,7 +579,7 @@ fn analyze_warnings(source: &str) -> Vec<&'static str> {
     if !has_refs(source) {
         warnings.push("missing REFS features");
     }
-    if !has_model_description(source) {
+    if !has_model_description {
         warnings.push("missing MODEL_DESCRIPTION / MODEL_DETAILS");
     }
     warnings

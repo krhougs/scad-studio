@@ -1,9 +1,10 @@
 use std::{
-    io::Read,
+    fs,
+    io::{Read, Write},
     path::PathBuf,
     process::{Child, Command, Output, Stdio},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use app_server_protocol::{CadQueryExportFormat, CadQueryMeshPayload};
@@ -48,11 +49,23 @@ pub struct CadQueryRunConfig {
     pub timeout: Duration,
 }
 
+#[derive(Debug, Clone)]
+pub struct CadQueryContractConfig {
+    pub python: PathBuf,
+    pub code: String,
+    pub timeout: Duration,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CadQueryRunResult {
     pub ready: app_server_protocol::CadQueryResultReady,
     pub mesh: CadQueryMeshPayload,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadQueryContractResult {
+    pub has_model_description: bool,
 }
 
 pub fn run_cadquery_runner(
@@ -67,6 +80,7 @@ pub fn run_cadquery_runner_with_cancel(
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
     let child = Command::new(&config.python)
         .args(runner_args(config))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -75,8 +89,24 @@ pub fn run_cadquery_runner_with_cancel(
     parse_runner_output(output)
 }
 
+pub fn run_cadquery_contract(
+    config: &CadQueryContractConfig,
+) -> Result<CadQueryContractResult, CadQueryRunnerError> {
+    let contract_file = TemporaryContractFile::write(&config.code)?;
+    let child = Command::new(&config.python)
+        .args(contract_args(contract_file.path()))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error_io(format!("启动 CadQuery contract runner 失败: {error}")))?;
+    let output = wait_with_timeout(child, config.timeout, &|| false)?;
+    parse_contract_output(output)
+}
+
 fn runner_args(config: &CadQueryRunConfig) -> Vec<String> {
     vec![
+        "-B".into(),
         "-m".into(),
         "budn_cad_runner".into(),
         "--script".into(),
@@ -89,6 +119,16 @@ fn runner_args(config: &CadQueryRunConfig) -> Vec<String> {
         export_arg(&config.export_formats),
         "--params".into(),
         config.params_json.clone(),
+    ]
+}
+
+fn contract_args(path: &std::path::Path) -> Vec<String> {
+    vec![
+        "-B".into(),
+        "-m".into(),
+        "budn_cad_runner".into(),
+        "--contract-file".into(),
+        path.to_string_lossy().into_owned(),
     ]
 }
 
@@ -190,6 +230,35 @@ fn parse_runner_output(output: Output) -> Result<CadQueryRunResult, CadQueryRunn
         ready: cadquery_result_ready(&mesh),
         mesh,
         stderr,
+    })
+}
+
+fn parse_contract_output(output: Output) -> Result<CadQueryContractResult, CadQueryRunnerError> {
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        let parsed = parse_structured_runner_error(&stdout);
+        return Err(CadQueryRunnerError {
+            kind: runner_error_kind(output.status.code(), parsed.as_ref()),
+            message: runner_error_message(parsed.as_ref(), &stderr),
+        });
+    }
+    let value = serde_json::from_str::<serde_json::Value>(&stdout).map_err(|error| {
+        CadQueryRunnerError {
+            kind: CadQueryRunnerErrorKind::Runner,
+            message: format!("解析 CadQuery contract runner 输出失败: {error}"),
+        }
+    })?;
+    let has_model_description = value
+        .get("contract")
+        .and_then(|contract| contract.get("has_model_description"))
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| CadQueryRunnerError {
+            kind: CadQueryRunnerErrorKind::Runner,
+            message: "CadQuery contract runner 输出缺少 contract.has_model_description".into(),
+        })?;
+    Ok(CadQueryContractResult {
+        has_model_description,
     })
 }
 
@@ -295,4 +364,62 @@ pub(super) fn error_permission_denied(message: impl Into<String>) -> CadQueryRun
         kind: CadQueryRunnerErrorKind::PermissionDenied,
         message: message.into(),
     }
+}
+
+struct TemporaryContractFile {
+    path: PathBuf,
+}
+
+impl TemporaryContractFile {
+    fn write(code: &str) -> Result<Self, CadQueryRunnerError> {
+        for attempt in 0..16 {
+            let path = std::env::temp_dir().join(format!(
+                "budn-cq-contract-{}-{}-{attempt}.py",
+                std::process::id(),
+                unique_temp_suffix()
+            ));
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&path) {
+                Ok(mut file) => {
+                    if let Err(error) = file.write_all(code.as_bytes()) {
+                        let _ = fs::remove_file(&path);
+                        return Err(error_io(format!(
+                            "写入 CadQuery contract 临时文件失败: {error}"
+                        )));
+                    }
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error_io(format!(
+                        "创建 CadQuery contract 临时文件失败: {error}"
+                    )));
+                }
+            }
+        }
+        Err(error_io("创建 CadQuery contract 临时文件失败: 文件名冲突"))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryContractFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn unique_temp_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }

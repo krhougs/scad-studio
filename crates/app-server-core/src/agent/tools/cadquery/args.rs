@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::llm::LlmToolCall;
 
 use super::super::{AgentToolRunContext, CadQueryToolRunRequest, tool_error_json};
-use super::support::{is_model_path, source_contract, target_type_label};
+use super::support::{SourceContract, is_model_path, source_contract, target_type_label};
 
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzeArgs {
@@ -117,8 +117,8 @@ pub(super) fn validate_contract_for_run(
 pub(super) fn validate_execute_product_contract(
     call: &LlmToolCall,
     request: &CadQueryToolRunRequest,
+    contract: &SourceContract,
 ) -> Result<(), String> {
-    let contract = source_contract(&request.target_path, request.target_type, &request.code);
     if !contract.has_model_description {
         return Err(tool_error_json(
             call,

@@ -1,12 +1,14 @@
 use app_server_core::llm::LlmToolCall;
 use app_server_core::{
-    AgentToolRunContext, AgentTurnInput, CadQueryCommitScope, CadQueryRunConfig, CadQueryRunResult,
-    CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
+    AgentToolRunContext, AgentTurnInput, CadQueryCommitScope, CadQueryContractConfig,
+    CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
+    CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
     CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
     SlicerInstall, cadquery_result_ready, current_workspace, detect_slicer_paths, export_model,
     list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
-    resolve_workspace_path, resolve_workspace_write_path, run_cadquery_runner,
-    run_cadquery_runner_with_cancel, save_config_dto, send_to_slicer, stage_cadquery_project,
+    resolve_workspace_path, resolve_workspace_write_path, run_cadquery_contract,
+    run_cadquery_runner, run_cadquery_runner_with_cancel, save_config_dto, send_to_slicer,
+    stage_cadquery_project,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -660,6 +662,22 @@ struct HostCadQueryToolRuntime {
 }
 
 impl CadQueryToolRuntime for HostCadQueryToolRuntime {
+    fn model_contract(
+        &self,
+        request: &CadQueryToolRunRequest,
+    ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
+        let result = run_cadquery_contract(&CadQueryContractConfig {
+            python: self.python.clone(),
+            code: request.code.clone(),
+            timeout: CADQUERY_RUNNER_TIMEOUT,
+        })
+        .map(|contract| CadQueryModelContract {
+            has_model_description: contract.has_model_description,
+        })
+        .map_err(cadquery_tool_error);
+        Some(result)
+    }
+
     fn dry_run(
         &self,
         request: CadQueryToolRunRequest,

@@ -3,8 +3,9 @@ mod runner_json;
 mod staging;
 
 pub use runner::{
-    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
-    run_cadquery_runner, run_cadquery_runner_with_cancel,
+    CadQueryContractConfig, CadQueryContractResult, CadQueryRunConfig, CadQueryRunResult,
+    CadQueryRunnerError, CadQueryRunnerErrorKind, run_cadquery_contract, run_cadquery_runner,
+    run_cadquery_runner_with_cancel,
 };
 pub use runner_json::{
     cadquery_result_ready, parse_cadquery_success_json, validate_cadquery_mesh_payload,

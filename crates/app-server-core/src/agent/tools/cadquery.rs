@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::llm::LlmToolCall;
 
-use super::{AgentToolRunContext, CadQueryToolRuntime, tool_error_json};
+use super::{AgentToolRunContext, CadQueryModelContract, CadQueryToolRuntime, tool_error_json};
 use args::{
     analyze_args, doc_update_path_for_execute, dry_run_request_args, execute_request_args,
     existing_model_path, resolve_selection_args, result_id_arg, source_request_args,
@@ -25,10 +25,14 @@ use args::{
 };
 use support::{
     analyze_success, contract_json, contract_warnings, resolve_selection_success, result_success,
-    run_success, source_contract,
+    run_success, source_contract, target_type_from_path,
 };
 
-pub(super) fn analyze_source(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) fn analyze_source(
+    workspace_root: &Path,
+    call: &LlmToolCall,
+    runtime: Option<&dyn CadQueryToolRuntime>,
+) -> String {
     let args = match analyze_args(call) {
         Ok(args) => args,
         Err(result) => return result,
@@ -47,6 +51,21 @@ pub(super) fn analyze_source(workspace_root: &Path, call: &LlmToolCall) -> Strin
             );
         }
     };
+    let request = super::CadQueryToolRunRequest {
+        target_path: args.target_path.clone(),
+        target_type: target_type_from_path(&args.target_path),
+        code: source.clone(),
+        params_json: "{}".into(),
+        export_formats: Vec::new(),
+        export_targets: Vec::new(),
+        doc_update_path: None,
+        plan_ref: None,
+        reason: None,
+    };
+    let contract = match source_contract_for_runtime(call, &request, runtime) {
+        Ok(contract) => contract,
+        Err(result) => return result,
+    };
     analyze_success(
         workspace_root,
         call,
@@ -54,16 +73,23 @@ pub(super) fn analyze_source(workspace_root: &Path, call: &LlmToolCall) -> Strin
         args.include_paired_doc,
         args.include_dependencies,
         &source,
+        contract.has_model_description,
     )
     .to_string()
 }
 
-pub(super) fn check_source(call: &LlmToolCall) -> String {
+pub(super) fn check_source(
+    call: &LlmToolCall,
+    runtime: Option<&dyn CadQueryToolRuntime>,
+) -> String {
     let request = match source_request_args(call) {
         Ok(request) => request,
         Err(result) => return result,
     };
-    let contract = source_contract(&request.target_path, request.target_type, &request.code);
+    let contract = match source_contract_for_runtime(call, &request, runtime) {
+        Ok(contract) => contract,
+        Err(result) => return result,
+    };
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -129,13 +155,6 @@ pub(super) fn execute(
     if let Err(result) = validate_execute_scope(call, &request, context) {
         return record_plan_failure_for_tool_error(_workspace_root, context, result);
     }
-    if let Err(result) = validate_execute_product_contract(call, &request) {
-        return record_plan_failure_for_tool_error(_workspace_root, context, result);
-    }
-    match doc_update_path_for_execute(_workspace_root, call, &request, context) {
-        Ok(doc_update_path) => request.doc_update_path = doc_update_path,
-        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
-    }
     let Some(runtime) = runtime else {
         return record_plan_failure_for_tool_error(
             _workspace_root,
@@ -147,6 +166,17 @@ pub(super) fn execute(
             ),
         );
     };
+    let contract = match source_contract_for_runtime(call, &request, Some(runtime)) {
+        Ok(contract) => contract,
+        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
+    };
+    if let Err(result) = validate_execute_product_contract(call, &request, &contract) {
+        return record_plan_failure_for_tool_error(_workspace_root, context, result);
+    }
+    match doc_update_path_for_execute(_workspace_root, call, &request, context) {
+        Ok(doc_update_path) => request.doc_update_path = doc_update_path,
+        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
+    }
     match runtime.execute(request) {
         Ok(result) => {
             let plan_result_path = context
@@ -172,6 +202,28 @@ pub(super) fn execute(
             record_plan_failure_for_tool_error(_workspace_root, context, raw)
         }
     }
+}
+
+fn source_contract_for_runtime(
+    call: &LlmToolCall,
+    request: &super::CadQueryToolRunRequest,
+    runtime: Option<&dyn CadQueryToolRuntime>,
+) -> Result<support::SourceContract, String> {
+    let mut contract = source_contract(&request.target_path, request.target_type, &request.code);
+    if let Some(result) = runtime.and_then(|runtime| runtime.model_contract(request)) {
+        let model_contract = result.map_err(|error| {
+            runtime_error_json(call, error.error_type, error.message, error.retry_allowed)
+        })?;
+        apply_model_contract(&mut contract, model_contract);
+    }
+    Ok(contract)
+}
+
+fn apply_model_contract(
+    contract: &mut support::SourceContract,
+    model_contract: CadQueryModelContract,
+) {
+    contract.has_model_description = model_contract.has_model_description;
 }
 
 pub(super) fn record_plan_failure_for_tool_error(
