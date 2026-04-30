@@ -37,9 +37,13 @@ import { runSavedPlan } from "./chat-actions";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
 import {
-  cadQueryResultTab,
   extractCadQueryReadyFromAgentEvent,
 } from "./cadquery-result-tab";
+import {
+  cadQueryArtifactTabPathForFile,
+  cadQueryTabMatchesReady,
+  isCadQueryStepFile,
+} from "./cadquery-source-path";
 import { CadQueryRefTree } from "./cadquery-ref-tree";
 import { documentTitleForFile } from "./document-title";
 import { Inspector } from "./inspector";
@@ -67,6 +71,7 @@ import {
 } from "./workbench-wiring";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 import { resolveWorkbenchWsUrl } from "./ws-url";
+import { shouldRefreshDocumentForWatch } from "./watch-refresh";
 
 type Phase = "idle" | "connecting" | "handshaking" | "ready" | "error";
 
@@ -127,6 +132,7 @@ export function WorkbenchLayout() {
   const chatSessions = useChatSessions();
   const currentChatSession = useCurrentChatSession();
   const currentSelection = useProtocolStore((s) => s.current_selection);
+  const cadQueryResults = useProtocolStore((s) => s.cadquery_results);
   const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
@@ -471,25 +477,14 @@ export function WorkbenchLayout() {
               activeTab.kind === "scad"
                 ? pathKey(derivePresetPath(activeTab.path))
                 : "";
-            const matchedSpecific = changed.has(activeKey);
             const matchedSettings =
               activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
-            const refreshableDocument =
-              activeTab.kind === "scad" ||
-              activeTab.kind === "cadquery" ||
-              activeTab.kind === "mesh" ||
-              activeTab.kind === "markdown" ||
-              activeTab.kind === "image";
-            const directoryRefreshableDocument =
-              activeTab.kind === "mesh" ||
-              activeTab.kind === "cadquery" ||
-              activeTab.kind === "markdown" ||
-              activeTab.kind === "image";
             if (
-              (matchedSpecific && refreshableDocument) ||
-              (!matchedSpecific &&
-                !matchedSettings &&
-                directoryRefreshableDocument)
+              shouldRefreshDocumentForWatch(
+                activeTab,
+                changed,
+                matchedSettings,
+              )
             ) {
               setDocumentRefreshSignal((n) => n + 1);
               logRef.current.append(
@@ -525,12 +520,13 @@ export function WorkbenchLayout() {
             const activeId = activeTabIdRef.current;
             const activeTab =
               openTabsRef.current.find((tab) => tab.id === activeId) ?? null;
-            if (activeTab?.kind === "cadquery") {
+            if (
+              activeTab?.kind === "cadquery" &&
+              cadQueryTabMatchesReady(activeTab.path, ready)
+            ) {
               setDocumentRefreshSignal((n) => n + 1);
-              setMessage(`cadquery ready ${ready.result_id}`);
-            } else {
-              openTab(cadQueryResultTab(ready));
             }
+            setMessage(`cadquery ready ${ready.result_id}`);
           }
           const eventName = describeAgentEvent(payload);
           logRef.current.append("info", `agent event: ${eventName}`);
@@ -596,6 +592,24 @@ export function WorkbenchLayout() {
 
   const handleOpenPath = useCallback(
     (path: unknown, label = pathLabel(path)) => {
+      if (isCadQueryStepFile(label)) {
+        const artifactPath = cadQueryArtifactTabPathForFile(
+          path,
+          cadQueryResults,
+        );
+        if (!artifactPath) {
+          setMessage(`unsupported file type: ${extensionOf(label)}`);
+          return;
+        }
+        openTab({
+          id: `cadquery-artifact:${pathKey(path)}`,
+          label,
+          path: artifactPath,
+          kind: "cadquery",
+        });
+        setMessage(`opened ${label}`);
+        return;
+      }
       const kind = resolveTabKind(label);
       if (!kind) {
         const ext = extensionOf(label) || "(no extension)";
@@ -606,7 +620,7 @@ export function WorkbenchLayout() {
       openTab({ id, label, path, kind });
       setMessage(`opened ${label}`);
     },
-    [openTab],
+    [cadQueryResults, openTab],
   );
 
   const handleOpenEntry = useCallback(

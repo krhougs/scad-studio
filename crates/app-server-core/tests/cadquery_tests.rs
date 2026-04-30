@@ -69,12 +69,24 @@ fn parses_cadquery_runner_json_into_protocol_payload() {
     assert_eq!(payload.parts[0].ref_text, "@part[top_lid]");
     assert_eq!(payload.parts[0].faces[0].positions.len(), 9);
     assert_eq!(payload.parts[0].feature_map[0].feature, "top_surface");
+    let relation = payload
+        .artifact_relation
+        .as_ref()
+        .expect("artifact relation");
+    assert_eq!(relation.source_path, "parts/top_lid.py");
+    assert_eq!(relation.exports[0].name, "step");
+    assert_eq!(relation.exports[0].path, "outputs/top_lid.step");
+    assert_eq!(
+        relation.exports[0].hash,
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
 
     let ready = cadquery_result_ready(&payload);
     assert_eq!(ready.part_count, 1);
     assert_eq!(ready.face_count, 1);
     assert_eq!(ready.edge_count, 1);
     assert_eq!(ready.vertex_count, 1);
+    assert_eq!(ready.artifact_relation, payload.artifact_relation);
 }
 
 #[test]

@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 5;
+export const CURRENT_PROTOCOL_VERSION = 6;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -266,6 +266,7 @@ export interface CadQueryResultReady {
   face_count: number;
   edge_count: number;
   vertex_count: number;
+  artifact_relation: CadQueryArtifactRelation | null;
 }
 
 export interface CadQueryMeshPayload {
@@ -274,7 +275,19 @@ export interface CadQueryMeshPayload {
   unit: PreviewUnit;
   root_ref_text: string;
   root_object_kind: CadQueryObjectKind;
+  artifact_relation: CadQueryArtifactRelation | null;
   parts: CadQueryPartMesh[];
+}
+
+export interface CadQueryArtifactRelation {
+  source_path: string;
+  exports: CadQueryArtifactExport[];
+}
+
+export interface CadQueryArtifactExport {
+  name: string;
+  path: string;
+  hash: string;
 }
 
 export interface CadQueryPartMesh {

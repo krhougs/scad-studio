@@ -7,16 +7,16 @@
 use std::io::{Cursor, Write};
 
 use app_server_protocol::{
-    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
-    CadQueryResultGetRequest, CancelRequest, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup, FileReadContents, PathHandle,
-    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
-    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewUnit,
-    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerResponseEnvelope,
-    SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest, WatchSubscriptionAck,
-    WorkspaceCurrentResponse, WorkspaceId, decode_client_frame, encode_server_frame,
-    web_file_read_capability,
+    CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryFeatureFaces, CadQueryMeshPayload,
+    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultGetRequest, CancelRequest,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientCommand,
+    ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup,
+    FileReadContents, PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl,
+    PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
+    PreviewUnit, ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope,
+    ServerResponseEnvelope, SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest,
+    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
+    encode_server_frame, web_file_read_capability,
 };
 use js_sys::{Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,15 @@ fn cadquery_mesh_success() -> CommandSuccess {
         unit: PreviewUnit::Millimeter,
         root_ref_text: "@part[top_lid]".into(),
         root_object_kind: CadQueryObjectKind::Part,
+        artifact_relation: Some(CadQueryArtifactRelation {
+            source_path: "parts/top_lid.py".into(),
+            exports: vec![CadQueryArtifactExport {
+                name: "step".into(),
+                path: "outputs/top_lid.step".into(),
+                hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+            }],
+        }),
         parts: vec![cadquery_part_mesh()],
     })
 }
@@ -573,6 +582,18 @@ fn cadquery_mesh_payload_is_buffered_by_result_id() {
             .pointer("/payload/result_id")
             .and_then(|value| value.as_str()),
         Some("cq_abc")
+    );
+    assert_eq!(
+        payload
+            .pointer("/payload/artifact_relation/source_path")
+            .and_then(|value| value.as_str()),
+        Some("parts/top_lid.py")
+    );
+    assert_eq!(
+        payload
+            .pointer("/payload/artifact_relation/exports/0/path")
+            .and_then(|value| value.as_str()),
+        Some("outputs/top_lid.step")
     );
     assert!(payload.pointer("/payload/parts").is_none());
 

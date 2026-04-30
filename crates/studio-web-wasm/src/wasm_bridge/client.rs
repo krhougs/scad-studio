@@ -620,6 +620,7 @@ fn cadquery_ready_from_payload(payload: &CadQueryMeshPayload) -> CadQueryResultR
             .iter()
             .map(|part| part.vertices.len() as u32)
             .sum(),
+        artifact_relation: payload.artifact_relation.clone(),
     }
 }
 
@@ -630,6 +631,7 @@ fn empty_cadquery_payload(ready: &CadQueryResultReady) -> CadQueryMeshPayload {
         unit: app_server_protocol::PreviewUnit::Millimeter,
         root_ref_text: String::new(),
         root_object_kind: app_server_protocol::CadQueryObjectKind::Part,
+        artifact_relation: ready.artifact_relation.clone(),
         parts: Vec::new(),
     }
 }

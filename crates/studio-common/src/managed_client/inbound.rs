@@ -119,6 +119,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                         .iter()
                         .map(|part| part.vertices.len() as u32)
                         .sum(),
+                    artifact_relation: payload.artifact_relation.clone(),
                 });
             }
             CommandSuccess::ChatCreated(response) => {

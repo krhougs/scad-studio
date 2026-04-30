@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  cadQueryResultTab,
   cadQueryResultIdFromPath,
   extractCadQueryReadyFromAgentEvent,
 } from "../../src/workbench/cadquery-result-tab";
@@ -13,6 +12,16 @@ describe("cadquery result tabs", () => {
         result: {
           result_id: "cq_123",
           build_id: "sha256:abc",
+          artifact_relation: {
+            source_path: "parts/model.py",
+            exports: [
+              {
+                name: "step",
+                path: "outputs/model.step",
+                hash: "sha256:def",
+              },
+            ],
+          },
         },
       },
     });
@@ -20,12 +29,16 @@ describe("cadquery result tabs", () => {
     expect(ready).toEqual({
       result_id: "cq_123",
       build_id: "sha256:abc",
-    });
-    expect(cadQueryResultTab(ready!)).toEqual({
-      id: "cadquery:cq_123",
-      kind: "cadquery",
-      label: "cq_123",
-      path: { type: "cadquery_result", result_id: "cq_123" },
+      artifact_relation: {
+        source_path: "parts/model.py",
+        exports: [
+          {
+            name: "step",
+            path: "outputs/model.step",
+            hash: "sha256:def",
+          },
+        ],
+      },
     });
     expect(
       cadQueryResultIdFromPath({

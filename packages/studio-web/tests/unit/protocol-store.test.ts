@@ -5,6 +5,7 @@ import {
   chatHistoryEqual,
   agentRunEqual,
   agentEventsEqual,
+  cadQueryResultsEqual,
 } from "../../src/state/protocol-store";
 import type { ChatSessionSummary, ChatMessageRecord, AgentRun, AgentEvent } from "../../src/workbench/chat-zone";
 
@@ -30,6 +31,7 @@ describe("applySnapshot", () => {
       agent_run: null,
       agent_events: [],
       current_selection: null,
+      cadquery_results: [],
       llm_configured: true,
       transport_status: null,
     });
@@ -155,6 +157,13 @@ describe("applySnapshot", () => {
     expect(useProtocolStore.getState().llm_configured).toBe(false);
   });
 
+  it("updates cadquery_results with artifact relation", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    const results = [makeCadQueryReady("cq_1")];
+    applySnapshot({ cadquery_results: results });
+    expect(useProtocolStore.getState().cadquery_results).toEqual(results);
+  });
+
   it("does not clear existing fields when snapshot omits them", () => {
     useProtocolStore.setState({
       workspace_current: { root_name: "proj", workspace_id: "w1" },
@@ -264,3 +273,38 @@ describe("agentEventsEqual", () => {
     expect(agentEventsEqual([], [makeEvent("agent.token")])).toBe(false);
   });
 });
+
+describe("cadQueryResultsEqual", () => {
+  it("compares artifact relation fields", () => {
+    expect(
+      cadQueryResultsEqual([makeCadQueryReady("cq_1")], [makeCadQueryReady("cq_1")]),
+    ).toBe(true);
+    expect(
+      cadQueryResultsEqual(
+        [makeCadQueryReady("cq_1", "outputs/model.step")],
+        [makeCadQueryReady("cq_1", "outputs/other.step")],
+      ),
+    ).toBe(false);
+  });
+});
+
+function makeCadQueryReady(resultId: string, exportPath = "outputs/model.step") {
+  return {
+    result_id: resultId,
+    build_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    part_count: 1,
+    face_count: 1,
+    edge_count: 0,
+    vertex_count: 0,
+    artifact_relation: {
+      source_path: "parts/model.py",
+      exports: [
+        {
+          name: "step",
+          path: exportPath,
+          hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      ],
+    },
+  };
+}

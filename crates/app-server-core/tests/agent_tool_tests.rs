@@ -3302,6 +3302,7 @@ fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {
         unit: PreviewUnit::Millimeter,
         root_ref_text: "@part[lid]".into(),
         root_object_kind: CadQueryObjectKind::Part,
+        artifact_relation: None,
         parts: vec![CadQueryPartMesh {
             name: "lid".into(),
             object_kind: CadQueryObjectKind::Part,

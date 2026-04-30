@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 5;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 6;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -439,6 +439,7 @@ pub struct CadQueryResultReady {
     pub face_count: u32,
     pub edge_count: u32,
     pub vertex_count: u32,
+    pub artifact_relation: Option<CadQueryArtifactRelation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -448,7 +449,21 @@ pub struct CadQueryMeshPayload {
     pub unit: PreviewUnit,
     pub root_ref_text: String,
     pub root_object_kind: CadQueryObjectKind,
+    pub artifact_relation: Option<CadQueryArtifactRelation>,
     pub parts: Vec<CadQueryPartMesh>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryArtifactRelation {
+    pub source_path: String,
+    pub exports: Vec<CadQueryArtifactExport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct CadQueryArtifactExport {
+    pub name: String,
+    pub path: String,
+    pub hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

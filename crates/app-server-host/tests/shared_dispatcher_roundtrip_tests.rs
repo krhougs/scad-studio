@@ -368,6 +368,53 @@ fn dispatcher_cadquery_preview_rejects_export_formats_without_writing_outputs() 
 }
 
 #[test]
+fn dispatcher_cadquery_result_get_preserves_artifact_relation() {
+    let workspace = temp_workspace("dispatcher-cadquery-artifact-relation");
+    std::fs::create_dir_all(workspace.join("parts")).unwrap();
+    std::fs::write(
+        workspace.join("parts/top_lid.py"),
+        "import cadquery as cq\n\ndef build(params=None):\n    return cq.Workplane('XY').box(1, 1, 1)\n",
+    )
+    .unwrap();
+    let captured = workspace.join("captured-preview-code.py");
+    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
+    let _env = EnvGuard::set("CADQUERY_RUNNER_PYTHON", runner.as_os_str());
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let response = dispatch(
+        &mut dispatcher,
+        44,
+        ClientCommand::CadQueryPreview(app_server_protocol::CadQueryPreviewRequest {
+            target_path: path_handle(["parts", "top_lid.py"]),
+            export_formats: Vec::new(),
+            params_json: "{}".into(),
+        }),
+    );
+    match response.result.expect("preview should succeed") {
+        CommandSuccess::CadQueryResultReady(ready) => {
+            let relation = ready.artifact_relation.expect("ready relation");
+            assert_eq!(relation.source_path, "parts/top_lid.py");
+            assert_eq!(relation.exports[0].path, "outputs/top_lid.step");
+        }
+        other => panic!("unexpected preview response: {other:?}"),
+    }
+
+    let response = dispatch_cached_result_get(&mut dispatcher, 45, "cq_abc");
+    match response.result.expect("result get should succeed") {
+        CommandSuccess::CadQueryMesh(payload) => {
+            let relation = payload.artifact_relation.expect("mesh relation");
+            assert_eq!(relation.source_path, "parts/top_lid.py");
+            assert_eq!(
+                relation.exports[0].hash,
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            );
+        }
+        other => panic!("unexpected result get response: {other:?}"),
+    }
+    cleanup_workspace(&workspace);
+}
+
+#[test]
 fn dispatcher_plan_confirm_returns_deprecated_error_without_using_saved_plan() {
     let workspace = temp_workspace("dispatcher-plan-confirm-ref");
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);

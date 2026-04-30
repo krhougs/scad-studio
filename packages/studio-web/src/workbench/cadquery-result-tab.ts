@@ -1,5 +1,4 @@
 import type { CadQueryResultReady } from "@budn/app-server-protocol";
-import type { DocumentTab } from "../state/ui-store";
 
 export type CadQueryResultTabPath = {
   type: "cadquery_result";
@@ -19,25 +18,12 @@ export function extractCadQueryReadyFromAgentEvent(
   return result as unknown as CadQueryResultReady;
 }
 
-export function cadQueryResultTab(ready: CadQueryResultReady): DocumentTab {
-  return {
-    id: `cadquery:${ready.result_id}`,
-    label: labelFromCadQueryReady(ready),
-    path: { type: "cadquery_result", result_id: ready.result_id },
-    kind: "cadquery",
-  };
-}
-
 export function cadQueryResultIdFromPath(path: unknown): string | null {
   const record = objectRecord(path);
   const resultId = record?.["result_id"];
   return record?.["type"] === "cadquery_result" && typeof resultId === "string"
     ? resultId
     : null;
-}
-
-function labelFromCadQueryReady(ready: CadQueryResultReady): string {
-  return ready.result_id;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {

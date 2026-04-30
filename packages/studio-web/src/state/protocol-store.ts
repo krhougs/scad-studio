@@ -7,7 +7,10 @@ import type {
   AgentEvent,
   ChatSnapshot,
 } from "../workbench/chat-zone";
-import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
+import type {
+  CadQueryResultReady,
+  SelectionUpdateRequest,
+} from "@budn/app-server-protocol";
 
 export type WorkspaceSlice = {
   workspace_current: { workspace_id?: unknown; root_name?: string } | null;
@@ -20,6 +23,7 @@ export type ChatSlice = {
   agent_run: AgentRun | null;
   agent_events: AgentEvent[];
   current_selection: SelectionUpdateRequest | null;
+  cadquery_results: CadQueryResultReady[];
   llm_configured: boolean;
 };
 
@@ -44,6 +48,7 @@ const INITIAL_CHAT: ChatSlice = {
   agent_run: null,
   agent_events: [],
   current_selection: null,
+  cadquery_results: [],
   llm_configured: true,
 };
 
@@ -176,6 +181,12 @@ function applyChatFields(
     patch.current_selection = selection;
   }
 
+  const cadqueryResults =
+    (snap["cadquery_results"] as CadQueryResultReady[] | undefined) ?? [];
+  if (!cadQueryResultsEqual(state.cadquery_results, cadqueryResults)) {
+    patch.cadquery_results = cadqueryResults;
+  }
+
   const llm = (snap["llm_configured"] as boolean | undefined) ?? true;
   if (state.llm_configured !== llm) {
     patch.llm_configured = llm;
@@ -246,4 +257,51 @@ export function agentEventsEqual(a: AgentEvent[], b: AgentEvent[]): boolean {
   if (a.length !== b.length) return false;
   if (a.length === 0) return true;
   return a[a.length - 1]!.event === b[b.length - 1]!.event;
+}
+
+export function cadQueryResultsEqual(
+  a: CadQueryResultReady[],
+  b: CadQueryResultReady[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]!;
+    const right = b[i]!;
+    if (
+      left.result_id !== right.result_id ||
+      left.build_id !== right.build_id ||
+      left.part_count !== right.part_count ||
+      left.face_count !== right.face_count ||
+      left.edge_count !== right.edge_count ||
+      left.vertex_count !== right.vertex_count ||
+      !artifactRelationEqual(left.artifact_relation, right.artifact_relation)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function artifactRelationEqual(
+  a: CadQueryResultReady["artifact_relation"],
+  b: CadQueryResultReady["artifact_relation"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.source_path !== b.source_path || a.exports.length !== b.exports.length) {
+    return false;
+  }
+  for (let i = 0; i < a.exports.length; i++) {
+    const left = a.exports[i]!;
+    const right = b.exports[i]!;
+    if (
+      left.name !== right.name ||
+      left.path !== right.path ||
+      left.hash !== right.hash
+    ) {
+      return false;
+    }
+  }
+  return true;
 }

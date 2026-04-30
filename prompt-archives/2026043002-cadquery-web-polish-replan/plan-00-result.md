@@ -24,7 +24,7 @@
 - Phase -1：已完成。
 - Phase 0：已完成。
 - Phase 1：已完成。
-- Phase 2：未开始。
+- Phase 2：已完成。
 - Phase 3：未开始。
 - Phase 4：未开始。
 - Phase 5：未开始。
@@ -158,3 +158,44 @@
 - 第二轮 Phase 1 review 发现 root object 仍可选、RefKind 不匹配时 canvas 会回退到错误 selection。已修复 root tree row、object mode fallback 和 nested assembly 行为。
 - 第三轮 Phase 1 review 发现 feature mode 会从 `face.features[0]` 回退生成 tree 不存在的 Ref，且 root object 仍可能通过 object mode 进入 selection。已改为只使用 `featureMap.faceIndices` 和非 root object selection。
 - 最终 Phase 1 re-review 结论：无阻塞项，无需返工。非阻塞缺口包括缺少 Workbench 级双向同步集成测试、preview mode 辅助元素的浏览器级断言、dock 位置截图或布局断言；这些在 Phase 5 真实网页验收和 Plan 级 review 中继续覆盖。
+
+## Phase 2 结果
+
+### 边界判断
+
+- 本 Phase 涉及 app-server protocol、runner manifest 解析、managed client snapshot、wasm side buffer 和 Web Workbench 文件路由，属于跨 protocol 与 Web 壳层接线改动。
+- `.py` 模型预览仍由文件列表直接打开 CadQuery source preview；`.step/.stp` 不再按扩展名进入 CadQuery，也不再由 `outputs/<stem>.step -> parts/<stem>.py` 推断 source。
+- 生成的 STEP 只有在当前 protocol snapshot 的 CadQuery result artifact relation 中明确列为 export path 时，才会构造 `cadquery_artifact` tab，并把 preview target 指向 relation 中的 source path。
+- Agent `mesh_ready` 事件不再创建临时 CadQuery result tab；只有当前 active CadQuery tab 与 ready relation 匹配时才刷新当前 tab。
+- watch 刷新路径不再对 CadQuery 使用目录级 fallback；CadQuery 只在 watched path 与当前 tab path 精确匹配时刷新，避免 root watch 或无关 output 变更刷新错误模型。
+- `.py` 模型写入仍由 CadQuery tool 和 staging commit 承接；本 Phase 没有新增普通文件写入 `.py` 或绕过 staging 的路径。
+
+### 变更摘要
+
+- `app-server-protocol` 新增 `CadQueryArtifactRelation` / `CadQueryArtifactExport`，并挂到 `CadQueryResultReady` 与 `CadQueryMeshPayload`；protocol version 升到 6。
+- `app-server-core` runner JSON 解析保留 manifest 中的 `source_path`、`exports` 和 `export_hashes`，并通过 `cadquery_result_ready` 传递到轻量 ready payload。
+- `studio-common` 与 `studio-web-wasm` 在从 mesh payload 生成 ready payload 时保留 artifact relation，wasm side buffer 不再丢失 relation。
+- `packages/app-server-protocol/generated/app_server_protocol_wasm_bg.wasm` 已通过 `bun run protocol:build` 重新生成，匹配 protocol version 6。
+- Web protocol store 记录 `cadquery_results`，文件列表打开 STEP 时只查询这些 result 的 artifact relation；无匹配 relation 时显示 unsupported。
+- 删除 Web 运行路径中打开临时 `cadquery_result` tab 的 factory 使用；保留 legacy result path 识别，避免破坏已有 viewer 分支。
+- 新增 `watch-refresh.ts`，把 watch 刷新策略变成可测试的纯函数，明确 CadQuery 不走目录级 fallback。
+
+### 验证证据
+
+- `bun run --cwd packages/studio-web test:unit tests/unit/watch-refresh.test.ts tests/unit/cadquery-source-path.test.ts tests/unit/tab-kind.test.ts tests/unit/cadquery-result-tab.test.ts tests/unit/protocol-package-import.test.ts tests/unit/protocol-store.test.ts tests/unit/cadquery-source-preview.test.tsx`：54 passed，0 failed。
+- `bun run --cwd packages/studio-web typecheck`：`tsc --noEmit` 通过，exit 0。
+- `cargo test -p app-server-core cadquery --test cadquery_tests`：11 passed，0 failed。
+- `cargo test -p app-server-protocol cadquery_payload_roundtrips_and_ready_counts_are_lightweight --test borsh_payload_roundtrip_tests`：1 passed，0 failed。
+- `cargo test -p app-server-host dispatcher_cadquery_result_get_preserves_artifact_relation --test shared_dispatcher_roundtrip_tests`：1 passed，0 failed。
+- `cargo test -p app-server-core workspace_tool_executor_cadquery --test agent_tool_tests`：22 passed，0 failed。
+- `cargo check -p studio-web-wasm --target wasm32-unknown-unknown`：通过，exit 0。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：8 passed，0 failed。
+- `lsof -nP -iTCP:39193 -iTCP:5188 -sTCP:LISTEN`：无输出，exit 1，Playwright harness 未遗留监听进程。
+- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+- Phase 2 提交后执行 `bun run protocol:check-generated`：通过，exit 0，generated protocol wasm 与当前 HEAD 一致。
+- `git diff --check`：无输出，exit 0。
+
+### 独立 Review 结论
+
+- 第一轮 Phase 2 review 发现两个阻塞项：Agent `mesh_ready` 不匹配当前 tab 时仍会打开临时 result tab；watch 目录级 fallback 仍可能刷新无关 active CadQuery tab。已删除临时 result tab 打开路径，并让 CadQuery watch 刷新只接受精确路径命中。
+- 第二轮 Phase 2 review 结论：无阻塞项，无高风险问题。Reviewer 确认 `.step/.stp` 只通过 `artifact_relation.exports` 找回 source path，普通 STEP 不再解析为 CadQuery tab，`cadQueryResultTab` factory 已删除，CadQuery watch 刷新不再走目录级 fallback。

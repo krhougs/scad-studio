@@ -57,6 +57,16 @@ describe("protocol package import", () => {
       face_count: 1,
       edge_count: 1,
       vertex_count: 1,
+      artifact_relation: {
+        source_path: "parts/top_lid.py",
+        exports: [
+          {
+            name: "step",
+            path: "outputs/top_lid.step",
+            hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+        ],
+      },
     };
     const mesh: CadQueryMeshPayload = {
       result_id: ready.result_id,
@@ -64,6 +74,7 @@ describe("protocol package import", () => {
       unit: "millimeter",
       root_ref_text: "@part[top_lid]",
       root_object_kind: "part",
+      artifact_relation: ready.artifact_relation,
       parts: [],
     };
     const success: CommandSuccess = {

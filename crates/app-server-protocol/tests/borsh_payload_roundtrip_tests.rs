@@ -2,11 +2,12 @@ use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
     AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent, AgentReasoningEvent,
     AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
-    CURRENT_PROTOCOL_VERSION, CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind,
-    CadQueryPartMesh, CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse,
-    ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse,
-    ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
+    CURRENT_PROTOCOL_VERSION, CadQueryArtifactExport, CadQueryArtifactRelation,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
+    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
+    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
     ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
@@ -227,6 +228,7 @@ fn cadquery_payload_roundtrips_and_ready_counts_are_lightweight() {
         unit: PreviewUnit::Millimeter,
         root_ref_text: "@assembly[full]".into(),
         root_object_kind: CadQueryObjectKind::Assembly,
+        artifact_relation: Some(cadquery_sample_relation()),
         parts: vec![CadQueryPartMesh {
             name: "top_lid".into(),
             object_kind: CadQueryObjectKind::Part,
@@ -269,6 +271,7 @@ fn cadquery_payload_roundtrips_and_ready_counts_are_lightweight() {
         face_count: 1,
         edge_count: 1,
         vertex_count: 1,
+        artifact_relation: payload.artifact_relation.clone(),
     };
     let response = ServerEnvelope::Response(ServerResponseEnvelope {
         request_id: RequestId(42),
@@ -340,6 +343,7 @@ fn cadquery_sample_payload() -> CadQueryMeshPayload {
         unit: PreviewUnit::Millimeter,
         root_ref_text: "@part[top_lid]".into(),
         root_object_kind: CadQueryObjectKind::Part,
+        artifact_relation: Some(cadquery_sample_relation()),
         parts: vec![CadQueryPartMesh {
             name: "top_lid".into(),
             object_kind: CadQueryObjectKind::Part,
@@ -367,6 +371,17 @@ fn cadquery_sample_payload() -> CadQueryMeshPayload {
                 feature: "top_surface".into(),
                 face_indices: vec![0],
             }],
+        }],
+    }
+}
+
+fn cadquery_sample_relation() -> CadQueryArtifactRelation {
+    CadQueryArtifactRelation {
+        source_path: "parts/top_lid.py".into(),
+        exports: vec![CadQueryArtifactExport {
+            name: "step".into(),
+            path: "outputs/top_lid.step".into(),
+            hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
         }],
     }
 }

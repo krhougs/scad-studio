@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use app_server_protocol::{
-    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
-    CadQueryResultReady, EdgeGroup, FaceGroup, PathHandle, PreviewUnit, ProtocolError,
-    ProtocolErrorCode, VertexPoint, WorkspaceId, validate_f32,
+    CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryFeatureFaces, CadQueryMeshPayload,
+    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, EdgeGroup, FaceGroup, PathHandle,
+    PreviewUnit, ProtocolError, ProtocolErrorCode, VertexPoint, WorkspaceId, validate_f32,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -97,6 +97,7 @@ pub fn parse_cadquery_success_json(text: &str) -> Result<CadQueryMeshPayload, Pr
         ));
     }
     validate_manifest(&decoded)?;
+    let artifact_relation = convert_artifact_relation(&decoded)?;
     let mut parts = Vec::with_capacity(decoded.parts.len());
     for part in decoded.parts {
         parts.push(convert_part(part)?);
@@ -107,6 +108,7 @@ pub fn parse_cadquery_success_json(text: &str) -> Result<CadQueryMeshPayload, Pr
         unit: PreviewUnit::Millimeter,
         root_ref_text: decoded.root_ref_text,
         root_object_kind: parse_object_kind(&decoded.root_object_kind)?,
+        artifact_relation: Some(artifact_relation),
         parts,
     };
     validate_cadquery_mesh_payload(&payload)?;
@@ -194,6 +196,26 @@ fn validate_manifest_path(path: &str, field: &str) -> Result<(), ProtocolError> 
     Ok(())
 }
 
+fn convert_artifact_relation(
+    decoded: &RunnerSuccess,
+) -> Result<CadQueryArtifactRelation, ProtocolError> {
+    let mut exports = Vec::with_capacity(decoded.exports.len());
+    for (name, path) in &decoded.exports {
+        let Some(hash) = decoded.manifest.export_hashes.get(name) else {
+            return invalid("CadQuery export_hashes 必须包含每个 export");
+        };
+        exports.push(CadQueryArtifactExport {
+            name: name.clone(),
+            path: path.clone(),
+            hash: hash.clone(),
+        });
+    }
+    Ok(CadQueryArtifactRelation {
+        source_path: decoded.manifest.source_path.clone(),
+        exports,
+    })
+}
+
 pub fn cadquery_result_ready(payload: &CadQueryMeshPayload) -> CadQueryResultReady {
     let part_count = payload.parts.len() as u32;
     let face_count = payload
@@ -218,6 +240,7 @@ pub fn cadquery_result_ready(payload: &CadQueryMeshPayload) -> CadQueryResultRea
         face_count,
         edge_count,
         vertex_count,
+        artifact_relation: payload.artifact_relation.clone(),
     }
 }
 
@@ -350,7 +373,7 @@ fn validate_index(index: u32, len: usize, field: &str) -> Result<(), ProtocolErr
     invalid(format!("{field} 越界"))
 }
 
-fn invalid(message: impl Into<String>) -> Result<(), ProtocolError> {
+fn invalid<T>(message: impl Into<String>) -> Result<T, ProtocolError> {
     Err(ProtocolError::new(
         ProtocolErrorCode::InvalidWireFrame,
         message,
