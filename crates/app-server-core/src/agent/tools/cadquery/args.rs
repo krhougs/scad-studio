@@ -114,6 +114,43 @@ pub(super) fn validate_contract_for_run(
     }
 }
 
+pub(super) fn validate_execute_product_contract(
+    call: &LlmToolCall,
+    request: &CadQueryToolRunRequest,
+) -> Result<(), String> {
+    let contract = source_contract(&request.target_path, request.target_type, &request.code);
+    if !contract.has_model_description {
+        return Err(tool_error_json(
+            call,
+            "CadQuery model source must include MODEL_DESCRIPTION and MODEL_DETAILS fields purpose, key_dimensions, intended_use, assumptions, interaction_notes, and manufacturing_or_placement_constraints.",
+            "invalid_arguments",
+        ));
+    }
+    if request.export_formats.is_empty() || request.export_targets.is_empty() {
+        return Err(tool_error_json(
+            call,
+            "cadquery_execute requires export_formats and export_targets so the committed .py source and derived .step output stay synchronized.",
+            "permission_denied",
+        ));
+    }
+    if !request
+        .export_formats
+        .iter()
+        .any(|format| matches!(format, CadQueryExportFormat::Step))
+        || !request
+            .export_targets
+            .iter()
+            .any(|target| target.ends_with(".step"))
+    {
+        return Err(tool_error_json(
+            call,
+            "cadquery_execute requires a step export format and matching outputs/*.step export target.",
+            "permission_denied",
+        ));
+    }
+    Ok(())
+}
+
 fn contract_failure_summary(contract: &super::support::SourceContract) -> String {
     let mut missing = Vec::new();
     if !contract.has_build_function {

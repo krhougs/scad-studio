@@ -45,6 +45,96 @@ fn tool_json_with_context(
     serde_json::from_str(&executor.execute(call, context)).expect("tool result should be json")
 }
 
+fn valid_part_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Contract test model\"\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn triple_quoted_model_contract_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"\"\"Contract test model\"\"\"\n\
+MODEL_DETAILS = {{\"purpose\":\"\"\"Verify model contract\"\"\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn annotated_model_contract_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION: str = \"Contract test model\"\n\
+MODEL_DETAILS: dict[str, str] = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn incomplete_model_details_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Incomplete contract test model\"\n\
+MODEL_DETAILS = {{\n\
+    # \"purpose\": \"Verify model contract\",\n\
+    # \"key_dimensions\": \"unit dimensions\",\n\
+    # \"intended_use\": \"automated contract validation\",\n\
+    # \"assumptions\": \"no external dependencies\",\n\
+    # \"interaction_notes\": \"select named features\",\n\
+    # \"manufacturing_or_placement_constraints\": \"none\",\n\
+}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn scoped_model_details_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Scoped contract test model\"\n\
+def details():\n    MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn empty_model_details_value_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Empty value contract test model\"\n\
+MODEL_DETAILS = {{\"purpose\":\"\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn collection_model_details_value_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Collection value contract test model\"\n\
+MODEL_DETAILS = {{\"purpose\":{{}},\"key_dimensions\":[],\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn empty_model_description_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"\"\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn string_literal_model_details_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"String literal contract test model\"\n\
+NOTE = '''\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":\"unit dimensions\",\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+'''\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
 fn test_path_handle(path: impl IntoIterator<Item = impl Into<String>>) -> PathHandle {
     PathHandle::new(WorkspaceId::new("ws"), path).expect("valid test path")
 }
@@ -1485,7 +1575,7 @@ fn workspace_tool_executor_cadquery_analyze_source_summarizes_source() {
         dir.path().join("parts/lid.py"),
         concat!(
             "from components.pcb import build as pcb_build\n",
-            "REFS = {\"type\":\"part\",\"features\":{\"top\":{\"selector\":\"top\"}}}\n",
+            "REFS = {\"type\":\"part\",\"features\":{\"lid_alignment_surface\":{\"selector\":\"top\"}}}\n",
             "def build(params=None):\n",
             "    return pcb_build(params)\n"
         ),
@@ -1511,7 +1601,10 @@ fn workspace_tool_executor_cadquery_analyze_source_summarizes_source() {
         result["local_dependencies"],
         serde_json::json!(["components/pcb.py"])
     );
-    assert_eq!(result["ref_keys"], serde_json::json!(["top"]));
+    assert_eq!(
+        result["ref_keys"],
+        serde_json::json!(["lid_alignment_surface"])
+    );
 }
 
 #[cfg(unix)]
@@ -1553,7 +1646,7 @@ fn workspace_tool_executor_cadquery_check_source_reports_contract() {
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"component\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"component\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "open('x', 'w')\\n\"}"
             ),
         ),
@@ -1629,7 +1722,7 @@ fn workspace_tool_executor_cadquery_check_source_warns_about_missing_model_descr
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top_surface\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\"}"
             ),
         ),
@@ -1645,6 +1738,13 @@ fn workspace_tool_executor_cadquery_check_source_warns_about_missing_model_descr
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("MODEL_DESCRIPTION"))
     );
+    let warnings = result["warnings"].to_string();
+    for required in ["purpose", "key_dimensions", "intended_use", "assumptions"] {
+        assert!(
+            warnings.contains(required),
+            "CadQuery model detail warning should mention {required}"
+        );
+    }
 }
 
 #[test]
@@ -1697,6 +1797,242 @@ fn workspace_tool_executor_cadquery_execute_explains_missing_refs_shape() {
 }
 
 #[test]
+fn workspace_tool_executor_cadquery_execute_rejects_missing_model_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentExecutionScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    );
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.execution_scope = Some(scope);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            concat!(
+                "{\"target_path\":\"parts/lid.py\",",
+                "\"target_type\":\"part\",",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_grip_surface\\\":{}}}\\n",
+                "def build(params=None): pass\",",
+                "\"export_formats\":[\"step\"],",
+                "\"export_targets\":[\"outputs/lid.step\"]}"
+            ),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("MODEL_DESCRIPTION")
+    );
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_incomplete_model_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentExecutionScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    );
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.execution_scope = Some(scope);
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": incomplete_model_details_source("lid_grip_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "invalid_arguments");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("MODEL_DETAILS")
+    );
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let scope = AgentExecutionScope::new(
+        vec!["parts/lid.py".into()],
+        Vec::new(),
+        vec!["outputs/lid.step".into()],
+    );
+    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    context.execution_scope = Some(scope);
+
+    for (case, code) in [
+        ("scoped", scoped_model_details_source("lid_grip_surface")),
+        (
+            "empty",
+            empty_model_details_value_source("lid_grip_surface"),
+        ),
+        (
+            "collection",
+            collection_model_details_value_source("lid_grip_surface"),
+        ),
+        (
+            "empty_description",
+            empty_model_description_source("lid_grip_surface"),
+        ),
+        (
+            "string_literal",
+            string_literal_model_details_source("lid_grip_surface"),
+        ),
+    ] {
+        let args = serde_json::json!({
+            "target_path": "parts/lid.py",
+            "target_type": "part",
+            "code": code,
+            "export_formats": ["step"],
+            "export_targets": ["outputs/lid.step"],
+        })
+        .to_string();
+
+        let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
+
+        assert_eq!(result["status"], "error", "{case}");
+        assert_eq!(result["error_type"], "invalid_arguments", "{case}");
+        assert!(
+            result["message"]
+                .as_str()
+                .unwrap()
+                .contains("MODEL_DETAILS")
+        );
+    }
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_requires_step_export_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+
+    let result = tool_json_with_context(
+        &executor,
+        &call(
+            "cadquery_execute",
+            &serde_json::json!({
+                "target_path": "parts/lid.py",
+                "target_type": "part",
+                "code": valid_part_source("lid_grip_surface"),
+            })
+            .to_string(),
+        ),
+        &context,
+    );
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("export_formats")
+    );
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("export_targets")
+    );
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_rejects_non_step_only_exports() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+    let executor =
+        WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
+    let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["stl"],
+        "export_targets": ["outputs/lid.stl"],
+    })
+    .to_string();
+
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
+
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error_type"], "permission_denied");
+    assert!(result["message"].as_str().unwrap().contains("step"));
+    assert!(runtime.execute_requests().is_empty());
+}
+
+#[test]
+fn workspace_tool_executor_cadquery_execute_accepts_python_model_contract_variants() {
+    for (case, code) in [
+        (
+            "triple_quoted",
+            triple_quoted_model_contract_source("lid_alignment_surface"),
+        ),
+        (
+            "annotated",
+            annotated_model_contract_source("lid_alignment_surface"),
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("parts")).unwrap();
+        std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+        let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("cq_1")));
+        let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf())
+            .with_cadquery_runtime(runtime.clone());
+        let scope = AgentExecutionScope::new(
+            vec!["parts/lid.py".into()],
+            Vec::new(),
+            vec!["outputs/lid.step".into()],
+        );
+        let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+        context.execution_scope = Some(scope);
+        let args = serde_json::json!({
+            "target_path": "parts/lid.py",
+            "target_type": "part",
+            "code": code,
+            "export_formats": ["step"],
+            "export_targets": ["outputs/lid.step"],
+        })
+        .to_string();
+
+        let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
+
+        assert_eq!(result["status"], "ok", "{case}: {result}");
+        assert_eq!(runtime.execute_requests().len(), 1, "{case}");
+    }
+}
+
+#[test]
 fn workspace_tool_executor_cadquery_dry_run_rejects_invalid_params_json() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = Arc::new(FakeCadQueryRuntime::new(sample_mesh("dry_cq_1")));
@@ -1711,7 +2047,7 @@ fn workspace_tool_executor_cadquery_dry_run_rejects_invalid_params_json() {
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\",",
                 "\"params_json\":\"{\"}"
             ),
@@ -1741,7 +2077,7 @@ fn workspace_tool_executor_cadquery_dry_run_uses_runtime_without_writing_workspa
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\",",
                 "\"params_json\":\"{}\"}"
             ),
@@ -1780,7 +2116,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_unsafe_source() {
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None):\\n    open('x', 'w')\"}"
             ),
         ),
@@ -1813,7 +2149,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_invalid_project_import() {
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
                 "\"code\":\"import docs as design_docs, chats.session\\n",
-                "REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\"}"
             ),
         ),
@@ -1841,21 +2177,15 @@ fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result(
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
     context.execution_scope = Some(scope);
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\",",
-                "\"export_formats\":[\"step\"],",
-                "\"export_targets\":[\"outputs/lid.step\"]}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
     assert_eq!(result["status"], "ok");
     assert_eq!(result["result_id"], "cq_1");
     assert_eq!(
@@ -1871,7 +2201,7 @@ fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result(
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\",",
                 "\"export_targets\":[\"outputs/lid.step\"]}"
             ),
@@ -1888,7 +2218,10 @@ fn workspace_tool_executor_cadquery_execute_allows_single_commit_and_get_result(
     );
     assert_eq!(summary["status"], "ok");
     assert_eq!(summary["root_ref_text"], "@part[lid]");
-    assert_eq!(summary["parts"][0]["features"], serde_json::json!(["top"]));
+    assert_eq!(
+        summary["parts"][0]["features"],
+        serde_json::json!(["lid_alignment_surface"])
+    );
 }
 
 #[test]
@@ -1906,7 +2239,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_plan_mode() {
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\"}"
             ),
         ),
@@ -1926,21 +2259,15 @@ fn workspace_tool_executor_cadquery_execute_allows_agent_mode_without_plan_scope
         WorkspaceToolExecutor::new(dir.path().to_path_buf()).with_cadquery_runtime(runtime.clone());
     let context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\",",
-                "\"export_formats\":[\"step\"],",
-                "\"export_targets\":[\"outputs/lid.step\"]}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "ok");
     assert_eq!(result["result_id"], "cq_1");
@@ -1971,21 +2298,15 @@ fn workspace_tool_executor_cadquery_execute_updates_plan_result_for_plan_scope()
         vec!["outputs/lid.step".into()],
     ));
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\",",
-                "\"export_formats\":[\"step\"],",
-                "\"export_targets\":[\"outputs/lid.step\"]}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "ok");
     assert_eq!(
@@ -2031,7 +2352,7 @@ fn workspace_tool_executor_cadquery_execute_records_plan_result_for_scope_failur
             concat!(
                 "{\"target_path\":\"parts/other.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\",",
                 "\"export_formats\":[\"step\"],",
                 "\"export_targets\":[\"outputs/other.step\"]}"
@@ -2077,21 +2398,15 @@ fn workspace_tool_executor_cadquery_execute_does_not_update_plan_result_through_
         vec!["outputs/lid.step".into()],
     ));
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\",",
-                "\"export_formats\":[\"step\"],",
-                "\"export_targets\":[\"outputs/lid.step\"]}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "ok");
     assert!(result["plan_result_update_warning"].is_string());
@@ -2129,21 +2444,15 @@ fn workspace_tool_executor_cadquery_execute_does_not_update_hard_linked_plan_res
         vec!["outputs/lid.step".into()],
     ));
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\",",
-                "\"export_formats\":[\"step\"],",
-                "\"export_targets\":[\"outputs/lid.step\"]}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "ok");
     assert!(result["plan_result_update_warning"].is_string());
@@ -2174,7 +2483,7 @@ fn workspace_tool_executor_cadquery_execute_rejects_unmatched_export_target() {
             concat!(
                 "{\"target_path\":\"parts/lid.py\",",
                 "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
+                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"lid_alignment_surface\\\":{}}}\\n",
                 "def build(params=None): pass\",",
                 "\"export_formats\":[\"step\"],",
                 "\"export_targets\":[\"outputs/other.step\"]}"
@@ -2200,22 +2509,18 @@ fn workspace_tool_executor_cadquery_execute_requires_paired_doc_in_scope() {
     context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into()],
         Vec::new(),
-        Vec::new(),
+        vec!["outputs/lid.step".into()],
     ));
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\"}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "permission_denied");
@@ -2241,22 +2546,18 @@ fn workspace_tool_executor_cadquery_execute_rejects_hard_linked_paired_doc() {
     context.execution_scope = Some(AgentExecutionScope::new(
         vec!["parts/lid.py".into(), "parts/lid.md".into()],
         Vec::new(),
-        Vec::new(),
+        vec!["outputs/lid.step".into()],
     ));
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "cadquery_execute",
-            concat!(
-                "{\"target_path\":\"parts/lid.py\",",
-                "\"target_type\":\"part\",",
-                "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                "def build(params=None): pass\"}"
-            ),
-        ),
-        &context,
-    );
+    let args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
+    let result = tool_json_with_context(&executor, &call("cadquery_execute", &args), &context);
 
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "permission_denied");
@@ -2299,8 +2600,11 @@ fn workspace_tool_executor_cadquery_resolve_selection_maps_feature() {
 
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_ref_text"], "@part[lid]");
-    assert_eq!(result["candidate_feature_ref"], "@feature[lid.top]");
-    assert_eq!(result["stable_ref"], "@feature[lid.top]");
+    assert_eq!(
+        result["candidate_feature_ref"],
+        "@feature[lid.lid_alignment_surface]"
+    );
+    assert_eq!(result["stable_ref"], "@feature[lid.lid_alignment_surface]");
     assert_eq!(result["ambiguous"], false);
 }
 
@@ -2803,7 +3107,7 @@ fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
@@ -2817,7 +3121,7 @@ fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
     assert_eq!(result["selections"][0]["ref_text"], "@face[lid:f_1]");
     assert_eq!(
         result["selections"][0]["candidate_feature_ref"],
-        "@feature[lid.top]"
+        "@feature[lid.lid_alignment_surface]"
     );
 }
 
@@ -2827,7 +3131,7 @@ fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = {\"features\": {\"top\": {\"kind\": \"feature\"}}}\n",
+        "REFS = {\"features\": {\"lid_alignment_surface\": {\"kind\": \"feature\"}}}\n",
     )
     .unwrap();
     std::fs::write(dir.path().join("parts/lid.md"), "# lid\n").unwrap();
@@ -2844,12 +3148,15 @@ fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
 
     let feature = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(feature["status"], "ok");
     assert_eq!(feature["owner_path"], "parts/lid.py");
     assert_eq!(feature["owner_doc_path"], "parts/lid.md");
-    assert_eq!(feature["stable_ref"], "@feature[lid.top]");
+    assert_eq!(feature["stable_ref"], "@feature[lid.lid_alignment_surface]");
     assert_eq!(feature["ambiguous"], false);
 
     let mut context = tool_context(AgentMode::Agent, None);
@@ -2859,7 +3166,7 @@ fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
@@ -2872,7 +3179,10 @@ fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
     assert_eq!(raw["status"], "ok");
     assert_eq!(raw["raw_ref_text"], "@face[lid:f_1]");
     assert_eq!(raw["owner_ref_text"], "@part[lid]");
-    assert_eq!(raw["candidate_feature_ref"], "@feature[lid.top]");
+    assert_eq!(
+        raw["candidate_feature_ref"],
+        "@feature[lid.lid_alignment_surface]"
+    );
 }
 
 #[test]
@@ -2923,7 +3233,7 @@ fn workspace_tool_executor_resolve_ref_selection_requires_safe_owner_source() {
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
@@ -2964,7 +3274,7 @@ fn workspace_tool_executor_resolve_ref_rejects_symlink_escape_owner_source() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         outside.path().join("lid.py"),
-        "REFS = {\"features\": {\"top\": {}}}\n",
+        "REFS = {\"features\": {\"lid_alignment_surface\": {}}}\n",
     )
     .unwrap();
     std::os::unix::fs::symlink(
@@ -2976,7 +3286,10 @@ fn workspace_tool_executor_resolve_ref_rejects_symlink_escape_owner_source() {
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], serde_json::Value::Null);
@@ -2992,7 +3305,7 @@ fn workspace_tool_executor_resolve_ref_rejects_symlink_denied_root_owner_source(
     std::fs::create_dir_all(dir.path().join("outputs")).unwrap();
     std::fs::write(
         dir.path().join("outputs/lid.py"),
-        "REFS = {\"features\": {\"top\": {}}}\n",
+        "REFS = {\"features\": {\"lid_alignment_surface\": {}}}\n",
     )
     .unwrap();
     std::os::unix::fs::symlink("../outputs/lid.py", dir.path().join("parts/lid.py")).unwrap();
@@ -3000,7 +3313,10 @@ fn workspace_tool_executor_resolve_ref_rejects_symlink_denied_root_owner_source(
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], serde_json::Value::Null);
@@ -3014,14 +3330,17 @@ fn workspace_tool_executor_resolve_ref_requires_refs_feature_entry() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "# top appears in a comment only\nREFS = {\"features\": {\"side\": {}}}\n",
+        "# lid_alignment_surface appears in a comment only\nREFS = {\"features\": {\"side\": {}}}\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3045,7 +3364,7 @@ fn workspace_tool_executor_resolve_ref_rejects_path_like_ref_names() {
         &executor,
         &call(
             "resolve_ref",
-            "{\"ref_text\":\"@feature[../.budn_staging/lid.top]\"}",
+            "{\"ref_text\":\"@feature[../.budn_staging/lid.lid_alignment_surface]\"}",
         ),
     );
     assert_eq!(result["status"], "error");
@@ -3058,14 +3377,17 @@ fn workspace_tool_executor_resolve_ref_ignores_refs_inside_string_literal() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "note = 'REFS = {\"features\": {\"top\": {}}}'\n",
+        "note = 'REFS = {\"features\": {\"lid_alignment_surface\": {}}}'\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3079,14 +3401,17 @@ fn workspace_tool_executor_resolve_ref_ignores_refs_dict_inside_refs_string_assi
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = '{\"features\": {\"top\": {}}}'\n",
+        "REFS = '{\"features\": {\"lid_alignment_surface\": {}}}'\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3100,14 +3425,17 @@ fn workspace_tool_executor_resolve_ref_ignores_refs_dict_inside_refs_assignment_
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = None  # {\"features\": {\"top\": {}}}\n",
+        "REFS = None  # {\"features\": {\"lid_alignment_surface\": {}}}\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3121,14 +3449,17 @@ fn workspace_tool_executor_resolve_ref_ignores_refs_dict_after_non_dict_refs_ass
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = None\nOTHER = {\"features\": {\"top\": {}}}\n",
+        "REFS = None\nOTHER = {\"features\": {\"lid_alignment_surface\": {}}}\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3142,14 +3473,17 @@ fn workspace_tool_executor_resolve_ref_ignores_refs_feature_inside_comment() {
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = {\n    # \"features\": {\"top\": {}}\n}\n",
+        "REFS = {\n    # \"features\": {\"lid_alignment_surface\": {}}\n}\n",
     )
     .unwrap();
 
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let result = tool_json(
         &executor,
-        &call("resolve_ref", "{\"ref_text\":\"@feature[lid.top]\"}"),
+        &call(
+            "resolve_ref",
+            "{\"ref_text\":\"@feature[lid.lid_alignment_surface]\"}",
+        ),
     );
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3163,7 +3497,7 @@ fn workspace_tool_executor_resolve_ref_selection_rejects_unsafe_candidate_featur
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(
         dir.path().join("parts/lid.py"),
-        "REFS = {\"features\": {\"top/../bad\": {}}}\n",
+        "REFS = {\"features\": {\"lid_alignment_surface/../bad\": {}}}\n",
     )
     .unwrap();
 
@@ -3175,7 +3509,7 @@ fn workspace_tool_executor_resolve_ref_selection_rejects_unsafe_candidate_featur
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top/../bad]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface/../bad]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
@@ -3202,7 +3536,7 @@ fn workspace_tool_executor_resolve_ref_keeps_ambiguous_selection_unstable() {
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: true,
@@ -3313,7 +3647,7 @@ fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {
                 face_idx: 0,
                 positions: vec![0.0, 0.0, 0.0],
                 normals: vec![0.0, 0.0, 1.0],
-                features: vec!["top".into()],
+                features: vec!["lid_alignment_surface".into()],
                 ambiguous: false,
             }],
             edges: vec![EdgeGroup {
@@ -3327,7 +3661,7 @@ fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {
                 adjacent_edges: vec![0],
             }],
             feature_map: vec![CadQueryFeatureFaces {
-                feature: "top".into(),
+                feature: "lid_alignment_surface".into(),
                 face_indices: vec![0],
             }],
         }],
@@ -4301,6 +4635,14 @@ fn registry_tool_loop_executes_scoped_cadquery_tool() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("parts")).unwrap();
     std::fs::write(dir.path().join("parts/lid.py"), "old\n").unwrap();
+    let execute_args = serde_json::json!({
+        "target_path": "parts/lid.py",
+        "target_type": "part",
+        "code": valid_part_source("lid_alignment_surface"),
+        "export_formats": ["step"],
+        "export_targets": ["outputs/lid.step"],
+    })
+    .to_string();
     let provider = MockProvider::new(vec![
         LlmResponse {
             content: String::new(),
@@ -4308,15 +4650,7 @@ fn registry_tool_loop_executes_scoped_cadquery_tool() {
             tool_calls: vec![LlmToolCall {
                 id: "call_cadquery_execute".into(),
                 function_name: "cadquery_execute".into(),
-                arguments: concat!(
-                    "{\"target_path\":\"parts/lid.py\",",
-                    "\"target_type\":\"part\",",
-                    "\"code\":\"REFS = {\\\"type\\\":\\\"part\\\",\\\"features\\\":{\\\"top\\\":{}}}\\n",
-                    "def build(params=None): pass\",",
-                    "\"export_formats\":[\"step\"],",
-                    "\"export_targets\":[\"outputs/lid.step\"]}"
-                )
-                .into(),
+                arguments: execute_args,
             }],
         },
         LlmResponse {

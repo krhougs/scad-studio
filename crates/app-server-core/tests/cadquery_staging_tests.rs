@@ -31,13 +31,13 @@ fn success_json() -> String {
             "face_idx":0,
             "positions":[0,0,0,1,0,0,0,1,0],
             "normals":[0,0,1,0,0,1,0,0,1],
-            "features":["top_surface"],
+            "features":["lid_alignment_surface"],
             "ambiguous":false
           }],
           "edges":[{"edge_idx":0,"polyline":[0,0,0,1,0,0],"adjacent_faces":[0]}],
           "vertices":[{"vertex_idx":0,"position":[0,0,0],"adjacent_edges":[0]}]
         },
-        "feature_map":{"top_surface":{"face_indices":[0],"selector":"faces(\">Z\")"}}
+        "feature_map":{"lid_alignment_surface":{"face_indices":[0],"selector":"faces(\">Z\")"}}
       }],
       "exports":{"step":"outputs/top_lid.step"},
       "metadata":{"bounding_box":{"min":[0,0,0],"max":[1,1,1]}},

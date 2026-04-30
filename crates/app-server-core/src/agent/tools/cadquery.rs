@@ -21,7 +21,7 @@ use super::{AgentToolRunContext, CadQueryToolRuntime, tool_error_json};
 use args::{
     analyze_args, doc_update_path_for_execute, dry_run_request_args, execute_request_args,
     existing_model_path, resolve_selection_args, result_id_arg, source_request_args,
-    validate_contract_for_run, validate_execute_scope,
+    validate_contract_for_run, validate_execute_product_contract, validate_execute_scope,
 };
 use support::{
     analyze_success, contract_json, contract_warnings, resolve_selection_success, result_success,
@@ -127,6 +127,9 @@ pub(super) fn execute(
         return record_plan_failure_for_tool_error(_workspace_root, context, result);
     }
     if let Err(result) = validate_execute_scope(call, &request, context) {
+        return record_plan_failure_for_tool_error(_workspace_root, context, result);
+    }
+    if let Err(result) = validate_execute_product_contract(call, &request) {
         return record_plan_failure_for_tool_error(_workspace_root, context, result);
     }
     match doc_update_path_for_execute(_workspace_root, call, &request, context) {

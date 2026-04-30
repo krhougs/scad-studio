@@ -28,6 +28,8 @@ fn cadquery_agent_prompt_requires_model_description_and_named_refs() {
     let prompt = cadquery_agent_system_prompt();
     assert!(prompt.contains("MODEL_DESCRIPTION"));
     assert!(prompt.contains("MODEL_DETAILS"));
+    assert!(prompt.contains("key_dimensions"));
+    assert!(prompt.contains("manufacturing_or_placement_constraints"));
     assert!(prompt.contains("REFS.features"));
     assert!(prompt.contains("export_formats"));
     assert!(prompt.contains("export_targets"));
@@ -436,7 +438,7 @@ fn test_selection() -> SelectionRef {
         owner_ref_text: Some("@part[lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[lid.top]".into()),
+        candidate_feature_ref: Some("@feature[lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:test".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,

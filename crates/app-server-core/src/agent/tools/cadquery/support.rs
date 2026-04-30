@@ -7,6 +7,15 @@ use crate::llm::LlmToolCall;
 
 use super::super::{CadQueryToolCachedResult, CadQueryToolRunResult};
 
+const REQUIRED_MODEL_DETAILS: [&str; 6] = [
+    "purpose",
+    "key_dimensions",
+    "intended_use",
+    "assumptions",
+    "interaction_notes",
+    "manufacturing_or_placement_constraints",
+];
+
 #[derive(Debug, Clone)]
 pub(super) struct SourceContract {
     pub(super) target_type_matches: bool,
@@ -80,7 +89,7 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
     }
     if !contract.has_model_description {
         warnings.push(
-            "missing MODEL_DESCRIPTION / MODEL_DETAILS; add a concise purpose string and structured model details for file-list preview and human review",
+            "missing MODEL_DESCRIPTION / MODEL_DETAILS; add purpose, key_dimensions, intended_use, assumptions, interaction_notes, and manufacturing_or_placement_constraints",
         );
     }
     if !contract.target_type_matches {
@@ -207,7 +216,239 @@ fn has_refs(source: &str) -> bool {
 }
 
 fn has_model_description(source: &str) -> bool {
-    source.contains("MODEL_DESCRIPTION") && source.contains("MODEL_DETAILS")
+    has_string_assignment(source, "MODEL_DESCRIPTION")
+        && assignment_dict(source, "MODEL_DETAILS").is_some_and(|dict| {
+            REQUIRED_MODEL_DETAILS
+                .iter()
+                .all(|field| dict_has_key(dict, field))
+        })
+}
+
+fn has_string_assignment(source: &str, name: &str) -> bool {
+    module_assignment_value(source, name)
+        .map(str::trim_start)
+        .is_some_and(|value| {
+            let Some(quote @ ('\'' | '"')) = value.chars().next() else {
+                return false;
+            };
+            python_string_at(value, 0, quote).is_some_and(|(_, text)| !text.trim().is_empty())
+        })
+}
+
+fn assignment_dict<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let value = module_assignment_value(source, name)?;
+    let start = skip_ws(value, 0);
+    dict_body_at(value, start)
+}
+
+fn module_assignment_value<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let mut index = 0;
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            index = quoted_string_end(source, index, ch)?;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(source, index);
+            continue;
+        }
+        if !is_line_start(source, index) || !source[index..].starts_with(name) {
+            index += ch.len_utf8();
+            continue;
+        }
+        if !is_identifier_boundary(source, index, name.len()) {
+            index += name.len();
+            continue;
+        }
+        if let Some(value_start) = assignment_value_start(source, index + name.len()) {
+            return Some(&source[value_start..]);
+        }
+        index += name.len();
+    }
+    None
+}
+
+fn assignment_value_start(source: &str, name_end: usize) -> Option<usize> {
+    let index = skip_inline_ws(source, name_end);
+    if source[index..].starts_with('=') && !source[index + 1..].starts_with('=') {
+        return Some(index + 1);
+    }
+    if !source[index..].starts_with(':') {
+        return None;
+    }
+    let line_end = source[index..]
+        .find('\n')
+        .map_or(source.len(), |offset| index + offset);
+    let assign = source[index + 1..line_end].find('=')? + index + 1;
+    (!source[assign + 1..].starts_with('=')).then_some(assign + 1)
+}
+
+fn dict_has_key(dict: &str, key: &str) -> bool {
+    value_start_for_key(dict, key)
+        .is_some_and(|value_start| dict_value_is_non_empty(dict, value_start))
+}
+
+fn value_start_for_key(dict: &str, key: &str) -> Option<usize> {
+    let mut index = 0;
+    let mut depth = 0usize;
+    while index < dict.len() {
+        let ch = dict[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            let (end, text) = python_string_at(dict, index, ch)?;
+            if depth == 0 && text == key {
+                let colon = skip_ws(dict, end);
+                if dict[colon..].starts_with(':') {
+                    return Some(colon + 1);
+                }
+            }
+            index = end;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(dict, index);
+            continue;
+        }
+        update_depth(ch, &mut depth);
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn dict_value_is_non_empty(dict: &str, value_start: usize) -> bool {
+    let value_start = skip_ws(dict, value_start);
+    let Some(ch) = dict[value_start..].chars().next() else {
+        return false;
+    };
+    if !matches!(ch, '\'' | '"') {
+        return false;
+    }
+    python_string_at(dict, value_start, ch).is_some_and(|(_, text)| !text.trim().is_empty())
+}
+
+fn dict_body_at(source: &str, open_index: usize) -> Option<&str> {
+    if !source[open_index..].starts_with('{') {
+        return None;
+    }
+    let mut index = open_index;
+    let mut depth = 0usize;
+    let mut content_start = open_index;
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            index = quoted_string_end(source, index, ch)?;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(source, index);
+            continue;
+        }
+        if ch == '{' {
+            if depth == 0 {
+                content_start = index + ch.len_utf8();
+            }
+            depth += 1;
+        } else if ch == '}' {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(&source[content_start..index]);
+            }
+        }
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn python_string_at(source: &str, quote_index: usize, quote: char) -> Option<(usize, &str)> {
+    let marker = if quote == '\'' { "'''" } else { "\"\"\"" };
+    if source[quote_index..].starts_with(marker) {
+        let content_start = quote_index + marker.len();
+        let offset = source[content_start..].find(marker)?;
+        let content_end = content_start + offset;
+        return Some((
+            content_end + marker.len(),
+            &source[content_start..content_end],
+        ));
+    }
+    quoted_string_at(source, quote_index, quote)
+}
+
+fn quoted_string_at(source: &str, quote_index: usize, quote: char) -> Option<(usize, &str)> {
+    let content_start = quote_index + quote.len_utf8();
+    let mut escaped = false;
+    for (offset, ch) in source[content_start..].char_indices() {
+        let index = content_start + offset;
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            return Some((index + ch.len_utf8(), &source[content_start..index]));
+        }
+    }
+    None
+}
+
+fn quoted_string_end(source: &str, quote_index: usize, quote: char) -> Option<usize> {
+    python_string_at(source, quote_index, quote).map(|(end, _)| end)
+}
+
+fn update_depth(ch: char, depth: &mut usize) {
+    match ch {
+        '{' | '[' | '(' => *depth += 1,
+        '}' | ']' | ')' => *depth = depth.saturating_sub(1),
+        _ => {}
+    }
+}
+
+fn skip_ws(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let Some(ch) = source[index..].chars().next() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn skip_inline_ws(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let Some(ch) = source[index..].chars().next() else {
+            break;
+        };
+        if !matches!(ch, ' ' | '\t') {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn line_comment_end(source: &str, index: usize) -> usize {
+    source[index..]
+        .find('\n')
+        .map_or(source.len(), |offset| index + offset + 1)
+}
+
+fn is_line_start(source: &str, index: usize) -> bool {
+    index == 0 || source[..index].chars().next_back() == Some('\n')
+}
+
+fn is_identifier_boundary(source: &str, start: usize, len: usize) -> bool {
+    let before = source[..start].chars().next_back();
+    let after = source[start + len..].chars().next();
+    !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
 }
 
 fn declared_type(source: &str) -> Option<CadQueryObjectKind> {

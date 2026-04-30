@@ -35,13 +35,13 @@ fn success_json() -> String {
             "face_idx":0,
             "positions":[0,0,0,1,0,0,0,1,0],
             "normals":[0,0,1,0,0,1,0,0,1],
-            "features":["top_surface"],
+            "features":["lid_alignment_surface"],
             "ambiguous":false
           }],
           "edges":[{"edge_idx":0,"polyline":[0,0,0,1,0,0],"adjacent_faces":[0]}],
           "vertices":[{"vertex_idx":0,"position":[0,0,0],"adjacent_edges":[0]}]
         },
-        "feature_map":{"top_surface":{"face_indices":[0],"selector":"faces(\">Z\")"}}
+        "feature_map":{"lid_alignment_surface":{"face_indices":[0],"selector":"faces(\">Z\")"}}
       }],
       "exports":{"step":"outputs/top_lid.step"},
       "metadata":{"bounding_box":{"min":[0,0,0],"max":[1,1,1]}},
@@ -68,7 +68,10 @@ fn parses_cadquery_runner_json_into_protocol_payload() {
     assert_eq!(payload.root_object_kind, CadQueryObjectKind::Part);
     assert_eq!(payload.parts[0].ref_text, "@part[top_lid]");
     assert_eq!(payload.parts[0].faces[0].positions.len(), 9);
-    assert_eq!(payload.parts[0].feature_map[0].feature, "top_surface");
+    assert_eq!(
+        payload.parts[0].feature_map[0].feature,
+        "lid_alignment_surface"
+    );
     let relation = payload
         .artifact_relation
         .as_ref()

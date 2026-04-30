@@ -140,7 +140,16 @@ fn registry_declares_path_scope_contracts() {
 
 #[test]
 fn registry_uses_specific_canonical_schemas() {
-    assert_required("cadquery_execute", &["target_path", "target_type", "code"]);
+    assert_required(
+        "cadquery_execute",
+        &[
+            "target_path",
+            "target_type",
+            "code",
+            "export_formats",
+            "export_targets",
+        ],
+    );
     assert_required("cadquery_get_result", &["result_id"]);
     assert_required(
         "cadquery_resolve_selection",

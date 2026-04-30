@@ -7,7 +7,9 @@
 - 已根据 2026-04-30 用户最新反馈再次修订 `plan-00.md`：PRD 示例暂不处理，system prompt 既有示例块暂不处理，Rust 代码里的 LLM 可见 feature 示例或占位命名纳入 Phase -1，system prompt 只补充 feature 命名责任指引。
 - Phase -1 已完成执行、验证与独立 review。
 - Phase 0 已完成当前状态审计、基线验证与独立 review。
-- Phase 1 已完成 Ref 图层树、预览模式、RefKind 选择模式、验证与独立 review。后续按计划进入 Phase 2。
+- Phase 1 已完成 Ref 图层树、预览模式、RefKind 选择模式、验证与独立 review。
+- Phase 2 已完成文件列表路由、artifact relation 与模型更新刷新。
+- Phase 3 已完成 Agent 模型产物契约、验证与独立 review。后续按计划进入 Phase 4。
 
 ## Review 结论处理
 
@@ -25,7 +27,7 @@
 - Phase 0：已完成。
 - Phase 1：已完成。
 - Phase 2：已完成。
-- Phase 3：未开始。
+- Phase 3：已完成。
 - Phase 4：未开始。
 - Phase 5：未开始。
 - Phase 6：未开始。
@@ -199,3 +201,43 @@
 
 - 第一轮 Phase 2 review 发现两个阻塞项：Agent `mesh_ready` 不匹配当前 tab 时仍会打开临时 result tab；watch 目录级 fallback 仍可能刷新无关 active CadQuery tab。已删除临时 result tab 打开路径，并让 CadQuery watch 刷新只接受精确路径命中。
 - 第二轮 Phase 2 review 结论：无阻塞项，无高风险问题。Reviewer 确认 `.step/.stp` 只通过 `artifact_relation.exports` 找回 source path，普通 STEP 不再解析为 CadQuery tab，`cadQueryResultTab` factory 已删除，CadQuery watch 刷新不再走目录级 fallback。
+
+## Phase 3 结果
+
+### 边界判断
+
+- 本 Phase 修改集中在 CadQuery Agent system prompt、`cadquery_execute` tool schema、Rust contract check / warning / error 和 app-server-core 测试。没有修改 Web 预览路由、artifact relation protocol 或 staging commit 机制。
+- 模型说明硬校验只作用于 `cadquery_execute` 的新建或修改模型路径；`cadquery_analyze_source` 与 `cadquery_check_source` 仍返回 `ok`，并通过 contract / warning 告知缺少说明，不会阻断既有旧模型预览。
+- `cadquery_execute` 的 scope、安全导入、unsafe 调用和 staging 相关校验顺序仍保留；本 Phase 只在 execution scope 通过后增加产品契约校验，并要求 `.step` 导出声明。
+- system prompt 既有示例块按计划边界暂不清理；本 Phase 只强化新增或修改指引中的结构性要求。
+
+### 变更摘要
+
+- `docs/cadquery-mvp/agent-system-prompt.md` 明确 `MODEL_DETAILS` 必须包含 `purpose`、`key_dimensions`、`intended_use`、`assumptions`、`interaction_notes` 和 `manufacturing_or_placement_constraints`。
+- `cadquery_execute` schema 将 `export_formats` 与 `export_targets` 设为必填，并在字段说明中要求包含 `.step` 导出目标，确保 `.py` 与 `.step` 同步。
+- `cadquery_execute` 新增产品契约校验：缺少模型说明字段、缺少导出声明、未包含 `.step` 格式或 `.step` target 时直接拒绝执行。
+- `MODEL_DESCRIPTION` / `MODEL_DETAILS` 检查从全文 substring 改为模块级赋值解析，支持普通字符串、三引号字符串和类型标注赋值，拒绝注释、字符串字面量、函数内赋值、空字段、集合值和空说明误通过。
+- 成功路径测试 fixture 中的 `@feature[lid.top]`、`top_surface` 与 `"top": {}` 替换为语义化 feature 名称，避免把弱命名当作默认成功样例。
+- 保留 `REFS.features` 必填、`REFS.type` 匹配、selection / feature map 映射、staging 和 artifact relation 已确认契约。
+
+### 验证证据
+
+- `cargo fmt`：通过。
+- `cargo test -p app-server-core workspace_tool_executor_cadquery_execute_accepts_python_model_contract_variants --test agent_tool_tests`：修复前按预期失败于 `triple_quoted`；修复后 1 passed，0 failed。
+- `cargo test -p app-server-core workspace_tool_executor_cadquery_execute --test agent_tool_tests`：19 passed，0 failed。
+- `cargo test -p app-server-core --test agent_tool_tests`：138 passed，0 failed。
+- `cargo test -p app-server-core --test agent_tool_registry_tests`：6 passed，0 failed。
+- `cargo test -p app-server-core --test agent_tests`：15 passed，0 failed。
+- `cargo test -p app-server-core --test llm_tests`：38 passed，0 failed。
+- `cargo test -p app-server-core --test cadquery_staging_tests`：12 passed，0 failed。
+- `cargo test -p app-server-core --test cadquery_tests -- --test-threads=1`：11 passed，0 failed。该文件中的大 stdout drain 用例在与其他 Cargo 测试并行时两次触发 2 秒超时；单独和串行均通过，失败模式与本 Phase 改动无关。
+- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|earbud|earbuds|charging case|headphone|earpiece|充电盒|耳机|耳塞" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+- `rg -n "human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+- `rg -n '@feature\[[^\]]*\.top\]|@feature\[lid\.top\]|"top": \{\}|"top": \{"kind": "feature"\}|top_surface|valid_part_source\("top"\)' crates/app-server-core/tests crates/app-server-core/src/agent/tools`：无命中，exit 1。
+- `git diff --check`：无输出，exit 0。
+
+### 独立 Review 结论
+
+- 第一轮 Phase 3 review 结论：无阻塞项；记录高风险非阻塞项，指出合法 Python 三引号字符串与类型标注赋值会被模型契约硬校验误拒绝。
+- 已按 reviewer 结论补充失败用例并修复 `support.rs` 解析逻辑，覆盖三引号字符串和类型标注赋值成功路径，同时保留空字段、注释、字符串字面量和函数内赋值拒绝路径。
+- 第二轮 Phase 3 review 结论：无阻塞项，无高风险非阻塞项，未发现验证缺口。

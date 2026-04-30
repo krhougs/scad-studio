@@ -199,7 +199,11 @@ fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
     });
 
     assert!(draft.text.contains("## CAD Plan"));
-    assert!(draft.text.contains("@feature[top_lid.top_surface]"));
+    assert!(
+        draft
+            .text
+            .contains("@feature[top_lid.lid_alignment_surface]")
+    );
     assert!(draft.text.contains("parts/top_lid.py"));
     assert!(draft.text.contains("part geometry"));
 }
@@ -352,7 +356,7 @@ fn selection(ref_text: &str) -> SelectionRef {
         owner_ref_text: Some("@part[top_lid]".into()),
         owner_object_kind: Some(CadQueryObjectKind::Part),
         instance_path: None,
-        candidate_feature_ref: Some("@feature[top_lid.top_surface]".into()),
+        candidate_feature_ref: Some("@feature[top_lid.lid_alignment_surface]".into()),
         build_id: Some("sha256:build".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
