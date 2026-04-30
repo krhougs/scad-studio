@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { CameraPreset, CameraState } from "../canvas/camera-state";
 import { CadQueryViewer } from "../viewers/cadquery-viewer";
 import type { CadQueryMeshHandleLike } from "../viewers/cadquery-mesh";
-import type { CadQuerySelectionMode } from "../viewers/cadquery-selection";
+import type {
+  CadQuerySelectionMode,
+  CadQueryViewerMode,
+} from "../viewers/cadquery-selection";
 import type { MeshInfo } from "../viewers/mesh-info";
 import type { MeshViewerOptions } from "../viewers/viewer-options";
 import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
@@ -13,6 +16,8 @@ type CadQuerySourcePreviewProps = {
   client: CadQuerySourcePreviewClient;
   label: string;
   selectionMode: CadQuerySelectionMode;
+  mode?: CadQueryViewerMode;
+  onMode?: (mode: CadQueryViewerMode) => void;
   viewerOptions?: MeshViewerOptions;
   cameraPreset?: CameraPreset | null;
   cameraOverride?: CameraState | null;
@@ -43,6 +48,8 @@ export function CadQuerySourcePreview(props: CadQuerySourcePreviewProps) {
     client,
     label,
     selectionMode,
+    mode,
+    onMode,
     viewerOptions,
     cameraPreset,
     cameraOverride,
@@ -99,6 +106,8 @@ export function CadQuerySourcePreview(props: CadQuerySourcePreviewProps) {
         client={client}
         label={label}
         selectionMode={selectionMode}
+        mode={mode}
+        onMode={onMode}
         refreshSignal={refreshSignal}
         cameraPreset={cameraPreset}
         cameraOverride={cameraOverride}

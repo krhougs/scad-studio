@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CadQueryScenePayload } from "../../src/viewers/cadquery-mesh";
 import {
+  cadQueryAvailableSelectionModes,
   cadQuerySelectionKey,
   selectionRefFromCadQueryPick,
   updateCadQuerySelection,
@@ -136,6 +137,40 @@ describe("cadquery selection refs", () => {
       result_id: "cq_result",
     });
   });
+
+  it("keeps nested assembly refs distinct from the root assembly", () => {
+    const nested = nestedAssemblyScene();
+
+    const ref = selectionRefFromCadQueryPick(nested, {
+      kind: "assembly",
+      partIndex: 0,
+      additive: false,
+    });
+
+    expect(ref).toMatchObject({
+      kind: "assembly",
+      ref_text: "@assembly[inner_frame]",
+      build_id: "sha256:abc",
+      result_id: "cq_result",
+    });
+    expect(ref.ref_text).not.toBe(nested.rootRefText);
+  });
+
+  it("does not expose root object kind as an object selection mode", () => {
+    expect(cadQueryAvailableSelectionModes(scene)).toEqual([
+      "part",
+      "feature",
+      "face",
+      "edge",
+      "vertex",
+    ]);
+    expect(cadQueryAvailableSelectionModes(rootPartScene())).toEqual([
+      "feature",
+      "face",
+      "edge",
+      "vertex",
+    ]);
+  });
 });
 
 function repeatedInstanceScene(): CadQueryScenePayload {
@@ -145,6 +180,30 @@ function repeatedInstanceScene(): CadQueryScenePayload {
       instancePart(0, "full_enclosure/screw_left"),
       instancePart(1, "full_enclosure/screw_right"),
     ],
+  };
+}
+
+function nestedAssemblyScene(): CadQueryScenePayload {
+  return {
+    ...scene,
+    rootRefText: "@assembly[full_enclosure]",
+    rootObjectKind: "assembly",
+    parts: [
+      {
+        ...scene.parts[0],
+        name: "inner_frame",
+        objectKind: "assembly",
+        refText: "@assembly[inner_frame]",
+      },
+    ],
+  };
+}
+
+function rootPartScene(): CadQueryScenePayload {
+  return {
+    ...scene,
+    rootRefText: "@part[top_lid]",
+    rootObjectKind: "part",
   };
 }
 

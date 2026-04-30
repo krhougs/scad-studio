@@ -27,7 +27,7 @@ test("@cadquery-viewer face picking emits selection target in browser", async ({
     .toMatchObject({ kind: "face", partIndex: 0, faceIndex: 0 });
 });
 
-test("@cadquery-viewer picks edge vertex part and assembly modes", async ({
+test("@cadquery-viewer picks edge vertex modes and ignores root object modes", async ({
   page,
 }) => {
   await installViewer(page, cadQueryTriangleScene());
@@ -49,13 +49,79 @@ test("@cadquery-viewer picks edge vertex part and assembly modes", async ({
   await canvas.click({ position: { x: 320, y: 240 } });
   await expect
     .poll(() => page.evaluate(() => window.__cadQueryPick))
-    .toMatchObject({ kind: "part", partIndex: 0 });
+    .toBeUndefined();
 
   await setSelectionMode(page, "assembly");
   await canvas.click({ position: { x: 320, y: 240 } });
   await expect
     .poll(() => page.evaluate(() => window.__cadQueryPick))
-    .toMatchObject({ kind: "assembly" });
+    .toBeUndefined();
+});
+
+test("@cadquery-viewer picks component instance and feature modes", async ({
+  page,
+}) => {
+  await installViewer(page, cadQueryComponentInstanceScene());
+  const canvas = page.locator("#cadquery-canvas");
+
+  await setSelectionMode(page, "component");
+  await canvas.click({ position: { x: 320, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toMatchObject({ kind: "component", partIndex: 0 });
+
+  await setSelectionMode(page, "instance");
+  await canvas.click({ position: { x: 320, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toMatchObject({ kind: "instance", partIndex: 0 });
+
+  await setSelectionMode(page, "feature");
+  await canvas.click({ position: { x: 320, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toMatchObject({
+      kind: "feature",
+      partIndex: 0,
+      feature: "mapped_surface",
+    });
+});
+
+test("@cadquery-viewer ignores feature mode without feature map ownership", async ({
+  page,
+}) => {
+  await installViewer(page, cadQueryUnmappedFeatureScene());
+  const canvas = page.locator("#cadquery-canvas");
+
+  await setSelectionMode(page, "feature");
+  await canvas.click({ position: { x: 320, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toBeUndefined();
+});
+
+test("@cadquery-viewer picks non-root part mode", async ({ page }) => {
+  await installViewer(page, cadQueryRepeatedInstanceScene());
+  const canvas = page.locator("#cadquery-canvas");
+
+  await setSelectionMode(page, "part");
+  await canvas.click({ position: { x: 130, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toMatchObject({ kind: "part", partIndex: 0 });
+});
+
+test("@cadquery-viewer picks nested assembly refs instead of only root", async ({
+  page,
+}) => {
+  await installViewer(page, cadQueryNestedAssemblyScene());
+  const canvas = page.locator("#cadquery-canvas");
+
+  await setSelectionMode(page, "assembly");
+  await canvas.click({ position: { x: 320, y: 240 } });
+  await expect
+    .poll(() => page.evaluate(() => window.__cadQueryPick))
+    .toMatchObject({ kind: "assembly", partIndex: 0 });
 });
 
 test("@cadquery-viewer distinguishes repeated assembly instances", async ({
@@ -159,6 +225,69 @@ function cadQueryRepeatedInstanceScene() {
       {
         ...cadQueryPart(1, "full_enclosure/top_lid_right", 0),
         transform: translationTransform(30, 0, 0),
+      },
+    ],
+  };
+}
+
+function cadQueryComponentInstanceScene() {
+  const part = cadQueryPart(0, "full_enclosure/insert", 0);
+  return {
+    resultId: "cq_browser",
+    buildId: "sha256:browser",
+    rootRefText: "@assembly[full_enclosure]",
+    rootObjectKind: "assembly",
+    parts: [
+      {
+        ...part,
+        name: "insert",
+        objectKind: "component",
+        refText: "@component[insert]",
+        faces: part.faces.map((face) => ({
+          ...face,
+          features: ["raw_surface"],
+        })),
+        featureMap: [{ feature: "mapped_surface", faceIndices: [0] }],
+      },
+    ],
+  };
+}
+
+function cadQueryUnmappedFeatureScene() {
+  const part = cadQueryPart(0, "full_enclosure/insert", 0);
+  return {
+    resultId: "cq_browser",
+    buildId: "sha256:browser",
+    rootRefText: "@assembly[full_enclosure]",
+    rootObjectKind: "assembly",
+    parts: [
+      {
+        ...part,
+        name: "insert",
+        objectKind: "component",
+        refText: "@component[insert]",
+        faces: part.faces.map((face) => ({
+          ...face,
+          features: ["raw_surface"],
+        })),
+        featureMap: [],
+      },
+    ],
+  };
+}
+
+function cadQueryNestedAssemblyScene() {
+  return {
+    resultId: "cq_browser",
+    buildId: "sha256:browser",
+    rootRefText: "@assembly[full_enclosure]",
+    rootObjectKind: "assembly",
+    parts: [
+      {
+        ...cadQueryPart(0, null, 0),
+        name: "inner_frame",
+        objectKind: "assembly",
+        refText: "@assembly[inner_frame]",
       },
     ],
   };

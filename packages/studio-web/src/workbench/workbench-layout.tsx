@@ -736,6 +736,7 @@ export function WorkbenchLayout() {
         activeView={activeView}
         onMeshInfo={setMeshInfo}
         onCadQueryScene={setCadQueryScene}
+        cadQueryScene={cadQueryScene}
         cadQuerySelection={currentSelection}
         cameraState={cameraState}
         cameraOverride={cameraOverride}

@@ -7,6 +7,8 @@ import type { CadQueryScenePayload } from "../viewers/cadquery-mesh";
 import {
   cadQuerySelectionKey,
   selectionRefFromCadQueryFeature,
+  selectionRefFromCadQueryInstance,
+  selectionRefFromCadQueryObject,
   selectionRefFromCadQueryPick,
   toggleCadQuerySelection,
 } from "../viewers/cadquery-selection";
@@ -23,7 +25,7 @@ type RefTreeRow = {
   label: string;
   detail: string;
   depth: number;
-  ref: SelectionRef;
+  ref: SelectionRef | null;
 };
 
 export function CadQueryRefTree(props: CadQueryRefTreeProps) {
@@ -47,32 +49,31 @@ export function CadQueryRefTree(props: CadQueryRefTreeProps) {
   };
   return (
     <div className="cadquery-ref-tree" data-testid="cadquery-ref-tree">
-      {rows.map((row) => (
-        <button
-          key={row.key}
-          type="button"
-          className="cadquery-ref-row"
-          style={{ "--ref-depth": row.depth } as React.CSSProperties}
-          aria-pressed={selected.has(row.key)}
-          data-testid={row.testId}
-          onClick={() => toggle(row.ref)}
-        >
-          <span className="cadquery-ref-row__check" aria-hidden="true" />
-          <span className="cadquery-ref-row__label">{row.label}</span>
-          <code>{row.detail}</code>
-        </button>
-      ))}
+      {rows.map((row) => {
+        const ref = row.ref;
+        return (
+          <RefTreeRowView
+            key={row.key}
+            row={row}
+            selected={ref ? selected.has(row.key) : false}
+            onToggle={ref ? () => toggle(ref) : undefined}
+          />
+        );
+      })}
     </div>
   );
 }
 
 export function cadQueryRefRows(scene: CadQueryScenePayload): RefTreeRow[] {
-  const rows: RefTreeRow[] = [rootRow(scene)];
+  const rows: RefTreeRow[] = [rootDisplayRow(scene)];
+  const seen = new Set<string>();
   for (const part of scene.parts) {
-    const partDepth = part.refText === scene.rootRefText ? 1 : 1;
-    if (part.refText !== scene.rootRefText || scene.parts.length > 1) {
-      rows.push(partRow(scene, part, partDepth));
+    const partDepth = 1;
+    if (part.refText !== scene.rootRefText) {
+      pushUnique(rows, seen, partRow(scene, part, partDepth));
     }
+    const instance = instanceRow(scene, part, partDepth);
+    if (instance) pushUnique(rows, seen, instance);
     rows.push(...featureRows(scene, part, partDepth + 1));
     rows.push(...faceRows(scene, part, partDepth + 1));
     rows.push(...edgeRows(scene, part, partDepth + 1));
@@ -81,12 +82,46 @@ export function cadQueryRefRows(scene: CadQueryScenePayload): RefTreeRow[] {
   return rows;
 }
 
-function rootRow(scene: CadQueryScenePayload): RefTreeRow {
-  const ref = selectionRefFromCadQueryPick(scene, {
-    kind: "assembly",
-    additive: false,
-  });
-  return row(ref, "root", scene.rootObjectKind, scene.rootRefText, 0);
+function RefTreeRowView(props: {
+  row: RefTreeRow;
+  selected: boolean;
+  onToggle?: () => void;
+}) {
+  const style = { "--ref-depth": props.row.depth } as React.CSSProperties;
+  const content = (
+    <>
+      <span className="cadquery-ref-row__check" aria-hidden="true" />
+      <span className="cadquery-ref-row__label">{props.row.label}</span>
+      <code>{props.row.detail}</code>
+    </>
+  );
+  if (!props.onToggle) {
+    return (
+      <div
+        className="cadquery-ref-row is-root"
+        style={style}
+        data-testid={props.row.testId}
+      >
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="cadquery-ref-row"
+      style={style}
+      aria-pressed={props.selected}
+      data-testid={props.row.testId}
+      onClick={props.onToggle}
+    >
+      {content}
+    </button>
+  );
+}
+
+function rootDisplayRow(scene: CadQueryScenePayload): RefTreeRow {
+  return row(null, "root", "root", scene.rootRefText, 0);
 }
 
 function partRow(
@@ -94,12 +129,30 @@ function partRow(
   part: CadQueryScenePayload["parts"][number],
   depth: number,
 ): RefTreeRow {
-  const ref = selectionRefFromCadQueryPick(scene, {
-    kind: "part",
-    partIndex: part.partIndex,
-    additive: false,
-  });
-  return row(ref, `part-${part.partIndex}`, part.name, part.refText, depth);
+  const ref = selectionRefFromCadQueryObject(scene, part.partIndex);
+  return row(
+    ref,
+    `${part.objectKind}-${part.partIndex}`,
+    part.name,
+    part.refText,
+    depth,
+  );
+}
+
+function instanceRow(
+  scene: CadQueryScenePayload,
+  part: CadQueryScenePayload["parts"][number],
+  depth: number,
+): RefTreeRow | null {
+  const ref = selectionRefFromCadQueryInstance(scene, part.partIndex);
+  if (!ref) return null;
+  return row(
+    ref,
+    `instance-${safeId(part.instancePath ?? "")}`,
+    part.name,
+    ref.ref_text,
+    depth,
+  );
 }
 
 function featureRows(
@@ -108,7 +161,11 @@ function featureRows(
   depth: number,
 ): RefTreeRow[] {
   return part.featureMap.map((feature) => {
-    const ref = selectionRefFromCadQueryFeature(scene, part.partIndex, feature.feature);
+    const ref = selectionRefFromCadQueryFeature(
+      scene,
+      part.partIndex,
+      feature.feature,
+    );
     return row(
       ref,
       `feature-${safeId(feature.feature)}`,
@@ -124,14 +181,20 @@ function faceRows(
   part: CadQueryScenePayload["parts"][number],
   depth: number,
 ): RefTreeRow[] {
-  return part.faces.map((face) => {
+  return part.faces.map((face, faceIndex) => {
     const ref = selectionRefFromCadQueryPick(scene, {
       kind: "face",
       partIndex: part.partIndex,
-      faceIndex: part.faces.indexOf(face),
+      faceIndex,
       additive: false,
     });
-    return row(ref, `face-${face.faceIndex}`, `face f_${face.faceIndex}`, ref.ref_text, depth);
+    return row(
+      ref,
+      `face-${face.faceIndex}`,
+      `face f_${face.faceIndex}`,
+      ref.ref_text,
+      depth,
+    );
   });
 }
 
@@ -147,7 +210,13 @@ function edgeRows(
       edgeIndex,
       additive: false,
     });
-    return row(ref, `edge-${edge.edgeIndex}`, `edge e_${edge.edgeIndex}`, ref.ref_text, depth);
+    return row(
+      ref,
+      `edge-${edge.edgeIndex}`,
+      `edge e_${edge.edgeIndex}`,
+      ref.ref_text,
+      depth,
+    );
   });
 }
 
@@ -174,20 +243,26 @@ function vertexRows(
 }
 
 function row(
-  ref: SelectionRef,
+  ref: SelectionRef | null,
   id: string,
   label: string,
   detail: string,
   depth: number,
 ): RefTreeRow {
   return {
-    key: cadQuerySelectionKey(ref),
+    key: ref ? cadQuerySelectionKey(ref) : id,
     testId: `cadquery-ref-row-${id}`,
     label,
     detail,
     depth,
     ref,
   };
+}
+
+function pushUnique(rows: RefTreeRow[], seen: Set<string>, row: RefTreeRow) {
+  if (seen.has(row.key)) return;
+  seen.add(row.key);
+  rows.push(row);
 }
 
 function safeId(value: string): string {

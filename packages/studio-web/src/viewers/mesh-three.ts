@@ -208,6 +208,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   let meshObj: Mesh | null = null;
   let meshMaterial: MeshStandardMaterial | null = null;
   let cadQueryGroup: Group | null = null;
+  let cadQueryPayload: CadQueryScenePayload | null = null;
   let cadQuerySelectionMode: CadQuerySelectionMode = "face";
   let cadQuerySelectionEnabled = true;
   let cadQueryPickHandler: ((pick: CadQueryPickTarget) => void) | null = null;
@@ -590,6 +591,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     scene.remove(cadQueryGroup);
     disposeCadQueryGroup(cadQueryGroup);
     cadQueryGroup = null;
+    cadQueryPayload = null;
     cadQueryPickables.faces = [];
     cadQueryPickables.edges = [];
     cadQueryPickables.vertices = [];
@@ -620,6 +622,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     for (const part of payload.parts) addCadQueryPart(group, payload, part);
     const info = computeMeshInfo(aggregate, null);
     cadQueryGroup = group;
+    cadQueryPayload = payload;
     scene.add(group);
     meshInfo = info;
     stats = info ? { vertices: info.vertices, indices: info.indices } : null;
@@ -768,16 +771,51 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
   ): Partial<Record<CadQuerySelectionMode, string>> {
     const keys: Partial<Record<CadQuerySelectionMode, string>> = {
       [pick.kind]: cadQueryKeyForPick(payload, pick),
-      assembly: cadQueryKeyForPick(payload, { kind: "assembly", additive: false }),
+      [payload.rootObjectKind]: cadQueryKeyForPick(payload, {
+        kind: "assembly",
+        additive: false,
+      }),
     };
-    if ("partIndex" in pick) {
-      keys.part = cadQueryKeyForPick(payload, {
-        kind: "part",
+    if (typeof pick.partIndex === "number") {
+      const part = payload.parts[pick.partIndex];
+      if (!part) return keys;
+      keys[part.objectKind] = cadQueryKeyForPick(payload, {
+        kind: part.objectKind,
         partIndex: pick.partIndex,
         additive: false,
       });
+      if (part.instancePath) {
+        keys.instance = cadQueryKeyForPick(payload, {
+          kind: "instance",
+          partIndex: pick.partIndex,
+          additive: false,
+        });
+      }
+      const feature = cadQueryFeatureForPick(payload, pick);
+      if (feature) {
+        keys.feature = cadQueryKeyForPick(payload, {
+          kind: "feature",
+          partIndex: pick.partIndex,
+          feature,
+          additive: false,
+        });
+      }
     }
     return keys;
+  }
+
+  function cadQueryFeatureForPick(
+    payload: CadQueryScenePayload,
+    pick: CadQueryPickTarget,
+  ): string | null {
+    if (pick.kind !== "face") return null;
+    const part = payload.parts[pick.partIndex];
+    const face = part?.faces[pick.faceIndex];
+    if (!part || !face) return null;
+    const mapped = part.featureMap.find((item) =>
+      item.faceIndices.includes(face.faceIndex),
+    );
+    return mapped?.feature ?? null;
   }
 
   function cadQueryKeyForPick(
@@ -1035,6 +1073,7 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     const pick = pickForMode(
       hit.userData["cadQueryPick"] as CadQueryPickTarget,
     );
+    if (!pick) return;
     cadQueryPickHandler({ ...pick, additive: ev.shiftKey });
   }
 
@@ -1100,13 +1139,62 @@ export function createMeshViewer(canvas: HTMLCanvasElement): MeshViewerHandle {
     return raycaster.intersectObjects(objects, false)[0]?.object ?? null;
   }
 
-  function pickForMode(pick: CadQueryPickTarget): CadQueryPickTarget {
+  function pickForMode(pick: CadQueryPickTarget): CadQueryPickTarget | null {
+    const payload = cadQueryPayload;
     if (cadQuerySelectionMode === "assembly") {
-      return { kind: "assembly", additive: false };
+      if (payload && typeof pick.partIndex === "number") {
+        const part = payload.parts[pick.partIndex];
+        if (
+          part?.objectKind === "assembly" &&
+          part.refText !== payload.rootRefText
+        ) {
+          return {
+            kind: "assembly",
+            partIndex: pick.partIndex,
+            additive: false,
+          };
+        }
+      }
+      return null;
     }
-    if (cadQuerySelectionMode === "part" && "partIndex" in pick) {
-      return { kind: "part", partIndex: pick.partIndex, additive: false };
+    if (!payload || typeof pick.partIndex !== "number") return pick;
+    const part = payload.parts[pick.partIndex];
+    if (!part) return null;
+    const selectableObject = part.refText !== payload.rootRefText;
+    if (
+      (cadQuerySelectionMode === "part" ||
+        cadQuerySelectionMode === "component") &&
+      part.objectKind === cadQuerySelectionMode &&
+      selectableObject
+    ) {
+      return {
+        kind: cadQuerySelectionMode,
+        partIndex: pick.partIndex,
+        additive: false,
+      };
     }
+    if (cadQuerySelectionMode === "instance" && part.instancePath) {
+      return { kind: "instance", partIndex: pick.partIndex, additive: false };
+    }
+    if (
+      cadQuerySelectionMode === "part" ||
+      cadQuerySelectionMode === "component" ||
+      cadQuerySelectionMode === "instance"
+    ) {
+      return null;
+    }
+    if (cadQuerySelectionMode === "feature") {
+      const feature = cadQueryFeatureForPick(payload, pick);
+      return feature
+        ? {
+            kind: "feature",
+            partIndex: pick.partIndex,
+            feature,
+            additive: false,
+          }
+        : null;
+    }
+    if (cadQuerySelectionMode !== pick.kind) return null;
     return pick;
   }
 

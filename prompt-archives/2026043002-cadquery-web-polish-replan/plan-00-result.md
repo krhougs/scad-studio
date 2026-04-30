@@ -6,7 +6,8 @@
 - 已根据 reviewer 结论局部重写 `plan-00.md`。
 - 已根据 2026-04-30 用户最新反馈再次修订 `plan-00.md`：PRD 示例暂不处理，system prompt 既有示例块暂不处理，Rust 代码里的 LLM 可见 feature 示例或占位命名纳入 Phase -1，system prompt 只补充 feature 命名责任指引。
 - Phase -1 已完成执行、验证与独立 review。
-- Phase 0 已完成当前状态审计、基线验证与独立 review。后续按计划进入 Phase 1。
+- Phase 0 已完成当前状态审计、基线验证与独立 review。
+- Phase 1 已完成 Ref 图层树、预览模式、RefKind 选择模式、验证与独立 review。后续按计划进入 Phase 2。
 
 ## Review 结论处理
 
@@ -22,7 +23,7 @@
 
 - Phase -1：已完成。
 - Phase 0：已完成。
-- Phase 1：未开始。
+- Phase 1：已完成。
 - Phase 2：未开始。
 - Phase 3：未开始。
 - Phase 4：未开始。
@@ -35,7 +36,11 @@
 - `cargo test -p app-server-core cadquery_tool_schemas_do_not_suggest_placeholder_feature_keys --test agent_tool_registry_tests`：1 passed，0 failed。
 - `cargo test -p app-server-core workspace_tool_executor_cadquery --test agent_tool_tests`：22 passed，0 failed。
 - `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
-- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：4 passed，0 failed。
+- `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts tests/unit/cadquery-ref-tree.test.tsx tests/unit/cadquery-viewer.test.tsx tests/unit/cadquery-source-preview.test.tsx`：21 passed，0 failed。
+- `bun run --cwd packages/studio-web typecheck`：`tsc --noEmit` 通过，exit 0。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：8 passed，0 failed。
+- `bun run --cwd packages/studio-web test:unit`：249 passed，1 failed；失败项为 `tests/unit/chat-zone.test.tsx > ChatZone > renders live agent tokens and tool events in arrival order`，原因是页面中出现两个 `read_file` 文本。该问题属于 Phase 4 聊天流 UI 范围，本 Phase 不修改聊天区实现。
+- `git diff --check`：无输出，exit 0。
 
 ## Phase -1 结果
 
@@ -118,3 +123,38 @@
 - Reviewer 记录的非阻塞风险：
   - `.step` 路由仍依赖 `outputs/<stem>.step -> parts/<stem>.py` 的前端路径推断；已归入 Phase 2 修复范围。
   - `agent_model` 默认目标仍存在于 Web 与 Rust Agent 辅助路径；后续涉及 Agent scope 或模型产物契约时需要继续确认它不会变成无上下文默认建模路径。
+
+## Phase 1 结果
+
+### GUI 边界判断
+
+- 本 Phase 修改集中在 `packages/studio-web` 的浏览器壳层、Three.js Viewer 接线和 Web Inspector section。Ref tree、mode toolbar 与底部 selection dock 目前只服务 Web Workbench 的 CadQuery preview 交互，并且依赖 Web 侧 scene payload、DOM test id 和 Three.js canvas pick 接线；本轮未把它们抽到 `scad-ui`。
+- 状态与行为仍通过 app-server protocol selection snapshot 同步：Ref tree 只构造 `SelectionRef` 并调用现有 `selection.update`；Viewer 只根据同一个 selection snapshot 生成 selected keys；Chat context 继续消费 protocol store 中的当前 selection。
+- 本轮没有在 `studio-app` 与 `studio-web` 中复制语义相同的共享基础组件，也没有新增绕过 protocol 的前端 Ref 推断路径。可复用视觉基础层的抽离留给后续桌面端复用需求，不在本 Phase 增加跨 crate 改动。
+
+### 变更摘要
+
+- `cadquery-selection.ts` 增加 `component`、`instance`、`feature` 和独立 `preview` viewer mode，统一从 `CadQueryScenePayload` 生成可用 selection modes。
+- Root 只作为 Ref tree 展示节点，不再生成可选 object row；`part.refText === scene.rootRefText` 的 object 不进入 Ref tree，也不能通过 canvas object mode 生成 selection。
+- Ref tree 现在显示 component / part / assembly、instance、feature、face、edge、vertex，并支持跨层级自由多选，继续通过 `selection.update` 同步到 protocol snapshot。
+- `mesh-three.ts` 的 canvas picking 支持 component、non-root part、non-root assembly、instance、feature、face、edge、vertex；RefKind 不匹配时不产生错误 selection。
+- Feature mode 只使用 protocol `featureMap.faceIndices` 建立 face 到 feature 的关系，未命中时不从 face 的 `features[0]` 回退生成 tree 中不存在的 feature Ref。
+- `CadQueryViewer`、`CadQuerySourcePreview` 和 `CanvasZone` 支持受控 `CadQueryViewerMode`，顶部 toolbar 提供 preview 与可用 RefKind mode，底部 `cadquery-select-dock` 只显示 selection modes，并把点击事件传回 Workbench。
+- Preview mode 继续关闭 selection interaction、selection overlay、selection dock/status；axis、底板、gizmo、灯光、相机与 render settings 不走 selection 开关路径。
+
+### 验证证据
+
+- `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts tests/unit/cadquery-ref-tree.test.tsx tests/unit/cadquery-viewer.test.tsx tests/unit/cadquery-source-preview.test.tsx`：21 passed，0 failed。
+- `bun run --cwd packages/studio-web typecheck`：`tsc --noEmit` 通过，exit 0。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：8 passed，0 failed。
+- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+- `lsof -nP -iTCP:39193 -iTCP:5188 -sTCP:LISTEN`：无输出，exit 1，Playwright harness 未遗留监听进程。
+- `git diff --check`：无输出，exit 0。
+- 额外完整单元测试 `bun run --cwd packages/studio-web test:unit`：249 passed，1 failed；失败项仍为 `tests/unit/chat-zone.test.tsx > ChatZone > renders live agent tokens and tool events in arrival order`，属于 Phase 4 聊天流 UI 的既有待处理范围。
+
+### 独立 Review 结论
+
+- 第一轮 Phase 1 review 发现非 root assembly 被合并到 root、底部 dock 在 Workbench 受控模式下无效。已修复并补充 nested assembly 与 controlled dock mode 测试。
+- 第二轮 Phase 1 review 发现 root object 仍可选、RefKind 不匹配时 canvas 会回退到错误 selection。已修复 root tree row、object mode fallback 和 nested assembly 行为。
+- 第三轮 Phase 1 review 发现 feature mode 会从 `face.features[0]` 回退生成 tree 不存在的 Ref，且 root object 仍可能通过 object mode 进入 selection。已改为只使用 `featureMap.faceIndices` 和非 root object selection。
+- 最终 Phase 1 re-review 结论：无阻塞项，无需返工。非阻塞缺口包括缺少 Workbench 级双向同步集成测试、preview mode 辅助元素的浏览器级断言、dock 位置截图或布局断言；这些在 Phase 5 真实网页验收和 Plan 级 review 中继续覆盖。

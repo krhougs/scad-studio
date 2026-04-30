@@ -18,7 +18,12 @@ import type { PlanRunTarget } from "../viewers/plan-preview-path";
 import type { MeshInfo } from "../viewers/mesh-info";
 import { CadQueryViewer } from "../viewers/cadquery-viewer";
 import type { CadQueryScenePayload } from "../viewers/cadquery-mesh";
-import type { CadQuerySelectionMode } from "../viewers/cadquery-selection";
+import {
+  cadQueryAvailableSelectionModes,
+  CADQUERY_SELECTION_MODES,
+  type CadQuerySelectionMode,
+  type CadQueryViewerMode,
+} from "../viewers/cadquery-selection";
 import { CadQuerySourcePreview } from "./cadquery-source-preview";
 import { MeshViewer } from "../viewers/mesh-viewer";
 import {
@@ -62,6 +67,7 @@ type CanvasZoneProps = {
   activeView: ViewPreset;
   onMeshInfo: (info: MeshInfo | null) => void;
   onCadQueryScene: (scene: CadQueryScenePayload | null) => void;
+  cadQueryScene: CadQueryScenePayload | null;
   cadQuerySelection: SelectionUpdateRequest | null;
   cameraState: CameraState | null;
   cameraOverride: CameraState | null;
@@ -70,8 +76,6 @@ type CanvasZoneProps = {
   planRunDisabled: boolean;
   onRunPlan: (target: PlanRunTarget) => void;
 };
-
-export type ViewerInteractionMode = "select" | "preview";
 
 export function CanvasZone(props: CanvasZoneProps) {
   const {
@@ -90,6 +94,7 @@ export function CanvasZone(props: CanvasZoneProps) {
     activeView,
     onMeshInfo,
     onCadQueryScene,
+    cadQueryScene,
     cadQuerySelection,
     cameraState,
     cameraOverride,
@@ -107,9 +112,7 @@ export function CanvasZone(props: CanvasZoneProps) {
   const [viewerOptions, setViewerOptions] = useState<MeshViewerOptions>(
     DEFAULT_MESH_VIEWER_OPTIONS,
   );
-  const [interactionMode, setInteractionMode] =
-    useState<ViewerInteractionMode>("select");
-  const [cadQuerySelectionMode] = useState<CadQuerySelectionMode>("face");
+  const [cadQueryMode, setCadQueryMode] = useState<CadQueryViewerMode>("face");
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageViewport, setStageViewport] = useState({
     width: 0,
@@ -139,6 +142,10 @@ export function CanvasZone(props: CanvasZoneProps) {
       : viewerOptions;
   const effectiveViewerOptions = baseViewerOptions;
   const viewportGizmoSize = metrics?.gizmoSize ?? 36;
+  const cadQueryAvailableModes = useMemo(
+    () => cadQueryAvailableSelectionModes(cadQueryScene),
+    [cadQueryScene],
+  );
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -176,6 +183,15 @@ export function CanvasZone(props: CanvasZoneProps) {
     setViewerOptions((prev) => ({ ...prev, ...patch }));
   };
 
+  useEffect(() => {
+    if (activeTab?.kind !== "cadquery") return;
+    if (cadQueryMode === "preview") return;
+    if (cadQueryAvailableModes.length === 0) return;
+    if (!cadQueryAvailableModes.includes(cadQueryMode)) {
+      setCadQueryMode(cadQueryAvailableModes[0]);
+    }
+  }, [activeTab?.kind, cadQueryAvailableModes, cadQueryMode]);
+
   return (
     <div
       className="canvas"
@@ -194,8 +210,11 @@ export function CanvasZone(props: CanvasZoneProps) {
             {isMeshLike ? (
               <ViewerToolbar
                 options={viewerOptions}
-                interactionMode={interactionMode}
-                onSetInteractionMode={setInteractionMode}
+                cadQueryMode={
+                  activeTab?.kind === "cadquery" ? cadQueryMode : null
+                }
+                cadQueryAvailableModes={cadQueryAvailableModes}
+                onSetCadQueryMode={setCadQueryMode}
                 onSetRenderMode={setRenderMode}
                 onUpdateOptions={updateViewerOptions}
               />
@@ -216,8 +235,8 @@ export function CanvasZone(props: CanvasZoneProps) {
                 refreshSignal={refreshSignal}
                 config={config}
                 viewerOptions={effectiveViewerOptions}
-                cadQuerySelectionMode={cadQuerySelectionMode}
-                interactionMode={interactionMode}
+                cadQueryMode={cadQueryMode}
+                onSetCadQueryMode={setCadQueryMode}
                 cadQuerySelection={cadQuerySelection}
                 onMeshInfo={onMeshInfo}
                 onCadQueryScene={onCadQueryScene}
@@ -290,8 +309,8 @@ type ActiveViewerProps = {
   refreshSignal: number;
   config: AppConfigShape | null;
   viewerOptions: MeshViewerOptions;
-  cadQuerySelectionMode: CadQuerySelectionMode;
-  interactionMode: ViewerInteractionMode;
+  cadQueryMode: CadQueryViewerMode;
+  onSetCadQueryMode: (mode: CadQueryViewerMode) => void;
   cadQuerySelection: SelectionUpdateRequest | null;
   onMeshInfo: (info: MeshInfo | null) => void;
   onCadQueryScene: (scene: CadQueryScenePayload | null) => void;
@@ -310,8 +329,8 @@ function ActiveViewer({
   refreshSignal,
   config,
   viewerOptions,
-  cadQuerySelectionMode,
-  interactionMode,
+  cadQueryMode,
+  onSetCadQueryMode,
   cadQuerySelection,
   onMeshInfo,
   onCadQueryScene,
@@ -321,6 +340,10 @@ function ActiveViewer({
   planRunDisabled,
   onRunPlan,
 }: ActiveViewerProps) {
+  const cadQuerySelectionMode: CadQuerySelectionMode =
+    cadQueryMode === "preview" ? "face" : cadQueryMode;
+  const interactionMode = cadQueryMode === "preview" ? "preview" : "select";
+
   useEffect(() => {
     if (tab.kind !== "mesh" && tab.kind !== "scad") {
       onMeshInfo(null);
@@ -380,7 +403,9 @@ function ActiveViewer({
           sourcePath={tab.path}
           client={client}
           label={tab.label}
-        selectionMode={cadQuerySelectionMode}
+          selectionMode={cadQuerySelectionMode}
+          mode={cadQueryMode}
+          onMode={onSetCadQueryMode}
           interactionMode={interactionMode}
           selectionSnapshot={cadQuerySelection}
           refreshSignal={refreshSignal}
@@ -400,6 +425,8 @@ function ActiveViewer({
         client={client}
         label={tab.label}
         selectionMode={cadQuerySelectionMode}
+        mode={cadQueryMode}
+        onMode={onSetCadQueryMode}
         interactionMode={interactionMode}
         selectionSnapshot={cadQuerySelection}
         refreshSignal={refreshSignal}
@@ -516,32 +543,42 @@ function EmptyStagePlaceholder() {
 
 function ViewerToolbar({
   options,
-  interactionMode,
-  onSetInteractionMode,
+  cadQueryMode,
+  cadQueryAvailableModes,
+  onSetCadQueryMode,
   onSetRenderMode,
   onUpdateOptions,
 }: {
   options: MeshViewerOptions;
-  interactionMode: ViewerInteractionMode;
-  onSetInteractionMode: (mode: ViewerInteractionMode) => void;
+  cadQueryMode: CadQueryViewerMode | null;
+  cadQueryAvailableModes: CadQuerySelectionMode[];
+  onSetCadQueryMode: (mode: CadQueryViewerMode) => void;
   onSetRenderMode: (mode: MeshRenderMode) => void;
   onUpdateOptions: (patch: Partial<MeshViewerOptions>) => void;
 }) {
+  const cadQueryToolbarModes: CadQueryViewerMode[] = [
+    "preview",
+    ...(cadQueryAvailableModes.length > 0
+      ? cadQueryAvailableModes
+      : CADQUERY_SELECTION_MODES),
+  ];
   return (
     <div className="viewer-toolbar" data-testid="viewer-toolbar">
-      <div className="viewer-toolbar__group" aria-label="viewer mode">
-        {(["select", "preview"] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={interactionMode === mode ? "active" : undefined}
-            onClick={() => onSetInteractionMode(mode)}
-            data-testid={`viewer-mode-${mode}`}
-          >
-            {mode}
-          </button>
-        ))}
-      </div>
+      {cadQueryMode ? (
+        <div className="viewer-toolbar__group" aria-label="cadquery mode">
+          {cadQueryToolbarModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={cadQueryMode === mode ? "active" : undefined}
+              onClick={() => onSetCadQueryMode(mode)}
+              data-testid={`viewer-cadquery-mode-${mode}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="viewer-toolbar__group" aria-label="render mode">
         {(["solid", "wireframe", "xray"] as const).map((mode) => (
           <button
