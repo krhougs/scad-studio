@@ -1,5 +1,20 @@
 # 已知问题记录
 
+## 2026-05-01 07:45:00: Rig 0.35.0 暂未暴露 OpenAI web search sources / annotations
+
+- 来源：执行 `prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 5 时，核对 OpenAI 官方 web search 文档与本地 `rig-core-0.35.0` 源码。OpenAI Responses API 会在 `web_search_call.action.sources` 与 message annotations 中提供来源信息；但 Rig 当前 `AdditionalParameters::Include` 未包含 `web_search_call.action.sources`，流式 `MultiTurnStreamItem` 也没有把 URL citation / sources 暴露为可直接消费的结构。
+- 原因：
+  - OpenAI Responses API 的 web search 来源字段存在于 provider 原始响应结构中。
+  - 当前 Rig 版本会把 hosted `web_search` 合并进 Responses request tools，但没有给 app server 侧提供稳定的 structured sources / annotations 输出。
+- 影响范围：
+  - Phase 5 只能在 Chat history 记录 provider capability record 与最终 assistant 文本，不能把来源 URL 作为 protocol 字段或可点击引用稳定输出。
+  - Phase 6 设计 Web 来源展示时，不能假定 core 已经能拿到结构化 citation；需要先升级 Rig、向 Rig 补适配，或在 app server 内增加受控的 provider response 解析层。
+- 可能的解法：
+  - 升级到暴露 OpenAI Responses web search sources / annotations 的 Rig 版本。
+  - 若上游暂不支持，在 `app-server-core` 内增加最小 OpenAI Responses stream 适配，但仍必须保持 Rig-only Agent 边界与 hosted tool 语义，不得回退到自建互联网搜索工具。
+  - protocol 侧先设计可选 sources 字段，并允许当前 provider capability record 作为降级路径。
+- 当前处理方式：Phase 5 默认关闭 native web search；开启后仅注册 OpenAI hosted `web_search`，记录 `agent_run_capabilities.native_web_search_enabled`，并保留最终文本。来源展示能力留到 Phase 6 结合上游支持情况处理。
+
 ## 2026-05-01 00:00:00: WebSocket 连接处理 future 曾不满足 `Send`
 
 - 状态：已处理，`prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 3 已恢复普通 `tokio::spawn`。

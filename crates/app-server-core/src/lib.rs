@@ -19,7 +19,7 @@ pub use agent::{
         SaveCadPlanPackageInput, SavedPlanPackage, collect_plan_packages, parse_plan_package,
         save_plan_package, save_plan_package_with_timestamp, slugify_plan_title,
     },
-    run_rig_agent_turn, run_rig_agent_turn_with_config,
+    rig_agent_additional_params, run_rig_agent_turn, run_rig_agent_turn_with_config,
     tools::{
         AgentExecutionScope, AgentSemanticStore, AgentToolCall, AgentToolCategory,
         AgentToolDefinition, AgentToolObserver, AgentToolPathPolicy, AgentToolPermission,

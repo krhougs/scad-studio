@@ -44,6 +44,7 @@ pub struct AgentTurnInput {
     pub active_selection_index: Option<u32>,
     pub plan_ref: Option<PathHandle>,
     pub context_refs: Vec<String>,
+    pub native_web_search_enabled: bool,
     pub execution_scope: Option<tools::AgentExecutionScope>,
 }
 
@@ -119,10 +120,8 @@ pub async fn run_rig_agent_turn_with_config(
         .temperature(config.temperature)
         .max_tokens(config.max_tokens)
         .default_max_turns(MAX_RIG_TOOL_TURNS);
-    if let Some(effort) = config.reasoning_effort.as_deref() {
-        builder = builder.additional_params(json!({
-            "reasoning": { "effort": effort }
-        }));
+    if let Some(additional_params) = rig_agent_additional_params(&config) {
+        builder = builder.additional_params(additional_params);
     }
     let (prompt, history) = build_rig_prompt_and_history(&input);
     let agent = builder.tools(tools).build();
@@ -164,6 +163,17 @@ pub async fn run_rig_agent_turn_with_config(
     Ok(RigAgentTurnResult {
         text: state.final_text(),
     })
+}
+
+pub fn rig_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
+    let mut params = serde_json::Map::new();
+    if let Some(effort) = config.reasoning_effort.as_deref() {
+        params.insert("reasoning".into(), json!({ "effort": effort }));
+    }
+    if config.native_web_search {
+        params.insert("tools".into(), json!([{ "type": "web_search" }]));
+    }
+    (!params.is_empty()).then(|| serde_json::Value::Object(params))
 }
 
 async fn drain_rig_stream<R, E, S>(
@@ -431,6 +441,14 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
             input.context_refs.join(", ")
         ));
     }
+    parts.push(format!(
+        "Native web search: {}",
+        if input.native_web_search_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    ));
     if let Some(scope) = &input.execution_scope {
         parts.push(format!(
             "Execution scope:\n{}",

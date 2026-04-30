@@ -10,6 +10,7 @@ pub struct RigAgentConfig {
     pub max_tokens: u64,
     pub temperature: f64,
     pub reasoning_effort: Option<String>,
+    pub native_web_search: bool,
 }
 
 impl std::fmt::Debug for RigAgentConfig {
@@ -21,6 +22,7 @@ impl std::fmt::Debug for RigAgentConfig {
             .field("max_tokens", &self.max_tokens)
             .field("temperature", &self.temperature)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("native_web_search", &self.native_web_search)
             .finish()
     }
 }
@@ -44,6 +46,7 @@ struct RigAgentConfigFile {
     max_tokens: Option<u64>,
     temperature: Option<f64>,
     reasoning_effort: Option<String>,
+    native_web_search: Option<bool>,
 }
 
 impl RigAgentConfigFile {
@@ -60,6 +63,7 @@ impl RigAgentConfigFile {
             max_tokens: self.max_tokens.unwrap_or(8192),
             temperature: self.temperature.unwrap_or(0.7),
             reasoning_effort: non_empty(self.reasoning_effort),
+            native_web_search: self.native_web_search.unwrap_or(false),
         })
     }
 }
@@ -103,6 +107,7 @@ fn load_from_env() -> Option<RigAgentConfig> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.7);
     let reasoning_effort = non_empty(env::var("BUDN_AGENT_REASONING_EFFORT").ok());
+    let native_web_search = env_flag("BUDN_AGENT_NATIVE_WEB_SEARCH");
 
     Some(RigAgentConfig {
         api_key,
@@ -111,6 +116,7 @@ fn load_from_env() -> Option<RigAgentConfig> {
         max_tokens,
         temperature,
         reasoning_effort,
+        native_web_search,
     })
 }
 
@@ -129,5 +135,14 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|text| {
         let trimmed = text.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+fn env_flag(key: &str) -> bool {
+    env::var(key).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
     })
 }

@@ -158,7 +158,39 @@
 
 ### Phase 5 — 接入模型原生联网搜索
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 未重新引入 Rust 桌面端、`studio-app`、`scad-ui`、`scad-viewer` 或 in-process / mpsc host 生产路径。
+  - 保持 WebSocket async service、async I/O、Rig-only Agent、工具 registry、路径权限和 CadQuery staging 边界。
+  - 没有新增本地互联网搜索工具；联网搜索只通过 OpenAI Responses hosted tool 暴露给模型。
+- 变更摘要：
+  - 为 Rig Agent 配置增加 `native_web_search`，支持 `BUDN_AGENT_NATIVE_WEB_SEARCH=true` 与 `BUDN_AGENT_CONFIG` TOML 字段，默认关闭。
+  - Rig 请求参数在开启配置时加入 `tools: [{ "type": "web_search" }]`，并保留 reasoning 参数；本地源码审查确认 Rig 0.35.0 会把该 hosted tool 追加到 OpenAI Responses request tools，不会覆盖已有 workspace function tools。
+  - Host 在每次 Agent run 开始时读取同一份 Rig 配置，向 Chat history 写入 `agent_run_capabilities` meta record，记录 provider 与 native web search 是否开启，且不记录 API key。
+  - Agent turn context 增加 native web search 状态，system prompt 明确 native web search 只能用于外部事实、标准、API / 背景资料，本地 workspace 必须走 app server 工具。
+  - Web Chat 空状态补充 `BUDN_AGENT_NATIVE_WEB_SEARCH=true` 可选配置提示。
+  - `docs/known_issues.md` 新增记录：Rig 0.35.0 暂未暴露 OpenAI web search `sources / annotations`，本 Phase 只能保存最终文本与 provider capability record，来源展示留到 Phase 6 处理。
+- TDD / 回归记录：
+  - 补充 Rig additional params 测试，覆盖默认不注册 hosted web search、开启后注册 hosted `web_search`。
+  - 补充 Rig Agent 配置测试，覆盖 env 与 TOML 配置中的 enabled / disabled 状态，并确认 Debug 不泄漏 API key。
+  - 补充 host Chat history meta 测试，覆盖 `agent_run_capabilities.native_web_search_enabled` 与 `run_id` 持久化。
+  - 补充 host error mapping 测试，确认 timeout 映射为 `AgentErrorType::Timeout`，unsupported / auth / rate / search error 仍归入 `LlmError`。
+- 独立复审记录：
+  - Phase 5 独立复审未发现阻塞项或高风险问题。
+  - reviewer 确认当前实现没有新增本地互联网搜索工具，`web_search` 通过 Rig OpenAI Responses `additional_params.tools` 注册为 provider hosted tool；本地 `rig-core-0.35.0` 源码显示该字段会追加到已有 function tools 后面，不会覆盖 workspace 工具。
+  - reviewer 提出的普通问题中，配置文件路径测试已补齐；结果文档已更新；hosted tool 与 function tools 共存风险已通过 Rig 源码审查确认；provider search error 更细测试受当前协议错误类型和 Rig 流式抽象限制，保留为非阻塞测试缺口。
+- 验证结果：
+  - `cargo test -p app-server-core rig_agent_additional_params` 通过。
+  - `cargo test -p app-server-core rig_agent_config` 通过。
+  - `cargo test -p app-server-host agent_capability_meta_records_native_web_search_state` 通过。
+  - `cargo test -p app-server-host rig_agent_errors_map_timeout_separately_from_provider_errors` 通过。
+  - `cargo test -p app-server-core` 通过。
+  - `cargo test -p app-server-host` 通过。
+  - `bun run --cwd packages/studio-web typecheck` 通过。
+  - `bun run --cwd packages/studio-web test:unit` 通过；仍有既有 React `act(...)` warning，未在本 Phase 扩大处理范围。
+  - `git diff --check` 通过。
+- 遗留问题：
+  - OpenAI web search 的结构化 sources / annotations 暂未被当前 Rig 版本暴露，已记录到 `docs/known_issues.md`；Phase 6 需要在 protocol / Web 展示设计中处理该降级路径。
 
 ### Phase 6 — Protocol、Web 端侧与配置接入
 

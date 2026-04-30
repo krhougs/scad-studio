@@ -7,7 +7,7 @@ use app_server_core::{
     export_model, list_workspace_entries_owned, load_config_dto, preview_ready_response,
     read_file_response_owned, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
     run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel,
-    run_rig_agent_turn, save_config_dto, send_to_slicer, stage_cadquery_project_owned,
+    run_rig_agent_turn_with_config, save_config_dto, send_to_slicer, stage_cadquery_project_owned,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -1106,6 +1106,49 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         .await
         .map(|response| response.messages)
         .unwrap_or_default();
+    let config = match app_server_core::llm::load_rig_agent_config().await {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            let message = "Rig OpenAI Responses Agent is not configured. Set BUDN_AGENT_CONFIG or BUDN_AGENT_OPENAI_API_KEY / OPENAI_API_KEY.";
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                message,
+            );
+            append_agent_error_message(
+                &worker.workspace_root,
+                &worker.run,
+                AgentErrorType::LlmError,
+                message,
+            )
+            .await;
+            return None;
+        }
+        Err(error) => {
+            let message = error.message;
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                message.clone(),
+            );
+            append_agent_error_message(
+                &worker.workspace_root,
+                &worker.run,
+                AgentErrorType::LlmError,
+                &message,
+            )
+            .await;
+            return None;
+        }
+    };
+    append_agent_capability_meta(
+        &worker.workspace_root,
+        &worker.run,
+        config.native_web_search,
+    )
+    .await;
     let mode = worker.mode;
     let execution_scope = match execution_scope_for_worker(worker, mode).await {
         Ok(scope) => scope,
@@ -1135,6 +1178,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         active_selection_index: worker.selection_snapshot.active_index,
         plan_ref: worker.plan_ref.clone(),
         context_refs: worker.context_refs.clone(),
+        native_web_search_enabled: config.native_web_search,
         execution_scope: execution_scope.clone(),
     };
     let cadquery_runtime = Arc::new(HostCadQueryToolRuntime {
@@ -1183,8 +1227,9 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         true
     });
     let cancelled_for_rig = Arc::clone(&worker.run.cancelled);
-    let turn_result = run_rig_agent_turn(
+    let turn_result = run_rig_agent_turn_with_config(
         input,
+        config,
         tool_executor,
         tool_context,
         &tool_observer,
@@ -1200,21 +1245,21 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
     match turn_result {
         Ok(draft) => Some(draft.text),
         Err(message) => {
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::LlmError,
-                message.clone(),
-            );
-            append_agent_error_message(
-                &worker.workspace_root,
-                &worker.run,
-                AgentErrorType::LlmError,
-                &message,
-            )
-            .await;
+            let error_type = agent_error_type_for_rig_message(&message);
+            push_agent_error(&worker.push_sink, &worker.run, error_type, message.clone());
+            append_agent_error_message(&worker.workspace_root, &worker.run, error_type, &message)
+                .await;
             None
         }
+    }
+}
+
+fn agent_error_type_for_rig_message(message: &str) -> AgentErrorType {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        AgentErrorType::Timeout
+    } else {
+        AgentErrorType::LlmError
     }
 }
 
@@ -1342,6 +1387,30 @@ async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, conte
             &run.session_id,
             ChatRole::Assistant,
             content,
+            Vec::new(),
+            None,
+            Some(run.run_id.clone()),
+        )
+        .await;
+}
+
+async fn append_agent_capability_meta(
+    workspace_root: &Path,
+    run: &AgentRunHandle,
+    native_web_search_enabled: bool,
+) {
+    let content = serde_json::json!({
+        "type": "agent_run_capabilities",
+        "provider": "openai_responses",
+        "native_web_search_enabled": native_web_search_enabled,
+    })
+    .to_string();
+    let store = ChatStore::new(workspace_root.to_path_buf());
+    let _ = store
+        .append_message_with_run_id(
+            &run.session_id,
+            ChatRole::Meta,
+            &content,
             Vec::new(),
             None,
             Some(run.run_id.clone()),
@@ -1779,6 +1848,63 @@ mod tests {
                 .expect("mesh result should be persisted")
                 .result_id,
             "cq_1"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_capability_meta_records_native_web_search_state() {
+        let temp_dir = tempfile::tempdir().expect("temp workspace");
+        let workspace_root = temp_dir.path().to_path_buf();
+        let store = ChatStore::new(workspace_root.clone());
+        let created = store
+            .create("agent capability", None, Vec::new())
+            .await
+            .expect("chat session should be created");
+        let run = AgentRunHandle {
+            session_id: created.session_id.clone(),
+            run_id: "agent-1".into(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+
+        append_agent_capability_meta(&workspace_root, &run, true).await;
+
+        let history = store
+            .history(&created.session_id, None)
+            .await
+            .expect("history should be readable")
+            .messages;
+        let (meta, value) = history
+            .iter()
+            .filter(|message| message.role == ChatRole::Meta)
+            .filter_map(|message| {
+                let value: serde_json::Value = serde_json::from_str(&message.content).ok()?;
+                (value["type"] == "agent_run_capabilities").then_some((message, value))
+            })
+            .next()
+            .expect("capability meta should be present");
+        assert_eq!(value["type"], "agent_run_capabilities");
+        assert_eq!(value["provider"], "openai_responses");
+        assert_eq!(value["native_web_search_enabled"], true);
+        assert_eq!(meta.run_id.as_deref(), Some("agent-1"));
+    }
+
+    #[test]
+    fn rig_agent_errors_map_timeout_separately_from_provider_errors() {
+        assert_eq!(
+            agent_error_type_for_rig_message("Rig OpenAI Responses Agent request timed out"),
+            AgentErrorType::Timeout
+        );
+        assert_eq!(
+            agent_error_type_for_rig_message("Hosted tool 'web_search' is not supported"),
+            AgentErrorType::LlmError
+        );
+        assert_eq!(
+            agent_error_type_for_rig_message("rate limit exceeded"),
+            AgentErrorType::LlmError
+        );
+        assert_eq!(
+            agent_error_type_for_rig_message("authentication failed"),
+            AgentErrorType::LlmError
         );
     }
 

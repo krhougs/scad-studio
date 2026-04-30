@@ -164,6 +164,7 @@ function LlmSetupGuide() {
       <ul className="welcome-suggestions">
         <li><code>BUDN_AGENT_OPENAI_API_KEY</code> or <code>OPENAI_API_KEY</code></li>
         <li><code>BUDN_AGENT_MODEL</code> (optional, defaults to gpt-5.2)</li>
+        <li><code>BUDN_AGENT_NATIVE_WEB_SEARCH=true</code> (optional)</li>
         <li><code>BUDN_AGENT_CONFIG</code> (optional TOML config path)</li>
       </ul>
       <p className="welcome-hint">
