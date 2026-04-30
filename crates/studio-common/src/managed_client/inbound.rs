@@ -137,7 +137,15 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                     self.pending_chat_session = None;
                 }
                 if self.latest_chat_history_request == Some(request_id) {
+                    let mesh_results = response
+                        .messages
+                        .iter()
+                        .filter_map(|message| message.mesh_result.clone())
+                        .collect::<Vec<_>>();
                     self.current_chat_history = response.messages.clone();
+                    for result in mesh_results {
+                        self.upsert_cadquery_result(result);
+                    }
                     self.latest_chat_history_request = None;
                 }
             }

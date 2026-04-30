@@ -1,5 +1,55 @@
 # 已知问题记录
 
+## 2026-04-30 22:24:00: 重载后 Chat history 没有恢复 CadQuery artifact relation
+
+- 状态：已处理，`prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 已让 CadQuery tool result history 携带 `mesh_result`，并在 Studio common 读取 chat history 时恢复 CadQuery result 缓存。
+- 来源：执行 `prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 独立 review 后的真实 Web 补充验证。
+- 原因：
+  - live `agent.mesh_ready` push 会更新前端 `cadquery_results`，因此同一会话内 `.step` 可以通过显式 artifact relation 找到 `.py` preview target。
+  - 但 Host 持久化 Chat tool result 时 `mesh_result` 为 `None`；页面重载后只剩 chat history，没有 live push 中的 artifact relation。
+  - Studio common 读取 `chat.history` 时也没有把历史消息里的 `mesh_result` 合并回 `cadquery_results`。
+- 影响范围：
+  - Agent 生成的 `.step` 在同一 live session 中可打开；重载页面或重新连接后，文件列表点击 `.step` 可能无法通过显式 artifact relation 进入 CadQuery 预览。
+  - Phase 5 早期后置验证只证明没有打开临时 result tab，不能充分证明 `.step` 点击本身不是空操作。
+- 可能的解法：
+  - Host 在记录 CadQuery tool result 时，从同一份 CadQuery result cache 找到对应 `result_id`，把完整 `CadQueryResultReady` 写入 ChatStore `mesh_result`。
+  - Studio common 在 `chat.history` response 中读取每条消息的 `mesh_result`，并合并到 `cadquery_results`。
+  - Web 文件列表继续只查询 `artifact_relation.exports`，不恢复任何基于路径或文件名的源文件推断。
+- 当前处理方式：已采用上述方案。`chat_history_response_restores_cadquery_results_from_mesh_records` 覆盖 history 恢复路径；真实网页脚本 `/tmp/budn_phase5_gap_verify_web.ts` 在重载后先打开 `.step`，得到 `AIRPODS-PRO2-CHARGING-TRAY.STEP` tab，并完成 CadQuery 预览、mode 切换和 Ref 多选验证。
+
+## 2026-04-30 21:55:00: CadQuery `MODEL_DETAILS` 嵌套值会被执行契约拒绝
+
+- 状态：已处理，`prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 已允许非空 dict / list 字段值通过 CadQuery model contract 校验。
+- 来源：执行 `prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 真实 Web Playwright 验收。
+- 原因：
+  - Agent 初始生成的 CadQuery source 包含 module-level `MODEL_DESCRIPTION`，并且 `MODEL_DETAILS` 中包含 `purpose`、`key_dimensions`、`intended_use`、`assumptions`、`interaction_notes`、`manufacturing_or_placement_constraints`。
+  - 其中 `key_dimensions` 是 dict，`assumptions` 和 `manufacturing_or_placement_constraints` 是 list。
+  - `cadquery_check_source` 对该源码返回 `missing MODEL_DESCRIPTION / MODEL_DETAILS` warning，`cadquery_execute` 返回 `CadQuery model source must include MODEL_DESCRIPTION and MODEL_DETAILS fields ...`，说明当前契约校验实际只接受更窄的字段值形态。
+- 影响范围：
+  - 真实 LLM 很自然会把尺寸、假设和制造约束生成为结构化 dict / list；这会导致前几次 `cadquery_execute` 被拒绝，增加真实 Agent run 的失败率和耗时。
+  - 当前 Phase 5 中 Agent 通过把字段值改成字符串后成功执行，因此不阻塞本轮验收，但会影响后续 CadQuery Agent 质量判断。
+- 可能的解法：
+  - 扩展 `MODEL_DETAILS` 契约校验，允许非空 string、dict、list 等 JSON-like Python 字面量，只要求字段存在且非空。
+  - 或者在 system prompt / tool schema 中明确要求 `MODEL_DETAILS` 每个字段值必须是非空字符串；该方案会降低模型说明结构化程度。
+  - 无论选择哪种方式，都需要补充 `cadquery_execute` 成功与拒绝路径测试，并同步 `cadquery_check_source` warning 语义。
+- 当前处理方式：已选择扩展契约校验。`workspace_tool_executor_cadquery_execute_accepts_python_model_contract_variants` 覆盖非空 dict / list 成功路径，`workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_details` 继续覆盖空 dict / list 拒绝路径。
+
+## 2026-04-30 21:55:00: `update_chat_summary.related_files` 不能关联 `outputs/` 导出物
+
+- 状态：已处理，`prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 已允许 Chat summary 把 `outputs/` 下导出物作为相关文件记录。
+- 来源：执行 `prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 selection 修改验收。
+- 原因：
+  - Agent 在完成 `parts/airpods-pro2-charging-tray.py` 与 `outputs/airpods-pro2-charging-tray.step` 同步更新后，调用 `update_chat_summary` 并把 `.py` 与 `.step` 都放入 `related_files`。
+  - tool 返回 `path root 'outputs' is denied for this tool`；Agent 移除 `outputs/...step` 后重试成功。
+  - 当前 summary 相关文件策略允许模型源文件，但不允许导出物路径。
+- 影响范围：
+  - Chat summary 无法把一次 Agent run 的导出物作为相关文件保存，用户后续从聊天摘要恢复上下文时只能看到 `.py`，看不到 `.step`。
+  - 这不影响 `.step` artifact relation 预览，因为预览仍由 CadQuery result relation 承接；影响的是聊天语义摘要和后续 Agent 上下文。
+- 可能的解法：
+  - 调整 `update_chat_summary` path policy，允许 `outputs/` 下由 app-server 已知 artifact relation 证明来源的导出物作为只读 related file。
+  - 或把导出物放入 summary 的独立 `related_outputs` 字段，避免和可编辑源文件共用同一权限策略。
+- 当前处理方式：已调整 `update_chat_summary` 的 related file 根目录策略，允许 `components`、`parts`、`assemblies`、`plans`、`refs`、`docs` 和 `outputs`，继续拒绝 `chats`、`.git`、`target`、`node_modules` 与 `.budn_staging`。`workspace_tool_executor_update_chat_summary_appends_chatstore_meta` 覆盖 `.py` 与 `.step` 同时写入 ChatStore summary 的路径。
+
 ## 2026-04-29 17:55:58: Web 文件列表缺少手动刷新入口
 
 - 状态：已处理，`prompt-archives/2026042903-web-agent-chat-ui-fixes/plan-00.md` Phase 3 已增加 Files panel 刷新按钮。

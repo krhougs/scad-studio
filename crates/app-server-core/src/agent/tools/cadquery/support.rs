@@ -320,14 +320,51 @@ fn dict_value_is_non_empty(dict: &str, value_start: usize) -> bool {
     let Some(ch) = dict[value_start..].chars().next() else {
         return false;
     };
-    if !matches!(ch, '\'' | '"') {
-        return false;
+    match ch {
+        '\'' | '"' => {
+            python_string_at(dict, value_start, ch).is_some_and(|(_, text)| !text.trim().is_empty())
+        }
+        '{' => dict_body_at(dict, value_start).is_some_and(collection_body_has_content),
+        '[' => list_body_at(dict, value_start).is_some_and(collection_body_has_content),
+        _ => false,
     }
-    python_string_at(dict, value_start, ch).is_some_and(|(_, text)| !text.trim().is_empty())
+}
+
+fn collection_body_has_content(body: &str) -> bool {
+    let mut index = 0;
+    while index < body.len() {
+        let Some(ch) = body[index..].chars().next() else {
+            break;
+        };
+        match ch {
+            '\'' | '"' => {
+                let Some((end, text)) = python_string_at(body, index, ch) else {
+                    return false;
+                };
+                if !text.trim().is_empty() {
+                    return true;
+                }
+                index = end;
+            }
+            '#' => index = line_comment_end(body, index),
+            ':' | ',' | '{' | '}' | '[' | ']' | '(' | ')' => index += ch.len_utf8(),
+            _ if ch.is_whitespace() => index += ch.len_utf8(),
+            _ => return true,
+        }
+    }
+    false
 }
 
 fn dict_body_at(source: &str, open_index: usize) -> Option<&str> {
-    if !source[open_index..].starts_with('{') {
+    collection_body_at(source, open_index, '{', '}')
+}
+
+fn list_body_at(source: &str, open_index: usize) -> Option<&str> {
+    collection_body_at(source, open_index, '[', ']')
+}
+
+fn collection_body_at(source: &str, open_index: usize, open: char, close: char) -> Option<&str> {
+    if !source[open_index..].starts_with(open) {
         return None;
     }
     let mut index = open_index;
@@ -343,13 +380,13 @@ fn dict_body_at(source: &str, open_index: usize) -> Option<&str> {
             index = line_comment_end(source, index);
             continue;
         }
-        if ch == '{' {
+        if ch == open {
             if depth == 0 {
                 content_start = index + ch.len_utf8();
             }
-            depth += 1;
-        } else if ch == '}' {
-            depth = depth.checked_sub(1)?;
+        }
+        update_depth(ch, &mut depth);
+        if ch == close {
             if depth == 0 {
                 return Some(&source[content_start..index]);
             }

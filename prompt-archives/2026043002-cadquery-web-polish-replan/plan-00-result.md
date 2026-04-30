@@ -10,7 +10,9 @@
 - Phase 1 已完成 Ref 图层树、预览模式、RefKind 选择模式、验证与独立 review。
 - Phase 2 已完成文件列表路由、artifact relation 与模型更新刷新。
 - Phase 3 已完成 Agent 模型产物契约、验证与独立 review。
-- Phase 4 已完成渲染模式与聊天流 UI、验证与独立 review。后续按计划进入 Phase 5。
+- Phase 4 已完成渲染模式与聊天流 UI、验证与独立 review。
+- Phase 5 已完成真实 Web Playwright 调试循环，覆盖真实 Chat、LLM、CadQuery tool call、文件列表、Ref 选择、基于 selection 的后续修改和 `.step` artifact relation 路由；真实验收和独立 review 后发现的问题已完成修复、回归测试与独立 review。
+- Phase 6 已完成最终验证、需求覆盖矩阵、结果归档和 Plan 级独立 review。
 
 ## Review 结论处理
 
@@ -30,15 +32,15 @@
 - Phase 2：已完成。
 - Phase 3：已完成。
 - Phase 4：已完成。
-- Phase 5：未开始。
-- Phase 6：未开始。
+- Phase 5：已完成真实验证、问题修复、回归测试与独立 review。
+- Phase 6：已完成最终验证、覆盖矩阵、结果归档和 Plan 级独立 review。
 
 ## 验证记录
 
 - `cargo test -p app-server-core cadquery_agent_system_prompt --test agent_tests`：3 passed，0 failed。
 - `cargo test -p app-server-core cadquery_tool_schemas_do_not_suggest_placeholder_feature_keys --test agent_tool_registry_tests`：1 passed，0 failed。
 - `cargo test -p app-server-core workspace_tool_executor_cadquery --test agent_tool_tests`：22 passed，0 failed。
-- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src crates/app-server-host/src crates/studio-common/src -g '!target' -g '!node_modules'`：无命中，exit 1。
 - `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts tests/unit/cadquery-ref-tree.test.tsx tests/unit/cadquery-viewer.test.tsx tests/unit/cadquery-source-preview.test.tsx`：21 passed，0 failed。
 - `bun run --cwd packages/studio-web typecheck`：`tsc --noEmit` 通过，exit 0。
 - `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：8 passed，0 failed。
@@ -279,3 +281,147 @@
 - 第二轮 Phase 4 review 结论：无阻塞项；记录两个高风险问题：tool modal 对 start/result 只显示局部 JSON，缺少完整 payload 元数据；CadQuery 渲染模式验证只覆盖底层 viewer，未覆盖 Workbench toolbar 到 CadQuery canvas 的完整路径。已修复 modal payload，并新增 Workbench 级 toolbar E2E。
 - 第三轮 Phase 4 review 结论：无阻塞项，无高风险问题；记录两个验证缺口：`agent.tool_start` modal 详情未直接测试，连续 assistant 来源隐藏与用户来源不受影响未有自动化断言。已补充对应单元测试。
 - 第四轮 Phase 4 review 结论：功能 diff 无阻塞项、无高风险问题、无验证缺口；唯一阻塞项为本结果文档尚未记录 Phase 4 状态和 GUI 边界判断。本节已按该结论补齐。
+
+## Phase 5 结果
+
+### 执行环境
+
+- 可控 dev server 命令：`CADQUERY_RUNNER_PYTHON=python3.11 BUDN_LLM_CONFIG=llm.toml RUST_LOG=info bun run dev --workspace /tmp/budn-phase5-cadquery-web-polish --web-port 5195 --ws-url ws://127.0.0.1:39421`。
+- Web 地址：`http://localhost:5195/`。
+- WebSocket 地址：`ws://127.0.0.1:39421`。
+- Workspace：`/tmp/budn-phase5-cadquery-web-polish`。
+- Dev server 日志：`/tmp/budn-phase5-cadquery-web-polish-dev.log`。
+- Playwright 证据目录：`/tmp/budn-phase5-cadquery-web-polish-evidence`。
+
+### 真实网页执行记录
+
+- 首轮脚本 `bun --cwd packages/studio-web /tmp/budn_phase5_real_web.ts` 在真实网页中新建 Chat，并提交原始用户输入“我想做一个放在车里的无线充电板上的给 AirPods 用的垫子”。
+- 第一次运行使用旧 LLM 配置时后端返回 `LLM HTTP 401 Unauthorized`；用户更新 `llm.toml` 后，已停止旧 dev server 并用同一端口重新启动，确认新运行读取当前配置。
+- 重新运行后 LLM 认证通过。Agent 先提出 AirPods 型号、车载无线充电板尺寸、垫子类型、厚度和材料等澄清问题，没有直接生成文件。
+- 按用户提醒，继续以真实用户身份回答澄清问题，而不是修改产品代码或 system prompt。后续脚本 `bun --cwd packages/studio-web /tmp/budn_phase5_continue_web.ts` 提交了 AirPods Pro 第 2 代、85mm 圆形车载充电板、TPU、2mm 薄底、4mm 围挡、1mm 凹槽和 18mm 指槽等参数。
+- Agent 进入 CadQuery tool 链路：`get_project_context` → `cadquery_check_source` → `cadquery_dry_run` → `cadquery_execute`。前两次 `cadquery_execute` 因 `MODEL_DETAILS` 字段值类型被拒绝；Agent 第三次改为字符串字段后成功提交。
+- 初始生成文件：
+  - `parts/airpods-pro2-charging-tray.py`
+  - `outputs/airpods-pro2-charging-tray.step`
+- Playwright 从文件列表打开 `.py`，CadQuery 预览加载成功；脚本切换 `wireframe`、`xray`、`solid` 并选择 Ref tree 中的 `bottom_face` 与 `finger_notch`。
+- 脚本以当前 selection context 提交“基于当前选择，把选中区域做得更高一些，并保持 STEP 导出同步。”Agent 读取当前 `.py`，通过 `cadquery_resolve_selection` 解析 `bottom_face` 与 `finger_notch`，将 `wall_h` 从 4mm 改为 6mm，将 `total_h` 从 6mm 改为 8mm，并再次通过 `cadquery_execute` 同步更新 `.py` 与 `.step`。
+- 后置验证脚本 `bun --cwd packages/studio-web /tmp/budn_phase5_post_verify_web.ts` 重新打开真实网页，验证最终 Assistant 回复、tool event modal、`.py` 预览、Ref tree、渲染模式、Ref 选择和 `.step` artifact relation 路由；该脚本只证明没有打开临时 `CadQuery result` tab，独立 review 后认为对 `.step` 点击是否非空操作的证据不足。
+- 补充验证脚本 `bun --cwd packages/studio-web /tmp/budn_phase5_gap_verify_web.ts` 用真实 Chat 让 Agent 在不改变几何的前提下重新同步导出 STEP，随后重载页面，并在空 tabbar 状态下先从文件列表打开 `.step`。脚本输出 `tabs_after_fresh_step=["AIRPODS-PRO2-CHARGING-TRAY.STEP ×"]`，证明重载后可从历史恢复的显式 artifact relation 打开 STEP artifact tab。
+- 同一补充脚本还验证 live `agent-done-mark`、历史 Chat 中 user / assistant 来源显示、连续 assistant 来源隐藏、preview mode、feature / edge selection mode、solid / wireframe / xray、Ref tree 精确 2 项多选，以及重新打开 `.py` 后的 CadQuery 预览。
+
+### 证据文件
+
+- `01-chat-after-generation.png`：原始 prompt 后 Agent 请求澄清的真实页面。
+- `02-chat-after-clarification.png`：澄清答案提交后生成模型的聊天页面。
+- `03-py-preview.png`：初始 `.py` CadQuery 预览。
+- `04-ref-selection.png`：Ref tree 选择后页面。
+- `05-after-selection-modification.png`：基于 selection 修改完成后的聊天页面。
+- `06-py-after-modification.png`：修改后 `.py` 预览。
+- `07-step-preview.png`：通过文件列表打开 `.step` 后仍使用 artifact relation 回到 `.py` 预览。
+- `08-live-done-after-resync.png`：真实 Chat 重新同步导出后 live done 标识。
+- `09-fresh-step-relation-and-selection.png`：重载页面后先打开 `.step`，验证 artifact relation、mode 切换和 Ref 多选。
+- `10-py-reopen-after-relation.png`：完成 `.step` 路由验证后重新打开 `.py` 预览。
+- `phase5-real-web-trace.zip`、`phase5-post-web-trace.zip`、`phase5-gap-web-trace.zip`：Playwright trace。
+- `failure.png` 和 `post-failure.png` 分别记录两次中间失败状态：前者是初次脚本等待文件生成超时；后者是后置脚本重载页面后找不到 live done 标识。两者不代表最终验收失败，已用后续真实页面操作补齐验证。
+
+### 真实验收中发现并修复的问题
+
+- `cadquery_check_source` 对包含 `MODEL_DETAILS` 非空 dict / list 值的源码返回 `missing MODEL_DESCRIPTION / MODEL_DETAILS` warning，`cadquery_execute` 同样拒绝该形态；Agent 改为字符串值后成功。这说明运行时契约与 LLM 自然生成的结构化说明存在不一致。本 Phase 已修复：`crates/app-server-core/src/agent/tools/cadquery/support.rs` 现在允许 `MODEL_DETAILS` 必填字段使用非空字符串、dict 或 list；空字符串、空 dict、空 list、非 module-level 赋值和字符串字面量中的伪赋值仍会被拒绝。
+- `update_chat_summary` 的 `related_files` 包含 `outputs/airpods-pro2-charging-tray.step` 时返回 `path root 'outputs' is denied for this tool`；Agent 移除 output path 后成功更新 summary。该问题会影响聊天摘要关联导出物。本 Phase 已修复：`crates/app-server-core/src/agent/tools/semantic_chat.rs` 现在允许 Chat summary 记录 `outputs/` 下导出物，同时继续拒绝 `chats`、`.git`、`target`、`node_modules` 和 `.budn_staging`。
+- Phase 5 review 指出 `.step` 验证存在空操作风险。继续追踪后确认，Host 持久化 CadQuery tool result 时没有把 `CadQueryResultReady` 写入 ChatStore `mesh_result`，Studio common 读取 `chat.history` 时也没有用历史 `mesh_result` 恢复 `cadquery_results`，导致页面重载后无法从历史恢复 artifact relation。本 Phase 已修复：`crates/app-server-host/src/dispatcher.rs` 现在从 CadQuery result cache 为 tool result 写入 `mesh_result`；`crates/studio-common/src/managed_client/inbound.rs` 在 chat history response 中恢复 CadQuery result 缓存。
+- Phase 5 review 指出 `MODEL_DETAILS` comment-only dict/list 仍可能误判为非空。本 Phase 已修复：collection 字段值现在忽略注释、空白和纯标点后再判断内容，`comment_only_collection` 已纳入拒绝路径测试。
+- Phase 5 review 指出 `outputs/` 作为 Chat summary related file 的边界需要更明确的测试证据。本 Phase 已补充断言：Chat summary 可记录 `outputs/top_lid.step`，但该 meta 消息没有 `tool_call_id`、`tool_calls`、`tool_result` 或 `mesh_result`，证明它只作为 Chat metadata related file，不建立 artifact relation 信任边界。
+- Phase 5 review 指出 Host 写入 Chat history 的 `mesh_result` 需要 Host 级直接测试。本 Phase 已新增 fake OpenAI-compatible SSE 服务和 fake CadQuery runner 集成测试，覆盖 `agent.invoke -> cadquery_execute -> Chat history`，并断言 tool result 持久化 `mesh_result`、artifact relation source/export 以及 `AgentMeshReady` push。
+- Phase 5 review 指出 fake LLM 测试使用全局环境变量可能与同文件 agent invoke 测试并行互相影响。本 Phase 已将所有 `AgentInvoke` 路径纳入同一 `EnvGuard` 锁：普通 agent 测试统一清空 LLM/CadQuery 环境，fake LLM 测试通过 `set_many` 设置本地服务和 fake runner。
+- 上述问题先记录到 `docs/known_issues.md`，修复后已在同一文档中标为已处理，方便后续会话判断历史原因和当前状态。
+- 重载页面后找不到 live `agent-done-mark` 属于历史事件不重新渲染；补充脚本已在真实 Agent run 完成时验证 live done 标识，同时保留最终 Assistant 回复、tool event、文件更新和预览证据。
+
+### 验证证据
+
+- `bun --cwd packages/studio-web /tmp/budn_phase5_real_web.ts`：第一次在有效 LLM 配置下进入真实网页和 Agent，但因 Agent 请求澄清而未生成文件，脚本按设计失败并保留 trace。
+- `bun --cwd packages/studio-web /tmp/budn_phase5_continue_web.ts`：完成澄清答案、初始 CadQuery 生成、`.py` 预览、渲染模式切换、Ref 选择和基于 selection 的后续修改；由于 live done 标识没有结束等待，手动停止脚本后保留已生成截图和聊天记录。
+- `bun --cwd packages/studio-web /tmp/budn_phase5_post_verify_web.ts`：通过，exit 0；输出 `tabs_after_py=["AIRPODS-PRO2-CHARGING-TRAY.PY ×"]`，`tabs_after_step=["AIRPODS-PRO2-CHARGING-TRAY.PY ×"]`。
+- `bun --cwd packages/studio-web /tmp/budn_phase5_gap_verify_web.ts`：通过，exit 0；输出 `chat_source_stats={"visibleUsers":3,"visibleAgents":3,"hiddenAgents":30}`、`tabs_after_fresh_step=["AIRPODS-PRO2-CHARGING-TRAY.STEP ×"]`、`selected_ref_count=2`、`tabs_after_py_reopen=["AIRPODS-PRO2-CHARGING-TRAY.STEP ×","AIRPODS-PRO2-CHARGING-TRAY.PY ×"]`。
+- `cargo test -p app-server-core workspace_tool_executor_cadquery_execute_accepts_python_model_contract_variants --test agent_tool_tests`：修复前 `structured` case 按预期失败；修复后 1 passed，0 failed。
+- `cargo test -p app-server-core workspace_tool_executor_update_chat_summary_appends_chatstore_meta --test agent_tool_tests`：修复前因 `outputs/top_lid.step` 被拒绝按预期失败；修复后 1 passed，0 failed。
+- `cargo test -p app-server-core workspace_tool_executor_update_chat_summary_rejects_denied_or_unknown_roots --test agent_tool_tests`：1 passed，0 failed。
+- `cargo test -p app-server-core workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_details --test agent_tool_tests`：新增 `comment_only_collection` case 修复前按预期失败；修复后 1 passed，0 failed。
+- `cargo test -p studio-common chat_history_response_restores_cadquery_results_from_mesh_records --test managed_client_tests`：1 passed，0 failed。
+- `cargo test -p app-server-host dispatcher_cadquery_result_get_preserves_artifact_relation --test shared_dispatcher_roundtrip_tests`：1 passed，0 failed。
+- `cargo test -p app-server-host dispatcher_agent_cadquery_execute_persists_mesh_result_in_chat_history --test shared_dispatcher_roundtrip_tests`：1 passed，0 failed。
+- `cargo test -p app-server-core --test agent_tool_tests`：138 passed，0 failed。
+- `cargo test -p studio-common --test managed_client_tests`：23 passed，0 failed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：15 passed，0 failed。
+- `cargo fmt --check`：通过，exit 0。
+- `bun run protocol:check-generated`：通过，exit 0。
+- `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-source-path.test.ts tests/unit/protocol-store.test.ts tests/unit/cadquery-viewer.test.tsx tests/unit/chat-messages.test.tsx`：53 passed，0 failed。
+- `git diff --check`：通过，exit 0。
+- `lsof -nP -iTCP:39421 -iTCP:5195 -sTCP:LISTEN`：停止 dev server 后无监听进程，exit 1。
+- `rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src crates/app-server-host/src crates/studio-common/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+
+### GUI 边界判断
+
+- 本 Phase 未修改前端或 GUI 代码；真实网页只验证 Phase 1 到 Phase 4 已提交能力在 Web 壳层的完整链路。
+- `.py` 与 `.step` 均通过 app-server protocol、CadQuery tool、runner manifest 和 Web artifact relation 路由进入预览；没有新增绕过 protocol 的前端路径推断。
+- 真实 AirPods 语义只存在于用户输入、聊天记录、Playwright 证据和临时 workspace 生成模型中，没有写入产品代码、schema、运行时默认分支或 system prompt 新增/修改指引。
+
+### 独立 Review 结论
+
+- 第一轮 Phase 5 独立 review 发现 `MODEL_DETAILS` comment-only dict/list、重载后 `.step` 路由空操作风险与 Host/Studio common 历史恢复缺口。已修复并补充真实 Web 脚本、core 单元测试、studio-common 单元测试与 Host dispatcher 测试。
+- 第二轮 Phase 5 独立 review 发现两个验证缺口：`outputs/` related file 需要证明只作为 Chat metadata；Host `mesh_result` 持久化需要 Host 级直接测试。已补充对应回归测试。
+- 第三轮 Phase 5 独立 review 发现 fake LLM 测试存在环境变量并行污染风险。已将同文件所有 agent invoke 测试纳入同一 `EnvGuard` 锁，并把 agent done 等待窗口从 600ms 调整为 5s。
+- 最终 Phase 5 re-review 结论：无阻塞项，无高风险问题。Reviewer 确认环境变量污染风险已解决，`outputs/` metadata 边界测试证据充足，5s 等待窗口有上限且不会在成功路径固定增加耗时。
+
+## Phase 6 结果
+
+### 最终需求覆盖矩阵
+
+| 序号 | 需求 | 覆盖方式 |
+| --- | --- | --- |
+| 1 | 启动本轮可控 Web dev server 并记录命令、端口和日志位置 | Phase 5 记录了 dev server 命令、Web/WebSocket 地址、workspace、日志路径和证据目录。 |
+| 2 | 在真实网页中新建 Chat，不复用旧 Chat | Phase 5 真实 Playwright 脚本新建 Chat，并记录初始截图 `01-chat-after-generation.png`。 |
+| 3 | 使用 AirPods 垫子原始 prompt 完成 CadQuery 建模 | Phase 5 真实网页记录了原始 prompt、澄清回答、LLM tool chain 和生成文件。 |
+| 4 | 模型能从 Web 文件列表打开并预览 | Phase 5 截图 `03-py-preview.png`、`06-py-after-modification.png` 覆盖 `.py` 预览。 |
+| 5 | 预览区域能交互选择 Ref，并用于后续修改 | Phase 5 记录 `bottom_face` 与 `finger_notch` 选择，并用 selection context 触发后续修改。 |
+| 6 | 遇到前端、LLM stream、tool call 问题时自行复现、定位、修复和验证 | Phase 5 修复 LLM tool contract、Chat summary output path、历史 artifact relation 恢复和 review 验证缺口。 |
+| 7 | 发现前端体验不佳之处时在计划范围内修复并验证 | Phase 4 修复 tool event、done mark、来源显示和 render mode 可验证性；Phase 5 用真实网页回归。 |
+| 8 | LLM reasoning 在前端显示 `Thinking` 并显示最新思考过程 | Phase 0 记录已完成能力；Phase 5 真实 Chat 验证 reasoning / tool event 流未回退。 |
+| 9 | Inspector 提供 Ref 层级树并支持任意用户可见 Ref 多选 | Phase 1 单元测试、E2E 和 Phase 5 真实 Ref tree 多选覆盖。 |
+| 10 | `.py` 和 `.step` 从文件列表打开都路由到已生成模型预览 | Phase 2 单元测试与 Host 测试覆盖显式 artifact relation；Phase 5 `09-fresh-step-relation-and-selection.png` 覆盖重载后 `.step` 打开。 |
+| 11 | `.py` 与 `.step` 同步，并由 app-server/protocol/manifest 显式关系表达 | Phase 2 protocol/manifest 测试、Phase 3 execute contract、Phase 5 Host `mesh_result` 持久化测试覆盖。 |
+| 12 | 每个模型包含用途、细节说明和面向人类交互的稳定命名 | Phase 3 system prompt / schema / contract 测试覆盖 `MODEL_DESCRIPTION`、`MODEL_DETAILS` 和 `REFS.features`。 |
+| 13 | solid / wireframe / xray 渲染和切换正常 | Phase 4 Playwright 像素差异测试和 Phase 5 真实网页模式切换覆盖。 |
+| 14 | 模型更新刷新当前 `.py` / `.step` tab，不打开临时 result tab | Phase 2 watch / tab route 测试与 Phase 5 `tabs_after_*` 输出覆盖。 |
+| 15 | LLM 输出结束只显示轻量 logo/icon，不显示大 done card | Phase 4 chat UI 测试与 Phase 5 live done 标识验证覆盖。 |
+| 16 | Agent tool start / running / result 默认单行，modal 展开详情 | Phase 4 chat event 单元测试与 Phase 5 tool event modal 验证覆盖。 |
+| 17 | 同一 LLM stream 只在最上面显示一次 `ASSISTANT` 来源 | Phase 4 chat messages 单元测试与 Phase 5 `chat_source_stats` 输出覆盖。 |
+| 18 | `cadquery-select-dock` 位于预览区底部正中、status bar 上方 | Phase 1/4 viewer 与 source preview 测试覆盖 dock 呈现；Phase 5 截图覆盖真实布局。 |
+| 19 | 模式集合包含独立预览模式和按 protocol RefKind 划分的选择模式 | Phase 1 selection / viewer 单元测试和 Playwright 覆盖 preview、feature、edge、face 等模式。 |
+| 20 | 预览模式保留 axis、底板等辅助，只隐藏选择覆盖层 | Phase 1 `CadQueryViewer` / `CadQuerySourcePreview` 测试和 Phase 5 preview mode 验证覆盖。 |
+| 21 | 清理当前验收 case 对产品代码、protocol、tool schema、Rust LLM 可见文案的污染 | Phase -1 清理与回归测试、Phase 0 污染复核、Phase 6 污染扫描均无命中。 |
+
+### Phase 6 验证证据
+
+- `bun run --cwd packages/studio-web typecheck`：通过，exit 0。
+- `bun run --cwd packages/studio-web test:unit tests/unit/cadquery-selection.test.ts tests/unit/cadquery-ref-tree.test.tsx tests/unit/cadquery-viewer.test.tsx tests/unit/cadquery-source-preview.test.tsx tests/unit/watch-refresh.test.ts tests/unit/cadquery-source-path.test.ts tests/unit/tab-kind.test.ts tests/unit/cadquery-result-tab.test.ts tests/unit/protocol-package-import.test.ts tests/unit/protocol-store.test.ts tests/unit/chat-messages.test.tsx`：77 passed，0 failed。
+- `bun run --cwd packages/studio-web test:e2e tests/playwright/cadquery-viewer-selection.spec.ts`：9 passed，0 failed。
+- `lsof -nP -iTCP:39193 -iTCP:5188 -sTCP:LISTEN`：无监听，exit 1。
+- `cargo test -p app-server-core --test agent_tool_tests`：138 passed，0 failed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：15 passed，0 failed。
+- `cargo test -p studio-common --test managed_client_tests`：23 passed，0 failed。
+- `cargo test -p app-server-protocol cadquery_payload_roundtrips_and_ready_counts_are_lightweight --test borsh_payload_roundtrip_tests`：1 passed，0 failed。
+- `bun run protocol:check-generated`：通过，exit 0。
+- `cargo fmt --check`：通过，exit 0。
+- `git diff --check`：通过，exit 0。
+- 污染扫描命令：`rg -n "AirPods|airpods|wireless charging|charging_pad|airpods_recess|front_finger_notch|cable_relief|placement_pocket|access_notch|human_readable_feature_name|semantic_part_feature_name|semantic_component_feature_name|semantic_assembly_feature_name" crates/app-server-core/src docs/cadquery-mvp/agent-system-prompt.md packages/studio-web/src packages/app-server-protocol/src crates/app-server-protocol/src crates/app-server-host/src crates/studio-common/src -g '!target' -g '!node_modules'`：无命中，exit 1。
+
+### 临时产物与工作树
+
+- Playwright 本轮没有留下 `39193` 或 `5188` 监听进程。
+- `git status --short` 显示仍有本任务外既有改动：`README.md`、`docs/getting-started.md`、`scripts/run_websocket_host.ts`、`tests/run_websocket_host.test.ts`、`plan-00.md`。这些不纳入 Phase 5/6 提交。
+- 本轮临时脚本和真实验收证据保存在 `/tmp/budn-phase5-cadquery-web-polish-evidence`，不在仓库 diff 内。
+
+### Plan 级 Review 结论
+
+- 第一轮 Plan 级独立 review 发现结果文档状态冲突：顶部与 Phase 进度写已完成 Plan 级独立 review，但本节仍写待执行。该问题已修正。
+- 第二轮 Plan 级独立 review 结论：无阻塞项，未发现高风险问题，Plan 级 review 通过。

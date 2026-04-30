@@ -11,11 +11,23 @@ use crate::{
 use super::{
     AgentToolRunContext,
     semantic::{
-        PLAN_SCOPE_ROOTS, non_empty_string_arg, normalize_allowed_path, optional_string_array,
+        first_segment, non_empty_string_arg, normalize_workspace_path, optional_string_array,
         parse_object, path_handle,
     },
     tool_error_json,
 };
+
+const CHAT_RELATED_FILE_ROOTS: &[&str] = &[
+    "components",
+    "parts",
+    "assemblies",
+    "plans",
+    "refs",
+    "docs",
+    "outputs",
+];
+const CHAT_RELATED_FILE_DENIED_ROOTS: &[&str] =
+    &[".git", "target", "node_modules", "chats", ".budn_staging"];
 
 pub(super) fn update_chat_summary(
     workspace_root: &Path,
@@ -70,7 +82,22 @@ fn chat_summary_args(call: &LlmToolCall) -> Result<ChatSummaryArgs, String> {
 }
 
 fn related_path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
-    let normalized = normalize_allowed_path(path, PLAN_SCOPE_ROOTS, call)?;
+    let normalized = normalize_workspace_path(path, call)?;
+    let root = first_segment(&normalized);
+    if CHAT_RELATED_FILE_DENIED_ROOTS.contains(&root) {
+        return Err(tool_error_json(
+            call,
+            &format!("path root '{root}' is denied for this tool"),
+            "permission_denied",
+        ));
+    }
+    if !CHAT_RELATED_FILE_ROOTS.contains(&root) {
+        return Err(tool_error_json(
+            call,
+            &format!("path root '{root}' is not allowed for this tool"),
+            "permission_denied",
+        ));
+    }
     path_handle(&normalized, call)
 }
 

@@ -72,6 +72,15 @@ def build(params=None): pass"
     )
 }
 
+fn structured_model_contract_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Structured contract test model\"\n\
+MODEL_DETAILS = {{\"purpose\":\"Verify model contract\",\"key_dimensions\":{{\"height\":\"8 mm\",\"width\":\"20 mm\"}},\"intended_use\":\"automated contract validation\",\"assumptions\":[\"no external dependencies\"],\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":[\"print flat\"]}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
 fn incomplete_model_details_source(feature: &str) -> String {
     format!(
         "MODEL_DESCRIPTION = \"Incomplete contract test model\"\n\
@@ -110,6 +119,26 @@ fn collection_model_details_value_source(feature: &str) -> String {
     format!(
         "MODEL_DESCRIPTION = \"Collection value contract test model\"\n\
 MODEL_DETAILS = {{\"purpose\":{{}},\"key_dimensions\":[],\"intended_use\":\"automated contract validation\",\"assumptions\":\"no external dependencies\",\"interaction_notes\":\"select named features\",\"manufacturing_or_placement_constraints\":\"none\"}}\n\
+REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
+def build(params=None): pass"
+    )
+}
+
+fn comment_only_collection_model_details_value_source(feature: &str) -> String {
+    format!(
+        "MODEL_DESCRIPTION = \"Comment-only collection value contract test model\"\n\
+MODEL_DETAILS = {{\n\
+    \"purpose\": {{\n\
+        # no usable purpose text\n\
+    }},\n\
+    \"key_dimensions\": [\n\
+        # no usable dimension text\n\
+    ],\n\
+    \"intended_use\":\"automated contract validation\",\n\
+    \"assumptions\":\"no external dependencies\",\n\
+    \"interaction_notes\":\"select named features\",\n\
+    \"manufacturing_or_placement_constraints\":\"none\",\n\
+}}\n\
 REFS = {{\"type\":\"part\",\"features\":{{\"{feature}\":{{}}}}}}\n\
 def build(params=None): pass"
     )
@@ -1897,6 +1926,10 @@ fn workspace_tool_executor_cadquery_execute_rejects_non_module_or_empty_model_de
             collection_model_details_value_source("lid_grip_surface"),
         ),
         (
+            "comment_only_collection",
+            comment_only_collection_model_details_value_source("lid_grip_surface"),
+        ),
+        (
             "empty_description",
             empty_model_description_source("lid_grip_surface"),
         ),
@@ -2001,6 +2034,10 @@ fn workspace_tool_executor_cadquery_execute_accepts_python_model_contract_varian
         (
             "annotated",
             annotated_model_contract_source("lid_alignment_surface"),
+        ),
+        (
+            "structured",
+            structured_model_contract_source("lid_alignment_surface"),
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -2663,7 +2700,7 @@ fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
             r#"{
                 "summary":"Discussed vent placement.",
                 "goal":"Prepare a CadQuery execution plan.",
-                "related_files":["parts/top_lid.py","plans/add-lid-vents.md"],
+                "related_files":["parts/top_lid.py","outputs/top_lid.step","plans/add-lid-vents.md"],
                 "open_questions":["Confirm slot count"]
             }"#,
         ),
@@ -2683,12 +2720,24 @@ fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
     assert_eq!(latest.role, app_server_protocol::ChatRole::Meta);
     assert!(latest.content.contains("\"type\":\"chat_summary\""));
     assert!(latest.content.contains("Discussed vent placement."));
+    assert!(latest.tool_calls.is_empty());
+    assert!(latest.tool_call_id.is_none());
+    assert!(latest.tool_result.is_none());
+    assert!(latest.mesh_result.is_none());
     assert_eq!(latest.related_files[0].display_path(), "parts/top_lid.py");
+    assert_eq!(
+        latest.related_files[1].display_path(),
+        "outputs/top_lid.step"
+    );
 
     let sessions = store.list(false).unwrap();
     assert_eq!(
         sessions.sessions[0].related_files[0].display_path(),
         "parts/top_lid.py"
+    );
+    assert_eq!(
+        sessions.sessions[0].related_files[1].display_path(),
+        "outputs/top_lid.step"
     );
 }
 
@@ -2728,40 +2777,46 @@ fn workspace_tool_executor_update_chat_summary_can_clear_related_files() {
 }
 
 #[test]
-fn workspace_tool_executor_update_chat_summary_rejects_arbitrary_chat_paths() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = ChatStore::new(dir.path().to_path_buf());
-    let created = store
-        .create("agent tools", Some("old goal".into()), Vec::new())
-        .unwrap();
-    let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
-    let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
-    context.session_id = Some(created.session_id.clone());
+fn workspace_tool_executor_update_chat_summary_rejects_denied_or_unknown_roots() {
+    for related_file in [
+        "chats/agent-tools.jsonl",
+        ".git/config",
+        "target/debug/out.step",
+        "node_modules/pkg/index.js",
+        ".budn_staging/result.step",
+        "tmp/result.step",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChatStore::new(dir.path().to_path_buf());
+        let created = store
+            .create("agent tools", Some("old goal".into()), Vec::new())
+            .unwrap();
+        let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
+        let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
+        context.session_id = Some(created.session_id.clone());
+        let args = serde_json::json!({
+            "summary": "bad",
+            "goal": "bad",
+            "related_files": [related_file],
+            "open_questions": []
+        })
+        .to_string();
 
-    let result = tool_json_with_context(
-        &executor,
-        &call(
-            "update_chat_summary",
-            r#"{
-                "summary":"bad",
-                "goal":"bad",
-                "related_files":["chats/agent-tools.jsonl"],
-                "open_questions":[]
-            }"#,
-        ),
-        &context,
-    );
+        let result =
+            tool_json_with_context(&executor, &call("update_chat_summary", &args), &context);
 
-    assert_eq!(result["status"], "error");
-    assert_eq!(result["error_type"], "permission_denied");
-    assert_eq!(
-        store
-            .history(&created.session_id, None)
-            .unwrap()
-            .messages
-            .len(),
-        1
-    );
+        assert_eq!(result["status"], "error", "{related_file}");
+        assert_eq!(result["error_type"], "permission_denied", "{related_file}");
+        assert_eq!(
+            store
+                .history(&created.session_id, None)
+                .unwrap()
+                .messages
+                .len(),
+            1,
+            "{related_file}"
+        );
+    }
 }
 
 #[test]

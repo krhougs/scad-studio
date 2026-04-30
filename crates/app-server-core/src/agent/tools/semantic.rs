@@ -290,7 +290,7 @@ pub(super) fn normalize_allowed_path(
     }
 }
 
-fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result<String, String> {
     let cleaned = path.trim().replace('\\', "/");
     if cleaned.is_empty() || cleaned.starts_with('/') || cleaned.contains(':') {
         return Err(tool_error_json(
@@ -353,7 +353,7 @@ fn target_type_label(target_type: CadQueryObjectKind) -> &'static str {
     }
 }
 
-fn first_segment(path: &str) -> &str {
+pub(super) fn first_segment(path: &str) -> &str {
     path.split('/')
         .find(|segment| !segment.is_empty())
         .unwrap_or("")

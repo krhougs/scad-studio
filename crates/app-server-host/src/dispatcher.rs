@@ -3,10 +3,10 @@ use app_server_core::{
     AgentToolRunContext, AgentTurnInput, CadQueryCommitScope, CadQueryRunConfig, CadQueryRunResult,
     CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
     CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
-    SlicerInstall, current_workspace, detect_slicer_paths, export_model, list_workspace_entries,
-    load_config_dto, preview_ready_response, read_file_response, resolve_workspace_path,
-    resolve_workspace_write_path, run_cadquery_runner, run_cadquery_runner_with_cancel,
-    save_config_dto, send_to_slicer, stage_cadquery_project,
+    SlicerInstall, cadquery_result_ready, current_workspace, detect_slicer_paths, export_model,
+    list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
+    resolve_workspace_path, resolve_workspace_write_path, run_cadquery_runner,
+    run_cadquery_runner_with_cancel, save_config_dto, send_to_slicer, stage_cadquery_project,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -631,6 +631,7 @@ struct AgentWorker {
 
 struct AgentToolEventRecorder {
     workspace_root: PathBuf,
+    cadquery_results: Arc<Mutex<CadQueryResultCache>>,
     push_sink: ServerPushSink,
     run: AgentRunHandle,
 }
@@ -643,7 +644,8 @@ impl app_server_core::ToolLoopObserver for AgentToolEventRecorder {
 
     fn tool_result(&self, call: &LlmToolCall, result: &str) {
         push_llm_tool_result(&self.push_sink, &self.run, call, result);
-        append_llm_tool_result(&self.workspace_root, &self.run, call, result);
+        let mesh_result = cadquery_ready_for_tool_result(&self.cadquery_results, result);
+        append_llm_tool_result(&self.workspace_root, &self.run, call, result, mesh_result);
     }
 }
 
@@ -1011,6 +1013,7 @@ fn run_text_agent_llm(
     tool_context.execution_scope = execution_scope;
     let tool_observer = AgentToolEventRecorder {
         workspace_root: worker.workspace_root.clone(),
+        cadquery_results: Arc::clone(&worker.cadquery_results),
         push_sink: Arc::clone(&worker.push_sink),
         run: worker.run.clone(),
     };
@@ -1214,6 +1217,7 @@ fn append_llm_tool_result(
     run: &AgentRunHandle,
     call: &LlmToolCall,
     result: &str,
+    mesh_result: Option<app_server_protocol::CadQueryResultReady>,
 ) {
     let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_result(
         &run.session_id,
@@ -1223,8 +1227,20 @@ fn append_llm_tool_result(
             tool_name: call.function_name.clone(),
             result_json: result.to_owned(),
         },
-        None,
+        mesh_result,
     );
+}
+
+fn cadquery_ready_for_tool_result(
+    cadquery_results: &Arc<Mutex<CadQueryResultCache>>,
+    result: &str,
+) -> Option<app_server_protocol::CadQueryResultReady> {
+    let value = serde_json::from_str::<serde_json::Value>(result).ok()?;
+    let result_id = value.get("result_id")?.as_str()?;
+    cadquery_results
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(result_id).as_ref().map(cadquery_result_ready))
 }
 
 fn push_agent_token(push_sink: &ServerPushSink, run: &AgentRunHandle, text: &str) {

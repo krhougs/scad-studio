@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentStartedResponse, AgentTokenEvent, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    AgentStartedResponse, AgentTokenEvent, CadQueryArtifactExport, CadQueryArtifactRelation,
+    CadQueryResultReady, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
     ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
     ChatSessionId, ChatSessionSummary, ClientCapabilities, ClientCommand, ClientEnvelope,
     ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequest,
@@ -829,6 +830,35 @@ fn chat_history_response_replaces_snapshot_history() {
 }
 
 #[test]
+fn chat_history_response_restores_cadquery_results_from_mesh_records() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let ready = cadquery_ready("cq_chat_history");
+    let mut message = chat_message("msg-1", ChatRole::Tool, "agent tool completed");
+    message.mesh_result = Some(ready.clone());
+
+    let request_id = client
+        .dispatch_chat_history(app_server_protocol::ChatHistoryRequest {
+            session_id: ChatSessionId("main".into()),
+            limit: Some(50),
+        })
+        .expect("dispatch chat.history");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::ChatHistory(ChatHistoryResponse {
+                session_id: ChatSessionId("main".into()),
+                messages: vec![message],
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.cadquery_results, vec![ready]);
+}
+
+#[test]
 fn chat_created_clears_previous_session_history() {
     let mut client = ManagedClient::new(FakeTransport::default());
     open_client_with_handshake(&mut client);
@@ -1065,6 +1095,26 @@ fn chat_message(id: &str, role: ChatRole, content: &str) -> ChatMessageRecord {
         tool_result: None,
         mesh_result: None,
         run_id: None,
+    }
+}
+
+fn cadquery_ready(result_id: &str) -> CadQueryResultReady {
+    CadQueryResultReady {
+        result_id: result_id.into(),
+        build_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        part_count: 1,
+        face_count: 2,
+        edge_count: 3,
+        vertex_count: 4,
+        artifact_relation: Some(CadQueryArtifactRelation {
+            source_path: "parts/top_lid.py".into(),
+            exports: vec![CadQueryArtifactExport {
+                name: "step".into(),
+                path: "outputs/top_lid.step".into(),
+                hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+            }],
+        }),
     }
 }
 
