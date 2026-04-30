@@ -4,11 +4,11 @@ use serde_json::{Value, json};
 use tokio::fs;
 
 use crate::agent::plan_package::collect_plan_packages;
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{canonical_or_original, collect_files, path};
 
-pub(super) async fn get_project_context(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn get_project_context(workspace_root: &Path, call: &AgentToolCall) -> String {
     let workspace_root = canonical_or_original(workspace_root).await;
     let mut objects = Vec::new();
     for (root, object_type) in [

@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::tool_error_json;
 
 pub(super) fn validate_plan_export_targets(
     target_path: &str,
     export_targets: &[String],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     for target in export_targets {
         if !matches_runner_export_target(target_path, target) {

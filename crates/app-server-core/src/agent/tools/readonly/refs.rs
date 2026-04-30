@@ -4,7 +4,7 @@ use app_server_protocol::SelectionRef;
 use serde_json::{Value, json};
 use tokio::fs;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{AgentToolRunContext, parse_object, path, string_arg};
 use crate::agent::tools::tool_error_json;
@@ -13,7 +13,7 @@ mod parse;
 
 pub(super) async fn resolve_ref(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let args = match parse_object(&call.arguments, call) {
@@ -53,7 +53,7 @@ pub(super) async fn resolve_ref(
 }
 
 async fn resolved_selection(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     workspace_root: &Path,
     selection: &SelectionRef,
 ) -> Value {
@@ -132,7 +132,7 @@ fn selection_risks(
 }
 
 async fn resolved_object_ref(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     workspace_root: &Path,
     kind: RefObjectKind,
     name: &str,
@@ -162,7 +162,7 @@ async fn resolved_object_ref(
 }
 
 async fn resolved_feature_ref(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     workspace_root: &Path,
     ref_text: &str,
     owner: &str,
@@ -197,7 +197,7 @@ async fn resolved_feature_ref(
     })
 }
 
-fn resolved_unstable_raw(call: &LlmToolCall, ref_text: &str) -> Value {
+fn resolved_unstable_raw(call: &AgentToolCall, ref_text: &str) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -293,7 +293,7 @@ fn owner_path_from_ref(ref_text: &str) -> Option<String> {
 }
 
 fn validate_feature_ref_parts(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     owner: &str,
     feature: &str,
 ) -> Result<(), String> {
@@ -301,7 +301,7 @@ fn validate_feature_ref_parts(
     validate_ref_name(call, feature)
 }
 
-fn validate_ref_name(call: &LlmToolCall, value: &str) -> Result<(), String> {
+fn validate_ref_name(call: &AgentToolCall, value: &str) -> Result<(), String> {
     if validate_ref_name_text(value) {
         Ok(())
     } else {

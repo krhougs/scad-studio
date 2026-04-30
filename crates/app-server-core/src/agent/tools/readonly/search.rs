@@ -3,7 +3,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tokio::fs;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{
     canonical_or_original, collect_files, matches_pattern, optional_string_arg, parse_object,
@@ -13,7 +13,7 @@ use super::{
 const MAX_SEARCH_FILE_BYTES: usize = 256 * 1024;
 const MAX_SEARCH_RESULTS: usize = 50;
 
-pub(super) async fn search_files(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn search_files(workspace_root: &Path, call: &AgentToolCall) -> String {
     let workspace_root = canonical_or_original(workspace_root).await;
     let args = match search_files_args(call) {
         Ok(args) => args,
@@ -37,7 +37,7 @@ struct SearchFilesArgs {
     max_results: usize,
 }
 
-fn search_files_args(call: &LlmToolCall) -> Result<SearchFilesArgs, String> {
+fn search_files_args(call: &AgentToolCall) -> Result<SearchFilesArgs, String> {
     let args = parse_object(&call.arguments, call)?;
     Ok(SearchFilesArgs {
         query: string_arg(&args, "query", call)?,
@@ -103,7 +103,7 @@ async fn readable_search_text(path: &Path) -> Option<String> {
 }
 
 fn search_files_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     query: &str,
     matches: Vec<Value>,
     truncated: bool,

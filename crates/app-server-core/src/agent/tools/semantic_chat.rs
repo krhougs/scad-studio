@@ -3,13 +3,10 @@ use std::path::Path;
 use app_server_protocol::{ChatSessionId, PathHandle};
 use serde_json::{Value, json};
 
-use crate::{
-    chat::{ChatStore, ChatSummaryUpdate},
-    llm::LlmToolCall,
-};
+use crate::chat::{ChatStore, ChatSummaryUpdate};
 
 use super::{
-    AgentToolRunContext,
+    AgentToolCall, AgentToolRunContext,
     semantic::{
         first_segment, non_empty_string_arg, normalize_workspace_path, optional_string_array,
         parse_object, path_handle,
@@ -31,7 +28,7 @@ const CHAT_RELATED_FILE_DENIED_ROOTS: &[&str] =
 
 pub(super) async fn update_chat_summary(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let session_id = match context.session_id.as_ref() {
@@ -70,7 +67,7 @@ struct ChatSummaryArgs {
     open_questions: Vec<String>,
 }
 
-fn chat_summary_args(call: &LlmToolCall) -> Result<ChatSummaryArgs, String> {
+fn chat_summary_args(call: &AgentToolCall) -> Result<ChatSummaryArgs, String> {
     let value = parse_object(call)?;
     let related_files = optional_string_array(&value, "related_files", call)?
         .into_iter()
@@ -84,7 +81,7 @@ fn chat_summary_args(call: &LlmToolCall) -> Result<ChatSummaryArgs, String> {
     })
 }
 
-fn related_path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
+fn related_path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
     let normalized = normalize_workspace_path(path, call)?;
     let root = first_segment(&normalized);
     if CHAT_RELATED_FILE_DENIED_ROOTS.contains(&root) {
@@ -104,7 +101,11 @@ fn related_path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, Str
     path_handle(&normalized, call)
 }
 
-fn chat_summary_success(call: &LlmToolCall, session_id: &ChatSessionId, message_id: &str) -> Value {
+fn chat_summary_success(
+    call: &AgentToolCall,
+    session_id: &ChatSessionId,
+    message_id: &str,
+) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,

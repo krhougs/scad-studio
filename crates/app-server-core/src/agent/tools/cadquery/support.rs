@@ -3,7 +3,7 @@ use std::path::Path;
 use app_server_protocol::{CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh};
 use serde_json::{Value, json};
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::super::{CadQueryToolCachedResult, CadQueryToolRunResult};
 
@@ -28,7 +28,7 @@ pub(super) struct SourceContract {
 
 pub(super) async fn analyze_success(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     target_path: &str,
     include_paired_doc: bool,
     include_dependencies: bool,
@@ -106,7 +106,7 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
 }
 
 pub(super) fn run_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     result: CadQueryToolRunResult,
     committed: bool,
 ) -> Value {
@@ -141,7 +141,7 @@ pub(super) fn run_success(
     }
 }
 
-pub(super) fn result_success(call: &LlmToolCall, result: &CadQueryToolCachedResult) -> Value {
+pub(super) fn result_success(call: &AgentToolCall, result: &CadQueryToolCachedResult) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -156,7 +156,7 @@ pub(super) fn result_success(call: &LlmToolCall, result: &CadQueryToolCachedResu
 }
 
 pub(super) fn resolve_selection_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     mesh: &CadQueryMeshPayload,
     ref_text: &str,
 ) -> Value {

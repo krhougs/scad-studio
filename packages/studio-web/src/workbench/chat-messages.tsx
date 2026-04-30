@@ -162,9 +162,9 @@ function LlmSetupGuide() {
         Set the following environment variables to enable the agent:
       </p>
       <ul className="welcome-suggestions">
-        <li><code>BUDN_LLM_BASE_URL</code></li>
-        <li><code>BUDN_LLM_API_KEY</code></li>
-        <li><code>BUDN_LLM_MODEL</code> (optional, defaults to gpt-4o)</li>
+        <li><code>BUDN_AGENT_OPENAI_API_KEY</code> or <code>OPENAI_API_KEY</code></li>
+        <li><code>BUDN_AGENT_MODEL</code> (optional, defaults to gpt-5.2)</li>
+        <li><code>BUDN_AGENT_CONFIG</code> (optional TOML config path)</li>
       </ul>
       <p className="welcome-hint">
         Restart the server after setting the variables.
@@ -450,7 +450,7 @@ type FriendlyError = { title: string; hint: string };
 const ERROR_MESSAGES: Record<string, FriendlyError> = {
   llm_error: {
     title: "AI service error",
-    hint: "The AI service returned an error. Check your LLM configuration and try again.",
+    hint: "The AI service returned an error. Check the Rig OpenAI Responses configuration and try again.",
   },
   llm_refused: {
     title: "Request refused",

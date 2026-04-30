@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use crate::agent::tools::AgentToolCall;
 use crate::agent::tools::tool_error_json;
-use crate::llm::LlmToolCall;
 use tokio::fs;
 
 use super::is_denied_path;
 
 pub(super) fn normalize_workspace_path(
     relative: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let cleaned = relative.replace('\\', "/");
     if cleaned.starts_with('/') || cleaned.contains(':') {

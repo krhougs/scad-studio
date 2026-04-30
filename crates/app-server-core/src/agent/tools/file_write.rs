@@ -6,7 +6,7 @@ use tokio::fs;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{AgentToolRunContext, tool_error_json};
 use path_policy::{
@@ -16,7 +16,7 @@ use path_policy::{
 
 pub(super) async fn write_file(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let args = match write_args(call) {
@@ -50,7 +50,7 @@ pub(super) async fn write_file(
 
 pub(super) async fn patch_file(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let args = match patch_args(call) {
@@ -94,7 +94,7 @@ pub(super) async fn patch_file(
 
 pub(super) async fn copy_file(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let args = match copy_args(call) {
@@ -165,7 +165,7 @@ struct CopyArgs {
     expected_source_hash: Option<String>,
 }
 
-fn write_args(call: &LlmToolCall) -> Result<WriteArgs, String> {
+fn write_args(call: &AgentToolCall) -> Result<WriteArgs, String> {
     let value = parse_object(call)?;
     Ok(WriteArgs {
         path: required_string(&value, "path", call)?,
@@ -174,7 +174,7 @@ fn write_args(call: &LlmToolCall) -> Result<WriteArgs, String> {
     })
 }
 
-fn patch_args(call: &LlmToolCall) -> Result<PatchArgs, String> {
+fn patch_args(call: &AgentToolCall) -> Result<PatchArgs, String> {
     let value = parse_object(call)?;
     Ok(PatchArgs {
         path: required_string(&value, "path", call)?,
@@ -184,7 +184,7 @@ fn patch_args(call: &LlmToolCall) -> Result<PatchArgs, String> {
     })
 }
 
-fn copy_args(call: &LlmToolCall) -> Result<CopyArgs, String> {
+fn copy_args(call: &AgentToolCall) -> Result<CopyArgs, String> {
     let value = parse_object(call)?;
     Ok(CopyArgs {
         source_path: required_string(&value, "source_path", call)?,
@@ -193,7 +193,7 @@ fn copy_args(call: &LlmToolCall) -> Result<CopyArgs, String> {
     })
 }
 
-fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
+fn parse_object(call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(&call.arguments).map_err(|error| {
         tool_error_json(
             call,
@@ -203,7 +203,7 @@ fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
     })
 }
 
-fn required_string(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn required_string(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     let text = string_arg(value, key, call)?;
     if text.is_empty() {
         Err(tool_error_json(
@@ -216,7 +216,7 @@ fn required_string(value: &Value, key: &str, call: &LlmToolCall) -> Result<Strin
     }
 }
 
-fn string_arg(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn string_arg(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -230,7 +230,11 @@ fn string_arg(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, St
         })
 }
 
-fn optional_string(value: &Value, key: &str, call: &LlmToolCall) -> Result<Option<String>, String> {
+fn optional_string(
+    value: &Value,
+    key: &str,
+    call: &AgentToolCall,
+) -> Result<Option<String>, String> {
     let Some(value) = value.get(key) else {
         return Ok(None);
     };
@@ -251,7 +255,7 @@ fn validate_copy_request(
     target: &WriteTarget,
     bytes: &[u8],
     expected_hash: Option<&str>,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if let Some(expected) = expected_hash
         && sha256_bytes(bytes) != expected
@@ -275,7 +279,7 @@ fn validate_copy_request(
 fn validate_copy_model_boundary(
     source: &str,
     target: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if is_cadquery_model_path(target) && !is_cadquery_model_path(source) {
         return Err(tool_error_json(
@@ -290,7 +294,7 @@ fn validate_copy_model_boundary(
 async fn validate_write_conflict(
     target: &WriteTarget,
     expected_hash: Option<&str>,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if !target.existed {
         return if expected_hash.is_some() {
@@ -322,7 +326,7 @@ async fn validate_write_conflict(
     }
 }
 
-async fn read_text(path: &Path, call: &LlmToolCall) -> Result<String, String> {
+async fn read_text(path: &Path, call: &AgentToolCall) -> Result<String, String> {
     String::from_utf8(read_text_bytes(path, call).await?).map_err(|_| {
         tool_error_json(
             call,
@@ -332,7 +336,7 @@ async fn read_text(path: &Path, call: &LlmToolCall) -> Result<String, String> {
     })
 }
 
-async fn read_text_bytes(path: &Path, call: &LlmToolCall) -> Result<Vec<u8>, String> {
+async fn read_text_bytes(path: &Path, call: &AgentToolCall) -> Result<Vec<u8>, String> {
     let bytes = fs::read(path).await.map_err(|error| {
         tool_error_json(call, &format!("读取文件失败: {error}"), "file_conflict")
     })?;
@@ -340,7 +344,7 @@ async fn read_text_bytes(path: &Path, call: &LlmToolCall) -> Result<Vec<u8>, Str
     Ok(bytes)
 }
 
-fn validate_text_bytes(bytes: &[u8], call: &LlmToolCall) -> Result<(), String> {
+fn validate_text_bytes(bytes: &[u8], call: &AgentToolCall) -> Result<(), String> {
     if bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
         Err(tool_error_json(
             call,
@@ -356,7 +360,7 @@ fn apply_exact_patch(
     current: &str,
     search: &str,
     replace: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     validate_text_bytes(search.as_bytes(), call)?;
     validate_text_bytes(replace.as_bytes(), call)?;
@@ -371,7 +375,7 @@ fn apply_exact_patch(
     Ok(current.replacen(search, replace, 1))
 }
 
-fn file_write_success(call: &LlmToolCall, path: &str, bytes: &[u8], created: bool) -> Value {
+fn file_write_success(call: &AgentToolCall, path: &str, bytes: &[u8], created: bool) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::fs;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{AgentToolRunContext, tool_error_json};
 
@@ -18,7 +18,7 @@ const MAX_FILE_READ_BYTES: usize = 64 * 1024;
 const MAX_DIR_ENTRIES: usize = 500;
 const DENIED_ROOTS: &[&str] = &[".git", "target", "node_modules", "outputs", ".budn_staging"];
 
-pub(super) async fn read_file(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn read_file(workspace_root: &Path, call: &AgentToolCall) -> String {
     let workspace_root = canonical_or_original(workspace_root).await;
     let args = match read_file_args(call) {
         Ok(args) => args,
@@ -64,7 +64,7 @@ struct TextSlice {
     file_size: usize,
 }
 
-fn read_file_args(call: &LlmToolCall) -> Result<ReadFileArgs, String> {
+fn read_file_args(call: &AgentToolCall) -> Result<ReadFileArgs, String> {
     let args = parse_object(&call.arguments, call)?;
     Ok(ReadFileArgs {
         path: string_arg(&args, "path", call)?,
@@ -75,7 +75,7 @@ fn read_file_args(call: &LlmToolCall) -> Result<ReadFileArgs, String> {
     })
 }
 
-async fn read_utf8_file(call: &LlmToolCall, path: &Path) -> Result<Utf8File, String> {
+async fn read_utf8_file(call: &AgentToolCall, path: &Path) -> Result<Utf8File, String> {
     let bytes = fs::read(path)
         .await
         .map_err(|error| tool_error_json(call, &format!("读取文件失败: {error}"), "not_found"))?;
@@ -97,7 +97,7 @@ async fn read_utf8_file(call: &LlmToolCall, path: &Path) -> Result<Utf8File, Str
 }
 
 fn text_slice(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     text: &str,
     file_size: usize,
     offset: usize,
@@ -124,7 +124,7 @@ fn text_slice(
     })
 }
 
-fn read_file_success(call: &LlmToolCall, path: &str, bytes: &[u8], slice: TextSlice) -> Value {
+fn read_file_success(call: &AgentToolCall, path: &str, bytes: &[u8], slice: TextSlice) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -139,7 +139,7 @@ fn read_file_success(call: &LlmToolCall, path: &str, bytes: &[u8], slice: TextSl
     })
 }
 
-pub(super) async fn list_directory(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn list_directory(workspace_root: &Path, call: &AgentToolCall) -> String {
     let workspace_root = canonical_or_original(workspace_root).await;
     let args = match list_directory_args(call) {
         Ok(args) => args,
@@ -174,7 +174,7 @@ struct ListDirectoryArgs {
     max_entries: usize,
 }
 
-fn list_directory_args(call: &LlmToolCall) -> Result<ListDirectoryArgs, String> {
+fn list_directory_args(call: &AgentToolCall) -> Result<ListDirectoryArgs, String> {
     let args = parse_object(&call.arguments, call)?;
     Ok(ListDirectoryArgs {
         path: string_arg(&args, "path", call)?,
@@ -203,7 +203,7 @@ fn filter_directory_entries(
 }
 
 fn list_directory_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     path: &str,
     entries: &[DirEntrySummary],
     truncated: bool,
@@ -230,15 +230,15 @@ fn list_directory_success(
     })
 }
 
-pub(super) async fn search_files(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn search_files(workspace_root: &Path, call: &AgentToolCall) -> String {
     search::search_files(workspace_root, call).await
 }
 
-pub(super) async fn get_project_context(workspace_root: &Path, call: &LlmToolCall) -> String {
+pub(super) async fn get_project_context(workspace_root: &Path, call: &AgentToolCall) -> String {
     project::get_project_context(workspace_root, call).await
 }
 
-pub(super) fn get_selection(call: &LlmToolCall, context: &AgentToolRunContext) -> String {
+pub(super) fn get_selection(call: &AgentToolCall, context: &AgentToolRunContext) -> String {
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -252,7 +252,7 @@ pub(super) fn get_selection(call: &LlmToolCall, context: &AgentToolRunContext) -
 
 pub(super) async fn resolve_ref(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let workspace_root = canonical_or_original(workspace_root).await;
@@ -267,7 +267,7 @@ struct DirEntrySummary {
     size_bytes: Option<u64>,
 }
 
-pub(super) fn parse_object(args: &str, call: &LlmToolCall) -> Result<Value, String> {
+pub(super) fn parse_object(args: &str, call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(args).map_err(|error| {
         tool_error_json(
             call,
@@ -277,7 +277,7 @@ pub(super) fn parse_object(args: &str, call: &LlmToolCall) -> Result<Value, Stri
     })
 }
 
-pub(super) fn string_arg(args: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn string_arg(args: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -307,7 +307,7 @@ fn usize_arg(args: &Value, key: &str) -> Option<usize> {
 async fn resolve_existing_path(
     workspace_root: &Path,
     relative: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<PathBuf, String> {
     let relative = path::normalize_workspace_path(relative, call)?;
     let root = first_path_segment(&relative);

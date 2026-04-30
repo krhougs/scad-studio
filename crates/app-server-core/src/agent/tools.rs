@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::plan_package::ParsedPlanPackage;
-use crate::llm::{LlmError, LlmMessage, LlmProvider, LlmResponse, LlmToolCall};
 pub use registry::{
     AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy, AgentToolPermission, AgentToolSpec,
     CadQueryModelFilePolicy, OutputPathPolicy, agent_tool_definitions_for_mode,
@@ -30,15 +29,28 @@ use tool_path_policy::{
     normalize_scope_paths, validate_registry_tool_intent, validate_tool_path_policy,
 };
 
-const MAX_TOOL_ROUNDS: usize = 10;
-#[async_trait]
-pub trait ToolExecutor: Send + Sync {
-    async fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentToolCall {
+    pub id: String,
+    pub function_name: String,
+    pub arguments: String,
 }
 
-pub trait ToolLoopObserver: Send + Sync {
-    fn tool_start(&self, call: &LlmToolCall);
-    fn tool_result(&self, call: &LlmToolCall, result: &str);
+#[derive(Debug, Clone)]
+pub struct AgentToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    async fn execute(&self, call: &AgentToolCall, context: &AgentToolRunContext) -> String;
+}
+
+pub trait AgentToolObserver: Send + Sync {
+    fn tool_start(&self, call: &AgentToolCall);
+    fn tool_result(&self, call: &AgentToolCall, result: &str);
 }
 
 #[async_trait]
@@ -221,12 +233,12 @@ impl AgentToolRunContext {
     }
 }
 
-pub struct NoopToolLoopObserver;
+pub struct NoopAgentToolObserver;
 
-impl ToolLoopObserver for NoopToolLoopObserver {
-    fn tool_start(&self, _call: &LlmToolCall) {}
+impl AgentToolObserver for NoopAgentToolObserver {
+    fn tool_start(&self, _call: &AgentToolCall) {}
 
-    fn tool_result(&self, _call: &LlmToolCall, _result: &str) {}
+    fn tool_result(&self, _call: &AgentToolCall, _result: &str) {}
 }
 
 pub struct WorkspaceToolExecutor {
@@ -252,7 +264,7 @@ impl WorkspaceToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for WorkspaceToolExecutor {
-    async fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
+    async fn execute(&self, call: &AgentToolCall, context: &AgentToolRunContext) -> String {
         if let Some(result) = validate_direct_executor_permission(call, context) {
             return record_tool_error_for_context(&self.workspace_root, call, context, result)
                 .await;
@@ -312,7 +324,7 @@ impl ToolExecutor for WorkspaceToolExecutor {
 }
 
 fn validate_direct_executor_permission(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> Option<String> {
     let spec = agent_tool_specs()
@@ -340,121 +352,8 @@ fn validate_direct_executor_permission(
     .map(|error| tool_error_json(call, &error.message, error.error_type))
 }
 
-pub async fn run_tool_loop_with_registry(
-    initial_messages: Vec<LlmMessage>,
-    context: AgentToolRunContext,
-    provider: &dyn LlmProvider,
-    executor: &dyn ToolExecutor,
-    observer: &dyn ToolLoopObserver,
-    on_token: &dyn Fn(&str) -> bool,
-) -> Result<LlmResponse, LlmError> {
-    run_tool_loop_with_registry_and_reasoning(
-        initial_messages,
-        context,
-        provider,
-        executor,
-        observer,
-        on_token,
-        &|_| true,
-    )
-    .await
-}
-
-pub async fn run_tool_loop_with_registry_and_reasoning(
-    initial_messages: Vec<LlmMessage>,
-    context: AgentToolRunContext,
-    provider: &dyn LlmProvider,
-    executor: &dyn ToolExecutor,
-    observer: &dyn ToolLoopObserver,
-    on_token: &dyn Fn(&str) -> bool,
-    on_reasoning: &dyn Fn(&str) -> bool,
-) -> Result<LlmResponse, LlmError> {
-    let tools = agent_tool_definitions_for_mode(context.mode);
-    let mut messages = initial_messages;
-    let mut last_content = String::new();
-    let mut intent_retries = 0usize;
-    for _ in 0..MAX_TOOL_ROUNDS {
-        let response = provider.stream_chat_with_reasoning(
-            messages.clone(),
-            &tools,
-            on_token,
-            on_reasoning,
-        )?;
-        if response.content.trim().is_empty()
-            && !response.has_tool_calls()
-            && response.reasoning_content.is_some()
-        {
-            messages.push(reasoning_only_retry_message());
-            continue;
-        }
-        if !response.has_tool_calls() {
-            if intent_retries < MAX_INTERRUPTED_INTENT_RETRIES
-                && looks_like_interrupted_intent(&response.content)
-            {
-                intent_retries += 1;
-                messages.push(LlmMessage::assistant_response(
-                    response.content.clone(),
-                    response.reasoning_content.clone(),
-                    Vec::new(),
-                ));
-                messages.push(interrupted_intent_retry_message());
-                continue;
-            }
-            return Ok(response);
-        }
-        last_content = response.content.clone();
-        messages.push(LlmMessage::assistant_response(
-            response.content.clone(),
-            response.reasoning_content.clone(),
-            response.tool_calls.clone(),
-        ));
-        for call in &response.tool_calls {
-            observer.tool_start(call);
-            let result = execute_registry_tool(call, &context, executor).await;
-            observer.tool_result(call, &result);
-            messages.push(LlmMessage::tool_result(call.id.clone(), result));
-        }
-    }
-    Ok(LlmResponse {
-        content: if last_content.is_empty() {
-            "Agent reached maximum tool call rounds.".into()
-        } else {
-            last_content
-        },
-        reasoning_content: None,
-        tool_calls: Vec::new(),
-    })
-}
-
-fn reasoning_only_retry_message() -> LlmMessage {
-    LlmMessage::new(
-        "user",
-        "上一轮只返回了 reasoning_content，没有正文或工具调用。请现在停止只思考的输出：如果任务需要读取、生成或修改项目文件，必须调用可用工具；否则返回面向用户的正文。",
-    )
-}
-
-const MAX_INTERRUPTED_INTENT_RETRIES: usize = 2;
-
-fn looks_like_interrupted_intent(content: &str) -> bool {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    trimmed.ends_with(':')
-        || trimmed.ends_with('：')
-        || trimmed.ends_with("...")
-        || trimmed.ends_with('…')
-}
-
-fn interrupted_intent_retry_message() -> LlmMessage {
-    LlmMessage::new(
-        "user",
-        "你上一轮表达了执行意图但没有调用任何工具。请立即调用需要的工具来完成操作，不要重复描述计划。",
-    )
-}
-
-async fn execute_registry_tool(
-    call: &LlmToolCall,
+pub async fn execute_registered_tool(
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     executor: &dyn ToolExecutor,
 ) -> String {
@@ -509,7 +408,7 @@ async fn execute_registry_tool(
 
 async fn record_tool_error_for_context(
     workspace_root: &std::path::Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     result: String,
 ) -> String {
@@ -520,7 +419,7 @@ async fn record_tool_error_for_context(
     }
 }
 
-fn tool_error_json(call: &LlmToolCall, message: &str, error_type: &str) -> String {
+fn tool_error_json(call: &AgentToolCall, message: &str, error_type: &str) -> String {
     json!({
         "status": "error",
         "tool_call_id": call.id,

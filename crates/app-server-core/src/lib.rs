@@ -11,26 +11,23 @@ mod watch;
 mod workspace;
 
 pub use agent::{
-    AgentBackend, AgentBackendDecision, AgentBackendError, AgentCadQueryCodeInput, AgentLlmRequest,
-    AgentTurnDraft, AgentTurnInput, GeneratedCadQueryCode, LocalAgentBackend,
-    build_execute_messages, build_turn_context, build_turn_messages, cadquery_agent_system_prompt,
-    draft_agent_turn, extract_cadquery_code, generate_cadquery_code, llm_generate_cadquery_code,
-    llm_request_for_cadquery_execute, mode_for_tool_loop,
+    AgentTurnInput, RigAgentCallbacks, RigAgentError, RigAgentTurnResult,
+    build_rig_prompt_and_history, build_turn_context, cadquery_agent_system_prompt,
+    extract_cadquery_code,
     plan_package::{
         ParsedPlanPackage, PlanPackageError, PlanPackagePaths, PlanTimestamp,
         SaveCadPlanPackageInput, SavedPlanPackage, collect_plan_packages, parse_plan_package,
         save_plan_package, save_plan_package_with_timestamp, slugify_plan_title,
     },
-    rig_backend_decision, stream_agent_turn, stream_agent_turn_with_tools,
-    stream_agent_turn_with_tools_and_reasoning,
+    run_rig_agent_turn, run_rig_agent_turn_with_config,
     tools::{
-        AgentExecutionScope, AgentSemanticStore, AgentToolCategory, AgentToolPathPolicy,
-        AgentToolPermission, AgentToolRunContext, AgentToolSpec, CadQueryModelContract,
-        CadQueryModelFilePolicy, CadQueryToolCachedResult, CadQueryToolRunRequest,
-        CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, NoopToolLoopObserver,
-        OutputPathPolicy, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
-        agent_tool_definitions_for_mode, agent_tool_permission, agent_tool_specs,
-        run_tool_loop_with_registry, run_tool_loop_with_registry_and_reasoning,
+        AgentExecutionScope, AgentSemanticStore, AgentToolCall, AgentToolCategory,
+        AgentToolDefinition, AgentToolObserver, AgentToolPathPolicy, AgentToolPermission,
+        AgentToolRunContext, AgentToolSpec, CadQueryModelContract, CadQueryModelFilePolicy,
+        CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult,
+        CadQueryToolRuntime, CadQueryToolRuntimeError, NoopAgentToolObserver, OutputPathPolicy,
+        ToolExecutor, WorkspaceToolExecutor, agent_tool_definitions_for_mode,
+        agent_tool_permission, agent_tool_specs, execute_registered_tool,
     },
 };
 pub use cadquery::{

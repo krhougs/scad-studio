@@ -11,9 +11,11 @@ path = "src/lib.rs"
 app-server-protocol = { path = "../app-server-protocol" }
 async-trait = "0.1"
 dirs = "6"
+futures-util = "0.3"
 jiff = "0.2.23"
 log.workspace = true
 notify = "8.2"
+rig-core.workspace = true
 scad-scene = { path = "../scad-scene" }
 serde.workspace = true
 serde_json.workspace = true
@@ -21,7 +23,6 @@ toml.workspace = true
 sha2 = "0.10"
 studio-common = { path = "../studio-common" }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
-ureq = { version = "3", features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,7 +2,7 @@ mod schemas;
 
 use app_server_protocol::AgentMode;
 
-use crate::llm::LlmToolDefinition;
+use crate::agent::tools::AgentToolDefinition;
 use schemas::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub struct AgentToolPathPolicy {
 
 #[derive(Debug, Clone)]
 pub struct AgentToolSpec {
-    pub definition: LlmToolDefinition,
+    pub definition: AgentToolDefinition,
     pub category: AgentToolCategory,
     pub allowed_modes: Vec<AgentMode>,
     pub requires_execution_scope: bool,
@@ -187,7 +187,7 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
     ]
 }
 
-pub fn agent_tool_definitions_for_mode(mode: AgentMode) -> Vec<LlmToolDefinition> {
+pub fn agent_tool_definitions_for_mode(mode: AgentMode) -> Vec<AgentToolDefinition> {
     agent_tool_specs()
         .into_iter()
         .filter(|spec| spec.automatic_llm_tool && spec.allowed_modes.iter().any(|op| *op == mode))
@@ -233,7 +233,7 @@ fn spec(
     path_policy: AgentToolPathPolicy,
 ) -> AgentToolSpec {
     AgentToolSpec {
-        definition: LlmToolDefinition {
+        definition: AgentToolDefinition {
             name: name.into(),
             description: description.into(),
             parameters,

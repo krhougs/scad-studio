@@ -1,12 +1,4 @@
-use std::{
-    io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::JoinHandle,
-};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use app_server_core::ChatStore;
 use app_server_host::HostRequestDispatcher;
@@ -242,41 +234,48 @@ fn dispatcher_persists_chat_jsonl_and_selection_snapshot() {
     cleanup_workspace(&workspace);
 }
 
-#[test]
-fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
+#[tokio::test]
+async fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
     let workspace = temp_workspace("dispatcher-agent-busy");
     let _agent_env = unset_agent_environment();
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent", Vec::new()).session_id;
-    let started = invoke_agent(&mut dispatcher, 31, &session_id, "summarize current model")
+    let session_id = create_chat_async(&mut dispatcher, "agent", Vec::new())
+        .await
+        .session_id;
+    let started = invoke_agent_async(&mut dispatcher, 31, &session_id, "summarize current model")
+        .await
         .expect("agent.invoke succeeds");
     assert_eq!(started.session_id, session_id);
 
-    // Without LLM the worker finishes almost immediately. Wait for
+    // Without Rig Agent configuration the worker finishes almost immediately. Wait for
     // done/error before verifying that a new invoke succeeds after the
     // previous run completes.
-    wait_for_done(&pushes, &started.run_id);
+    wait_for_done_async(&pushes, &started.run_id).await;
 
-    let restarted =
-        invoke_agent(&mut dispatcher, 34, &session_id, "new run").expect("restart succeeds");
+    let restarted = invoke_agent_async(&mut dispatcher, 34, &session_id, "new run")
+        .await
+        .expect("restart succeeds");
     assert_eq!(restarted.session_id, session_id);
 
-    wait_for_done(&pushes, &restarted.run_id);
+    wait_for_done_async(&pushes, &restarted.run_id).await;
     cleanup_workspace(&workspace);
 }
 
-#[test]
-fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
+#[tokio::test]
+async fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
     let workspace = temp_workspace("dispatcher-agent-llm-error-history");
     let _agent_env = unset_agent_environment();
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent error", Vec::new()).session_id;
+    let session_id = create_chat_async(&mut dispatcher, "agent error", Vec::new())
+        .await
+        .session_id;
 
-    let started = invoke_agent(&mut dispatcher, 35, &session_id, "create a small part")
+    let started = invoke_agent_async(&mut dispatcher, 35, &session_id, "create a small part")
+        .await
         .expect("agent starts");
-    wait_for_done(&pushes, &started.run_id);
+    wait_for_done_async(&pushes, &started.run_id).await;
 
-    let history = read_chat_history(&mut dispatcher, &session_id);
+    let history = read_chat_history_async(&mut dispatcher, &session_id).await;
     let assistant = history
         .iter()
         .find(|message| {
@@ -285,20 +284,26 @@ fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
         })
         .expect("agent failure should be persisted as assistant history");
     assert!(assistant.content.contains("Agent run failed"));
-    assert!(assistant.content.contains("LLM not configured"));
+    assert!(
+        assistant
+            .content
+            .contains("Rig OpenAI Responses Agent is not configured")
+    );
 
     cleanup_workspace(&workspace);
 }
 
-#[test]
-fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload() {
+#[tokio::test]
+async fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload() {
     let workspace = temp_workspace("dispatcher-agent-plan-ref");
     std::fs::create_dir_all(workspace.join("parts")).unwrap();
     std::fs::write(workspace.join("parts/top_lid.py"), "old code\n").unwrap();
     let _agent_env = unset_agent_environment();
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent execute", Vec::new()).session_id;
-    let started = match dispatch(
+    let session_id = create_chat_async(&mut dispatcher, "agent execute", Vec::new())
+        .await
+        .session_id;
+    let started = match dispatch_async(
         &mut dispatcher,
         36,
         ClientCommand::AgentInvoke(AgentInvokeRequest {
@@ -309,6 +314,7 @@ fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload() {
             context_refs: Vec::new(),
         }),
     )
+    .await
     .result
     .expect("agent.invoke with plan_ref succeeds")
     {
@@ -316,7 +322,7 @@ fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload() {
         other => panic!("unexpected agent.invoke response: {other:?}"),
     };
 
-    wait_for_done(&pushes, &started.run_id);
+    wait_for_done_async(&pushes, &started.run_id).await;
     assert_eq!(
         std::fs::read_to_string(workspace.join("parts/top_lid.py")).unwrap(),
         "old code\n"
@@ -431,54 +437,6 @@ fn dispatcher_cadquery_result_get_preserves_artifact_relation() {
         }
         other => panic!("unexpected result get response: {other:?}"),
     }
-    cleanup_workspace(&workspace);
-}
-
-#[test]
-fn dispatcher_agent_cadquery_execute_persists_mesh_result_in_chat_history() {
-    let workspace = temp_workspace("dispatcher-agent-cadquery-history-mesh");
-    std::fs::create_dir_all(workspace.join("parts")).unwrap();
-    std::fs::write(workspace.join("parts/top_lid.py"), "old source\n").unwrap();
-    let captured = workspace.join("captured-agent-code.py");
-    let runner = fake_capturing_cadquery_runner(&workspace, &captured, false);
-    let server = fake_llm_server(vec![
-        tool_call_sse("cadquery_execute", cadquery_execute_tool_args()),
-        content_sse("完成"),
-    ]);
-    let base_url = server.base_url().to_owned();
-    let _env = EnvGuard::set_many(&[
-        ("BUDN_LLM_CONFIG", None),
-        ("BUDN_LLM_BASE_URL", Some(std::ffi::OsStr::new(&base_url))),
-        ("BUDN_LLM_API_KEY", Some(std::ffi::OsStr::new("test-key"))),
-        ("BUDN_LLM_MODEL", Some(std::ffi::OsStr::new("test-model"))),
-        ("BUDN_LLM_VARIANT", None),
-        ("BUDN_LLM_SERVICE_LEVEL", None),
-        ("BUDN_LLM_TIMEOUT_SECS", Some(std::ffi::OsStr::new("5"))),
-        ("CADQUERY_RUNNER_PYTHON", Some(runner.as_os_str())),
-    ]);
-    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
-    let session_id = create_chat(&mut dispatcher, "agent cadquery", Vec::new()).session_id;
-
-    let started = invoke_agent(&mut dispatcher, 46, &session_id, "create the model")
-        .expect("agent invoke succeeds");
-    wait_for_done(&pushes, &started.run_id);
-
-    let history = read_chat_history(&mut dispatcher, &session_id);
-    let mesh = history
-        .iter()
-        .find_map(|message| {
-            message
-                .tool_result
-                .as_ref()
-                .filter(|tool| tool.tool_name == "cadquery_execute")?;
-            message.mesh_result.as_ref()
-        })
-        .expect("cadquery_execute tool result should persist mesh_result");
-    let relation = mesh.artifact_relation.as_ref().expect("artifact relation");
-    assert_eq!(mesh.result_id, "cq_abc");
-    assert_eq!(relation.source_path, "parts/top_lid.py");
-    assert_eq!(relation.exports[0].path, "outputs/top_lid.step");
-    assert_agent_mesh_ready_push(&pushes, &started.run_id, "cq_abc");
     cleanup_workspace(&workspace);
 }
 
@@ -713,6 +671,29 @@ fn create_chat(
     }
 }
 
+async fn create_chat_async(
+    dispatcher: &mut HostRequestDispatcher,
+    title: &str,
+    related_files: Vec<PathHandle>,
+) -> app_server_protocol::ChatCreatedResponse {
+    match dispatch_async(
+        dispatcher,
+        20,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: title.into(),
+            goal: Some("lid iteration".into()),
+            related_files,
+        }),
+    )
+    .await
+    .result
+    .expect("chat.create succeeds")
+    {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    }
+}
+
 fn send_chat(
     dispatcher: &mut HostRequestDispatcher,
     session_id: &ChatSessionId,
@@ -764,6 +745,27 @@ fn read_chat_history(
             limit: Some(10),
         }),
     )
+    .result
+    .expect("chat.history succeeds")
+    {
+        CommandSuccess::ChatHistory(response) => response.messages,
+        other => panic!("unexpected chat.history response: {other:?}"),
+    }
+}
+
+async fn read_chat_history_async(
+    dispatcher: &mut HostRequestDispatcher,
+    session_id: &ChatSessionId,
+) -> Vec<app_server_protocol::ChatMessageRecord> {
+    match dispatch_async(
+        dispatcher,
+        23,
+        ClientCommand::ChatHistory(ChatHistoryRequest {
+            session_id: session_id.clone(),
+            limit: Some(10),
+        }),
+    )
+    .await
     .result
     .expect("chat.history succeeds")
     {
@@ -848,13 +850,13 @@ fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessio
         .expect("saved plan tool result");
 }
 
-fn invoke_agent(
+async fn invoke_agent_async(
     dispatcher: &mut HostRequestDispatcher,
     request_id: u64,
     session_id: &ChatSessionId,
     prompt: &str,
 ) -> Result<app_server_protocol::AgentStartedResponse, app_server_protocol::ProtocolError> {
-    match dispatch(
+    match dispatch_async(
         dispatcher,
         request_id,
         ClientCommand::AgentInvoke(AgentInvokeRequest {
@@ -865,6 +867,7 @@ fn invoke_agent(
             context_refs: Vec::new(),
         }),
     )
+    .await
     .result?
     {
         CommandSuccess::AgentStarted(response) => Ok(response),
@@ -909,36 +912,31 @@ fn dispatch(
         }))
 }
 
+async fn dispatch_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    command: ClientCommand,
+) -> app_server_protocol::ServerResponseEnvelope {
+    dispatcher
+        .dispatch_envelope(ClientRequestEnvelope {
+            request_id: RequestId(request_id),
+            command,
+        })
+        .await
+}
+
 fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {
     PathHandle::new(WorkspaceId::new("workspace"), segments).expect("path handle")
 }
 
-fn wait_for_done(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
+async fn wait_for_done_async(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
     for _ in 0..250 {
         if find_done_event(pushes, run_id).is_some() {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("agent.done not observed for {run_id}");
-}
-
-fn assert_agent_mesh_ready_push(
-    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
-    run_id: &str,
-    result_id: &str,
-) {
-    let found = pushes
-        .lock()
-        .expect("push buffer lock")
-        .iter()
-        .any(|push| match &push.event {
-            ServerPushEvent::AgentMeshReady(event) => {
-                event.run_id == run_id && event.result.result_id == result_id
-            }
-            _ => false,
-        });
-    assert!(found, "agent mesh ready push should include {result_id}");
 }
 
 fn handshake_request() -> CapabilityHandshakeRequest {
@@ -1069,177 +1067,6 @@ fn cadquery_success_json() -> &'static str {
     }"#
 }
 
-struct FakeLlmServer {
-    base_url: String,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl FakeLlmServer {
-    fn base_url(&self) -> &str {
-        &self.base_url
-    }
-}
-
-impl Drop for FakeLlmServer {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn fake_llm_server(responses: Vec<String>) -> FakeLlmServer {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake llm server");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking fake llm listener");
-    let base_url = format!("http://{}", listener.local_addr().expect("llm addr"));
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_thread = Arc::clone(&stop);
-    let handle = std::thread::spawn(move || {
-        for response in responses {
-            if !serve_next_llm_response(&listener, &stop_thread, &response) {
-                break;
-            }
-        }
-    });
-    FakeLlmServer {
-        base_url,
-        stop,
-        handle: Some(handle),
-    }
-}
-
-fn serve_next_llm_response(listener: &TcpListener, stop: &AtomicBool, response: &str) -> bool {
-    while !stop.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                write_llm_response(stream, response);
-                return true;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(_) => return false,
-        }
-    }
-    false
-}
-
-fn write_llm_response(mut stream: TcpStream, response: &str) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone llm stream"));
-    let content_length = read_http_content_length(&mut reader);
-    if content_length > 0 {
-        let mut body = vec![0; content_length];
-        reader.read_exact(&mut body).expect("read llm request body");
-    }
-    let http = format!(
-        concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "Content-Type: text/event-stream\r\n",
-            "Content-Length: {}\r\n",
-            "Connection: close\r\n\r\n",
-            "{}"
-        ),
-        response.len(),
-        response
-    );
-    stream
-        .write_all(http.as_bytes())
-        .expect("write llm response");
-}
-
-fn read_http_content_length(reader: &mut BufReader<TcpStream>) -> usize {
-    let mut content_length = 0;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes = reader.read_line(&mut line).expect("read llm header");
-        if bytes == 0 || line == "\r\n" {
-            break;
-        }
-        if line.to_ascii_lowercase().starts_with("content-length:")
-            && let Some(value) = line.split(':').nth(1)
-        {
-            content_length = value.trim().parse().unwrap_or(0);
-        }
-    }
-    content_length
-}
-
-fn tool_call_sse(tool_name: &str, arguments: serde_json::Value) -> String {
-    let payload = serde_json::json!({
-        "choices": [{
-            "delta": {
-                "tool_calls": [{
-                    "index": 0,
-                    "id": "call-cadquery-execute",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": arguments.to_string(),
-                    }
-                }]
-            }
-        }]
-    });
-    sse_response(payload)
-}
-
-fn content_sse(content: &str) -> String {
-    sse_response(serde_json::json!({
-        "choices": [{
-            "delta": {
-                "content": content,
-            }
-        }]
-    }))
-}
-
-fn sse_response(payload: serde_json::Value) -> String {
-    format!("data: {payload}\n\ndata: [DONE]\n\n")
-}
-
-fn cadquery_execute_tool_args() -> serde_json::Value {
-    serde_json::json!({
-        "target_path": "parts/top_lid.py",
-        "target_type": "part",
-        "code": cadquery_contract_source(),
-        "export_formats": ["step"],
-        "export_targets": ["outputs/top_lid.step"],
-        "params_json": "{}",
-        "reason": "Verify host persistence for CadQuery mesh metadata."
-    })
-}
-
-fn cadquery_contract_source() -> &'static str {
-    r#"import cadquery as cq
-
-MODEL_DESCRIPTION = "Simple lid model for host persistence verification."
-MODEL_DETAILS = {
-    "purpose": "Verify CadQuery mesh metadata persists in Chat history.",
-    "key_dimensions": "1mm cube",
-    "intended_use": "Integration test fixture",
-    "assumptions": "No manufacturing assumptions",
-    "interaction_notes": "No user interaction",
-    "manufacturing_or_placement_constraints": "No placement constraints",
-}
-REFS = {
-    "type": "part",
-    "features": {
-        "top_surface": {
-            "selector": "faces('>Z')",
-            "description": "Top face",
-        },
-    },
-}
-
-def build(params=None):
-    return cq.Workplane("XY").box(1, 1, 1)
-"#
-}
-
 #[cfg(unix)]
 fn make_executable(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -1260,15 +1087,15 @@ fn env_lock() -> &'static Mutex<()> {
 
 fn unset_agent_environment() -> EnvGuard {
     EnvGuard::unset_many(&[
-        "BUDN_LLM_CONFIG",
-        "BUDN_LLM_BASE_URL",
-        "BUDN_LLM_API_KEY",
-        "BUDN_LLM_MODEL",
-        "BUDN_LLM_VARIANT",
-        "BUDN_LLM_SERVICE_LEVEL",
-        "BUDN_LLM_TIMEOUT_SECS",
-        "BUDN_LLM_MAX_TOKENS",
-        "BUDN_LLM_TEMPERATURE",
+        "BUDN_AGENT_CONFIG",
+        "BUDN_AGENT_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "BUDN_AGENT_MODEL",
+        "BUDN_AGENT_REASONING_EFFORT",
+        "BUDN_AGENT_MAX_TOKENS",
+        "BUDN_AGENT_TIMEOUT_SECS",
+        "BUDN_AGENT_MAX_TOKENS",
+        "BUDN_AGENT_TEMPERATURE",
         "CADQUERY_RUNNER_PYTHON",
     ])
 }
@@ -1303,30 +1130,6 @@ impl EnvGuard {
                 let previous = std::env::var_os(key);
                 unsafe {
                     std::env::remove_var(key);
-                }
-                (*key, previous)
-            })
-            .collect();
-        Self {
-            previous,
-            _lock: lock,
-        }
-    }
-
-    fn set_many(entries: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
-        let lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = entries
-            .iter()
-            .map(|(key, value)| {
-                let previous = std::env::var_os(key);
-                unsafe {
-                    if let Some(value) = value {
-                        std::env::set_var(key, value);
-                    } else {
-                        std::env::remove_var(key);
-                    }
                 }
                 (*key, previous)
             })

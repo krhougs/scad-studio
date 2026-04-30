@@ -1,14 +1,13 @@
-use app_server_core::llm::LlmToolCall;
 use app_server_core::{
-    AgentToolRunContext, AgentTurnInput, CadQueryCommitScope, CadQueryContractConfig,
-    CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
-    CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
+    AgentToolCall, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
+    CadQueryContractConfig, CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult,
+    CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
     CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
     SlicerInstall, cadquery_result_ready, current_workspace_owned, detect_slicer_paths,
     export_model, list_workspace_entries_owned, load_config_dto, preview_ready_response,
     read_file_response_owned, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
-    run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel, save_config_dto,
-    send_to_slicer, stage_cadquery_project_owned,
+    run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel,
+    run_rig_agent_turn, save_config_dto, send_to_slicer, stage_cadquery_project_owned,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -33,7 +32,6 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::thread;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 
@@ -566,7 +564,7 @@ impl HostRequestDispatcher {
             agent_runs: Arc::clone(&self.agent_runs),
             push_sink: Arc::clone(&self.push_sink),
         };
-        thread::spawn(move || run_agent_worker(worker));
+        tokio::spawn(run_agent_worker(worker));
         Ok(CommandSuccess::AgentStarted(response))
     }
 
@@ -685,18 +683,81 @@ struct AgentToolEventRecorder {
     cadquery_results: Arc<Mutex<CadQueryResultCache>>,
     push_sink: ServerPushSink,
     run: AgentRunHandle,
+    history_writes: Arc<Mutex<Vec<AgentToolHistoryWrite>>>,
 }
 
-impl app_server_core::ToolLoopObserver for AgentToolEventRecorder {
-    fn tool_start(&self, call: &LlmToolCall) {
+enum AgentToolHistoryWrite {
+    ToolCall(ChatToolCallRecord),
+    ToolResult(
+        ChatToolResultRecord,
+        Option<app_server_protocol::CadQueryResultReady>,
+    ),
+}
+
+impl app_server_core::AgentToolObserver for AgentToolEventRecorder {
+    fn tool_start(&self, call: &AgentToolCall) {
         push_llm_tool_start(&self.push_sink, &self.run, call);
-        append_llm_tool_call(&self.workspace_root, &self.run, call);
+        self.record_history_write(AgentToolHistoryWrite::ToolCall(ChatToolCallRecord {
+            tool_call_id: call.id.clone(),
+            tool_name: call.function_name.clone(),
+            args_json: call.arguments.clone(),
+        }));
     }
 
-    fn tool_result(&self, call: &LlmToolCall, result: &str) {
+    fn tool_result(&self, call: &AgentToolCall, result: &str) {
         push_llm_tool_result(&self.push_sink, &self.run, call, result);
         let mesh_result = cadquery_ready_for_tool_result(&self.cadquery_results, result);
-        append_llm_tool_result(&self.workspace_root, &self.run, call, result, mesh_result);
+        self.record_history_write(AgentToolHistoryWrite::ToolResult(
+            ChatToolResultRecord {
+                tool_call_id: call.id.clone(),
+                tool_name: call.function_name.clone(),
+                result_json: result.to_owned(),
+            },
+            mesh_result,
+        ));
+    }
+}
+
+impl AgentToolEventRecorder {
+    fn record_history_write(&self, write: AgentToolHistoryWrite) {
+        if let Ok(mut writes) = self.history_writes.lock() {
+            writes.push(write);
+        }
+    }
+
+    async fn flush_history_writes(&self) {
+        let writes = self
+            .history_writes
+            .lock()
+            .ok()
+            .map(|mut writes| writes.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let store = ChatStore::new(self.workspace_root.clone());
+        for write in writes {
+            match write {
+                AgentToolHistoryWrite::ToolCall(tool_call) => {
+                    let _ = store
+                        .append_tool_call_with_run_id(
+                            &self.run.session_id,
+                            "agent tool started",
+                            tool_call,
+                            Some(self.run.run_id.clone()),
+                        )
+                        .await;
+                }
+                AgentToolHistoryWrite::ToolResult(tool_result, mesh_result) => {
+                    let _ = store
+                        .append_tool_result_with_run_id(
+                            &self.run.session_id,
+                            "agent tool completed",
+                            tool_result,
+                            mesh_result,
+                            Some(self.run.run_id.clone()),
+                        )
+                        .await;
+                }
+            }
+        }
     }
 }
 
@@ -950,45 +1011,24 @@ impl HostCadQueryToolRuntime {
     }
 }
 
-fn run_agent_worker(worker: AgentWorker) {
-    run_text_agent(worker);
+async fn run_agent_worker(worker: AgentWorker) {
+    run_text_agent(worker).await;
 }
 
-fn run_text_agent(worker: AgentWorker) {
-    let provider = match block_on_old_agent_future(app_server_core::llm::create_provider()) {
-        Ok(p) => p,
-        Err(error) => {
-            let message = error.message;
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::LlmError,
-                message.clone(),
-            );
-            append_agent_error_message(
-                &worker.workspace_root,
-                &worker.run,
-                AgentErrorType::LlmError,
-                &message,
-            );
-            finish_agent_worker(worker, false);
-            return;
-        }
-    };
-    let response_text = match run_text_agent_llm(&worker, provider.as_ref()) {
+async fn run_text_agent(worker: AgentWorker) {
+    let response_text = match run_text_agent_rig(&worker).await {
         Some(text) => text,
         None => {
             finish_agent_worker(worker, false);
             return;
         }
     };
-    thread::sleep(Duration::from_millis(120));
     if worker.run.cancelled.load(Ordering::SeqCst) {
         finish_agent_worker(worker, true);
         return;
     }
     let saved_plan = if matches!(worker.mode, AgentMode::Plan) {
-        latest_saved_plan_for_worker(&worker)
+        latest_saved_plan_for_worker(&worker).await
     } else {
         None
     };
@@ -996,14 +1036,14 @@ fn run_text_agent(worker: AgentWorker) {
         try_propose_plan(&worker, saved_plan.as_ref());
     }
     if !response_text.trim().is_empty() {
-        append_agent_message(&worker.workspace_root, &worker.run, &response_text);
+        append_agent_message(&worker.workspace_root, &worker.run, &response_text).await;
     }
     finish_agent_worker(worker, false);
 }
 
-fn latest_saved_plan_for_worker(worker: &AgentWorker) -> Option<SavedCadPlan> {
+async fn latest_saved_plan_for_worker(worker: &AgentWorker) -> Option<SavedCadPlan> {
     let store = ChatStore::new(worker.workspace_root.clone());
-    let history = block_on_old_agent_future(store.history(&worker.run.session_id, None)).ok()?;
+    let history = store.history(&worker.run.session_id, None).await.ok()?;
     latest_saved_cad_plan(&history.messages, &worker.run.run_id)
 }
 
@@ -1059,16 +1099,15 @@ use crate::plan_extraction::{
     SavedCadPlan, execution_scope_from_plan_ref, latest_saved_cad_plan, plan_target_handle,
 };
 
-fn run_text_agent_llm(
-    worker: &AgentWorker,
-    provider: &dyn app_server_core::llm::LlmProvider,
-) -> Option<String> {
+async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
     let store = ChatStore::new(worker.workspace_root.clone());
-    let history = block_on_old_agent_future(store.history(&worker.run.session_id, None))
+    let history = store
+        .history(&worker.run.session_id, None)
+        .await
         .map(|response| response.messages)
         .unwrap_or_default();
-    let mode = app_server_core::mode_for_tool_loop(worker.mode);
-    let execution_scope = match execution_scope_for_worker(worker, mode) {
+    let mode = worker.mode;
+    let execution_scope = match execution_scope_for_worker(worker, mode).await {
         Ok(scope) => scope,
         Err(error) => {
             let message = error.message;
@@ -1083,7 +1122,8 @@ fn run_text_agent_llm(
                 &worker.run,
                 AgentErrorType::PermissionDenied,
                 &message,
-            );
+            )
+            .await;
             return None;
         }
     };
@@ -1104,8 +1144,10 @@ fn run_text_agent_llm(
         push_sink: Arc::clone(&worker.push_sink),
         run: worker.run.clone(),
     });
-    let tool_executor = app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone())
-        .with_cadquery_runtime(cadquery_runtime);
+    let tool_executor: Arc<dyn app_server_core::ToolExecutor> = Arc::new(
+        app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone())
+            .with_cadquery_runtime(cadquery_runtime),
+    );
     let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), mode);
     tool_context.session_id = Some(worker.run.session_id.clone());
     tool_context.run_id = Some(worker.run.run_id.clone());
@@ -1118,39 +1160,43 @@ fn run_text_agent_llm(
         cadquery_results: Arc::clone(&worker.cadquery_results),
         push_sink: Arc::clone(&worker.push_sink),
         run: worker.run.clone(),
+        history_writes: Arc::new(Mutex::new(Vec::new())),
     };
-    let push_sink = Arc::clone(&worker.push_sink);
-    let run = worker.run.clone();
-    let cancelled = Arc::clone(&worker.run.cancelled);
-    let turn_result = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())
-        .and_then(|runtime| {
-            runtime
-                .block_on(app_server_core::stream_agent_turn_with_tools_and_reasoning(
-                    input,
-                    provider,
-                    &tool_executor,
-                    tool_context,
-                    &tool_observer,
-                    &|token| {
-                        if cancelled.load(Ordering::SeqCst) {
-                            return false;
-                        }
-                        push_agent_token(&push_sink, &run, token);
-                        true
-                    },
-                    &|delta| {
-                        if cancelled.load(Ordering::SeqCst) {
-                            return false;
-                        }
-                        push_agent_reasoning(&push_sink, &run, delta);
-                        true
-                    },
-                ))
-                .map_err(|error| error.message)
-        });
+    let token_push_sink = Arc::clone(&worker.push_sink);
+    let token_run = worker.run.clone();
+    let token_cancelled = Arc::clone(&worker.run.cancelled);
+    let token_push = Arc::new(move |token: &str| {
+        if token_cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        push_agent_token(&token_push_sink, &token_run, token);
+        true
+    });
+    let reasoning_push_sink = Arc::clone(&worker.push_sink);
+    let reasoning_run = worker.run.clone();
+    let reasoning_cancelled = Arc::clone(&worker.run.cancelled);
+    let reasoning_push = Arc::new(move |delta: &str| {
+        if reasoning_cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        push_agent_reasoning(&reasoning_push_sink, &reasoning_run, delta);
+        true
+    });
+    let cancelled_for_rig = Arc::clone(&worker.run.cancelled);
+    let turn_result = run_rig_agent_turn(
+        input,
+        tool_executor,
+        tool_context,
+        &tool_observer,
+        app_server_core::RigAgentCallbacks {
+            on_token: token_push,
+            on_reasoning: reasoning_push,
+            cancelled: Arc::new(move || cancelled_for_rig.load(Ordering::SeqCst)),
+        },
+    )
+    .await
+    .map_err(|error| error.message);
+    tool_observer.flush_history_writes().await;
     match turn_result {
         Ok(draft) => Some(draft.text),
         Err(message) => {
@@ -1165,13 +1211,14 @@ fn run_text_agent_llm(
                 &worker.run,
                 AgentErrorType::LlmError,
                 &message,
-            );
+            )
+            .await;
             None
         }
     }
 }
 
-fn execution_scope_for_worker(
+async fn execution_scope_for_worker(
     worker: &AgentWorker,
     mode: AgentMode,
 ) -> Result<Option<app_server_core::AgentExecutionScope>, ProtocolError> {
@@ -1181,11 +1228,9 @@ fn execution_scope_for_worker(
     let Some(plan_ref) = &worker.plan_ref else {
         return Ok(None);
     };
-    block_on_old_agent_future(execution_scope_from_plan_ref(
-        &worker.workspace_root,
-        plan_ref,
-    ))
-    .map(Some)
+    execution_scope_from_plan_ref(&worker.workspace_root, plan_ref)
+        .await
+        .map(Some)
 }
 
 pub fn validate_cadquery_confirmation(
@@ -1290,19 +1335,21 @@ fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
     }
 }
 
-fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
+async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
     let store = ChatStore::new(workspace_root.to_path_buf());
-    let _ = block_on_old_agent_future(store.append_message_with_run_id(
-        &run.session_id,
-        ChatRole::Assistant,
-        content,
-        Vec::new(),
-        None,
-        Some(run.run_id.clone()),
-    ));
+    let _ = store
+        .append_message_with_run_id(
+            &run.session_id,
+            ChatRole::Assistant,
+            content,
+            Vec::new(),
+            None,
+            Some(run.run_id.clone()),
+        )
+        .await;
 }
 
-fn append_agent_error_message(
+async fn append_agent_error_message(
     workspace_root: &Path,
     run: &AgentRunHandle,
     error_type: AgentErrorType,
@@ -1312,51 +1359,8 @@ fn append_agent_error_message(
         workspace_root,
         run,
         &format!("Agent run failed ({error_type:?}): {message}"),
-    );
-}
-
-fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmToolCall) {
-    let store = ChatStore::new(workspace_root.to_path_buf());
-    let _ = block_on_old_agent_future(store.append_tool_call(
-        &run.session_id,
-        "agent tool started",
-        ChatToolCallRecord {
-            tool_call_id: call.id.clone(),
-            tool_name: call.function_name.clone(),
-            args_json: call.arguments.clone(),
-        },
-    ));
-}
-
-fn append_llm_tool_result(
-    workspace_root: &Path,
-    run: &AgentRunHandle,
-    call: &LlmToolCall,
-    result: &str,
-    mesh_result: Option<app_server_protocol::CadQueryResultReady>,
-) {
-    let store = ChatStore::new(workspace_root.to_path_buf());
-    let _ = block_on_old_agent_future(store.append_tool_result(
-        &run.session_id,
-        "agent tool completed",
-        ChatToolResultRecord {
-            tool_call_id: call.id.clone(),
-            tool_name: call.function_name.clone(),
-            result_json: result.to_owned(),
-        },
-        mesh_result,
-    ));
-}
-
-fn block_on_old_agent_future<T>(future: impl std::future::Future<Output = T>) -> T {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return tokio::task::block_in_place(|| handle.block_on(future));
-    }
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("old Agent worker runtime should build")
-        .block_on(future)
+    )
+    .await;
 }
 
 fn cadquery_ready_for_tool_result(
@@ -1391,7 +1395,7 @@ fn push_agent_reasoning(push_sink: &ServerPushSink, run: &AgentRunHandle, text: 
     });
 }
 
-fn push_llm_tool_start(push_sink: &ServerPushSink, run: &AgentRunHandle, call: &LlmToolCall) {
+fn push_llm_tool_start(push_sink: &ServerPushSink, run: &AgentRunHandle, call: &AgentToolCall) {
     (push_sink)(ServerPushEnvelope {
         event: ServerPushEvent::AgentToolStart(AgentToolStartEvent {
             session_id: run.session_id.clone(),
@@ -1406,7 +1410,7 @@ fn push_llm_tool_start(push_sink: &ServerPushSink, run: &AgentRunHandle, call: &
 fn push_llm_tool_result(
     push_sink: &ServerPushSink,
     run: &AgentRunHandle,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     result: &str,
 ) {
     (push_sink)(ServerPushEnvelope {
@@ -1683,7 +1687,7 @@ fn server_capabilities(llm_configured: bool) -> ServerCapabilities {
 async fn server_capabilities_for_request(
     requested_preview_kinds: Vec<PreviewRequestKind>,
 ) -> ServerCapabilities {
-    let llm_configured = app_server_core::llm::load_llm_config()
+    let llm_configured = app_server_core::llm::load_rig_agent_config()
         .await
         .ok()
         .flatten()
@@ -1697,4 +1701,124 @@ async fn server_capabilities_for_request(
         capabilities.supported_preview_kinds = vec![PreviewRequestKind::GeometryArtifact];
     }
     capabilities
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app_server_core::AgentToolObserver as _;
+    use app_server_protocol::{
+        CadQueryFeatureFaces, CadQueryPartMesh, EdgeGroup, FaceGroup, PreviewUnit, VertexPoint,
+    };
+
+    #[tokio::test]
+    async fn agent_tool_recorder_flushes_history_in_event_order() {
+        let temp_dir = tempfile::tempdir().expect("temp workspace");
+        let workspace_root = temp_dir.path().to_path_buf();
+        let store = ChatStore::new(workspace_root.clone());
+        let created = store
+            .create("agent history", None, Vec::new())
+            .await
+            .expect("chat session should be created");
+        let run = AgentRunHandle {
+            session_id: created.session_id.clone(),
+            run_id: "agent-1".into(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        let cadquery_results = Arc::new(Mutex::new(CadQueryResultCache::new(
+            CADQUERY_RESULT_CACHE_LIMIT,
+        )));
+        cadquery_results
+            .lock()
+            .expect("cache lock")
+            .insert_cached(CadQueryToolCachedResult {
+                mesh: sample_mesh("cq_1"),
+                exports: vec!["outputs/top_lid.step".into()],
+                warnings: Vec::new(),
+            });
+        let recorder = AgentToolEventRecorder {
+            workspace_root: workspace_root.clone(),
+            cadquery_results,
+            push_sink: Arc::new(|_| {}),
+            run,
+            history_writes: Arc::new(Mutex::new(Vec::new())),
+        };
+        let call = AgentToolCall {
+            id: "call-1".into(),
+            function_name: "read_file".into(),
+            arguments: r#"{"path":"parts/top_lid.py"}"#.into(),
+        };
+
+        recorder.tool_start(&call);
+        recorder.tool_result(&call, r#"{"status":"ok","result_id":"cq_1"}"#);
+        recorder.flush_history_writes().await;
+
+        let history = store
+            .history(&created.session_id, None)
+            .await
+            .expect("history should be readable")
+            .messages;
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1].role, ChatRole::Assistant);
+        assert_eq!(history[1].tool_calls[0].tool_call_id, "call-1");
+        assert_eq!(history[1].run_id.as_deref(), Some("agent-1"));
+        assert_eq!(history[2].role, ChatRole::Tool);
+        assert_eq!(
+            history[2]
+                .tool_result
+                .as_ref()
+                .expect("tool result")
+                .tool_call_id,
+            "call-1"
+        );
+        assert_eq!(history[2].run_id.as_deref(), Some("agent-1"));
+        assert_eq!(
+            history[2]
+                .mesh_result
+                .as_ref()
+                .expect("mesh result should be persisted")
+                .result_id,
+            "cq_1"
+        );
+    }
+
+    fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {
+        CadQueryMeshPayload {
+            result_id: result_id.into(),
+            build_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .into(),
+            unit: PreviewUnit::Millimeter,
+            root_ref_text: "@part[lid]".into(),
+            root_object_kind: CadQueryObjectKind::Part,
+            artifact_relation: None,
+            parts: vec![CadQueryPartMesh {
+                name: "lid".into(),
+                object_kind: CadQueryObjectKind::Part,
+                ref_text: "@part[lid]".into(),
+                instance_path: None,
+                transform: None,
+                faces: vec![FaceGroup {
+                    face_idx: 0,
+                    positions: vec![0.0, 0.0, 0.0],
+                    normals: vec![0.0, 0.0, 1.0],
+                    features: vec!["lid_alignment_surface".into()],
+                    ambiguous: false,
+                }],
+                edges: vec![EdgeGroup {
+                    edge_idx: 0,
+                    polyline: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    adjacent_faces: vec![0],
+                }],
+                vertices: vec![VertexPoint {
+                    vertex_idx: 0,
+                    position: [0.0, 0.0, 0.0],
+                    adjacent_edges: vec![0],
+                }],
+                feature_map: vec![CadQueryFeatureFaces {
+                    feature: "lid_alignment_surface".into(),
+                    face_indices: vec![0],
+                }],
+            }],
+        }
+    }
 }

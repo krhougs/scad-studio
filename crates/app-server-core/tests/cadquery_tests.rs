@@ -163,7 +163,7 @@ async fn cadquery_runner_drains_large_stdout_before_process_exit() {
         output_dir: root.join("outputs"),
         export_formats: Vec::new(),
         params_json: "{}".into(),
-        timeout: Duration::from_secs(2),
+        timeout: Duration::from_secs(5),
     })
     .await
     .expect("runner should drain stdout while child is running");

@@ -3,7 +3,7 @@ use tokio::fs;
 
 use app_server_protocol::{PathHandle, WorkspaceId};
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::super::{AgentExecutionScope, AgentToolRunContext, tool_error_json};
 
@@ -46,7 +46,7 @@ pub(super) enum ExistingFilePolicy {
 pub(super) async fn safe_write_target(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     policy: WriteTargetPolicy,
 ) -> Result<WriteTarget, String> {
@@ -71,7 +71,7 @@ pub(super) async fn safe_write_target(
 pub(super) async fn safe_existing_file(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     policy: ExistingFilePolicy,
 ) -> Result<ExistingFile, String> {
     let handle = path_handle(path, call)?;
@@ -88,7 +88,7 @@ pub(super) async fn safe_existing_file(
 pub(super) fn validate_existing_affected_scope(
     relative: &str,
     context: &AgentToolRunContext,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let Some(scope) = context.execution_scope.as_ref() else {
         return Ok(());
@@ -110,7 +110,7 @@ pub(super) fn validate_existing_affected_scope(
     ))
 }
 
-async fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
+async fn target_status(path: &Path, call: &AgentToolCall) -> Result<bool, String> {
     match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
@@ -135,7 +135,7 @@ async fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> 
     }
 }
 
-async fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Result<(), String> {
+async fn validate_existing_literal_file(path: &Path, call: &AgentToolCall) -> Result<(), String> {
     match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
@@ -159,7 +159,7 @@ async fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Resu
 #[cfg(unix)]
 fn validate_no_hard_link_alias(
     metadata: &std::fs::Metadata,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if metadata.nlink() > 1 {
         return Err(tool_error_json(
@@ -174,7 +174,7 @@ fn validate_no_hard_link_alias(
 #[cfg(not(unix))]
 fn validate_no_hard_link_alias(
     _metadata: &std::fs::Metadata,
-    _call: &LlmToolCall,
+    _call: &AgentToolCall,
 ) -> Result<(), String> {
     Ok(())
 }
@@ -182,7 +182,7 @@ fn validate_no_hard_link_alias(
 async fn resolve_write_path(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<PathBuf, String> {
     let handle = path_handle(path, call)?;
     crate::resolve_workspace_write_path(root, &handle)
@@ -190,7 +190,7 @@ async fn resolve_write_path(
         .map_err(|error| tool_error_json(call, &error.message, "invalid_arguments"))
 }
 
-fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
+fn path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
     PathHandle::new(
         WorkspaceId::new("workspace"),
         path.split('/').map(str::to_owned),
@@ -217,7 +217,7 @@ async fn literal_workspace_path(root: &Path, handle: &PathHandle) -> PathBuf {
 async fn workspace_relative_path(
     root: &Path,
     absolute: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let root = fs::canonicalize(root)
         .await
@@ -240,7 +240,7 @@ async fn workspace_relative_path(
 fn validate_actual_write_path(
     relative: &str,
     allow_cadquery_model: bool,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let root = first_path_segment(relative);
     if WRITE_DENIED_ROOTS.contains(&root) || !WRITE_ALLOWED_ROOTS.contains(&root) {
@@ -265,7 +265,7 @@ fn validate_write_execution_scope(
     existed: bool,
     scope: Option<&AgentExecutionScope>,
     policy: WriteTargetPolicy,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let Some(scope) = scope else {
         return Ok(());
@@ -280,7 +280,7 @@ fn validate_write_file_scope(
     relative: &str,
     existed: bool,
     scope: &AgentExecutionScope,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if existed && scope.contains_affected_file(relative) {
         return Ok(());
@@ -305,7 +305,7 @@ fn validate_write_file_scope(
 fn validate_copy_target_scope(
     relative: &str,
     scope: &AgentExecutionScope,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if scope.contains_new_file(relative) {
         Ok(())

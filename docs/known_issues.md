@@ -122,25 +122,25 @@
   - 扩展 `CadQueryToolRuntimeError`，增加 `traceback` 与 `diagnostics` 字段，并在 `cadquery_tool_error()` 中从 runner stderr / message 填充。
 - 当前处理方式：Phase 7 已同步文档语义；运行时继续保证安全边界：commit 前完成 topology 与 doc update preflight，commit 后文档追加失败进入 warnings，`cadquery_execute` 成功后仍会设置单次 commit guard。剩余问题只保留 runner traceback / diagnostics 的结构化拆分。
 
-## 2026-04-28 09:22:00: CadQuery edit intent 尚未由 LLM 结构化输出接管
+## 2026-04-28 09:22:00: CadQuery edit intent 尚未进入结构化 Agent 输出
 
-- 状态：历史记录；当前 Agent / Plan 双模式迁移后，结构化 edit intent 应进入 Agent mode execution scope，不再进入旧 confirmation payload。
-- 来源：用户明确要求不允许存在 move / replace 等硬编码判断，这些编辑意图应由 LLM 自行决定。
+- 状态：当前问题；旧本地 plan 草稿和 prompt 关键词判断已删除，剩余问题是 Rig Agent 仍没有专用结构化 edit intent 字段。
+- 来源：用户明确要求不允许存在 move / replace 等硬编码判断，这些编辑意图应由模型自行决定。
 - 原因：
-  - 当前协议和 Web 执行范围还没有承接 LLM 输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
+  - 当前 protocol 和 Web 执行范围还没有表达模型输出的结构化 edit intent 字段，例如 `InstanceMove`、`InstanceReplacement`、`ComponentReplacement`。
   - 本轮已删除 `crates/app-server-core/src/agent/selection.rs` 与 `packages/studio-web/src/workbench/cadquery-agent-scope.ts` 中的 prompt 关键词判断。
-  - 本轮新增 `docs/cadquery-mvp/agent-system-prompt.md`，记录后续真实 LLM 后端应承担的结构化输出责任，并通过 `cadquery_agent_system_prompt()` 作为运行时 system prompt 加载。
-  - 现阶段 Web 只能使用显式 target path 或 selection 的结构化 owner/ref 信息，不能替 LLM 猜测用户要移动、替换还是修改本体。
+  - `docs/cadquery-mvp/agent-system-prompt.md` 记录模型应承担的结构化判断责任，并通过 `cadquery_agent_system_prompt()` 作为运行时 system prompt 加载。
+  - 现阶段 Web 只能使用显式 target path、plan package 或 selection 的结构化 owner/ref 信息，不能替模型猜测用户要移动、替换还是修改本体。
 - 影响范围：
   - prompt 中出现 move / replace / 移动 / 替换 等词不会再改变确认范围，也不会生成几何修改。
-  - 在真实 LLM edit intent 接入前，instance move / replacement 这类语义需要通过显式 target 或后续结构化 tool call 才能准确表达。
-  - Agent Execute 在没有 LLM codegen 后端时会返回 `LlmError`，不再执行本地固定 CadQuery 几何模板。
+  - 在结构化 edit intent 接入前，instance move / replacement 这类语义需要通过显式 target、plan package 或后续结构化 tool call 才能准确表达。
+  - 未配置 Rig OpenAI Responses provider 时，Agent 会返回 `LlmError` 并记录错误消息；不会执行本地固定 CadQuery 几何模板。
   - 这不扩大写入权限；Agent mode 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 限制。
 - 可能的解法：
-  - 在 protocol 中增加 LLM tool output 专用的结构化 edit intent enum，并把它作为 Agent mode execution scope 的一部分展示给用户。
-  - 真实 Agent 后端输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
-  - Web UI 只展示 LLM 输出的结构化 execution scope；如果后续需要人工修正，应通过显式控件改结构化字段，再由 Agent mode 执行，而不是恢复关键词词表。
-- 当前处理方式：已删除 prompt 关键词推断和本地 CadQuery 几何 codegen；当前 fallback 仅使用 selection 结构化 owner/ref 选择默认目标。`llm_request_for_cadquery_execute()` 已能构造带 system prompt、history、target 和 selection context 的 LLM 请求，真实 provider 接入仍是后续能力缺口。
+  - 在 protocol 中增加模型 tool output 专用的结构化 edit intent enum，并把它作为 Agent mode execution scope 的一部分展示给用户。
+  - Rig Agent 输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
+  - Web UI 只展示模型输出的结构化 execution scope；如果后续需要人工修正，应通过显式控件修改结构化字段，再由 Agent mode 执行，而不是恢复关键词词表。
+- 当前处理方式：已删除 prompt 关键词推断、本地 plan 草稿和本地 CadQuery 几何 codegen；生产 Agent 入口走 Rig OpenAI Responses API，当前执行范围来自显式 `plan_ref` / plan package 和结构化 selection context。
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
@@ -190,21 +190,22 @@
   - 在 CI 中固定全仓库 fmt 检查，避免格式差异继续累积。
 - 当前处理方式：本轮不修改无关源码；已对 Phase 1 触及的 Rust 文件执行 `rustfmt --edition 2024 --check` 并通过，后续仍需单独处理全仓库 fmt 差异。
 
-## 2026-04-28 04:18:42: Agent 后端尚未接入真实 LLM provider 配置
+## 2026-04-28 04:18:42: Agent 后端真实 provider 配置缺口
 
-- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1，按计划评估 Rig 后实现 Agent / Chat / CadQuery tool 主链路。
+- 状态：历史记录；`prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 4 已接入 Rig OpenAI Responses API，旧 `AgentBackend` / 本地文本草稿 / OpenAI-compatible Chat Completions 路径已删除。
+- 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1，按计划评估 Rig 后实现 Agent / Chat / CadQuery tool 主链路；后续由 `prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 4 完成架构替换。
 - 原因：
   - Phase 1 已确认 `rig-core` 当前评估版本为 `0.35.0`，其 provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 方向符合后续接入需求。
-  - 当前仓库尚无 LLM provider 配置模型、密钥管理策略、运行时 provider 选择规则和可复现的 provider mock 测试夹具。
-  - 为避免在 Phase 1 中硬编码供应商或凭据，当前实现先提供 `AgentBackend` trait。后续根据用户要求，已移除本地 deterministic CadQuery codegen fallback。
+  - 当前实现已读取 `BUDN_AGENT_CONFIG`、`BUDN_AGENT_OPENAI_API_KEY` / `OPENAI_API_KEY`、`BUDN_AGENT_MODEL`、timeout、max tokens、temperature 和 reasoning effort。
+  - 仍缺少可复现的 provider mock 测试夹具，以及模型原生联网搜索 capability / 来源记录字段；这些属于后续 Phase 范围。
 - 影响范围：
-  - 当前 Agent 可以处理 Inform / Plan 的本地文本草稿，但 Execute 需要真实 LLM codegen 后端；缺少后端时返回 `LlmError`。
-  - 后续实现 Plan / Execute 的复杂 CAD 修改、基于 selection 的语义编辑和多轮工具调用时，必须接入真实 LLM provider 或 provider mock。
+  - 未配置 Rig OpenAI Responses provider 时，Agent run 会通过 `agent.error` 返回 `LlmError`，并在 Chat history 中记录失败消息。
+  - 当前生产 Agent 不再有本地文本草稿或固定几何模板后备路径；复杂 CAD 修改必须由 Rig multi-turn tool loop 完成。
 - 可能的解法：
-  - 在 app server 配置中增加 provider 类型、模型名、base URL、密钥来源和超时等字段，并明确本地开发与生产部署的读取规则。
-  - 基于 `AgentBackend` trait 接入 Rig provider，并为 tool call、streaming、cancel 和 error mapping 补充 mock backend 测试。
-  - 将真实 provider 的不可用、鉴权失败和速率限制映射为协议错误与 Chat tool result，而不是直接暴露底层 SDK 错误。
-- 当前处理方式：保留 `AgentBackend` trait 和 Inform / Plan 文本草稿；Execute 不再使用本地几何 fallback，后续必须接入真实 provider 或 provider mock。
+  - 在后续 Phase 中通过 Rig OpenAI Responses hosted tool 接入模型原生联网搜索，并把 capability 与来源记录纳入 protocol。
+  - 为 Rig streaming、tool call、cancel 和 provider error mapping 建立更细的 provider mock / test support。
+  - 将 provider 的认证失败、限流和 hosted tool 不可用错误映射为更具体的协议错误与 Chat 事件。
+- 当前处理方式：生产 Agent 入口只走 Rig OpenAI Responses API；缺少 provider 配置时返回清晰错误并保持 workspace 不变。
 
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 

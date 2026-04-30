@@ -111,7 +111,50 @@
 
 ### Phase 4 — Rig 成为唯一生产 Agent 执行引擎
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 未重新引入 Rust 桌面端、`studio-app`、`scad-ui`、`scad-viewer` 或 in-process / mpsc host 生产路径。
+  - 保持 Phase 2/3 的 async dispatcher、async I/O、async CadQuery runner / staging 和 WebSocket-only 生产 host 边界。
+  - 工具 registry、路径权限、CadQuery staging、Chat history、Agent run 管理、取消语义和 protocol event 继续由 app server 承接。
+- 变更摘要：
+  - 将 `rig-core` 加入 workspace 依赖，`app-server-core` 使用 Rig OpenAI Responses API 作为唯一生产 Agent 执行引擎。
+  - 删除旧 `openai_compat`、`LlmProvider`、OpenAI-compatible Chat Completions 配置语义、`ureq` SSE parser、自研多轮 tool loop 和本地假 Agent 回答。
+  - 新增 Rig Agent 配置读取：`BUDN_AGENT_CONFIG`、`BUDN_AGENT_OPENAI_API_KEY` / `OPENAI_API_KEY`、`BUDN_AGENT_MODEL`、`BUDN_AGENT_TIMEOUT_SECS`、`BUDN_AGENT_MAX_TOKENS`、`BUDN_AGENT_TEMPERATURE`、`BUDN_AGENT_REASONING_EFFORT`。
+  - 将现有 Agent tool registry 包装为 Rig dynamic tools，继续复用既有 path policy、CadQuery staging、semantic tool 和 readonly/file_write 工具实现。
+  - 将 Rig streaming event 映射到现有 protocol 事件：token、reasoning、tool start、tool result、done 和 error。
+  - Agent worker 改为 `tokio::spawn` async task；删除旧 `std::thread::spawn`、`thread::sleep` 和同步 helper。
+  - Rig 请求创建与 stream drain 使用同一 timeout，并在 provider stream pending 时通过 cancel tick 响应 Agent cancel。
+  - Agent tool history 改为按事件顺序收集并串行追加到 ChatStore，保留 `run_id` 与 CadQuery `mesh_result`。
+  - Web Chat 空状态和错误提示改为 Rig OpenAI Responses 配置说明。
+  - 更新 `docs/known_issues.md`，关闭旧 AgentBackend / 本地文本草稿 / OpenAI-compatible 生产路径记录，并保留结构化 edit intent 作为当前后续问题。
+- TDD / 回归记录：
+  - 补充 Rig stream 映射测试，覆盖 token、reasoning、tool call、tool result。
+  - 补充 `drain_rig_stream` 测试，覆盖 provider stream pending 时 cancel 返回、配置 timeout 返回和 provider error 映射。
+  - 补充 host recorder 测试，覆盖 tool call/result 按顺序写入 Chat history，并持久化 `run_id` 与 CadQuery `mesh_result`。
+  - 调整 host Agent 测试，使 Agent async task 与测试 dispatch 运行在同一 Tokio runtime 内，避免测试 helper 临时 runtime 结束时中止 worker。
+- 第一轮独立复审记录：
+  - 发现 Rig stream cancel 只在 `stream.next().await` 返回后检查，provider pending 时会阻塞 Agent run；已改为 `tokio::select!` 同时监听 cancel tick、timeout 和 stream item。
+  - 发现 `BUDN_AGENT_TIMEOUT_SECS` 已读取但未用于 Rig 请求；已将同一 timeout 覆盖 stream 创建和 drain。
+  - 发现 tool call/result 使用独立 `tokio::spawn` 写 Chat history，等待完成不能保证 JSONL 顺序；已改为内存队列收集并串行写入。
+  - 发现测试缺口：缺少 cancel / timeout / provider error 与 tool history 顺序覆盖；已补充上述回归测试。
+- 第二轮独立复审记录：
+  - 未发现阻塞项或高风险问题。
+  - 确认 `BUDN_AGENT_TIMEOUT_SECS` 已被请求创建和 stream drain 使用，`drain_rig_stream` 可在 stream pending 时响应 cancel / timeout。
+  - 确认 `AgentToolEventRecorder` 已按事件顺序串行写入 ChatStore，并保留 `run_id` 与 CadQuery `mesh_result`。
+  - 普通问题指出本结果文档仍写 Phase 4 未执行；本节已更新。
+- 验证结果：
+  - `cargo test -p app-server-core drain_rig_stream` 通过。
+  - `cargo test -p app-server-host agent_tool_recorder_flushes_history_in_event_order` 通过。
+  - `cargo test -p app-server-core` 通过。
+  - `cargo test -p app-server-host` 通过。
+  - `bun run --cwd packages/studio-web typecheck` 通过。
+  - `bun run --cwd packages/studio-web test:unit` 通过；仍有既有 React `act(...)` warning，未在本 Phase 扩大处理范围。
+  - `git diff --check` 通过。
+  - Phase 4 旧路径搜索无命中：`ureq`、`openai_compat`、`LlmProvider`、`LlmMessage`、`LlmResponse`、`LlmConfig`、`LlmTool`、`AgentBackend`、`LocalAgentBackend`、`llm_generate_cadquery_code`、`create_provider`、`run_tool_loop`、`Chat Completions`、`chat/completions`、`BUDN_LLM_BASE_URL`、`BUDN_LLM_CONFIG`、`BUDN_LLM`、`base_url`、`OpenAiCompatible`、`OpenAI-compatible`、`OpenAI compatible`、`std::thread::spawn`、`thread::sleep`、`block_on_old_agent_future`。
+- 遗留问题：
+  - 模型原生联网搜索尚未接入；按计划留到 Phase 5。
+  - protocol / Web 端 capability 与搜索来源字段尚未接入；按计划留到 Phase 6。
+  - 更完整的 provider mock / hosted tool capability 集成测试适合随 Phase 5/6 一起补齐；本 Phase 已覆盖 Rig stream 映射、cancel、timeout、provider error 和 host Chat history 顺序。
 
 ### Phase 5 — 接入模型原生联网搜索
 

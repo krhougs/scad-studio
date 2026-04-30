@@ -15,7 +15,7 @@ use std::os::windows::fs::MetadataExt;
 
 use serde_json::json;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{AgentToolRunContext, CadQueryModelContract, CadQueryToolRuntime, tool_error_json};
 use args::{
@@ -30,7 +30,7 @@ use support::{
 
 pub(super) async fn analyze_source(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> String {
     let args = match analyze_args(call) {
@@ -80,7 +80,7 @@ pub(super) async fn analyze_source(
 }
 
 pub(super) async fn check_source(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> String {
     let request = match source_request_args(call) {
@@ -103,7 +103,7 @@ pub(super) async fn check_source(
 
 pub(super) async fn dry_run(
     _workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> String {
     let request = match dry_run_request_args(call) {
@@ -130,7 +130,7 @@ pub(super) async fn dry_run(
 
 pub(super) async fn execute(
     _workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     runtime: Option<&dyn CadQueryToolRuntime>,
     committed: &AtomicBool,
@@ -217,7 +217,7 @@ pub(super) async fn execute(
 }
 
 async fn source_contract_for_runtime(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &super::CadQueryToolRunRequest,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> Result<support::SourceContract, String> {
@@ -275,7 +275,10 @@ pub(super) async fn record_plan_failure_for_tool_error(
     value.to_string()
 }
 
-pub(super) fn get_result(call: &LlmToolCall, runtime: Option<&dyn CadQueryToolRuntime>) -> String {
+pub(super) fn get_result(
+    call: &AgentToolCall,
+    runtime: Option<&dyn CadQueryToolRuntime>,
+) -> String {
     let result_id = match result_id_arg(call) {
         Ok(result_id) => result_id,
         Err(result) => return result,
@@ -294,7 +297,7 @@ pub(super) fn get_result(call: &LlmToolCall, runtime: Option<&dyn CadQueryToolRu
 }
 
 pub(super) fn resolve_selection(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> String {
     let args = match resolve_selection_args(call) {
@@ -315,7 +318,7 @@ pub(super) fn resolve_selection(
 }
 
 fn runtime_error_json(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     error_type: String,
     message: String,
     retry_allowed: bool,

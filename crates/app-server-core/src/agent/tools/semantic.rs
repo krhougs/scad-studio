@@ -4,12 +4,9 @@ use app_server_protocol::{CadQueryObjectKind, WorkspaceId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    agent::plan_package::{SaveCadPlanPackageInput, save_plan_package},
-    llm::LlmToolCall,
-};
+use crate::agent::plan_package::{SaveCadPlanPackageInput, save_plan_package};
 
-use super::{AgentToolRunContext, semantic_export, tool_error_json};
+use super::{AgentToolCall, AgentToolRunContext, semantic_export, tool_error_json};
 
 const DENIED_RELATION_ROOTS: &[&str] = &[
     ".git",
@@ -24,7 +21,7 @@ pub(super) const PLAN_SCOPE_ROOTS: &[&str] =
 
 pub(super) async fn save_cad_plan(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let mut args = match save_plan_args(call) {
@@ -41,7 +38,7 @@ pub(super) async fn save_cad_plan(
 
 type SavePlanArgs = SaveCadPlanPackageInput;
 
-fn save_plan_args(call: &LlmToolCall) -> Result<SavePlanArgs, String> {
+fn save_plan_args(call: &AgentToolCall) -> Result<SavePlanArgs, String> {
     let value = parse_object(call)?;
     let target_path = cadquery_target_arg(&value, "target_path", call)?;
     let affected_files = plan_scope_paths(&value, "affected_files", call)?;
@@ -66,7 +63,7 @@ fn save_plan_args(call: &LlmToolCall) -> Result<SavePlanArgs, String> {
     Ok(args)
 }
 
-pub(super) fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
+pub(super) fn parse_object(call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(&call.arguments).map_err(|error| {
         tool_error_json(
             call,
@@ -79,7 +76,7 @@ pub(super) fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
 pub(super) fn non_empty_string_arg(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let text = value.get(key).and_then(Value::as_str).unwrap_or("").trim();
     if text.is_empty() {
@@ -93,7 +90,7 @@ pub(super) fn non_empty_string_arg(
     }
 }
 
-fn plan_scope_paths(value: &Value, key: &str, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn plan_scope_paths(value: &Value, key: &str, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let paths = optional_plan_scope_paths(value, key, call)?;
     if paths.is_empty() {
         Err(tool_error_json(
@@ -109,7 +106,7 @@ fn plan_scope_paths(value: &Value, key: &str, call: &LlmToolCall) -> Result<Vec<
 fn optional_plan_scope_paths(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<String>, String> {
     optional_string_array(value, key, call)?
         .into_iter()
@@ -117,7 +114,7 @@ fn optional_plan_scope_paths(
         .collect()
 }
 
-fn export_targets(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn export_targets(value: &Value, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let targets = optional_string_array(value, "export_targets", call)?
         .into_iter()
         .map(|path| normalize_export_target(&path, call))
@@ -132,7 +129,7 @@ fn export_targets(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, Stri
     Ok(targets)
 }
 
-fn validate_plan_execution_scope(args: &SavePlanArgs, call: &LlmToolCall) -> Result<(), String> {
+fn validate_plan_execution_scope(args: &SavePlanArgs, call: &AgentToolCall) -> Result<(), String> {
     if args
         .affected_files
         .iter()
@@ -148,7 +145,7 @@ fn validate_plan_execution_scope(args: &SavePlanArgs, call: &LlmToolCall) -> Res
     ))
 }
 
-fn cadquery_target_arg(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn cadquery_target_arg(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     let path = non_empty_string_arg(value, key, call)?;
     let normalized = normalize_allowed_path(&path, &["components", "parts", "assemblies"], call)?;
     if !normalized.ends_with(".py") {
@@ -161,7 +158,7 @@ fn cadquery_target_arg(value: &Value, key: &str, call: &LlmToolCall) -> Result<S
     Ok(normalized)
 }
 
-fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKind, String> {
+fn target_type_arg(value: &Value, call: &AgentToolCall) -> Result<CadQueryObjectKind, String> {
     match non_empty_string_arg(value, "target_type", call)?.as_str() {
         "assembly" => Ok(CadQueryObjectKind::Assembly),
         "component" => Ok(CadQueryObjectKind::Component),
@@ -176,7 +173,7 @@ fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKi
 
 fn validate_target_type_matches_path(
     args: &SavePlanArgs,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let expected = match first_segment(&args.target_path) {
         "assemblies" => CadQueryObjectKind::Assembly,
@@ -197,7 +194,7 @@ fn validate_target_type_matches_path(
 pub(super) fn optional_string_array(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<String>, String> {
     let Some(raw) = value.get(key) else {
         return Ok(Vec::new());
@@ -225,7 +222,7 @@ pub(super) fn optional_string_array(
 
 pub(super) fn path_handle(
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<app_server_protocol::PathHandle, String> {
     app_server_protocol::PathHandle::new(
         WorkspaceId::new("workspace"),
@@ -240,7 +237,7 @@ pub(super) fn path_handle(
     })
 }
 
-fn normalize_export_target(path: &str, call: &LlmToolCall) -> Result<String, String> {
+fn normalize_export_target(path: &str, call: &AgentToolCall) -> Result<String, String> {
     let normalized = normalize_workspace_path(path, call)?;
     if first_segment(&normalized) != "outputs" {
         return Err(tool_error_json(
@@ -268,7 +265,7 @@ fn supported_export_extension(path: &str) -> bool {
 pub(super) fn normalize_allowed_path(
     path: &str,
     allowed_roots: &[&str],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let normalized = normalize_workspace_path(path, call)?;
     let root = first_segment(&normalized);
@@ -290,7 +287,7 @@ pub(super) fn normalize_allowed_path(
     }
 }
 
-pub(super) fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn normalize_workspace_path(path: &str, call: &AgentToolCall) -> Result<String, String> {
     let cleaned = path.trim().replace('\\', "/");
     if cleaned.is_empty() || cleaned.starts_with('/') || cleaned.contains(':') {
         return Err(tool_error_json(
@@ -315,7 +312,7 @@ pub(super) fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result
 }
 
 fn save_plan_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     args: SavePlanArgs,
     saved: crate::agent::plan_package::SavedPlanPackage,

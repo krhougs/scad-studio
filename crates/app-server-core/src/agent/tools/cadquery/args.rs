@@ -5,7 +5,7 @@ use app_server_protocol::{
 };
 use serde_json::Value;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::super::{AgentToolRunContext, CadQueryToolRunRequest, tool_error_json};
 use super::support::{SourceContract, is_model_path, source_contract, target_type_label};
@@ -23,7 +23,7 @@ pub(super) struct ResolveSelectionArgs {
     pub(super) selection_ref: String,
 }
 
-pub(super) fn analyze_args(call: &LlmToolCall) -> Result<AnalyzeArgs, String> {
+pub(super) fn analyze_args(call: &AgentToolCall) -> Result<AnalyzeArgs, String> {
     let value = parse_object(call)?;
     Ok(AnalyzeArgs {
         target_path: required_string(&value, "target_path", call)?,
@@ -32,7 +32,7 @@ pub(super) fn analyze_args(call: &LlmToolCall) -> Result<AnalyzeArgs, String> {
     })
 }
 
-pub(super) fn source_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn source_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let value = parse_object(call)?;
     let target_path = required_model_path(&value, "target_path", call)?;
     let target_type = target_type_arg(&value, call)?;
@@ -49,13 +49,13 @@ pub(super) fn source_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunR
     })
 }
 
-pub(super) fn dry_run_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn dry_run_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let request = source_request_args(call)?;
     validate_params_json(&request.params_json, call)?;
     Ok(request)
 }
 
-pub(super) fn execute_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn execute_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let value = parse_object(call)?;
     let mut request = source_request_args(call)?;
     request.export_formats = export_formats_arg(&value, call)?;
@@ -65,12 +65,12 @@ pub(super) fn execute_request_args(call: &LlmToolCall) -> Result<CadQueryToolRun
     Ok(request)
 }
 
-pub(super) fn result_id_arg(call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn result_id_arg(call: &AgentToolCall) -> Result<String, String> {
     let value = parse_object(call)?;
     required_string(&value, "result_id", call)
 }
 
-pub(super) fn resolve_selection_args(call: &LlmToolCall) -> Result<ResolveSelectionArgs, String> {
+pub(super) fn resolve_selection_args(call: &AgentToolCall) -> Result<ResolveSelectionArgs, String> {
     let value = parse_object(call)?;
     let selection_ref = required_string(&value, "selection_ref", call)?;
     if selection_ref.starts_with("@selector[") || selection_ref.starts_with("@subshape[") {
@@ -87,7 +87,7 @@ pub(super) fn resolve_selection_args(call: &LlmToolCall) -> Result<ResolveSelect
 }
 
 pub(super) fn validate_contract_for_run(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
 ) -> Result<(), String> {
     let contract = source_contract(&request.target_path, request.target_type, &request.code);
@@ -112,7 +112,7 @@ pub(super) fn validate_contract_for_run(
 }
 
 pub(super) fn validate_execute_product_contract(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
     contract: &SourceContract,
 ) -> Result<(), String> {
@@ -169,7 +169,7 @@ fn contract_failure_summary(contract: &super::support::SourceContract) -> String
 }
 
 pub(super) fn validate_execute_scope(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
     context: &AgentToolRunContext,
 ) -> Result<(), String> {
@@ -239,7 +239,7 @@ pub(super) fn validate_execute_scope(
 
 pub(super) async fn doc_update_path_for_execute(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
     context: &AgentToolRunContext,
 ) -> Result<Option<String>, String> {
@@ -269,7 +269,7 @@ pub(super) async fn doc_update_path_for_execute(
 pub(super) async fn existing_model_path(
     root: &Path,
     relative: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<PathBuf, String> {
     let handle = path_handle(relative, call)?;
     if !is_model_path(&handle.display_path()) {
@@ -288,7 +288,7 @@ pub(super) async fn existing_model_path(
 async fn reject_symlink_workspace_path(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let handle = path_handle(path, call)?;
     reject_symlink_segments(root, handle.path_segments(), call).await
@@ -297,7 +297,7 @@ async fn reject_symlink_workspace_path(
 async fn reject_symlink_segments(
     root: &Path,
     segments: &[String],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let mut current = root.to_path_buf();
     for segment in segments {
@@ -318,7 +318,7 @@ async fn reject_symlink_segments(
 }
 
 #[cfg(unix)]
-async fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(path: &Path, call: &AgentToolCall) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
     if tokio::fs::metadata(path)
@@ -336,11 +336,11 @@ async fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String>
 }
 
 #[cfg(not(unix))]
-async fn reject_hard_link(_path: &Path, _call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(_path: &Path, _call: &AgentToolCall) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
+fn parse_object(call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(&call.arguments).map_err(|error| {
         tool_error_json(
             call,
@@ -350,7 +350,7 @@ fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
     })
 }
 
-fn required_model_path(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn required_model_path(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     let handle = path_handle(&required_string(value, key, call)?, call)?;
     let path = handle.display_path();
     if is_model_path(&path) {
@@ -364,7 +364,7 @@ fn required_model_path(value: &Value, key: &str, call: &LlmToolCall) -> Result<S
     }
 }
 
-fn required_string(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn required_string(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -387,7 +387,7 @@ fn bool_arg(value: &Value, key: &str) -> Option<bool> {
     value.get(key).and_then(Value::as_bool)
 }
 
-fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKind, String> {
+fn target_type_arg(value: &Value, call: &AgentToolCall) -> Result<CadQueryObjectKind, String> {
     match required_string(value, "target_type", call)?.as_str() {
         "part" => Ok(CadQueryObjectKind::Part),
         "component" => Ok(CadQueryObjectKind::Component),
@@ -402,7 +402,7 @@ fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKi
 
 fn export_formats_arg(
     value: &Value,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<CadQueryExportFormat>, String> {
     value
         .get("export_formats")
@@ -422,7 +422,7 @@ fn export_formats_arg(
         .collect()
 }
 
-fn export_targets_arg(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn export_targets_arg(value: &Value, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let Some(items) = value.get("export_targets").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
@@ -452,7 +452,7 @@ fn export_targets_arg(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, 
 
 fn validate_export_request(
     request: &CadQueryToolRunRequest,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     match (
         request.export_formats.is_empty(),
@@ -479,7 +479,7 @@ fn validate_export_request(
 
 fn export_target_formats(
     targets: &[String],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<CadQueryExportFormat>, String> {
     targets
         .iter()
@@ -501,13 +501,13 @@ fn targets_match_runner_outputs(request: &CadQueryToolRunRequest) -> bool {
     })
 }
 
-fn export_pairing_error(call: &LlmToolCall, message: &str) -> Result<(), String> {
+fn export_pairing_error(call: &AgentToolCall, message: &str) -> Result<(), String> {
     Err(tool_error_json(call, message, "permission_denied"))
 }
 
 fn export_format_for_target(
     target: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<CadQueryExportFormat, String> {
     let lower = target.to_ascii_lowercase();
     if lower.ends_with(".step") || lower.ends_with(".stp") {
@@ -539,7 +539,7 @@ fn expected_export_target(target_path: &str, format: &CadQueryExportFormat) -> S
     format!("outputs/{stem}.{extension}")
 }
 
-fn validate_params_json(params: &str, call: &LlmToolCall) -> Result<(), String> {
+fn validate_params_json(params: &str, call: &AgentToolCall) -> Result<(), String> {
     serde_json::from_str::<Value>(params)
         .map(|_| ())
         .map_err(|error| {
@@ -551,7 +551,7 @@ fn validate_params_json(params: &str, call: &LlmToolCall) -> Result<(), String> 
         })
 }
 
-fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
+fn path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
     PathHandle::new(
         WorkspaceId::new("workspace"),
         path.split('/').map(str::to_owned),
