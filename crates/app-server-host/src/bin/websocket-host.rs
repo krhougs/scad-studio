@@ -1,4 +1,7 @@
-use app_server_host::{WebSocketHostConfig, run_websocket_host};
+use app_server_host::{
+    WebSocketHostConfig, cadquery_python_path, run_websocket_host,
+    verify_cadquery_runner_environment,
+};
 use std::future::pending;
 use std::path::PathBuf;
 
@@ -13,6 +16,8 @@ async fn main() {
 
 async fn run() -> Result<(), String> {
     let args = parse_args(std::env::args().skip(1).collect())?;
+    let python = cadquery_python_path();
+    verify_cadquery_runner_environment(&python)?;
     let url = run_websocket_host(WebSocketHostConfig {
         bind_addr: args.bind_addr,
         workspace_path: args.workspace_path,

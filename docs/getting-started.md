@@ -123,7 +123,7 @@ bun run web
 | 变量 | 消费者 | 默认值 | 说明 |
 |------|--------|--------|------|
 | `SCAD_STUDIO_WS_URL` | `run_websocket_host.ts` / `run_studio_web_dev.ts` / Vite | `ws://127.0.0.1:38421` | 完整 WebSocket URL；host 从中解析 host/port。显式设置后，前端直接连接此地址 |
-| `STUDIO_WEB_WORKSPACE` | `run_websocket_host.ts` | `workspace/studio-web/` | websocket-host 的根工作目录；首次启动会自动 `mkdir -p` |
+| `STUDIO_WEB_WORKSPACE` | `run_websocket_host.ts` | `workspace/budn-web/` | websocket-host 的根工作目录；首次启动会自动 `mkdir -p` |
 | `STUDIO_WEB_PORT` | `run_studio_web_dev.ts` | `5173` | Vite dev server 端口 |
 | `VITE_WS_URL` | Vite | 空 | 前端直接连接的 WebSocket URL；优先级低于 URL 参数 `?ws=...`，高于同源代理 fallback |
 | `VITE_WS_PROXY_TARGET` | Vite dev server | `ws://127.0.0.1:38421` | `/app-server/ws` 的代理目标，通常由 `bun run web` 自动注入 |

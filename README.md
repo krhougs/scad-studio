@@ -70,7 +70,7 @@ bun run web
 | 变量 | 默认 | 作用 |
 |------|------|------|
 | `SCAD_STUDIO_WS_URL` | `ws://127.0.0.1:38421` | websocket-host 绑定地址（完整 URL，端口从中解析） |
-| `STUDIO_WEB_WORKSPACE` | `workspace/studio-web/` | host 的工作目录根；首次启动会自动创建 |
+| `STUDIO_WEB_WORKSPACE` | `workspace/budn-web/` | host 的工作目录根；首次启动会自动创建 |
 | `STUDIO_WEB_PORT` | `5173` | Vite dev 端口 |
 
 显式覆盖 WebSocket 时仍可使用 `?ws=ws://host:port`，也可设置 `SCAD_STUDIO_WS_URL`。这两种方式会让前端直接连接指定地址；默认路径继续使用 `/app-server/ws` 代理，避免外部设备把 `127.0.0.1` 解析成设备自身。

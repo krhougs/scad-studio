@@ -23,6 +23,8 @@ use app_server_protocol::{
     SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
     WorkspaceListResponse, negotiate_protocol_version,
 };
+
+use crate::cadquery_python_path;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1489,12 +1491,6 @@ fn path_handle_to_relative_path(path: &PathHandle) -> PathBuf {
 
 fn display_relative_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-fn cadquery_python_path() -> PathBuf {
-    std::env::var_os("CADQUERY_RUNNER_PYTHON")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("python3"))
 }
 
 fn server_capabilities() -> ServerCapabilities {

@@ -20,7 +20,8 @@
 - 选择模式不是 `select / preview` 两档；模式集合必须是一个独立预览模式，加多个按 protocol RefKind 划分的选择模式。
 - RefKind 选择模式覆盖 MVP 用户可见层级：component / part / assembly、instance、feature、face、edge、vertex。root 只是树根展示节点，不是用户可选 Ref。
 - 预览模式保留 axis、底板、gizmo、灯光、相机和渲染设置，只隐藏选择线框、anchor、hover/selected 高亮、选择 dock/status 和选择交互。
-- 具体 AirPods 垫子语义只能作为真实用户输入、prompt archive、测试 fixture、测试断言、真实验收记录或生成 workspace 模型存在；不得进入前端、后端、`app-server`、protocol、tool schema 或产品 prompt 的通用实现。
+- 具体 AirPods 垫子语义只能作为真实用户输入、prompt archive、测试 fixture、测试断言、真实验收记录或生成 workspace 模型存在；不得进入前端、后端、`app-server`、protocol、tool schema 或运行时默认 prompt 的通用实现。本轮明确暂不处理的 PRD 示例和 system prompt 既有示例块除外。
+- 2026-04-30 用户补充边界：PRD 文档中的领域示例暂不处理；system prompt 中既有示例块暂不处理；Rust 代码里的 LLM 可见 tool schema、tool guidance、contract warning、tool error 和占位命名必须处理；system prompt 必须补充明确指引，说明 `REFS.features` 的 key 由 LLM 根据实际模型语义命名，不能从 Rust/schema/warning/error 的示例或占位符继承名称。
 
 ## 全局输入基准
 
@@ -31,7 +32,7 @@
 - `docs/cadquery-mvp/` 作为 CadQuery MVP 产品、Ref、tool contract、Agent 行为和验收语义的基准文档。
 - 当前源码、当前未提交 diff、上一轮已提交 checkpoint 和本计划的 `plan-00-result.md`。
 
-执行任一 Phase 时，如果发现当前 system prompt、tool guidance 或 Agent 行为与 `docs/cadquery-mvp/`、本计划或真实验收需求不一致，必须把 system prompt / guidance 修改纳入该 Phase 的修复范围，而不是推迟到 Phase 3。
+执行任一 Phase 时，如果发现当前 system prompt、tool guidance 或 Agent 行为与 `docs/cadquery-mvp/`、本计划或真实验收需求不一致，必须把 system prompt / guidance 修改纳入该 Phase 的修复范围，而不是推迟到 Phase 3。执行 Phase -1 时，`docs/cadquery-mvp/` 中的 PRD 示例只作为背景和边界参考，不作为本轮清理对象；system prompt 的修改限定为补充 feature 命名责任指引，不清理既有示例块。
 
 若 `docs/cadquery-mvp/`、`plan-prompt.md`、`AGENTS.md`、现有代码和用户原始需求之间出现无法依据明确优先级自行消解的冲突，必须停止当前 Phase，记录冲突来源、影响范围和可选处理方向，并请求用户干预；在冲突被确认前不得继续编码、重构、删除文件或调整测试。
 
@@ -71,34 +72,38 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 18. `cadquery-select-dock` 位于预览区域底部正中间、status bar 上方。
 19. 模式集合包含一个独立预览模式和多个按 protocol RefKind 划分的选择模式。
 20. 预览模式保留 axis、底板等预览辅助，只隐藏选择线框和 anchor 等选择覆盖层。
-21. 清理之前 Agent 把具体建模 case 和任务相关内容耦合进前端、后端、`app-server`、protocol、tool schema 或产品 prompt 的问题。
+21. 清理之前 Agent 把具体建模 case 和任务相关内容耦合进前端、后端、`app-server`、protocol、tool schema、Rust tool guidance / warning / error 的问题；Rust 运行时 LLM 可见文案不得包含具体 feature key 示例或占位 feature key；system prompt 必须补充 feature 命名责任指引；PRD 示例和 system prompt 既有示例块暂不处理。
 
 ## Phase -1 — 清理具体建模 case 与任务耦合
 
 输入：
 
 - 当前未提交 diff。
-- 前端、后端、`app-server`、protocol、tool schema、产品 prompt 和 docs 中与 CadQuery Web / Agent 相关的改动。
-- `docs/cadquery-mvp/` 中与 CadQuery MVP、Ref、Agent tool contract、system prompt 和验收语义相关的基准。
+- 前端、后端、`app-server`、protocol、tool schema、Rust tool guidance / warning / error、system prompt 指引中与 CadQuery Web / Agent 相关的改动。
+- `docs/cadquery-mvp/` 中与 CadQuery MVP、Ref、Agent tool contract、system prompt 和验收语义相关的基准；PRD 示例只作为背景和边界参考，不作为本 Phase 清理对象。
+- Rust 代码中的 LLM 可见 CadQuery 文案路径，至少包含 `crates/app-server-core/src/agent/tools/registry/schemas/cadquery.rs`、`crates/app-server-core/src/agent/tools/cadquery/args.rs`、`crates/app-server-core/src/agent/tools/cadquery/support.rs` 及同类 schema、warning、error、guidance 来源。
 - `AGENTS.md` 中“禁止测试场景污染产品代码”的长期约束。
 
 操作步骤：
 
-1. 主执行者先划分审计模块并记录预期边界，至少包含：前端产品代码、后端 / `app-server`、protocol / wasm 生成产物、CadQuery tool schema 与 system prompt、测试 fixture、prompt archive 与真实验收记录。
+1. 主执行者先划分审计模块并记录预期边界，至少包含：前端产品代码、后端 / `app-server`、protocol / wasm 生成产物、Rust CadQuery tool schema / guidance / warning / error、system prompt 指引、测试 fixture、prompt archive 与真实验收记录。
 2. 按模块派发独立 subagent 做全局语义审计与只读检索。每个 subagent 负责一个互不重叠的模块范围，先理解该模块新增或修改内容的产品意图、默认行为、数据流和运行入口，再判断是否存在只服务当前验收任务的语义耦合，不直接修改文件。
 3. 每个 subagent 以语义识别为主，搜索只作为辅助发现手段。审计范围包括新增默认 prompt、schema 示例、tool fallback、前端展示分支、后端路由、测试专用常量、模型结构默认值、文件路由、selection 逻辑、artifact 映射和 UI 文案等是否只服务本轮验收；不得把关键词命中作为唯一依据，也不得因为没有关键词命中就判定无污染。
 4. 每个 subagent 输出疑似污染位置、对应代码或文案的实际语义、为什么它只服务当前验收任务或为什么可以保留、是否属于产品运行路径、建议处理方式和风险。
-5. 主执行者汇总所有 subagent 结果，将疑似污染内容分类为：必须清理的产品代码路径、必须清理的通用契约或 schema、必须清理的产品 prompt / guidance、可保留的测试 fixture、可保留的 prompt archive、可保留的真实验收记录、可保留的生成 workspace 模型。
+5. 主执行者汇总所有 subagent 结果，将疑似污染内容分类为：必须清理的产品代码路径、必须清理的通用契约或 schema、必须清理的 Rust LLM 可见 feature 示例或占位命名、必须补充的 system prompt feature 命名指引、可保留的测试 fixture、可保留的 prompt archive、可保留的真实验收记录、可保留的生成 workspace 模型、暂不处理的 PRD 示例、暂不处理的 system prompt 既有示例块。
 6. 主执行者根据汇总结果制定修复顺序，并只清理必须清理的产品路径或通用契约污染；可保留类别不得因清理动作被删除或改写成失去验收价值。
-7. 对产品代码路径、通用契约或 schema、产品 prompt / guidance 中的当前验收任务语义进行清理，改为领域无关的产品契约、能力描述或通用示例。
+7. 对产品代码路径、通用契约或 schema、Rust LLM 可见 tool schema / guidance / warning / error 中的当前验收任务语义、具体 feature key 示例和占位 feature key 进行清理，改为领域无关的产品契约与结构性要求。
 8. 保留测试 fixture、prompt archive、真实验收记录和生成 workspace 模型中的具体 case，但确认它们不会被产品运行路径读取为默认逻辑或通用提示。
-9. 为清理后的边界补充或调整验证，确保后续新增功能不能再次依赖当前验收任务语义通过测试。
+9. 在 system prompt 中补充 feature 命名责任指引：`REFS.features` 的 key 应由 LLM 根据当前模型的真实语义命名，修改旧模型时优先保留已有稳定 key，Rust/schema/warning/error 不提供也不暗示具体 feature 名称。
+10. 为清理后的边界补充或调整验证，确保后续新增功能不能再次依赖当前验收任务语义通过测试，并验证 Rust LLM 可见 schema / warning / error / guidance 不包含具体 feature key 示例或占位 feature key，同时保留 `REFS.features` 必填、`REFS.type` 匹配、staging、selection 和 feature map 映射要求。
 
 验收标准：
 
-- 前端、后端、`app-server`、protocol、tool schema 和产品 prompt 中不存在当前验收 case 专属对象名、任务 prompt 专用语义或无关键词的一次性验收逻辑。
+- 前端、后端、`app-server`、protocol、tool schema 和 Rust LLM 可见 guidance / warning / error 中不存在当前验收 case 专属对象名、任务 prompt 专用语义、具体 feature key 示例、占位 feature key 或无关键词的一次性验收逻辑。
+- system prompt 包含明确 feature 命名责任指引：LLM 根据实际模型语义命名 `REFS.features` key，不从 Rust/schema/warning/error 的示例或占位符继承名称。
 - 每个审计模块都有独立 subagent 输出，主执行者已在 `plan-00-result.md` 汇总语义审计结论、疑似污染分类、修复决策和保留理由。
-- 保留下来的具体 case 只存在于测试 fixture、prompt archive、真实验收记录或生成 workspace 模型中。
+- 保留下来的具体 case 只存在于测试 fixture、prompt archive、真实验收记录、生成 workspace 模型、暂不处理的 PRD 示例或暂不处理的 system prompt 既有示例块中；`plan-00-result.md` 必须记录后两类的保留理由。
+- 清理不得降低 `REFS.features` 必填、`REFS.type` 匹配、staging、selection、feature map 映射和 artifact relation 等已确认产品契约。
 - 清理后不破坏已完成的 CadQuery 建模、预览、selection、reasoning 和 staging 语义。
 - 已按“全局执行协议”完成本 Phase 独立 review、收敛和 `plan-00-result.md` 更新。
 
@@ -106,6 +111,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - 不删除真实验收所需的 prompt archive、测试 fixture 或生成模型记录。
 - 不把领域无关清理扩大成无关重构。
+- 不处理 PRD 示例和 system prompt 既有示例块，只补充 system prompt 中关于 feature 命名责任的通用指引。
 
 ## Phase 0 — 当前状态审计与基线固定
 
@@ -121,13 +127,13 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 1. 审计当前工作树，把上一轮已完成能力、本轮半成品和需要回退的错误边界分开记录。
 2. 确认后台 dev server 和测试进程状态；若存在来源不明或不可控进程，记录并停止或避开，后续 Phase 5 必须启动本轮可控 dev server。
 3. 确认被中断的 Playwright 进程状态，记录已完成的基线测试结果。
-4. 复核 `app-server`、protocol、tool schema、system prompt、前端产品代码和后端产品代码中是否仍存在验收场景专有命名。
+4. 复核 `app-server`、protocol、tool schema、Rust tool guidance / warning / error、system prompt 新增或修改指引、前端产品代码和后端产品代码中是否仍存在验收场景专有命名；system prompt 既有示例块只记录保留理由，不作为本 Phase 清理对象。
 
 验收标准：
 
 - 能明确列出当前保留、修正和继续实现的范围。
 - 无后台测试进程处于不明状态。
-- 前端、后端、`app-server` 和通用 prompt / schema 不包含当前验收对象专有命名。
+- 前端、后端、`app-server`、通用 schema、Rust LLM 可见 guidance / warning / error 和 system prompt 新增或修改指引不包含当前验收对象专有命名；system prompt 既有示例块按 Phase -1 边界暂不处理。
 - 已按“全局执行协议”完成本 Phase 独立 review、收敛和 `plan-00-result.md` 更新。
 
 前序目标保护：
@@ -206,7 +212,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 输入：
 
-- CadQuery Agent system prompt。
+- CadQuery Agent system prompt 指引部分；既有示例块按 Phase -1 边界暂不清理。
 - CadQuery tool schema、contract check、runtime warning。
 - `docs/cadquery-mvp/` 中 Agent system prompt、tool contract、Ref 命名和模型产物要求。
 - 真实 Web Chat 生成或修改的模型源码。
@@ -216,13 +222,13 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 1. 要求新建或修改的 CadQuery 模型包含用途说明、关键尺寸、使用场景、假设、交互注意事项和制造或放置约束。
 2. 要求 `REFS.features` 使用稳定、可读、语义化命名。`face1`、`top`、`base` 等只能作为“含义不足的反例”，不得变成固定校验特例或通用默认命名。
 3. 要求 Agent 使用 `cadquery_execute` 时声明 `.step` 导出目标，保持 `.py` 与 `.step` 同步，并让 app-server 记录 artifact relation。
-4. 检查通用提示、tool schema 和 warning 示例保持领域无关，不含当前验收对象专有命名。
+4. 检查通用提示新增或修改内容、tool schema、Rust tool guidance / warning / error 保持领域无关，不含当前验收对象专有命名或具体 feature key 示例；system prompt 既有示例块只记录保留理由，不作为本 Phase 清理对象。
 
 验收标准：
 
 - 新生成模型源码能直接读到模型用途和关键细节。
 - Ref 名称面向后续选择和修改，而不是只描述几何位置或序号。
-- 通用 app-server、tool schema 和产品 prompt 不含当前验收场景专有对象名。
+- 通用 app-server、tool schema、Rust LLM 可见 guidance / warning / error 和 system prompt 新增或修改指引不含当前验收场景专有对象名；system prompt 既有示例块按 Phase -1 边界暂不处理。
 - 已按“全局执行协议”完成本 Phase 独立 review、收敛和 `plan-00-result.md` 更新。
 
 前序目标保护：
@@ -289,7 +295,7 @@ Phase 6 必须至少覆盖以下需求，不得只按“10 条”粗略归类：
 
 - 真实网页路径完成新建 Chat → 原始用户 prompt → CadQuery 建模 → 文件列表打开 → Ref 选择 → 基于 selection 后续修改 → 当前 tab 刷新的完整链路。
 - Playwright 验收过程有可复述证据，包括命令、端口、页面行为、关键断言和必要截图或 trace。
-- 具体 AirPods prompt 未进入产品代码、通用 prompt、schema 或运行时默认分支。
+- 具体 AirPods prompt 未进入产品代码、schema、运行时默认分支或 system prompt 新增/修改指引；system prompt 既有示例块按 Phase -1 边界暂不处理。
 - 已按“全局执行协议”完成本 Phase 独立 review、收敛和 `plan-00-result.md` 更新。
 
 前序目标保护：

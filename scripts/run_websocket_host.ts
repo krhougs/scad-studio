@@ -2,7 +2,7 @@
 // 所有 smoke / dev 入口都必须通过 `launchWebsocketHost` 启动，不得自行 cargo run。
 //
 // 端口与 URL 由 `SCAD_STUDIO_WS_URL` 控制；默认 `ws://127.0.0.1:38421`。
-// `--workspace` 可通过参数或 `STUDIO_WEB_WORKSPACE` 覆盖，默认 `workspace/studio-web`。
+// `--workspace` 可通过参数或 `STUDIO_WEB_WORKSPACE` 覆盖，默认 `workspace/budn-web`。
 
 import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
@@ -11,7 +11,7 @@ import { isPortOpen, waitForPort } from "./wait_for_port";
 
 export const REPO_ROOT = path.resolve(import.meta.dir, "..");
 export const DEFAULT_WS_URL = "ws://127.0.0.1:38421";
-export const DEFAULT_WORKSPACE = path.join(REPO_ROOT, "workspace", "studio-web");
+export const DEFAULT_WORKSPACE = path.join(REPO_ROOT, "workspace", "budn-web");
 
 export type ParsedWsUrl = {
   hostname: string;
@@ -55,6 +55,19 @@ export type LaunchOptions = {
   stderr?: "inherit" | "pipe" | "ignore";
   waitTimeoutMs?: number;
 };
+
+export async function waitForHostReady(
+  exited: Promise<number | null>,
+  ready: Promise<void>,
+): Promise<void> {
+  const first = await Promise.race([
+    ready.then(() => ({ type: "ready" as const })),
+    exited.then((code) => ({ type: "exited" as const, code })),
+  ]);
+  if (first.type === "exited") {
+    throw new Error(`websocket host exited before becoming ready: ${first.code}`);
+  }
+}
 
 export async function launchWebsocketHost(
   options: LaunchOptions = {},
@@ -100,7 +113,10 @@ export async function launchWebsocketHost(
 
   const timeoutMs = options.waitTimeoutMs ?? 120_000;
   try {
-    await waitForPort(parsed.hostname, parsed.port, { timeoutMs });
+    await waitForHostReady(
+      proc.exited,
+      waitForPort(parsed.hostname, parsed.port, { timeoutMs }),
+    );
   } catch (err) {
     try {
       proc.kill();

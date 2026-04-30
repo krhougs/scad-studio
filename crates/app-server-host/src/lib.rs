@@ -1,3 +1,4 @@
+mod cadquery_env;
 mod dispatcher;
 mod in_process;
 mod mpsc_transport;
@@ -7,6 +8,7 @@ mod session;
 mod websocket;
 
 pub use app_server_transport::ClientTransport;
+pub use cadquery_env::{cadquery_python_path, verify_cadquery_runner_environment};
 pub use dispatcher::{
     HostRequestDispatcher, ServerPushSink, agent_error_type, validate_cadquery_confirmation,
 };
