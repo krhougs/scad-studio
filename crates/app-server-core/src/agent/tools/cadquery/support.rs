@@ -75,7 +75,7 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
     }
     if !contract.has_refs {
         warnings.push(
-            "missing REFS.features; add e.g. REFS = {\"type\":\"part\",\"features\":{\"part_body\":{},\"placement_pocket\":{},\"access_notch\":{}}}",
+            "missing REFS.features; add REFS = {\"type\":\"part\",\"features\":{...}} with stable feature keys chosen from this model's semantics",
         );
     }
     if !contract.has_model_description {

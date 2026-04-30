@@ -229,6 +229,33 @@ fn registry_uses_specific_canonical_schemas() {
     );
 }
 
+#[test]
+fn cadquery_tool_schemas_do_not_suggest_placeholder_feature_keys() {
+    for tool in [
+        "cadquery_check_source",
+        "cadquery_dry_run",
+        "cadquery_execute",
+    ] {
+        let schema_text = spec_by_name(tool).definition.parameters.to_string();
+        for forbidden in [
+            "human_readable_feature_name",
+            "semantic_part_feature_name",
+            "semantic_component_feature_name",
+            "semantic_assembly_feature_name",
+            "placement_pocket",
+            "access_notch",
+            "outer_shell",
+            "mounting_boss",
+            "alignment_slot",
+        ] {
+            assert!(
+                !schema_text.contains(forbidden),
+                "CadQuery tool schema should not suggest placeholder feature key {forbidden}"
+            );
+        }
+    }
+}
+
 fn spec_by_name(tool: &str) -> AgentToolSpec {
     agent_tool_specs()
         .into_iter()

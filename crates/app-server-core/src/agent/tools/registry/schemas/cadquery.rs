@@ -173,7 +173,7 @@ fn cadquery_source_properties(extra: Value) -> Value {
     properties.insert(
         "code".into(),
         string_schema(
-            "Complete CadQuery Python source. Must include module-level MODEL_DESCRIPTION, MODEL_DETAILS, descriptive REFS = {\"type\":\"part|component|assembly\",\"features\":{\"human_readable_feature_name\":{}}}, and def build(params=None): ... returning the model.",
+            "Complete CadQuery Python source. Must include module-level MODEL_DESCRIPTION, MODEL_DETAILS, REFS with type part|component|assembly and non-empty features named from the actual model semantics, and def build(params=None): ... returning the model.",
         ),
     );
     Value::Object(properties)

@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::llm::LlmToolCall;
 
 use super::super::{AgentToolRunContext, CadQueryToolRunRequest, tool_error_json};
-use super::support::{is_model_path, source_contract};
+use super::support::{is_model_path, source_contract, target_type_label};
 
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzeArgs {
@@ -105,9 +105,9 @@ pub(super) fn validate_contract_for_run(
         Err(tool_error_json(
             call,
             &format!(
-                "CadQuery source contract is not satisfied: {}. Required source shape includes a module-level REFS dict like {} and a build(params=None) function.",
+                "CadQuery source contract is not satisfied: {}. Required source shape includes a module-level REFS dict with type '{}' and a non-empty \"features\" map chosen from the actual model semantics, plus a build(params=None) function.",
                 contract_failure_summary(&contract),
-                refs_example_for_type(request.target_type),
+                target_type_label(request.target_type),
             ),
             "invalid_arguments",
         ))
@@ -132,20 +132,6 @@ fn contract_failure_summary(contract: &super::support::SourceContract) -> String
         missing.push("unsafe calls");
     }
     missing.join(", ")
-}
-
-fn refs_example_for_type(target_type: CadQueryObjectKind) -> &'static str {
-    match target_type {
-        CadQueryObjectKind::Part => {
-            r#"REFS = {"type":"part","features":{"part_body":{},"placement_pocket":{},"access_notch":{}}}"#
-        }
-        CadQueryObjectKind::Component => {
-            r#"REFS = {"type":"component","features":{"component_body":{},"mounting_feature":{}}}"#
-        }
-        CadQueryObjectKind::Assembly => {
-            r#"REFS = {"type":"assembly","features":{"primary_instance":{},"secondary_instance":{}}}"#
-        }
-    }
 }
 
 pub(super) fn validate_execute_scope(

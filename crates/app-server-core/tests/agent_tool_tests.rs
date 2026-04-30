@@ -1598,6 +1598,22 @@ fn workspace_tool_executor_cadquery_check_source_explains_refs_shape() {
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("REFS ="))
     );
+    let warnings_text = result["warnings"].to_string();
+    for forbidden in [
+        "placement_pocket",
+        "access_notch",
+        "outer_shell",
+        "mounting_boss",
+        "alignment_slot",
+        "semantic_part_feature_name",
+        "semantic_component_feature_name",
+        "semantic_assembly_feature_name",
+    ] {
+        assert!(
+            !warnings_text.contains(forbidden),
+            "CadQuery contract warning example should be domain-neutral: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -1662,6 +1678,21 @@ fn workspace_tool_executor_cadquery_execute_explains_missing_refs_shape() {
             .contains("REFS.features")
     );
     assert!(result["message"].as_str().unwrap().contains("\"features\""));
+    for forbidden in [
+        "placement_pocket",
+        "access_notch",
+        "outer_shell",
+        "mounting_boss",
+        "alignment_slot",
+        "semantic_part_feature_name",
+        "semantic_component_feature_name",
+        "semantic_assembly_feature_name",
+    ] {
+        assert!(
+            !result["message"].as_str().unwrap().contains(forbidden),
+            "CadQuery execute error example should be domain-neutral: {forbidden}"
+        );
+    }
     assert!(runtime.execute_requests().is_empty());
 }
 

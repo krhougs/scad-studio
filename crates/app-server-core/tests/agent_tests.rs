@@ -72,6 +72,38 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
 }
 
 #[test]
+fn cadquery_agent_system_prompt_uses_domain_neutral_feature_examples() {
+    let prompt = cadquery_agent_system_prompt();
+
+    for forbidden in [
+        "AirPods",
+        "airpods",
+        "charging_pad",
+        "airpods_recess",
+        "wireless charging",
+        "outer_shell",
+        "mounting_boss",
+        "alignment_slot",
+        "cable_relief_channel",
+    ] {
+        assert!(
+            !prompt.contains(forbidden),
+            "system prompt must not contain current acceptance scenario token: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn cadquery_agent_system_prompt_owns_feature_key_naming() {
+    let prompt = cadquery_agent_system_prompt();
+
+    assert!(prompt.contains("REFS.features keys are your responsibility"));
+    assert!(prompt.contains("tool schemas, warnings, and errors describe structure only"));
+    assert!(prompt.contains("do not provide feature names to copy"));
+    assert!(prompt.contains("Preserve existing stable feature keys"));
+}
+
+#[test]
 fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
     let request = llm_request_for_cadquery_execute(AgentCadQueryCodeInput {
         prompt: "replace this screw with a countersunk version".into(),
