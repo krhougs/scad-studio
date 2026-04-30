@@ -6,11 +6,8 @@ members = [
     "crates/app-server-protocol-wasm",
     "crates/app-server-transport",
     "crates/scad-scene",
-    "crates/studio-app",
     "crates/studio-common",
-    "crates/scad-ui",
     "crates/studio-web-wasm",
-    "crates/scad-viewer",
 ]
 resolver = "2"
 
@@ -27,7 +24,6 @@ serde_json = "1"
 toml = "0.8"
 borsh = { version = "1", features = ["derive"] }
 log = "0.4"
-egui_commonmark = "0.22"
 unicode-casefold = "0.2"
 unicode-general-category = "1.1"
 unicode-segmentation = "1.12"

@@ -69,7 +69,6 @@ pub fn negotiate_protocol_version(
 #[serde(rename_all = "snake_case")]
 #[borsh(use_discriminant = true)]
 pub enum ClientPlatform {
-    Desktop = 0,
     Web = 1,
     Other = 2,
 }

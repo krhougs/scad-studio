@@ -15,7 +15,7 @@ pub struct FileWatcher {
 
 #[derive(Debug, Clone)]
 pub enum WatchMessage {
-    Changed(PathBuf),
+    Changed(Vec<PathBuf>),
     Error(String),
 }
 
@@ -28,6 +28,7 @@ struct WatchCoalescer {
     watched_files: Vec<PathBuf>,
     subscribed: bool,
     pending_deadline: Option<Instant>,
+    pending_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -172,11 +173,13 @@ impl WatchCoalescer {
         self.watched_files = paths.into_iter().map(normalize_path).collect();
         self.subscribed = true;
         self.pending_deadline = None;
+        self.pending_paths.clear();
     }
 
     fn unsubscribe(&mut self) {
         self.subscribed = false;
         self.pending_deadline = None;
+        self.pending_paths.clear();
     }
 
     fn disconnect(&mut self) {
@@ -185,6 +188,7 @@ impl WatchCoalescer {
 
     fn reconnect(&mut self) {
         self.pending_deadline = None;
+        self.pending_paths.clear();
     }
 
     fn push_raw_path(&mut self, now: Instant, path: PathBuf) {
@@ -194,8 +198,12 @@ impl WatchCoalescer {
         if is_filtered_temp_path(&path) {
             return;
         }
-        if !matches_any_path(&[path], &self.watched_files) {
+        let normalized = normalize_path(path);
+        if !matches_any_path(std::slice::from_ref(&normalized), &self.watched_files) {
             return;
+        }
+        if !self.pending_paths.contains(&normalized) {
+            self.pending_paths.push(normalized);
         }
         self.pending_deadline = Some(now + DEBOUNCE);
     }
@@ -206,10 +214,8 @@ impl WatchCoalescer {
             return None;
         }
         self.pending_deadline = None;
-        self.watched_files
-            .first()
-            .cloned()
-            .map(WatchMessage::Changed)
+        let paths = std::mem::take(&mut self.pending_paths);
+        (!paths.is_empty()).then_some(WatchMessage::Changed(paths))
     }
 }
 
@@ -242,7 +248,7 @@ mod watch_coalescer_tests {
         );
         assert!(matches!(
             state.take_due_notification(now + DEBOUNCE + Duration::from_millis(100)),
-            Some(WatchMessage::Changed(path)) if path == watched
+            Some(WatchMessage::Changed(paths)) if paths == vec![watched]
         ));
         assert!(
             state
@@ -309,7 +315,25 @@ mod watch_coalescer_tests {
         state.push_raw_path(now + Duration::from_secs(2), watched.clone());
         assert!(matches!(
             state.take_due_notification(now + Duration::from_secs(2) + DEBOUNCE + Duration::from_millis(1)),
-            Some(WatchMessage::Changed(path)) if path == watched
+            Some(WatchMessage::Changed(paths)) if paths == vec![watched]
+        ));
+    }
+
+    #[test]
+    fn preserves_actual_changed_paths_under_watched_directory() {
+        let mut state = WatchCoalescer::default();
+        let root = PathBuf::from("/tmp/workspace");
+        let scad = root.join("examples/cube.scad");
+        let settings = root.join("examples/cube.scad.json");
+        state.subscribe(vec![root]);
+        let now = Instant::now();
+
+        state.push_raw_path(now, scad.clone());
+        state.push_raw_path(now + Duration::from_millis(50), settings.clone());
+
+        assert!(matches!(
+            state.take_due_notification(now + DEBOUNCE + Duration::from_millis(60)),
+            Some(WatchMessage::Changed(paths)) if paths == vec![scad, settings]
         ));
     }
 }

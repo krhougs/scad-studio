@@ -4,8 +4,17 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection } from "node:net";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,6 +28,11 @@ export const HOST_WORKSPACE = path.join(
   REPO_ROOT,
   "tests",
   "studio-web-smoke-workspace",
+);
+const TEST_CADQUERY_RUNNER = path.join(
+  REPO_ROOT,
+  "target",
+  "playwright-fake-cadquery-python.sh",
 );
 
 export type HarnessOptions = {
@@ -40,13 +54,20 @@ export type HarnessHandle = {
   stop: () => Promise<void>;
 };
 
+export type HostEnvHandle = {
+  env: NodeJS.ProcessEnv;
+  cleanup: () => void;
+};
+
 let protocolWasmReady = false;
 
 export function createHarness(opts: HarnessOptions): HarnessHandle {
   const hostBind = `127.0.0.1:${opts.bindPort}`;
   const baseUrl = `http://127.0.0.1:${opts.vitePort}`;
   const wsUrl = `ws://${hostBind}`;
-  const workspacePath = opts.workspacePath ?? HOST_WORKSPACE;
+  const workspace = isolatedWorkspace(opts.workspacePath);
+  const workspacePath = workspace.path;
+  const hostEnv = isolatedHostEnvWithTestCadqueryRunner(opts.hostEnv);
   let hostProc: ChildProcess | null = null;
   let viteProc: ChildProcess | null = null;
 
@@ -71,7 +92,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
         {
           cwd: REPO_ROOT,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, ...(opts.hostEnv ?? {}) },
+          env: hostEnv.env,
         },
       );
       hostProc = host;
@@ -114,8 +135,72 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
       }
       hostProc = null;
       viteProc = null;
+      hostEnv.cleanup();
+      workspace.cleanup();
     },
   };
+}
+
+function isolatedWorkspace(explicitPath?: string): { path: string; cleanup: () => void } {
+  if (explicitPath) {
+    return { path: explicitPath, cleanup: () => {} };
+  }
+  const tempWorkspace = mkdtempSync(
+    path.join(tmpdir(), "scad-studio-smoke-workspace-"),
+  );
+  cpSync(HOST_WORKSPACE, tempWorkspace, { recursive: true });
+  return {
+    path: tempWorkspace,
+    cleanup: () => rmSync(tempWorkspace, { recursive: true, force: true }),
+  };
+}
+
+export function isolatedHostEnvWithTestCadqueryRunner(
+  overrides: Record<string, string> = {},
+): HostEnvHandle {
+  const configEnv = isolatedHostConfigEnv(overrides);
+  return {
+    env: hostEnvWithTestCadqueryRunner(configEnv.env),
+    cleanup: configEnv.cleanup,
+  };
+}
+
+function isolatedHostConfigEnv(
+  overrides: Record<string, string> = {},
+): { env: Record<string, string>; cleanup: () => void } {
+  if ("HOME" in overrides || "XDG_CONFIG_HOME" in overrides) {
+    return { env: overrides, cleanup: () => {} };
+  }
+  const tempHome = mkdtempSync(path.join(tmpdir(), "scad-studio-smoke-home-"));
+  const realHome = homedir();
+  return {
+    env: {
+      ...overrides,
+      HOME: tempHome,
+      XDG_CONFIG_HOME: path.join(tempHome, ".config"),
+      CARGO_HOME: process.env.CARGO_HOME ?? path.join(realHome, ".cargo"),
+      RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(realHome, ".rustup"),
+    },
+    cleanup: () => rmSync(tempHome, { recursive: true, force: true }),
+  };
+}
+
+export function hostEnvWithTestCadqueryRunner(
+  overrides: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  ensureTestCadqueryRunner();
+  return {
+    ...process.env,
+    CADQUERY_RUNNER_PYTHON: TEST_CADQUERY_RUNNER,
+    ...overrides,
+  };
+}
+
+function ensureTestCadqueryRunner(): void {
+  if (!existsSync(TEST_CADQUERY_RUNNER)) {
+    writeFileSync(TEST_CADQUERY_RUNNER, "#!/bin/sh\nexit 0\n");
+    chmodSync(TEST_CADQUERY_RUNNER, 0o755);
+  }
 }
 
 export async function clearServiceWorkerState(

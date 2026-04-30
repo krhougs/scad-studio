@@ -41,7 +41,7 @@ export interface ConfigSaveRequest {
   config: AppConfigDto;
 }
 
-export type ClientPlatform = "desktop" | "web" | "other";
+export type ClientPlatform = "web" | "other";
 export type PreviewRequestKind = "geometry_artifact" | "rendered_image";
 export type PreviewResponseFormat = "mesh" | "three_mf" | "rendered_image" | "stl";
 export type PreviewUnit = "millimeter";

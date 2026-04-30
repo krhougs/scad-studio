@@ -940,7 +940,7 @@ fn handshake_request_with_version(
     CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "dispatcher-test".into(),
-            platform: ClientPlatform::Desktop,
+            platform: ClientPlatform::Web,
             protocol_version,
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],

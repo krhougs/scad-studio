@@ -9,6 +9,10 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import {
+  isolatedHostEnvWithTestCadqueryRunner,
+  type HostEnvHandle,
+} from "./_smoke-harness";
 
 const SPEC_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SPEC_DIR, "..", "..", "..", "..");
@@ -20,8 +24,10 @@ const WS_URL = `ws://${HOST_BIND}`;
 
 let hostProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
+let hostEnv: HostEnvHandle | null = null;
 
 test.beforeAll(async () => {
+  hostEnv = isolatedHostEnvWithTestCadqueryRunner();
   const host = spawn(
     "cargo",
     [
@@ -36,7 +42,11 @@ test.beforeAll(async () => {
       "--bind",
       HOST_BIND,
     ],
-    { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: hostEnv.env,
+    },
   );
   hostProc = host;
   host.stdout?.on("data", () => {});
@@ -73,6 +83,8 @@ test.afterAll(async () => {
   }
   viteProc = null;
   hostProc = null;
+  hostEnv?.cleanup();
+  hostEnv = null;
 });
 
 test.beforeEach(async ({ page }) => {
@@ -150,7 +162,7 @@ test("@image clicking screenshot.png opens image viewer", async ({ page }) => {
   await expect(page.getByTestId("image-scale")).toContainText("scale");
 });
 
-test("@scad-viewer clicking cube.scad opens a real viewer workflow", async ({
+test("@scad-preview clicking cube.scad opens a real preview workflow", async ({
   page,
 }) => {
   await page.goto(`${BASE_URL}/?ws=${encodeURIComponent(WS_URL)}&left-panel=files`);

@@ -165,7 +165,7 @@ fn handshake_request() -> CapabilityHandshakeRequest {
     CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "studio-common-tests".into(),
-            platform: ClientPlatform::Desktop,
+            platform: ClientPlatform::Web,
             protocol_version: ProtocolVersionRange::new(3, 3),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],

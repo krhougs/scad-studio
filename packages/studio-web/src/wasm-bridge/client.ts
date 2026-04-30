@@ -11,7 +11,7 @@ import { RequestResolverMap } from "./request-resolvers";
 export type HandshakeParams = {
   capabilities: {
     client_name: string;
-    platform: "desktop" | "web" | "other";
+    platform: "web" | "other";
     protocol_version: { min: number; max: number };
     file_read: { denied_extensions: string[] };
     supported_preview_kinds: string[];

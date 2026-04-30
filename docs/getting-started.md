@@ -113,7 +113,6 @@ bun run web
 | `bun run web:dev` | 仅启 Vite dev（不含 host） |
 | `bun run web:build` | 生产构建：cargo 编 wasm → wasm-bindgen → vite build |
 | `bun run --cwd packages/studio-web preview` | 生产构建后本地静态预览（Service Worker 在此模式下启用） |
-| `cargo run -p studio-app` | 启动桌面端 |
 | `cargo run -p app-server-host --bin websocket-host -- --workspace <path> --bind 127.0.0.1:38421` | 手动启 websocket-host（不经 `scripts/`） |
 
 ### 3.3 环境变量
@@ -180,7 +179,7 @@ bun run web:smoke -- --case <name>                      # 单条
 | `wasm_package_smoke` | Phase 5 S1c | `scripts/smoke/wasm_package_smoke.ts`（generated/ diff） |
 | `browser_smoke` | Phase 3 S2 | `packages/studio-web/tests/playwright/browser-smoke.spec.ts` |
 | `browser_watch_smoke` | Phase 5 S3 | `packages/studio-web/tests/playwright/browser-watch-smoke.spec.ts` |
-| `markdown_view` / `image_view` / `scad_viewer` | Phase 6 | browser-smoke.spec.ts 内的标签子集 |
+| `markdown_view` / `image_view` / `scad_preview` | Phase 6 | browser-smoke.spec.ts 内的标签子集 |
 | `canvas_interaction` | Phase 7 | `tests/playwright/canvas-interaction.spec.ts` |
 | `parameters_presets` | Phase 7 | `tests/playwright/parameters-presets.spec.ts` |
 | `export_slicer` | Phase 7 | `tests/playwright/export-slicer.spec.ts` |

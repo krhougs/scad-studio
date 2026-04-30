@@ -9,7 +9,18 @@ export function shouldRefreshDocumentForWatch(
   const matchedSpecific = changed.has(pathKey(tab.path));
   if (matchedSpecific) return refreshableDocumentKind(tab.kind);
   if (matchedSettings) return false;
+  if (tab.kind === "scad") return changed.size === 0;
   return directoryRefreshableDocumentKind(tab.kind);
+}
+
+export function shouldRefreshScadSettingsForWatch(
+  tab: Pick<DocumentTab, "kind">,
+  changed: Set<string>,
+  matchedSettings: boolean,
+): boolean {
+  if (tab.kind !== "scad") return false;
+  if (matchedSettings) return true;
+  return changed.size === 0;
 }
 
 function refreshableDocumentKind(kind: DocumentTab["kind"]): boolean {

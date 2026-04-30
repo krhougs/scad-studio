@@ -181,8 +181,8 @@ fn propagates_transport_error_frames() {
 fn handshake_request() -> CapabilityHandshakeRequest {
     CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
-            client_name: "studio-app".into(),
-            platform: ClientPlatform::Desktop,
+            client_name: "studio-web-test".into(),
+            platform: ClientPlatform::Web,
             protocol_version: ProtocolVersionRange::new(1, 2),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![

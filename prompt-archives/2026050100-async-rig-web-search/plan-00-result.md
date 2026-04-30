@@ -16,13 +16,35 @@
 - 用户指出同步路径搜索与 Tokio 同名类型存在歧义；已修订 Phase 7，明确候选项必须结合 import 与类型来源判断，`tokio::fs`、`tokio::process::Command`、`tokio::sync::mpsc`、`tokio::task::JoinHandle` 是允许的 async 目标。
 - reviewer 第九轮指出 `thread::Builder` / `std::thread::JoinHandle`、不存在的 host 文件输入、Phase 4 Web 验证和 Phase 1 smoke 验证问题；已补充阻塞式线程关键词，移除不存在文件输入，并补充 Web typecheck / unit 与 smoke 验收。
 - reviewer 第十轮复审未发现阻塞项、高风险或普通问题。
-- 尚未开始执行代码、文档或测试改造。
+- Phase 1 已完成实现、验证和独立复审；第四轮 Phase 1 复审未发现阻塞项或高风险问题，准备提交 Phase 1。
 
 ## Phase 记录
 
 ### Phase 1 — 删除 Rust 桌面端与桌面专属生产路径
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 变更摘要：
+  - 删除 `crates/studio-app`、`crates/scad-ui`、`crates/scad-viewer`，并从 workspace 成员与锁文件中移除相关依赖。
+  - 删除 `app-server-host` 的 in-process / mpsc 生产入口、导出、runtime、GUI shutdown example 和对应 host 测试。
+  - 删除 protocol / TypeScript bridge 中的桌面 product platform，保留 `ClientPlatform::Web = 1` 与 `Other = 2` 的 wire discriminant。
+  - 将 Web smoke 中 `scad_viewer` / `@scad-viewer` 重命名为 `scad_preview` / `@scad-preview`。
+  - 修正 watcher 事件，使服务端向 Web 发送实际变更路径；Web 端按源文件与设置文件分别刷新，避免设置文件变化触发无关预览重跑。
+  - 调整 Playwright smoke harness，使用隔离 host 环境和临时 workspace，避免测试污染共享 fixture。
+  - 更新架构、getting started、Web 平台限制、跨平台路径策略、设计系统与已知问题文档，明确当前生产 GUI 端为 Web，旧 Rust GUI / viewer 相关问题转为历史记录或 Web 当前能力问题。
+- 验证结果：
+  - `bun run protocol:build && bun run protocol:check-generated` 通过。
+  - `bun run --cwd packages/studio-web typecheck` 通过。
+  - `cargo test --workspace` 通过；仍有既有 dead_code warning，未在本 Phase 扩大处理范围。
+  - `bun run --cwd packages/studio-web test:unit` 通过；仍有既有 React `act(...)` warning，未在本 Phase 扩大处理范围。
+  - `bun run web:smoke` 通过；构建阶段仍有既有 Vite 大 chunk warning，未在本 Phase 扩大处理范围。
+  - `bun run web:smoke:browser` 通过，75 个 Playwright 用例通过。
+- 独立复审记录：
+  - 第一轮 Phase 1 复审发现两个代码 / 文档阻塞项：`ClientPlatform::Web` discriminant 不得改变，`docs/known_issues.md` 不得伪造归档路径或继续把旧桌面 GUI 回归作为当前风险。已修正。
+  - 第二轮 Phase 1 复审发现三个归档阻塞项：`docs/known_issues.md` 仍有不可验证的外部 worktree 路径，部分旧桌面 / viewer 差距仍作为当前目标描述，`plan-00-result.md` 仍写 Phase 1 未执行。已修正。
+  - 第三轮 Phase 1 复审发现 `docs/known_issues.md` 的 Markdown 历史记录、`docs/architecture.md` 的硬约束回顾和 `docs/feature-roadmap.md` 的平台菜单说明仍有旧桌面当前目标口吻。已改为 Web / 共享模型 / 历史记录口径。
+  - 第四轮 Phase 1 复审未发现阻塞项或高风险问题；普通问题指出 `docs/architecture.md` 对 `scad-scene` 的描述比当前 crate 状态更激进。已改为 Web 生产路径只消费其 mesh / STL / 3MF 纯数据能力，并记录旧 renderer / pipeline / gizmo / 窗口模块仍待后续整理。
+- 遗留问题：
+  - Phase 1 未处理后续 async service、Rig-only Agent 和模型原生联网搜索目标；这些仍按 Phase 2 到 Phase 6 自动推进。
 
 ### Phase 2 — 建立 WebSocket-only async 后端服务边界
 

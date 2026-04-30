@@ -29,7 +29,7 @@ use app_server_protocol::{
 use crate::cadquery_python_path;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -1459,12 +1459,18 @@ fn build_watcher(
     watched_handle: app_server_protocol::PathHandle,
     watched_path: PathBuf,
 ) -> Result<FileWatcher, ProtocolError> {
+    let watched_path_for_events = watched_path.clone();
     let watcher = FileWatcher::new(move |message| match message {
-        app_server_core::WatchMessage::Changed(_) => {
+        app_server_core::WatchMessage::Changed(changed_paths) => {
+            let changed_handles = watch_changed_paths_to_handles(
+                &watched_handle,
+                &watched_path_for_events,
+                &changed_paths,
+            );
             (push_sink)(ServerPushEnvelope {
                 event: ServerPushEvent::WatchChanged(WatchChangedEvent {
                     subscription_id: subscription_id.clone(),
-                    changed_paths: vec![watched_handle.clone()],
+                    changed_paths: changed_handles,
                 }),
             });
         }
@@ -1479,6 +1485,44 @@ fn build_watcher(
     });
     watcher.watch_files(vec![watched_path]);
     Ok(watcher)
+}
+
+pub fn watch_changed_paths_to_handles(
+    watched_handle: &PathHandle,
+    watched_path: &Path,
+    changed_paths: &[PathBuf],
+) -> Vec<PathHandle> {
+    let mut handles = Vec::new();
+    for changed_path in changed_paths {
+        if let Some(handle) =
+            watch_changed_path_to_handle(watched_handle, watched_path, changed_path)
+        {
+            if !handles.contains(&handle) {
+                handles.push(handle);
+            }
+        }
+    }
+    if handles.is_empty() {
+        handles.push(watched_handle.clone());
+    }
+    handles
+}
+
+fn watch_changed_path_to_handle(
+    watched_handle: &PathHandle,
+    watched_path: &Path,
+    changed_path: &Path,
+) -> Option<PathHandle> {
+    let relative = changed_path.strip_prefix(watched_path).ok()?;
+    let mut segments = watched_handle.path_segments().to_vec();
+    for component in relative.components() {
+        match component {
+            Component::Normal(value) => segments.push(value.to_str()?.to_owned()),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    PathHandle::new(watched_handle.workspace_id().clone(), segments).ok()
 }
 
 fn internal_error(error: impl std::fmt::Display) -> ProtocolError {

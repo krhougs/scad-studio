@@ -17,7 +17,6 @@
 本策略不适用于：
 
 - `config.json`、`*.scad.json`、`package.json`、`tsconfig.json` 等文件格式本身。
-- `studio-app` 内部基于内存的本地路径传递。
 - server 本机上由用户配置的 OpenSCAD、切片器等可执行文件路径。此类路径在当前配置、预览、导出 wire payload 中需要表达时，必须使用 `HostLocalPath` 这类独立类型，并在 server 所在平台校验。
 
 ## 官方约束依据

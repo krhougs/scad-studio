@@ -71,7 +71,10 @@ import {
 } from "./workbench-wiring";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 import { resolveWorkbenchWsUrl } from "./ws-url";
-import { shouldRefreshDocumentForWatch } from "./watch-refresh";
+import {
+  shouldRefreshDocumentForWatch,
+  shouldRefreshScadSettingsForWatch,
+} from "./watch-refresh";
 
 type Phase = "idle" | "connecting" | "handshaking" | "ready" | "error";
 
@@ -479,29 +482,27 @@ export function WorkbenchLayout() {
                 : "";
             const matchedSettings =
               activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
-            if (
-              shouldRefreshDocumentForWatch(
-                activeTab,
-                changed,
-                matchedSettings,
-              )
-            ) {
+            if (shouldRefreshDocumentForWatch(activeTab, changed, matchedSettings)) {
               setDocumentRefreshSignal((n) => n + 1);
               logRef.current.append(
                 "info",
                 `document refresh triggered by ${activeKey}`,
               );
-            } else if (matchedSettings) {
+            }
+            if (
+              shouldRefreshScadSettingsForWatch(
+                activeTab,
+                changed,
+                matchedSettings,
+              )
+            ) {
               setScadSettingsRefreshSignal((n) => n + 1);
+              const source = matchedSettings
+                ? activeSettingsKey
+                : "directory change";
               logRef.current.append(
                 "info",
-                `scad settings refresh triggered by ${activeSettingsKey}`,
-              );
-            } else if (activeTab.kind === "scad") {
-              setScadSettingsRefreshSignal((n) => n + 1);
-              logRef.current.append(
-                "info",
-                `scad settings refresh triggered by directory change`,
+                `scad settings refresh triggered by ${source}`,
               );
             }
           }

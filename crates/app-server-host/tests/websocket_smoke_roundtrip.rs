@@ -1,8 +1,8 @@
 use app_server_host::{WebSocketHostConfig, run_websocket_host_once};
 use app_server_protocol::{
-    CapabilityHandshakeRequest, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, PreviewRequest, PreviewRequestKind, ProtocolVersionRange, RequestId,
-    web_file_read_capability,
+    CURRENT_PROTOCOL_VERSION, CapabilityHandshakeRequest, ClientCapabilities, ClientCommand,
+    ClientPlatform, ClientRequestEnvelope, PreviewRequest, PreviewRequestKind,
+    ProtocolVersionRange, RequestId, web_file_read_capability,
 };
 use app_server_transport::{
     ClientEnvelope, ServerEnvelope, decode_server_envelope_binary, encode_client_envelope_binary,
@@ -29,9 +29,9 @@ fn websocket_smoke_roundtrip() {
         let (mut socket, _) = connect_async(&url).await.unwrap();
         let handshake = ClientEnvelope::Handshake(CapabilityHandshakeRequest {
             capabilities: ClientCapabilities {
-                client_name: "desktop-smoke".into(),
-                platform: ClientPlatform::Desktop,
-                protocol_version: ProtocolVersionRange::new(4, 4),
+                client_name: "web-smoke".into(),
+                platform: ClientPlatform::Web,
+                protocol_version: current_protocol_version_range(),
                 file_read: web_file_read_capability(),
                 supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             },
@@ -214,7 +214,7 @@ fn websocket_compressed_client_roundtrip_handles_large_frame() {
             capabilities: ClientCapabilities {
                 client_name: "compressed-smoke".into(),
                 platform: ClientPlatform::Web,
-                protocol_version: ProtocolVersionRange::new(4, 4),
+                protocol_version: current_protocol_version_range(),
                 file_read: web_file_read_capability(),
                 supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
             },
@@ -432,6 +432,10 @@ fn temp_workspace() -> std::path::PathBuf {
     stl_io::write_stl(&mut bytes, triangles.iter()).unwrap();
     std::fs::write(root.join("model.stl"), bytes).unwrap();
     root
+}
+
+fn current_protocol_version_range() -> ProtocolVersionRange {
+    ProtocolVersionRange::new(CURRENT_PROTOCOL_VERSION, CURRENT_PROTOCOL_VERSION)
 }
 
 fn cleanup_workspace(workspace: std::path::PathBuf) {

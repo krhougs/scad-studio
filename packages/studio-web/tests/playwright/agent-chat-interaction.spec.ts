@@ -69,9 +69,19 @@ test("@agent-chat shows welcome empty state or chat body after handshake", async
   const emptyState = page.getByTestId("chat-empty-state");
   const chatBody = page.getByTestId("chat-body");
   const llmGuide = page.getByTestId("llm-setup-guide");
-  await expect(emptyState.or(chatBody).or(llmGuide)).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect
+    .poll(
+      async () => {
+        const visible = await Promise.all([
+          emptyState.isVisible().catch(() => false),
+          chatBody.isVisible().catch(() => false),
+          llmGuide.isVisible().catch(() => false),
+        ]);
+        return visible.some(Boolean);
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
 });
 
 test("@agent-chat llm status dot element exists in chat header", async ({

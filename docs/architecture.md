@@ -20,14 +20,10 @@
               │                   │                    │
    ┌──────────▼──────────┐        │          ┌─────────▼──────────┐
    │  app-server-host    │        │          │ studio-web-wasm    │
-   │  （websocket-host / │        │          │ （wasm-bindgen     │
-   │   in-process host） │        │          │   wrapper）        │
+   │  （websocket-host） │        │          │ （wasm-bindgen     │
+   │                    │        │          │   wrapper）        │
    └──────────┬──────────┘        │          └─────────┬──────────┘
               │                   │                    │
-              │   ┌───────────────▼──────────┐         │
-              │   │ studio-app（桌面 egui）  │         │
-              │   └──────────────────────────┘         │
-              │                                        │
               └──────────────── ws ────────────────────┤
                                                        │
                                            ┌───────────▼───────────┐
@@ -53,7 +49,7 @@
 - `Front plane` 是 `XZ`。
 - `Right plane` 是 `YZ`。
 
-这个契约适用于 `app-server-core` 生成或解析后通过 protocol 输出的 mesh，也适用于 `scad-scene` 的 `MeshData`、STL / 3MF 输出、桌面预览和 Web Three.js 预览。OpenSCAD 已经符合这套坐标系，不需要为了 Web 预览额外改写其输出轴向；未来其它 CAD 后端如果使用不同轴约定，才需要在对应 adapter / loader 边界转换到这套项目坐标系。前端相机 preset、ViewportGizmo、坐标轴、网格和底板只能消费这套坐标系，不能用额外展示映射补偿后端 mesh 数据。
+这个契约适用于 `app-server-core` 生成或解析后通过 protocol 输出的 mesh，也适用于 `scad-scene` 的 `MeshData`、STL / 3MF 输出和 Web Three.js 预览。OpenSCAD 已经符合这套坐标系，不需要为了 Web 预览额外改写其输出轴向；未来其它 CAD 后端如果使用不同轴约定，才需要在对应 adapter / loader 边界转换到这套项目坐标系。前端相机 preset、ViewportGizmo、坐标轴、网格和底板只能消费这套坐标系，不能用额外展示映射补偿后端 mesh 数据。
 
 ### 2.1 `app-server-protocol`
 
@@ -65,12 +61,12 @@
 
 - 承接真正的 OS 能力：workspace 解析、目录树、文件读写、OpenSCAD CLI 启停、STL / 3MF 解析、watch notify 聚合、预览任务调度、配置（`dirs::config_dir()/scad-studio/config.json`）、切片器信息、导出。
 - 暴露 `dispatch_client_command` 给 host 层；自身不绑定任何 transport。
-- **改此 crate = server 端能力变更**。web 与桌面共享同一份实现；桌面端无独立 FS 代码。
+- **改此 crate = server 端能力变更**。Web 通过 app server protocol 消费同一份后端能力，不在前端实现文件系统或外部工具调用。
 
 ### 2.3 `app-server-transport`
 
 - `ClientTransport` trait（同步签名：`handshake / reconnect / request / subscribe / unsubscribe / cancel / poll_server_event / close`）。
-- `WebSocketClientTransport`（wasm32 专属），`InProcessTransport`（桌面 `tokio::mpsc`）。
+- `WebSocketClientTransport`（wasm32 专属）。
 - `websocket_wire.rs`：`encode_client_envelope_binary` / `decode_server_envelope_binary` 等 Borsh binary frame 编解码。
 - `studio-common` **不**依赖 `app-server-transport`（架构硬约束）：前者只描述状态机，后者是平台适配。
 
@@ -78,7 +74,7 @@
 
 - 可执行入口：
   - `websocket-host`（二进制 bin）：`--workspace` + `--bind` → tokio-tungstenite 起 WebSocket server，每个连接喂给 `app-server-core::dispatch_client_command`。
-  - `in_process_host`：桌面端嵌入式入口（同进程启动 app-server-core + `tokio::mpsc` transport）。
+- WebSocket 是当前生产 transport。旧同进程桌面 host 已删除。
 
 ### 2.5 `studio-common`
 
@@ -88,7 +84,7 @@
   - `ManagedClient<T>`（Phase 2a 新增的监督层）：pending request registry、watch 订阅 registry、超时 tick、watch 节流窗口、reconnect 重放、snapshot 聚合
   - `ClientEvent` / `ClientError` / `ClientSnapshot` / `TransportStatus` / `TransportCloseReason` / `WatchParams` / `WatchEventPayload` / `ClientTimeouts`
   - `WorkspaceSession` / `DirectoryWatchLifecycle` / `PreviewState`（跨端共享业务状态）
-- serde 形态由测试快照冻结（`crates/studio-common/tests/managed_client_tests.rs`），web 与桌面 UI 依赖其稳定性。
+- serde 形态由测试快照冻结（`crates/studio-common/tests/managed_client_tests.rs`），Web UI 依赖其稳定性。
 
 ### 2.6 `studio-web-wasm`
 
@@ -98,17 +94,9 @@
 - `tests/wasm_bridge_smoke.rs`：可手动通过 `wasm-pack test --headless --chrome` 运行的补充用例；不属于默认 smoke 链路。
 - **不含**任何业务 UI、任何 WebSocket、任何 `wasm-bindgen-futures`（契约禁止 wasm 侧等待 JS Promise）。
 
-### 2.7 `studio-app`（桌面）
+### 2.7 `scad-scene`
 
-- egui 壳 + `app-server-host::in_process_host` + `InProcessTransport` 接上 `studio-common::ManagedClient`。
-- 跟 `packages/studio-web` 的关系：**UI 壳层各自独立**，但协议 client 状态机和业务状态（workspace / preview）共用 `studio-common`。
-
-### 2.8 `scad-ui` / `scad-scene` / `scad-data` / `scad-viewer`
-
-- `scad-ui`：egui 共享主题与基础组件（目前桌面端消费；web 端不消费 CSS 系统）。
-- `scad-scene`：wgpu 渲染管线、`MeshData` 中间表示、相机 / 光照 —— 目前桌面端使用；wasm32 的异步 wgpu 初始化仍在桩阶段。
-- `scad-data`：STL / 3MF / 参数文件的字节级解析。
-- `scad-viewer`：桌面端预览 widget。
+- `scad-scene`：当前 Web 生产路径只消费其中的 mesh / STL / 3MF 纯数据能力；crate 内仍保留旧 renderer、pipeline、gizmo 和窗口相关模块，后续需要在独立计划中继续整理。
 
 ## 3. JS / TS package 能力边界
 
@@ -245,7 +233,7 @@ wire frame = WIRE_MAGIC("BDNP") + WIRE_VERSION(u8) + borsh_payload
 
 1. `app-server-protocol` 是唯一线格式来源；其它 crate 不允许私自再包一层 tag。Phase 2a codex review 就是因为 `studio-common` 造了 `{"frame":...}` 被打回。
 2. `studio-common` **不能** 依赖 `app-server-transport`。
-3. 桌面端**不能**绕过协议做本地 I/O。所有 FS / OpenSCAD / slicer 交互都必须走 `app-server-core`。
+3. Web 端**不能**绕过协议做本地 I/O、OpenSCAD / slicer 交互或 provider 调用；这些能力都必须走 `app-server-core`。
 4. Web 端**不能**持有 WebSocket 之外的业务状态机；协议状态归 `ManagedClient`，UI 状态归 Zustand，两者不交叠。
 5. wasm 内部**不**持有 JS Promise；不用 `wasm-bindgen-futures` 等待 JS 异步。
 6. 新增 `#[wasm_bindgen]` 项或调整 `src/lib.rs` 模块顺序会让 wasm-bindgen 产物漂移；commit 前必须同步更新 `packages/studio-web-wasm/generated/`，否则 S1c smoke 会红。
