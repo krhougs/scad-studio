@@ -416,19 +416,63 @@ pub fn build_execute_messages(input: &AgentCadQueryCodeInput) -> Vec<LlmMessage>
     messages
 }
 
+const MAX_HISTORY_TURNS: usize = 8;
+
 fn append_history_messages(messages: &mut Vec<LlmMessage>, history: &[ChatMessageRecord]) {
+    if let Some(summary) = extract_latest_chat_summary(history) {
+        messages.push(LlmMessage::new("user", &format!("[Chat summary]\n{summary}")));
+        messages.push(LlmMessage::new("assistant", "Understood."));
+    }
+    let effective = collect_effective_history(history);
+    let start = effective.len().saturating_sub(MAX_HISTORY_TURNS * 2);
+    for (role, content) in &effective[start..] {
+        messages.push(LlmMessage::new(*role, content.as_str()));
+    }
+}
+
+fn extract_latest_chat_summary(history: &[ChatMessageRecord]) -> Option<String> {
+    history
+        .iter()
+        .rev()
+        .filter(|msg| msg.role == ChatRole::Meta)
+        .find_map(|msg| {
+            let value: serde_json::Value = serde_json::from_str(&msg.content).ok()?;
+            if value.get("type")?.as_str()? != "chat_summary" {
+                return None;
+            }
+            value.get("summary")?.as_str().map(|s| s.to_owned())
+        })
+}
+
+fn collect_effective_history(history: &[ChatMessageRecord]) -> Vec<(&'static str, String)> {
+    let mut result: Vec<(&'static str, String)> = Vec::new();
     for msg in history {
         let role = match msg.role {
             ChatRole::User => "user",
             ChatRole::Assistant => "assistant",
             ChatRole::Tool | ChatRole::Meta => continue,
         };
-        let content = msg.content.trim();
+        if role == "assistant" && is_tool_call_placeholder(msg) {
+            continue;
+        }
+        let content = msg.content.trim().to_owned();
         if content.is_empty() {
             continue;
         }
-        messages.push(LlmMessage::new(role, content));
+        if let Some((last_role, last_content)) = result.last_mut() {
+            if *last_role == role {
+                last_content.push_str("\n\n");
+                last_content.push_str(&content);
+                continue;
+            }
+        }
+        result.push((role, content));
     }
+    result
+}
+
+fn is_tool_call_placeholder(msg: &ChatMessageRecord) -> bool {
+    !msg.tool_calls.is_empty() || msg.content.trim() == "agent tool started"
 }
 
 pub fn build_turn_context(input: &AgentTurnInput) -> String {

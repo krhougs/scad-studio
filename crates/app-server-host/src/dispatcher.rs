@@ -982,7 +982,7 @@ fn run_text_agent_llm(
 ) -> Option<String> {
     let store = ChatStore::new(worker.workspace_root.clone());
     let history = store
-        .history(&worker.run.session_id, Some(8))
+        .history(&worker.run.session_id, None)
         .map(|response| response.messages)
         .unwrap_or_default();
     let mode = app_server_core::mode_for_tool_loop(worker.mode);

@@ -357,6 +357,7 @@ pub fn run_tool_loop_with_registry_and_reasoning(
     let tools = agent_tool_definitions_for_mode(context.mode);
     let mut messages = initial_messages;
     let mut last_content = String::new();
+    let mut intent_retries = 0usize;
     for _ in 0..MAX_TOOL_ROUNDS {
         let response = provider.stream_chat_with_reasoning(
             messages.clone(),
@@ -372,6 +373,18 @@ pub fn run_tool_loop_with_registry_and_reasoning(
             continue;
         }
         if !response.has_tool_calls() {
+            if intent_retries < MAX_INTERRUPTED_INTENT_RETRIES
+                && looks_like_interrupted_intent(&response.content)
+            {
+                intent_retries += 1;
+                messages.push(LlmMessage::assistant_response(
+                    response.content.clone(),
+                    response.reasoning_content.clone(),
+                    Vec::new(),
+                ));
+                messages.push(interrupted_intent_retry_message());
+                continue;
+            }
             return Ok(response);
         }
         last_content = response.content.clone();
@@ -402,6 +415,26 @@ fn reasoning_only_retry_message() -> LlmMessage {
     LlmMessage::new(
         "user",
         "上一轮只返回了 reasoning_content，没有正文或工具调用。请现在停止只思考的输出：如果任务需要读取、生成或修改项目文件，必须调用可用工具；否则返回面向用户的正文。",
+    )
+}
+
+const MAX_INTERRUPTED_INTENT_RETRIES: usize = 2;
+
+fn looks_like_interrupted_intent(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.ends_with(':')
+        || trimmed.ends_with('：')
+        || trimmed.ends_with("...")
+        || trimmed.ends_with('…')
+}
+
+fn interrupted_intent_retry_message() -> LlmMessage {
+    LlmMessage::new(
+        "user",
+        "你上一轮表达了执行意图但没有调用任何工具。请立即调用需要的工具来完成操作，不要重复描述计划。",
     )
 }
 
