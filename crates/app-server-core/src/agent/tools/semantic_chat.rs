@@ -29,7 +29,7 @@ const CHAT_RELATED_FILE_ROOTS: &[&str] = &[
 const CHAT_RELATED_FILE_DENIED_ROOTS: &[&str] =
     &[".git", "target", "node_modules", "chats", ".budn_staging"];
 
-pub(super) fn update_chat_summary(
+pub(super) async fn update_chat_summary(
     workspace_root: &Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
@@ -54,7 +54,10 @@ pub(super) fn update_chat_summary(
         related_files: args.related_files,
         open_questions: args.open_questions,
     };
-    match ChatStore::new(workspace_root.to_path_buf()).update_summary(session_id, update) {
+    match ChatStore::new(workspace_root.to_path_buf())
+        .update_summary(session_id, update)
+        .await
+    {
         Ok(ack) => chat_summary_success(call, session_id, &ack.message_id).to_string(),
         Err(error) => tool_error_json(call, &error.message, "invalid_arguments"),
     }

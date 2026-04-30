@@ -1,7 +1,8 @@
-use std::{fmt, fs, path::PathBuf};
+use std::{fmt, path::PathBuf};
 
 use app_server_protocol::{AppConfigDto, DisplayUnitDto, HostLocalPath, SlicerConfigDto};
 use studio_common::{AppConfig, DisplayUnit, SlicerConfig};
+use tokio::fs;
 
 #[derive(Debug)]
 pub struct ConfigError(String);
@@ -12,20 +13,25 @@ pub fn config_file_path() -> Result<PathBuf, ConfigError> {
         .ok_or_else(|| ConfigError("无法确定配置目录".into()))
 }
 
-pub fn load_config() -> Result<AppConfig, ConfigError> {
+pub async fn load_config() -> Result<AppConfig, ConfigError> {
     let path = config_file_path()?;
-    if !path.exists() {
+    if !fs::try_exists(path.clone())
+        .await
+        .map_err(|error| ConfigError(format!("读取配置失败: {error}")))?
+    {
         return Ok(AppConfig::default());
     }
-    let json =
-        fs::read_to_string(&path).map_err(|error| ConfigError(format!("读取配置失败: {error}")))?;
+    let json = fs::read_to_string(path)
+        .await
+        .map_err(|error| ConfigError(format!("读取配置失败: {error}")))?;
     AppConfig::from_json(&json).map_err(|error| ConfigError(error.to_string()))
 }
 
-pub fn save_config(config: &AppConfig) -> Result<(), ConfigError> {
+pub async fn save_config(config: &AppConfig) -> Result<(), ConfigError> {
     let path = config_file_path()?;
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent().map(|path| path.to_path_buf()) {
         fs::create_dir_all(parent)
+            .await
             .map_err(|error| ConfigError(format!("创建配置目录失败: {error}")))?;
     }
     fs::write(
@@ -34,26 +40,28 @@ pub fn save_config(config: &AppConfig) -> Result<(), ConfigError> {
             .to_json()
             .map_err(|error| ConfigError(error.to_string()))?,
     )
+    .await
     .map_err(|error| ConfigError(format!("写入配置失败: {error}")))
 }
 
-pub fn load_config_dto() -> Result<AppConfigDto, ConfigError> {
-    app_config_to_dto(&load_config()?)
+pub async fn load_config_dto() -> Result<AppConfigDto, ConfigError> {
+    app_config_to_dto(&load_config().await?)
 }
 
-pub fn save_config_dto(config: &AppConfigDto) -> Result<(), ConfigError> {
-    save_config(&app_config_from_dto(config.clone())?)
+pub async fn save_config_dto(config: AppConfigDto) -> Result<(), ConfigError> {
+    save_config(&app_config_from_dto(config)?).await
 }
 
-pub fn load_config_json() -> Result<String, ConfigError> {
-    load_config()?
+pub async fn load_config_json() -> Result<String, ConfigError> {
+    load_config()
+        .await?
         .to_json()
         .map_err(|error| ConfigError(error.to_string()))
 }
 
-pub fn save_config_json(json: &str) -> Result<(), ConfigError> {
+pub async fn save_config_json(json: &str) -> Result<(), ConfigError> {
     let config = AppConfig::from_json(json).map_err(|error| ConfigError(error.to_string()))?;
-    save_config(&config)
+    save_config(&config).await
 }
 
 pub fn app_config_to_dto(config: &AppConfig) -> Result<AppConfigDto, ConfigError> {

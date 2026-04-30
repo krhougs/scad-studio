@@ -138,8 +138,8 @@ fn latest_saved_cad_plan_extracts_plan_ref_and_confirm_scope() {
     );
 }
 
-#[test]
-fn parse_plan_package_extracts_execution_scope() {
+#[tokio::test]
+async fn parse_plan_package_extracts_execution_scope() {
     let dir = tempfile::tempdir().unwrap();
     write_plan_package(
         dir.path(),
@@ -167,6 +167,7 @@ source_chat_session: chat-1
         dir.path(),
         &path_handle(["plans", "2026042900-add-lid-vents"]),
     )
+    .await
     .expect("plan package should parse");
 
     assert_eq!(parsed.plan_id, "2026042900-add-lid-vents");
@@ -182,8 +183,8 @@ source_chat_session: chat-1
     );
 }
 
-#[test]
-fn execution_scope_from_plan_ref_uses_parsed_plan_package() {
+#[tokio::test]
+async fn execution_scope_from_plan_ref_uses_parsed_plan_package() {
     let dir = tempfile::tempdir().unwrap();
     write_plan_package(
         dir.path(),
@@ -212,6 +213,7 @@ source_chat_session: chat-1
         dir.path(),
         &path_handle(["plans", "2026042900-add-lid-vents"]),
     )
+    .await
     .expect("plan package should become execution scope");
 
     assert_eq!(
@@ -229,8 +231,8 @@ source_chat_session: chat-1
     assert_eq!(scope.export_targets, vec!["outputs/top_lid.step"]);
 }
 
-#[test]
-fn parse_plan_package_returns_normalized_execution_scope() {
+#[tokio::test]
+async fn parse_plan_package_returns_normalized_execution_scope() {
     let dir = tempfile::tempdir().unwrap();
     write_plan_package(
         dir.path(),
@@ -258,6 +260,7 @@ source_chat_session: chat-1
         dir.path(),
         &path_handle(["plans", "2026042900-normalized-scope"]),
     )
+    .await
     .expect("plan package should parse");
 
     assert_eq!(parsed.target_path, "parts/top_lid.py");
@@ -265,8 +268,8 @@ source_chat_session: chat-1
     assert_eq!(parsed.export_targets, vec!["outputs/top_lid.step"]);
 }
 
-#[test]
-fn parse_plan_package_rejects_missing_required_files() {
+#[tokio::test]
+async fn parse_plan_package_rejects_missing_required_files() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("plans/2026042900-missing-result")).unwrap();
     std::fs::write(
@@ -285,6 +288,7 @@ fn parse_plan_package_rejects_missing_required_files() {
         dir.path(),
         &path_handle(["plans", "2026042900-missing-result"]),
     )
+    .await
     .unwrap_err();
 
     assert_eq!(
@@ -295,8 +299,8 @@ fn parse_plan_package_rejects_missing_required_files() {
 }
 
 #[cfg(unix)]
-#[test]
-fn parse_plan_package_rejects_symlinked_plans_root() {
+#[tokio::test]
+async fn parse_plan_package_rejects_symlinked_plans_root() {
     let dir = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     write_plan_package(
@@ -326,6 +330,7 @@ source_chat_session: chat-1
         dir.path(),
         &path_handle(["plans", "2026042900-external-plan"]),
     )
+    .await
     .unwrap_err();
 
     assert_eq!(
@@ -335,8 +340,8 @@ source_chat_session: chat-1
     assert!(error.message.contains("symlink"));
 }
 
-#[test]
-fn parse_plan_package_rejects_workspace_escape_and_bad_exports() {
+#[tokio::test]
+async fn parse_plan_package_rejects_workspace_escape_and_bad_exports() {
     let dir = tempfile::tempdir().unwrap();
     write_plan_package(
         dir.path(),
@@ -361,6 +366,7 @@ source_chat_session: chat-1
     );
 
     let error = parse_plan_package(dir.path(), &path_handle(["plans", "2026042900-bad-scope"]))
+        .await
         .unwrap_err();
 
     assert_eq!(

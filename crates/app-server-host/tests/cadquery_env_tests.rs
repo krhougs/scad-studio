@@ -1,15 +1,17 @@
 use app_server_host::verify_cadquery_runner_environment;
 
-#[test]
-fn cadquery_environment_verify_accepts_python_that_can_import_runner_dependencies() {
+#[tokio::test]
+async fn cadquery_environment_verify_accepts_python_that_can_import_runner_dependencies() {
     let dir = tempfile::tempdir().unwrap();
     let python = fake_python(dir.path(), 0, "");
 
-    verify_cadquery_runner_environment(&python).expect("fake python should verify");
+    verify_cadquery_runner_environment(&python)
+        .await
+        .expect("fake python should verify");
 }
 
-#[test]
-fn cadquery_environment_verify_reports_python_import_failure_with_env_hint() {
+#[tokio::test]
+async fn cadquery_environment_verify_reports_python_import_failure_with_env_hint() {
     let dir = tempfile::tempdir().unwrap();
     let python = fake_python(
         dir.path(),
@@ -17,7 +19,9 @@ fn cadquery_environment_verify_reports_python_import_failure_with_env_hint() {
         "ModuleNotFoundError: No module named 'cadquery'",
     );
 
-    let error = verify_cadquery_runner_environment(&python).expect_err("verify should fail");
+    let error = verify_cadquery_runner_environment(&python)
+        .await
+        .expect_err("verify should fail");
 
     assert!(error.contains("CadQuery Python 环境验证失败"));
     assert!(error.contains("CADQUERY_RUNNER_PYTHON"));

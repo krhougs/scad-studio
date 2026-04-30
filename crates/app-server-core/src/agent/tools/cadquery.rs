@@ -2,11 +2,11 @@ mod args;
 mod support;
 
 use std::{
-    fs,
-    io::Write,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -28,7 +28,7 @@ use support::{
     run_success, source_contract, target_type_from_path,
 };
 
-pub(super) fn analyze_source(
+pub(super) async fn analyze_source(
     workspace_root: &Path,
     call: &LlmToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
@@ -37,11 +37,11 @@ pub(super) fn analyze_source(
         Ok(args) => args,
         Err(result) => return result,
     };
-    let source_path = match existing_model_path(workspace_root, &args.target_path, call) {
+    let source_path = match existing_model_path(workspace_root, &args.target_path, call).await {
         Ok(path) => path,
         Err(result) => return result,
     };
-    let source = match fs::read_to_string(&source_path) {
+    let source = match fs::read_to_string(&source_path).await {
         Ok(source) => source,
         Err(error) => {
             return tool_error_json(
@@ -62,7 +62,7 @@ pub(super) fn analyze_source(
         plan_ref: None,
         reason: None,
     };
-    let contract = match source_contract_for_runtime(call, &request, runtime) {
+    let contract = match source_contract_for_runtime(call, &request, runtime).await {
         Ok(contract) => contract,
         Err(result) => return result,
     };
@@ -75,10 +75,11 @@ pub(super) fn analyze_source(
         &source,
         contract.has_model_description,
     )
+    .await
     .to_string()
 }
 
-pub(super) fn check_source(
+pub(super) async fn check_source(
     call: &LlmToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> String {
@@ -86,7 +87,7 @@ pub(super) fn check_source(
         Ok(request) => request,
         Err(result) => return result,
     };
-    let contract = match source_contract_for_runtime(call, &request, runtime) {
+    let contract = match source_contract_for_runtime(call, &request, runtime).await {
         Ok(contract) => contract,
         Err(result) => return result,
     };
@@ -100,7 +101,7 @@ pub(super) fn check_source(
     .to_string()
 }
 
-pub(super) fn dry_run(
+pub(super) async fn dry_run(
     _workspace_root: &Path,
     call: &LlmToolCall,
     runtime: Option<&dyn CadQueryToolRuntime>,
@@ -119,7 +120,7 @@ pub(super) fn dry_run(
             "permission_denied",
         );
     };
-    match runtime.dry_run(request) {
+    match runtime.dry_run(request).await {
         Ok(result) => run_success(call, result, false).to_string(),
         Err(error) => {
             runtime_error_json(call, error.error_type, error.message, error.retry_allowed)
@@ -127,7 +128,7 @@ pub(super) fn dry_run(
     }
 }
 
-pub(super) fn execute(
+pub(super) async fn execute(
     _workspace_root: &Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
@@ -143,17 +144,20 @@ pub(super) fn execute(
                 "cadquery_execute already committed in this run",
                 "permission_denied",
             ),
-        );
+        )
+        .await;
     }
     let mut request = match execute_request_args(call) {
         Ok(request) => request,
-        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
+        Err(result) => {
+            return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
+        }
     };
     if let Err(result) = validate_contract_for_run(call, &request) {
-        return record_plan_failure_for_tool_error(_workspace_root, context, result);
+        return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
     }
     if let Err(result) = validate_execute_scope(call, &request, context) {
-        return record_plan_failure_for_tool_error(_workspace_root, context, result);
+        return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
     }
     let Some(runtime) = runtime else {
         return record_plan_failure_for_tool_error(
@@ -164,28 +168,36 @@ pub(super) fn execute(
                 "CadQuery runtime is not configured",
                 "permission_denied",
             ),
-        );
+        )
+        .await;
     };
-    let contract = match source_contract_for_runtime(call, &request, Some(runtime)) {
+    let contract = match source_contract_for_runtime(call, &request, Some(runtime)).await {
         Ok(contract) => contract,
-        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
+        Err(result) => {
+            return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
+        }
     };
     if let Err(result) = validate_execute_product_contract(call, &request, &contract) {
-        return record_plan_failure_for_tool_error(_workspace_root, context, result);
+        return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
     }
-    match doc_update_path_for_execute(_workspace_root, call, &request, context) {
+    match doc_update_path_for_execute(_workspace_root, call, &request, context).await {
         Ok(doc_update_path) => request.doc_update_path = doc_update_path,
-        Err(result) => return record_plan_failure_for_tool_error(_workspace_root, context, result),
+        Err(result) => {
+            return record_plan_failure_for_tool_error(_workspace_root, context, result).await;
+        }
     }
-    match runtime.execute(request) {
+    match runtime.execute(request).await {
         Ok(result) => {
             let plan_result_path = context
                 .execution_scope
                 .as_ref()
                 .and_then(|scope| scope.plan_result_path.clone());
-            let plan_result_warning = plan_result_path.as_deref().and_then(|path| {
-                append_plan_result_success(_workspace_root, path, context, &result).err()
-            });
+            let plan_result_warning = match plan_result_path.as_deref() {
+                Some(path) => append_plan_result_success(_workspace_root, path, context, &result)
+                    .await
+                    .err(),
+                None => None,
+            };
             committed.store(true, Ordering::SeqCst);
             let mut response = run_success(call, result, true);
             if let Some(path) = plan_result_path {
@@ -199,18 +211,20 @@ pub(super) fn execute(
         Err(error) => {
             let raw =
                 runtime_error_json(call, error.error_type, error.message, error.retry_allowed);
-            record_plan_failure_for_tool_error(_workspace_root, context, raw)
+            record_plan_failure_for_tool_error(_workspace_root, context, raw).await
         }
     }
 }
 
-fn source_contract_for_runtime(
+async fn source_contract_for_runtime(
     call: &LlmToolCall,
     request: &super::CadQueryToolRunRequest,
     runtime: Option<&dyn CadQueryToolRuntime>,
 ) -> Result<support::SourceContract, String> {
     let mut contract = source_contract(&request.target_path, request.target_type, &request.code);
-    if let Some(result) = runtime.and_then(|runtime| runtime.model_contract(request)) {
+    if let Some(runtime) = runtime
+        && let Some(result) = runtime.model_contract(request).await
+    {
         let model_contract = result.map_err(|error| {
             runtime_error_json(call, error.error_type, error.message, error.retry_allowed)
         })?;
@@ -226,7 +240,7 @@ fn apply_model_contract(
     contract.has_model_description = model_contract.has_model_description;
 }
 
-pub(super) fn record_plan_failure_for_tool_error(
+pub(super) async fn record_plan_failure_for_tool_error(
     workspace_root: &Path,
     context: &AgentToolRunContext,
     result_json: String,
@@ -250,7 +264,7 @@ pub(super) fn record_plan_failure_for_tool_error(
         .get("message")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("Agent tool failed");
-    match append_plan_result_failure(workspace_root, path, context, error_type, message) {
+    match append_plan_result_failure(workspace_root, path, context, error_type, message).await {
         Ok(()) => {
             value["plan_result_path"] = json!(path);
         }
@@ -320,7 +334,7 @@ fn runtime_error_json(
     .to_string()
 }
 
-fn append_plan_result_success(
+async fn append_plan_result_success(
     workspace_root: &Path,
     plan_result_path: &str,
     context: &AgentToolRunContext,
@@ -335,10 +349,10 @@ fn append_plan_result_success(
         markdown_list(&result.committed_files),
         markdown_list(&result.exports)
     );
-    append_plan_result_record(workspace_root, plan_result_path, &record)
+    append_plan_result_record(workspace_root, plan_result_path, &record).await
 }
 
-fn append_plan_result_failure(
+async fn append_plan_result_failure(
     workspace_root: &Path,
     plan_result_path: &str,
     context: &AgentToolRunContext,
@@ -352,18 +366,19 @@ fn append_plan_result_failure(
         error_type,
         message
     );
-    append_plan_result_record(workspace_root, plan_result_path, &record)
+    append_plan_result_record(workspace_root, plan_result_path, &record).await
 }
 
-fn append_plan_result_record(
+async fn append_plan_result_record(
     workspace_root: &Path,
     plan_result_path: &str,
     record: &str,
 ) -> Result<(), String> {
     validate_plan_result_path(plan_result_path)?;
-    reject_plan_result_symlink_components(workspace_root, plan_result_path)?;
+    reject_plan_result_symlink_components(workspace_root, plan_result_path).await?;
     let absolute = workspace_root.join(plan_result_path);
     let metadata = fs::symlink_metadata(&absolute)
+        .await
         .map_err(|error| format!("读取 plan-result.md 失败: {error}"))?;
     if metadata.file_type().is_symlink() {
         return Err("plan-result.md must not be a symlink".into());
@@ -372,14 +387,17 @@ fn append_plan_result_record(
         return Err("plan-result.md must be a regular file".into());
     }
     reject_hard_linked_plan_result(&metadata)?;
-    fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .append(true)
         .open(&absolute)
-        .and_then(|mut file| file.write_all(record.as_bytes()))
+        .await
+        .map_err(|error| format!("更新 plan-result.md 失败: {error}"))?;
+    file.write_all(record.as_bytes())
+        .await
         .map_err(|error| format!("更新 plan-result.md 失败: {error}"))
 }
 
-fn reject_plan_result_symlink_components(
+async fn reject_plan_result_symlink_components(
     workspace_root: &Path,
     plan_result_path: &str,
 ) -> Result<(), String> {
@@ -387,6 +405,7 @@ fn reject_plan_result_symlink_components(
     for segment in plan_result_path.split('/') {
         current.push(segment);
         if fs::symlink_metadata(&current)
+            .await
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
         {

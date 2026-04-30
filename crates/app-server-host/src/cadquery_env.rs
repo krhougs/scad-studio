@@ -1,7 +1,7 @@
 use std::{
     path::{Path, PathBuf},
-    process::Command,
 };
+use tokio::process::Command;
 
 const VERIFY_SCRIPT: &str = r#"
 import cadquery
@@ -14,11 +14,12 @@ pub fn cadquery_python_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("python3"))
 }
 
-pub fn verify_cadquery_runner_environment(python: &Path) -> Result<(), String> {
+pub async fn verify_cadquery_runner_environment(python: &Path) -> Result<(), String> {
     let output = Command::new(python)
         .arg("-c")
         .arg(VERIFY_SCRIPT)
         .output()
+        .await
         .map_err(|error| verification_error(python, &format!("启动 Python 失败: {error}")))?;
     if output.status.success() {
         return Ok(());

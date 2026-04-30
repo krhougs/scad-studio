@@ -1,7 +1,8 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use app_server_protocol::SelectionRef;
 use serde_json::{Value, json};
+use tokio::fs;
 
 use crate::llm::LlmToolCall;
 
@@ -10,7 +11,7 @@ use crate::agent::tools::tool_error_json;
 
 mod parse;
 
-pub(super) fn resolve_ref(
+pub(super) async fn resolve_ref(
     workspace_root: &Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
@@ -27,38 +28,49 @@ pub(super) fn resolve_ref(
         if let Err(result) = validate_ref_name(call, &name) {
             return result;
         }
-        return resolved_object_ref(call, workspace_root, kind, &name).to_string();
+        return resolved_object_ref(call, workspace_root, kind, &name)
+            .await
+            .to_string();
     }
     if let Some((owner, feature)) = parse_feature_ref(&ref_text) {
         if let Err(result) = validate_feature_ref_parts(call, &owner, &feature) {
             return result;
         }
-        return resolved_feature_ref(call, workspace_root, &ref_text, &owner, &feature).to_string();
+        return resolved_feature_ref(call, workspace_root, &ref_text, &owner, &feature)
+            .await
+            .to_string();
     }
     if let Some(selection) = context
         .selections
         .iter()
         .find(|selection| selection.ref_text == ref_text)
     {
-        return resolved_selection(call, workspace_root, selection).to_string();
+        return resolved_selection(call, workspace_root, selection)
+            .await
+            .to_string();
     }
     resolved_unstable_raw(call, &ref_text).to_string()
 }
 
-fn resolved_selection(
+async fn resolved_selection(
     call: &LlmToolCall,
     workspace_root: &Path,
     selection: &SelectionRef,
 ) -> Value {
-    let owner_path = selection
+    let owner_path_candidate = selection
         .owner_ref_text
         .as_deref()
-        .and_then(owner_path_from_ref)
-        .filter(|path| path::safe_file_path(workspace_root, path).is_some());
-    let owner_doc_path = owner_path
-        .as_deref()
-        .and_then(|path| paired_doc_path(workspace_root, path));
-    let stable_ref = selection_stable_feature(workspace_root, selection, owner_path.as_deref());
+        .and_then(owner_path_from_ref);
+    let owner_path = match owner_path_candidate {
+        Some(path) if path::safe_file_path(workspace_root, &path).await.is_some() => Some(path),
+        _ => None,
+    };
+    let owner_doc_path = match owner_path.as_deref() {
+        Some(path) => paired_doc_path(workspace_root, path).await,
+        None => None,
+    };
+    let stable_ref =
+        selection_stable_feature(workspace_root, selection, owner_path.as_deref()).await;
     let risks = selection_risks(selection, owner_path.as_deref(), stable_ref.as_ref());
     json!({
         "status": "ok",
@@ -75,7 +87,7 @@ fn resolved_selection(
     })
 }
 
-fn selection_stable_feature(
+async fn selection_stable_feature(
     workspace_root: &Path,
     selection: &SelectionRef,
     owner_path: Option<&str>,
@@ -96,7 +108,9 @@ fn selection_stable_feature(
     if feature_owner != owner_name {
         return None;
     }
-    let source = fs::read_to_string(path::safe_file_path(workspace_root, owner_path?)?).ok()?;
+    let source = fs::read_to_string(path::safe_file_path(workspace_root, owner_path?).await?)
+        .await
+        .ok()?;
     parse::source_has_refs_feature(&source, &feature).then(|| candidate.to_owned())
 }
 
@@ -117,17 +131,21 @@ fn selection_risks(
     vec!["raw geometry has no stable feature mapping"]
 }
 
-fn resolved_object_ref(
+async fn resolved_object_ref(
     call: &LlmToolCall,
     workspace_root: &Path,
     kind: RefObjectKind,
     name: &str,
 ) -> Value {
     let source_path = object_source_path(kind, name);
-    let exists = path::safe_file_path(workspace_root, &source_path).is_some();
-    let owner_doc_path = exists
-        .then(|| paired_doc_path(workspace_root, &source_path))
-        .flatten();
+    let exists = path::safe_file_path(workspace_root, &source_path)
+        .await
+        .is_some();
+    let owner_doc_path = if exists {
+        paired_doc_path(workspace_root, &source_path).await
+    } else {
+        None
+    };
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -143,22 +161,27 @@ fn resolved_object_ref(
     })
 }
 
-fn resolved_feature_ref(
+async fn resolved_feature_ref(
     call: &LlmToolCall,
     workspace_root: &Path,
     ref_text: &str,
     owner: &str,
     feature: &str,
 ) -> Value {
-    let (owner_ref, owner_path) = find_owner_source(workspace_root, owner);
-    let owner_doc_path = owner_path
-        .as_deref()
-        .and_then(|path| paired_doc_path(workspace_root, path));
-    let has_feature = owner_path
-        .as_ref()
-        .and_then(|path| path::safe_file_path(workspace_root, path))
-        .and_then(|path| fs::read_to_string(path).ok())
-        .is_some_and(|source| parse::source_has_refs_feature(&source, feature));
+    let (owner_ref, owner_path) = find_owner_source(workspace_root, owner).await;
+    let owner_doc_path = match owner_path.as_deref() {
+        Some(path) => paired_doc_path(workspace_root, path).await,
+        None => None,
+    };
+    let has_feature = match owner_path.as_ref() {
+        Some(path) => match path::safe_file_path(workspace_root, path).await {
+            Some(path) => fs::read_to_string(path)
+                .await
+                .is_ok_and(|source| parse::source_has_refs_feature(&source, feature)),
+            None => false,
+        },
+        None => false,
+    };
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -239,14 +262,17 @@ fn parse_feature_ref(ref_text: &str) -> Option<(String, String)> {
     Some((owner.to_owned(), feature.to_owned()))
 }
 
-fn find_owner_source(workspace_root: &Path, owner: &str) -> (Option<String>, Option<String>) {
+async fn find_owner_source(workspace_root: &Path, owner: &str) -> (Option<String>, Option<String>) {
     for kind in [
         RefObjectKind::Part,
         RefObjectKind::Component,
         RefObjectKind::Assembly,
     ] {
         let source_path = object_source_path(kind, owner);
-        if path::safe_file_path(workspace_root, &source_path).is_some() {
+        if path::safe_file_path(workspace_root, &source_path)
+            .await
+            .is_some()
+        {
             return (
                 Some(format!("@{}[{owner}]", kind.ref_label())),
                 Some(source_path),
@@ -294,7 +320,9 @@ fn validate_ref_name_text(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
-fn paired_doc_path(workspace_root: &Path, source_path: &str) -> Option<String> {
+async fn paired_doc_path(workspace_root: &Path, source_path: &str) -> Option<String> {
     let doc_path = source_path.strip_suffix(".py")?.to_owned() + ".md";
-    path::safe_file_path(workspace_root, &doc_path).map(|_| doc_path)
+    path::safe_file_path(workspace_root, &doc_path)
+        .await
+        .map(|_| doc_path)
 }

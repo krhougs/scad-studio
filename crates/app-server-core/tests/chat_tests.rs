@@ -6,8 +6,8 @@ use app_server_protocol::{
     ProtocolErrorCode, WorkspaceId,
 };
 
-#[test]
-fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
+#[tokio::test]
+async fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
     let root = temp_dir("chat-store");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
@@ -19,6 +19,7 @@ fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
             Some("lid iteration".into()),
             vec![related.clone()],
         )
+        .await
         .expect("create chat");
     assert_eq!(created.session_id, ChatSessionId("main-chat".into()));
 
@@ -30,50 +31,61 @@ fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
             vec![related.clone()],
             None,
         )
+        .await
         .expect("append user message");
     assert_eq!(ack.session_id, created.session_id);
     assert!(ack.message_id.starts_with("msg-"));
 
-    let sessions = store.list(false).expect("list sessions");
+    let sessions = store.list(false).await.expect("list sessions");
     assert_eq!(sessions.sessions.len(), 1);
     assert_eq!(sessions.sessions[0].message_count, 2);
     assert_eq!(sessions.sessions[0].related_files, vec![related.clone()]);
 
     let history = store
         .history(&created.session_id, Some(10))
+        .await
         .expect("read history");
     assert_eq!(history.messages.len(), 2);
     assert_eq!(history.messages[0].role, ChatRole::Meta);
     assert_eq!(history.messages[1].content, "make the lid taller");
 
-    let archived = store.archive(&created.session_id).expect("archive chat");
+    let archived = store
+        .archive(&created.session_id)
+        .await
+        .expect("archive chat");
     assert_eq!(archived.session_id, created.session_id);
-    assert!(store.list(false).expect("list active").sessions.is_empty());
-    assert_eq!(store.list(true).expect("list archived").sessions.len(), 1);
+    assert!(store.list(false).await.expect("list active").sessions.is_empty());
+    assert_eq!(
+        store.list(true).await.expect("list archived").sessions.len(),
+        1
+    );
 
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn chat_store_uses_unique_session_ids_for_repeated_titles() {
+#[tokio::test]
+async fn chat_store_uses_unique_session_ids_for_repeated_titles() {
     let root = temp_dir("chat-store-ids");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
 
-    let first = store.create("main", None, Vec::new()).unwrap();
-    let second = store.create("main", None, Vec::new()).unwrap();
+    let first = store.create("main", None, Vec::new()).await.unwrap();
+    let second = store.create("main", None, Vec::new()).await.unwrap();
 
     assert_eq!(first.session_id, ChatSessionId("main".into()));
     assert_eq!(second.session_id, ChatSessionId("main-2".into()));
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn chat_store_persists_tool_call_and_result_records_in_history() {
+#[tokio::test]
+async fn chat_store_persists_tool_call_and_result_records_in_history() {
     let root = temp_dir("chat-store-tool-history");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
-    let created = store.create("agent tools", None, Vec::new()).unwrap();
+    let created = store
+        .create("agent tools", None, Vec::new())
+        .await
+        .unwrap();
 
     let call_ack = store
         .append_tool_call(
@@ -85,6 +97,7 @@ fn chat_store_persists_tool_call_and_result_records_in_history() {
                 args_json: "{\"path\":\"README.md\"}".into(),
             },
         )
+        .await
         .expect("append tool call");
     assert_eq!(call_ack.message_id, "msg-2");
 
@@ -99,10 +112,11 @@ fn chat_store_persists_tool_call_and_result_records_in_history() {
             },
             None,
         )
+        .await
         .expect("append tool result");
     assert_eq!(result_ack.message_id, "msg-3");
 
-    let history = store.history(&created.session_id, Some(10)).unwrap();
+    let history = store.history(&created.session_id, Some(10)).await.unwrap();
     assert_eq!(history.messages.len(), 3);
     let call_message = &history.messages[1];
     assert_eq!(call_message.role, ChatRole::Assistant);
@@ -119,8 +133,8 @@ fn chat_store_persists_tool_call_and_result_records_in_history() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn chat_store_rejects_untrusted_session_ids_before_path_join() {
+#[tokio::test]
+async fn chat_store_rejects_untrusted_session_ids_before_path_join() {
     let root = temp_dir("chat-store-invalid-id");
     fs::create_dir_all(root.join("chats")).unwrap();
     fs::write(root.join("escape.jsonl"), "{}\n").unwrap();
@@ -129,16 +143,19 @@ fn chat_store_rejects_untrusted_session_ids_before_path_join() {
 
     let send_error = store
         .append_message(&invalid, ChatRole::User, "escape", Vec::new(), None)
+        .await
         .expect_err("chat.send should reject path-like session id");
     assert_eq!(send_error.code, ProtocolErrorCode::InvalidCommand);
 
     let history_error = store
         .history(&invalid, None)
+        .await
         .expect_err("chat.history should reject path-like session id");
     assert_eq!(history_error.code, ProtocolErrorCode::InvalidCommand);
 
     let archive_error = store
         .archive(&invalid)
+        .await
         .expect_err("chat.archive should reject path-like session id");
     assert_eq!(archive_error.code, ProtocolErrorCode::InvalidCommand);
     assert!(root.join("escape.jsonl").is_file());
@@ -146,8 +163,8 @@ fn chat_store_rejects_untrusted_session_ids_before_path_join() {
 }
 
 #[cfg(unix)]
-#[test]
-fn chat_store_rejects_chats_symlink_escape() {
+#[tokio::test]
+async fn chat_store_rejects_chats_symlink_escape() {
     let root = temp_dir("chat-store-symlink");
     let outside = temp_dir("chat-store-outside");
     fs::create_dir_all(&root).unwrap();
@@ -157,6 +174,7 @@ fn chat_store_rejects_chats_symlink_escape() {
 
     let error = store
         .create("escaped chat", None, Vec::new())
+        .await
         .expect_err("chat.create should reject symlinked chats directory");
 
     assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
@@ -167,8 +185,8 @@ fn chat_store_rejects_chats_symlink_escape() {
 }
 
 #[cfg(unix)]
-#[test]
-fn chat_store_rejects_archive_through_chats_symlink_escape() {
+#[tokio::test]
+async fn chat_store_rejects_archive_through_chats_symlink_escape() {
     let root = temp_dir("chat-store-archive-symlink");
     let outside = temp_dir("chat-store-archive-outside");
     fs::create_dir_all(&root).unwrap();
@@ -179,6 +197,7 @@ fn chat_store_rejects_archive_through_chats_symlink_escape() {
 
     let error = store
         .archive(&ChatSessionId("main".into()))
+        .await
         .expect_err("chat.archive should reject symlinked chats parent");
 
     assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
@@ -190,8 +209,8 @@ fn chat_store_rejects_archive_through_chats_symlink_escape() {
 }
 
 #[cfg(unix)]
-#[test]
-fn chat_store_rejects_archived_dir_symlink_escape() {
+#[tokio::test]
+async fn chat_store_rejects_archived_dir_symlink_escape() {
     let root = temp_dir("chat-store-archived-dir-symlink");
     let outside = temp_dir("chat-store-archived-dir-outside");
     fs::create_dir_all(root.join("chats")).unwrap();
@@ -202,6 +221,7 @@ fn chat_store_rejects_archived_dir_symlink_escape() {
 
     let error = store
         .archive(&ChatSessionId("main".into()))
+        .await
         .expect_err("chat.archive should reject symlinked archived directory");
 
     assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
@@ -213,8 +233,8 @@ fn chat_store_rejects_archived_dir_symlink_escape() {
 }
 
 #[cfg(unix)]
-#[test]
-fn chat_store_rejects_jsonl_file_symlink_escape() {
+#[tokio::test]
+async fn chat_store_rejects_jsonl_file_symlink_escape() {
     let root = temp_dir("chat-store-jsonl-symlink");
     let outside = temp_dir("chat-store-jsonl-outside");
     fs::create_dir_all(root.join("chats")).unwrap();
@@ -225,6 +245,7 @@ fn chat_store_rejects_jsonl_file_symlink_escape() {
 
     let error = store
         .history(&ChatSessionId("main".into()), None)
+        .await
         .expect_err("chat.history should reject symlinked JSONL file");
 
     assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
@@ -233,8 +254,8 @@ fn chat_store_rejects_jsonl_file_symlink_escape() {
     let _ = fs::remove_dir_all(outside);
 }
 
-#[test]
-fn old_jsonl_without_run_id_deserializes_with_none() {
+#[tokio::test]
+async fn old_jsonl_without_run_id_deserializes_with_none() {
     let root = temp_dir("chat-store-old-jsonl");
     fs::create_dir_all(root.join("chats")).unwrap();
     let jsonl_path = root.join("chats/old-session.jsonl");
@@ -246,18 +267,22 @@ fn old_jsonl_without_run_id_deserializes_with_none() {
     let store = ChatStore::new(root.clone());
     let history = store
         .history(&ChatSessionId("old-session".into()), None)
+        .await
         .expect("should read old JSONL without run_id");
     assert_eq!(history.messages.len(), 1);
     assert_eq!(history.messages[0].run_id, None);
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn run_id_roundtrips_through_jsonl() {
+#[tokio::test]
+async fn run_id_roundtrips_through_jsonl() {
     let root = temp_dir("chat-store-run-id");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
-    let created = store.create("run-id test", None, Vec::new()).unwrap();
+    let created = store
+        .create("run-id test", None, Vec::new())
+        .await
+        .unwrap();
 
     store
         .append_message_with_run_id(
@@ -268,10 +293,12 @@ fn run_id_roundtrips_through_jsonl() {
             None,
             Some("agent-7".into()),
         )
+        .await
         .expect("append with run_id");
 
     let history = store
         .history(&created.session_id, Some(10))
+        .await
         .expect("read history");
     assert_eq!(history.messages.len(), 2);
     assert_eq!(history.messages[0].run_id, None); // Meta message

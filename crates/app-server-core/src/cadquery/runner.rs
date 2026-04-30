@@ -1,13 +1,17 @@
 use std::{
-    fs,
-    io::{Read, Write},
     path::PathBuf,
-    process::{Child, Command, Output, Stdio},
-    thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    process::{Output, Stdio},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use app_server_protocol::{CadQueryExportFormat, CadQueryMeshPayload};
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    task::JoinHandle,
+    time,
+};
 
 use super::{cadquery_result_ready, parse_cadquery_success_json};
 
@@ -68,39 +72,53 @@ pub struct CadQueryContractResult {
     pub has_model_description: bool,
 }
 
-pub fn run_cadquery_runner(
-    config: &CadQueryRunConfig,
+pub async fn run_cadquery_runner(
+    config: CadQueryRunConfig,
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
-    run_cadquery_runner_with_cancel(config, &|| false)
+    run_cadquery_runner_with_cancel(config, &|| false).await
 }
 
-pub fn run_cadquery_runner_with_cancel(
-    config: &CadQueryRunConfig,
-    is_cancelled: &dyn Fn() -> bool,
+pub async fn run_cadquery_runner_with_cancel(
+    config: CadQueryRunConfig,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
-    let child = Command::new(&config.python)
-        .args(runner_args(config))
+    let mut command = Command::new(&config.python);
+    command
+        .args(runner_args(&config))
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let child = command
         .spawn()
         .map_err(|error| error_io(format!("启动 CadQuery runner 失败: {error}")))?;
-    let output = wait_with_timeout(child, config.timeout, is_cancelled)?;
+    let output = wait_with_timeout(child, config.timeout, is_cancelled).await?;
     parse_runner_output(output)
 }
 
-pub fn run_cadquery_contract(
-    config: &CadQueryContractConfig,
+pub async fn run_cadquery_contract(
+    config: CadQueryContractConfig,
 ) -> Result<CadQueryContractResult, CadQueryRunnerError> {
-    let contract_file = TemporaryContractFile::write(&config.code)?;
-    let child = Command::new(&config.python)
+    let contract_file = TemporaryContractFile::write(config.code.clone()).await?;
+    let mut command = Command::new(&config.python);
+    command
         .args(contract_args(contract_file.path()))
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error_io(format!("启动 CadQuery contract runner 失败: {error}")))?;
-    let output = wait_with_timeout(child, config.timeout, &|| false)?;
+        .kill_on_drop(true);
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            contract_file.remove().await;
+            return Err(error_io(format!(
+                "启动 CadQuery contract runner 失败: {error}"
+            )));
+        }
+    };
+    let output = wait_with_timeout(child, config.timeout, &|| false).await;
+    contract_file.remove().await;
+    let output = output?;
     parse_contract_output(output)
 }
 
@@ -132,84 +150,87 @@ fn contract_args(path: &std::path::Path) -> Vec<String> {
     ]
 }
 
-fn wait_with_timeout(
-    mut child: std::process::Child,
+async fn wait_with_timeout(
+    mut child: tokio::process::Child,
     timeout: Duration,
-    is_cancelled: &dyn Fn() -> bool,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Output, CadQueryRunnerError> {
-    let stdout_reader = pipe_reader(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| error_io("CadQuery runner stdout pipe was not available"))?,
-        "stdout",
-    );
-    let stderr_reader = pipe_reader(
-        child
-            .stderr
-            .take()
-            .ok_or_else(|| error_io("CadQuery runner stderr pipe was not available"))?,
-        "stderr",
-    );
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        if is_cancelled() {
-            terminate_child(child);
-            let _ = join_pipe_reader(stdout_reader, "stdout");
-            let _ = join_pipe_reader(stderr_reader, "stderr");
-            return Err(CadQueryRunnerError {
-                kind: CadQueryRunnerErrorKind::Cancelled,
-                message: "CadQuery runner 已取消".into(),
-            });
-        }
+    let stdout_task = read_child_stream(child.stdout.take());
+    let stderr_task = read_child_stream(child.stderr.take());
+    let timeout = time::sleep(timeout);
+    tokio::pin!(timeout);
+    let mut tick = time::interval(Duration::from_millis(10));
+    loop {
         if let Some(status) = child
             .try_wait()
-            .map_err(|error| error_io(format!("轮询 CadQuery runner 失败: {error}")))?
+            .map_err(|error| error_io(format!("等待 CadQuery runner 结束失败: {error}")))?
         {
+            let stdout = read_child_output(stdout_task, "stdout").await?;
+            let stderr = read_child_output(stderr_task, "stderr").await?;
             return Ok(Output {
                 status,
-                stdout: join_pipe_reader(stdout_reader, "stdout")?,
-                stderr: join_pipe_reader(stderr_reader, "stderr")?,
+                stdout,
+                stderr,
             });
         }
-        thread::sleep(Duration::from_millis(10));
+        tokio::select! {
+            _ = &mut timeout => {
+                terminate_child(child, stdout_task, stderr_task).await;
+                return Err(CadQueryRunnerError {
+                    kind: CadQueryRunnerErrorKind::Timeout,
+                    message: "CadQuery runner 执行超时".into(),
+                });
+            }
+            _ = tick.tick() => {
+                if is_cancelled() {
+                    terminate_child(child, stdout_task, stderr_task).await;
+                return Err(CadQueryRunnerError {
+                    kind: CadQueryRunnerErrorKind::Cancelled,
+                    message: "CadQuery runner 已取消".into(),
+                });
+                }
+            }
+        }
     }
-    terminate_child(child);
-    let _ = join_pipe_reader(stdout_reader, "stdout");
-    let _ = join_pipe_reader(stderr_reader, "stderr");
-    Err(CadQueryRunnerError {
-        kind: CadQueryRunnerErrorKind::Timeout,
-        message: "CadQuery runner 执行超时".into(),
+}
+
+fn read_child_stream<R>(stream: Option<R>) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(mut stream) = stream {
+            stream.read_to_end(&mut bytes).await?;
+        }
+        Ok(bytes)
     })
 }
 
-fn pipe_reader<R>(mut reader: R, label: &'static str) -> JoinHandle<std::io::Result<Vec<u8>>>
-where
-    R: Read + Send + 'static,
-{
-    thread::Builder::new()
-        .name(format!("cadquery-runner-{label}-reader"))
-        .spawn(move || {
-            let mut bytes = Vec::new();
-            reader.read_to_end(&mut bytes)?;
-            Ok(bytes)
-        })
-        .expect("spawn CadQuery runner pipe reader")
-}
-
-fn join_pipe_reader(
-    handle: JoinHandle<std::io::Result<Vec<u8>>>,
-    label: &str,
+async fn read_child_output(
+    task: JoinHandle<std::io::Result<Vec<u8>>>,
+    label: &'static str,
 ) -> Result<Vec<u8>, CadQueryRunnerError> {
-    let result = handle
-        .join()
-        .map_err(|_| error_io(format!("CadQuery runner {label} reader panicked")))?;
-    result.map_err(|error| error_io(format!("读取 CadQuery runner {label} 失败: {error}")))
+    match task.await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(error_io(format!(
+            "读取 CadQuery runner {label} 失败: {error}"
+        ))),
+        Err(error) => Err(error_io(format!(
+            "等待 CadQuery runner {label} 读取任务失败: {error}"
+        ))),
+    }
 }
 
-fn terminate_child(mut child: Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+async fn terminate_child(
+    mut child: tokio::process::Child,
+    stdout_task: JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_task: JoinHandle<std::io::Result<Vec<u8>>>,
+) {
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    let _ = read_child_output(stdout_task, "stdout").await;
+    let _ = read_child_output(stderr_task, "stderr").await;
 }
 
 fn parse_runner_output(output: Output) -> Result<CadQueryRunResult, CadQueryRunnerError> {
@@ -371,7 +392,7 @@ struct TemporaryContractFile {
 }
 
 impl TemporaryContractFile {
-    fn write(code: &str) -> Result<Self, CadQueryRunnerError> {
+    async fn write(code: String) -> Result<Self, CadQueryRunnerError> {
         for attempt in 0..16 {
             let path = std::env::temp_dir().join(format!(
                 "budn-cq-contract-{}-{}-{attempt}.py",
@@ -382,13 +403,12 @@ impl TemporaryContractFile {
             options.write(true).create_new(true);
             #[cfg(unix)]
             {
-                use std::os::unix::fs::OpenOptionsExt;
                 options.mode(0o600);
             }
-            match options.open(&path) {
+            match options.open(path.clone()).await {
                 Ok(mut file) => {
-                    if let Err(error) = file.write_all(code.as_bytes()) {
-                        let _ = fs::remove_file(&path);
+                    if let Err(error) = file.write_all(code.as_bytes()).await {
+                        let _ = fs::remove_file(path.clone()).await;
                         return Err(error_io(format!(
                             "写入 CadQuery contract 临时文件失败: {error}"
                         )));
@@ -409,11 +429,9 @@ impl TemporaryContractFile {
     fn path(&self) -> &std::path::Path {
         &self.path
     }
-}
 
-impl Drop for TemporaryContractFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+    async fn remove(self) {
+        let _ = fs::remove_file(self.path).await;
     }
 }
 

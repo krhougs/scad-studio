@@ -9,8 +9,8 @@ fn preset_path_uses_matching_scad_json_name() {
     assert_eq!(path, std::path::PathBuf::from("/tmp/example.scad.json"));
 }
 
-#[test]
-fn save_load_and_delete_presets_round_trip() {
+#[tokio::test]
+async fn save_load_and_delete_presets_round_trip() {
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time should move forward")
@@ -25,15 +25,15 @@ fn save_load_and_delete_presets_round_trip() {
         ("size".to_string(), ParameterValue::Number(14.0)),
         ("name".to_string(), ParameterValue::Text("B".into())),
     ]);
-    save_preset(&preset_path, "draft", &values).expect("preset should be written");
-    let loaded = load_presets(&preset_path).expect("preset should load");
+    save_preset(&preset_path, "draft", &values).await.expect("preset should be written");
+    let loaded = load_presets(&preset_path).await.expect("preset should load");
     assert_eq!(
         loaded.presets["draft"]["size"],
         ParameterValue::Number(14.0)
     );
 
-    delete_preset(&preset_path, "draft").expect("preset should delete");
-    let deleted = load_presets(&preset_path).expect("preset file should still parse");
+    delete_preset(&preset_path, "draft").await.expect("preset should delete");
+    let deleted = load_presets(&preset_path).await.expect("preset file should still parse");
     assert!(deleted.presets.is_empty());
 
     let _ = std::fs::remove_file(&preset_path);

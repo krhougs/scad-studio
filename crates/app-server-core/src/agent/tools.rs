@@ -16,6 +16,7 @@ use app_server_protocol::{
     AgentMode, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, ChatSessionId,
     SelectionRef,
 };
+use async_trait::async_trait;
 use serde_json::json;
 
 use super::plan_package::ParsedPlanPackage;
@@ -30,8 +31,9 @@ use tool_path_policy::{
 };
 
 const MAX_TOOL_ROUNDS: usize = 10;
+#[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String;
+    async fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String;
 }
 
 pub trait ToolLoopObserver: Send + Sync {
@@ -39,20 +41,21 @@ pub trait ToolLoopObserver: Send + Sync {
     fn tool_result(&self, call: &LlmToolCall, result: &str);
 }
 
+#[async_trait]
 pub trait CadQueryToolRuntime: Send + Sync {
-    fn model_contract(
+    async fn model_contract(
         &self,
         _request: &CadQueryToolRunRequest,
     ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
         None
     }
 
-    fn dry_run(
+    async fn dry_run(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError>;
 
-    fn execute(
+    async fn execute(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError>;
@@ -247,43 +250,54 @@ impl WorkspaceToolExecutor {
     }
 }
 
+#[async_trait]
 impl ToolExecutor for WorkspaceToolExecutor {
-    fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
+    async fn execute(&self, call: &LlmToolCall, context: &AgentToolRunContext) -> String {
         if let Some(result) = validate_direct_executor_permission(call, context) {
-            return record_tool_error_for_context(&self.workspace_root, call, context, result);
+            return record_tool_error_for_context(&self.workspace_root, call, context, result)
+                .await;
         }
         match call.function_name.as_str() {
-            "read_file" => readonly::read_file(&self.workspace_root, call),
-            "list_directory" => readonly::list_directory(&self.workspace_root, call),
-            "search_files" => readonly::search_files(&self.workspace_root, call),
-            "get_project_context" => readonly::get_project_context(&self.workspace_root, call),
-            "get_selection" => readonly::get_selection(call, context),
-            "resolve_ref" => readonly::resolve_ref(&self.workspace_root, call, context),
-            "save_cad_plan" => semantic::save_cad_plan(&self.workspace_root, call, context),
-            "update_chat_summary" => {
-                semantic_chat::update_chat_summary(&self.workspace_root, call, context)
+            "read_file" => readonly::read_file(&self.workspace_root, call).await,
+            "list_directory" => readonly::list_directory(&self.workspace_root, call).await,
+            "search_files" => readonly::search_files(&self.workspace_root, call).await,
+            "get_project_context" => {
+                readonly::get_project_context(&self.workspace_root, call).await
             }
-            "write_file" => file_write::write_file(&self.workspace_root, call, context),
-            "patch_file" => file_write::patch_file(&self.workspace_root, call, context),
-            "copy_file" => file_write::copy_file(&self.workspace_root, call, context),
-            "cadquery_analyze_source" => cadquery::analyze_source(
-                &self.workspace_root,
-                call,
-                self.cadquery_runtime.as_deref(),
-            ),
+            "get_selection" => readonly::get_selection(call, context),
+            "resolve_ref" => readonly::resolve_ref(&self.workspace_root, call, context).await,
+            "save_cad_plan" => semantic::save_cad_plan(&self.workspace_root, call, context).await,
+            "update_chat_summary" => {
+                semantic_chat::update_chat_summary(&self.workspace_root, call, context).await
+            }
+            "write_file" => file_write::write_file(&self.workspace_root, call, context).await,
+            "patch_file" => file_write::patch_file(&self.workspace_root, call, context).await,
+            "copy_file" => file_write::copy_file(&self.workspace_root, call, context).await,
+            "cadquery_analyze_source" => {
+                cadquery::analyze_source(
+                    &self.workspace_root,
+                    call,
+                    self.cadquery_runtime.as_deref(),
+                )
+                .await
+            }
             "cadquery_check_source" => {
-                cadquery::check_source(call, self.cadquery_runtime.as_deref())
+                cadquery::check_source(call, self.cadquery_runtime.as_deref()).await
             }
             "cadquery_dry_run" => {
                 cadquery::dry_run(&self.workspace_root, call, self.cadquery_runtime.as_deref())
+                    .await
             }
-            "cadquery_execute" => cadquery::execute(
-                &self.workspace_root,
-                call,
-                context,
-                self.cadquery_runtime.as_deref(),
-                &self.cadquery_committed,
-            ),
+            "cadquery_execute" => {
+                cadquery::execute(
+                    &self.workspace_root,
+                    call,
+                    context,
+                    self.cadquery_runtime.as_deref(),
+                    &self.cadquery_committed,
+                )
+                .await
+            }
             "cadquery_get_result" => cadquery::get_result(call, self.cadquery_runtime.as_deref()),
             "cadquery_resolve_selection" => {
                 cadquery::resolve_selection(call, self.cadquery_runtime.as_deref())
@@ -326,7 +340,7 @@ fn validate_direct_executor_permission(
     .map(|error| tool_error_json(call, &error.message, error.error_type))
 }
 
-pub fn run_tool_loop_with_registry(
+pub async fn run_tool_loop_with_registry(
     initial_messages: Vec<LlmMessage>,
     context: AgentToolRunContext,
     provider: &dyn LlmProvider,
@@ -343,9 +357,10 @@ pub fn run_tool_loop_with_registry(
         on_token,
         &|_| true,
     )
+    .await
 }
 
-pub fn run_tool_loop_with_registry_and_reasoning(
+pub async fn run_tool_loop_with_registry_and_reasoning(
     initial_messages: Vec<LlmMessage>,
     context: AgentToolRunContext,
     provider: &dyn LlmProvider,
@@ -395,7 +410,7 @@ pub fn run_tool_loop_with_registry_and_reasoning(
         ));
         for call in &response.tool_calls {
             observer.tool_start(call);
-            let result = execute_registry_tool(call, &context, executor);
+            let result = execute_registry_tool(call, &context, executor).await;
             observer.tool_result(call, &result);
             messages.push(LlmMessage::tool_result(call.id.clone(), result));
         }
@@ -438,7 +453,7 @@ fn interrupted_intent_retry_message() -> LlmMessage {
     )
 }
 
-fn execute_registry_tool(
+async fn execute_registry_tool(
     call: &LlmToolCall,
     context: &AgentToolRunContext,
     executor: &dyn ToolExecutor,
@@ -457,7 +472,8 @@ fn execute_registry_tool(
             call,
             context,
             tool_error_json(call, permission.reason, "permission_denied"),
-        );
+        )
+        .await;
     }
     if let Some(spec) = spec
         && let Err(error) = validate_tool_path_policy(
@@ -472,7 +488,8 @@ fn execute_registry_tool(
             call,
             context,
             tool_error_json(call, &error.message, error.error_type),
-        );
+        )
+        .await;
     }
     if let Err(error) = validate_registry_tool_intent(
         &call.function_name,
@@ -484,19 +501,20 @@ fn execute_registry_tool(
             call,
             context,
             tool_error_json(call, &error.message, error.error_type),
-        );
+        )
+        .await;
     }
-    executor.execute(call, context)
+    executor.execute(call, context).await
 }
 
-fn record_tool_error_for_context(
+async fn record_tool_error_for_context(
     workspace_root: &std::path::Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
     result: String,
 ) -> String {
     if call.function_name == "cadquery_execute" {
-        cadquery::record_plan_failure_for_tool_error(workspace_root, context, result)
+        cadquery::record_plan_failure_for_tool_error(workspace_root, context, result).await
     } else {
         result
     }

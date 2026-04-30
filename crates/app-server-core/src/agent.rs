@@ -329,7 +329,7 @@ pub fn stream_agent_turn(
     })
 }
 
-pub fn stream_agent_turn_with_tools(
+pub async fn stream_agent_turn_with_tools(
     input: AgentTurnInput,
     provider: &dyn LlmProvider,
     tool_executor: &dyn tools::ToolExecutor,
@@ -346,9 +346,10 @@ pub fn stream_agent_turn_with_tools(
         on_token,
         &|_| true,
     )
+    .await
 }
 
-pub fn stream_agent_turn_with_tools_and_reasoning(
+pub async fn stream_agent_turn_with_tools_and_reasoning(
     input: AgentTurnInput,
     provider: &dyn LlmProvider,
     tool_executor: &dyn tools::ToolExecutor,
@@ -367,6 +368,7 @@ pub fn stream_agent_turn_with_tools_and_reasoning(
         on_token,
         on_reasoning,
     )
+    .await
     .map_err(|err| AgentBackendError {
         message: err.message,
     })?;
@@ -420,7 +422,10 @@ const MAX_HISTORY_TURNS: usize = 8;
 
 fn append_history_messages(messages: &mut Vec<LlmMessage>, history: &[ChatMessageRecord]) {
     if let Some(summary) = extract_latest_chat_summary(history) {
-        messages.push(LlmMessage::new("user", &format!("[Chat summary]\n{summary}")));
+        messages.push(LlmMessage::new(
+            "user",
+            &format!("[Chat summary]\n{summary}"),
+        ));
         messages.push(LlmMessage::new("assistant", "Understood."));
     }
     let effective = collect_effective_history(history);

@@ -3,8 +3,9 @@ use app_server_core::{
     AgentExecutionScope, AgentToolRunContext, CadQueryModelContract, CadQueryToolCachedResult,
     CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
     ChatStore, NoopToolLoopObserver, ToolExecutor, ToolLoopObserver, WorkspaceToolExecutor,
-    agent_tool_definitions_for_mode, run_tool_loop_with_registry,
-    run_tool_loop_with_registry_and_reasoning,
+    agent_tool_definitions_for_mode,
+    run_tool_loop_with_registry as run_tool_loop_with_registry_async,
+    run_tool_loop_with_registry_and_reasoning as run_tool_loop_with_registry_and_reasoning_async,
 };
 use app_server_protocol::{
     AgentMode, CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
@@ -14,6 +15,52 @@ use app_server_protocol::{
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build")
+        .block_on(future)
+}
+
+fn run_tool_loop_with_registry(
+    initial_messages: Vec<LlmMessage>,
+    context: AgentToolRunContext,
+    provider: &dyn app_server_core::llm::LlmProvider,
+    executor: &dyn ToolExecutor,
+    observer: &dyn ToolLoopObserver,
+    on_token: &dyn Fn(&str) -> bool,
+) -> Result<LlmResponse, LlmError> {
+    block_on(run_tool_loop_with_registry_async(
+        initial_messages,
+        context,
+        provider,
+        executor,
+        observer,
+        on_token,
+    ))
+}
+
+fn run_tool_loop_with_registry_and_reasoning(
+    initial_messages: Vec<LlmMessage>,
+    context: AgentToolRunContext,
+    provider: &dyn app_server_core::llm::LlmProvider,
+    executor: &dyn ToolExecutor,
+    observer: &dyn ToolLoopObserver,
+    on_token: &dyn Fn(&str) -> bool,
+    on_reasoning: &dyn Fn(&str) -> bool,
+) -> Result<LlmResponse, LlmError> {
+    block_on(run_tool_loop_with_registry_and_reasoning_async(
+        initial_messages,
+        context,
+        provider,
+        executor,
+        observer,
+        on_token,
+        on_reasoning,
+    ))
+}
 
 fn tool_context(
     mode: AgentMode,
@@ -33,8 +80,8 @@ fn call(name: &str, arguments: &str) -> LlmToolCall {
 }
 
 fn tool_json(executor: &WorkspaceToolExecutor, call: &LlmToolCall) -> serde_json::Value {
-    serde_json::from_str(&executor.execute(call, &tool_context(AgentMode::Agent, None)))
-        .expect("tool result should be json")
+    let result = block_on(executor.execute(call, &tool_context(AgentMode::Agent, None)));
+    serde_json::from_str(&result).expect("tool result should be json")
 }
 
 fn tool_json_with_context(
@@ -42,7 +89,8 @@ fn tool_json_with_context(
     call: &LlmToolCall,
     context: &AgentToolRunContext,
 ) -> serde_json::Value {
-    serde_json::from_str(&executor.execute(call, context)).expect("tool result should be json")
+    let result = block_on(executor.execute(call, context));
+    serde_json::from_str(&result).expect("tool result should be json")
 }
 
 fn valid_part_source(feature: &str) -> String {
@@ -2805,9 +2853,8 @@ fn workspace_tool_executor_cadquery_resolve_selection_maps_feature() {
 fn workspace_tool_executor_direct_call_denies_chat_summary_in_plan_mode() {
     let dir = tempfile::tempdir().unwrap();
     let store = ChatStore::new(dir.path().to_path_buf());
-    let created = store
-        .create("agent tools", Some("old goal".into()), Vec::new())
-        .unwrap();
+    let created =
+        block_on(store.create("agent tools", Some("old goal".into()), Vec::new())).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Plan);
     context.session_id = Some(created.session_id.clone());
@@ -2829,8 +2876,7 @@ fn workspace_tool_executor_direct_call_denies_chat_summary_in_plan_mode() {
     assert_eq!(result["status"], "error");
     assert_eq!(result["error_type"], "permission_denied");
     assert_eq!(
-        store
-            .history(&created.session_id, None)
+        block_on(store.history(&created.session_id, None))
             .unwrap()
             .messages
             .len(),
@@ -2842,9 +2888,8 @@ fn workspace_tool_executor_direct_call_denies_chat_summary_in_plan_mode() {
 fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
     let dir = tempfile::tempdir().unwrap();
     let store = ChatStore::new(dir.path().to_path_buf());
-    let created = store
-        .create("agent tools", Some("old goal".into()), Vec::new())
-        .unwrap();
+    let created =
+        block_on(store.create("agent tools", Some("old goal".into()), Vec::new())).unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
     context.session_id = Some(created.session_id.clone());
@@ -2871,7 +2916,7 @@ fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
         serde_json::json!(["summary", "goal", "related_files", "open_questions"])
     );
 
-    let history = store.history(&created.session_id, None).unwrap();
+    let history = block_on(store.history(&created.session_id, None)).unwrap();
     let latest = history.messages.last().unwrap();
     assert_eq!(latest.role, app_server_protocol::ChatRole::Meta);
     assert!(latest.content.contains("\"type\":\"chat_summary\""));
@@ -2886,7 +2931,7 @@ fn workspace_tool_executor_update_chat_summary_appends_chatstore_meta() {
         "outputs/top_lid.step"
     );
 
-    let sessions = store.list(false).unwrap();
+    let sessions = block_on(store.list(false)).unwrap();
     assert_eq!(
         sessions.sessions[0].related_files[0].display_path(),
         "parts/top_lid.py"
@@ -2902,13 +2947,12 @@ fn workspace_tool_executor_update_chat_summary_can_clear_related_files() {
     let dir = tempfile::tempdir().unwrap();
     let store = ChatStore::new(dir.path().to_path_buf());
     let initial_related = test_path_handle(["parts", "top_lid.py"]);
-    let created = store
-        .create(
-            "agent tools",
-            Some("old goal".into()),
-            vec![initial_related],
-        )
-        .unwrap();
+    let created = block_on(store.create(
+        "agent tools",
+        Some("old goal".into()),
+        vec![initial_related],
+    ))
+    .unwrap();
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
     context.session_id = Some(created.session_id.clone());
@@ -2928,7 +2972,7 @@ fn workspace_tool_executor_update_chat_summary_can_clear_related_files() {
     );
 
     assert_eq!(result["status"], "ok");
-    let sessions = store.list(false).unwrap();
+    let sessions = block_on(store.list(false)).unwrap();
     assert!(sessions.sessions[0].related_files.is_empty());
 }
 
@@ -2944,9 +2988,8 @@ fn workspace_tool_executor_update_chat_summary_rejects_denied_or_unknown_roots()
     ] {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::new(dir.path().to_path_buf());
-        let created = store
-            .create("agent tools", Some("old goal".into()), Vec::new())
-            .unwrap();
+        let created =
+            block_on(store.create("agent tools", Some("old goal".into()), Vec::new())).unwrap();
         let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
         let mut context = AgentToolRunContext::new(dir.path().to_path_buf(), AgentMode::Agent);
         context.session_id = Some(created.session_id.clone());
@@ -2964,8 +3007,7 @@ fn workspace_tool_executor_update_chat_summary_rejects_denied_or_unknown_roots()
         assert_eq!(result["status"], "error", "{related_file}");
         assert_eq!(result["error_type"], "permission_denied", "{related_file}");
         assert_eq!(
-            store
-                .history(&created.session_id, None)
+            block_on(store.history(&created.session_id, None))
                 .unwrap()
                 .messages
                 .len(),
@@ -3324,8 +3366,8 @@ fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
         ambiguous: false,
     }];
 
-    let result: serde_json::Value =
-        serde_json::from_str(&executor.execute(&call("get_selection", "{}"), &context)).unwrap();
+    let tool_result = block_on(executor.execute(&call("get_selection", "{}"), &context));
+    let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["active_index"], 0);
     assert_eq!(result["context_refs"][0], "@part[lid]");
@@ -3382,11 +3424,11 @@ fn workspace_tool_executor_resolve_ref_maps_object_feature_and_raw_selection() {
         result_id: Some("cq_1".into()),
         ambiguous: false,
     }];
-    let raw: serde_json::Value = serde_json::from_str(&executor.execute(
+    let tool_result = block_on(executor.execute(
         &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_1]\"}"),
         &context,
-    ))
-    .unwrap();
+    ));
+    let raw: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(raw["status"], "ok");
     assert_eq!(raw["raw_ref_text"], "@face[lid:f_1]");
     assert_eq!(raw["owner_ref_text"], "@part[lid]");
@@ -3421,11 +3463,11 @@ fn workspace_tool_executor_resolve_ref_prefers_object_mapping_over_selection_sna
         ambiguous: false,
     }];
 
-    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+    let tool_result = block_on(executor.execute(
         &call("resolve_ref", "{\"ref_text\":\"@part[lid]\"}"),
         &context,
-    ))
-    .unwrap();
+    ));
+    let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["stable_ref"], "@part[lid]");
     assert_eq!(result["owner_path"], "parts/lid.py");
@@ -3450,11 +3492,11 @@ fn workspace_tool_executor_resolve_ref_selection_requires_safe_owner_source() {
         ambiguous: false,
     }];
 
-    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+    let tool_result = block_on(executor.execute(
         &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_missing]\"}"),
         &context,
-    ))
-    .unwrap();
+    ));
+    let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["owner_path"], serde_json::Value::Null);
     assert_eq!(result["stable_ref"], serde_json::Value::Null);
@@ -3726,11 +3768,11 @@ fn workspace_tool_executor_resolve_ref_selection_rejects_unsafe_candidate_featur
         ambiguous: false,
     }];
 
-    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+    let tool_result = block_on(executor.execute(
         &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_unsafe]\"}"),
         &context,
-    ))
-    .unwrap();
+    ));
+    let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["stable_ref"], serde_json::Value::Null);
     assert_eq!(result["ambiguous"], true);
@@ -3753,11 +3795,11 @@ fn workspace_tool_executor_resolve_ref_keeps_ambiguous_selection_unstable() {
         ambiguous: true,
     }];
 
-    let result: serde_json::Value = serde_json::from_str(&executor.execute(
+    let tool_result = block_on(executor.execute(
         &call("resolve_ref", "{\"ref_text\":\"@face[lid:f_2]\"}"),
         &context,
-    ))
-    .unwrap();
+    ));
+    let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["raw_ref_text"], "@face[lid:f_2]");
     assert_eq!(result["stable_ref"], serde_json::Value::Null);
@@ -3813,8 +3855,9 @@ impl FakeCadQueryRuntime {
     }
 }
 
+#[async_trait::async_trait]
 impl CadQueryToolRuntime for FakeCadQueryRuntime {
-    fn model_contract(
+    async fn model_contract(
         &self,
         _request: &CadQueryToolRunRequest,
     ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
@@ -3825,7 +3868,7 @@ impl CadQueryToolRuntime for FakeCadQueryRuntime {
         })
     }
 
-    fn dry_run(
+    async fn dry_run(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
@@ -3838,7 +3881,7 @@ impl CadQueryToolRuntime for FakeCadQueryRuntime {
         })
     }
 
-    fn execute(
+    async fn execute(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
@@ -3960,8 +4003,9 @@ impl app_server_core::llm::LlmProvider for MockProvider {
 
 struct EchoExecutor;
 
+#[async_trait::async_trait]
 impl ToolExecutor for EchoExecutor {
-    fn execute(&self, call: &LlmToolCall, _context: &AgentToolRunContext) -> String {
+    async fn execute(&self, call: &LlmToolCall, _context: &AgentToolRunContext) -> String {
         format!("echo: {} {}", call.function_name, call.arguments)
     }
 }
@@ -3982,8 +4026,9 @@ impl CountingExecutor {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor for CountingExecutor {
-    fn execute(&self, call: &LlmToolCall, _context: &AgentToolRunContext) -> String {
+    async fn execute(&self, call: &LlmToolCall, _context: &AgentToolRunContext) -> String {
         self.calls.lock().unwrap().push(call.function_name.clone());
         format!("counted: {}", call.function_name)
     }
@@ -4000,8 +4045,9 @@ impl ContextRecordingExecutor {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor for ContextRecordingExecutor {
-    fn execute(&self, _call: &LlmToolCall, context: &AgentToolRunContext) -> String {
+    async fn execute(&self, _call: &LlmToolCall, context: &AgentToolRunContext) -> String {
         self.contexts.lock().unwrap().push(context.clone());
         "{\"status\":\"ok\"}".into()
     }

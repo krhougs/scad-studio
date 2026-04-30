@@ -9,8 +9,8 @@ fn slugify_plan_title_uses_ascii_lowercase_digits_and_hyphens() {
     assert_eq!(slugify_plan_title("新增滑盖"), "cad-plan");
 }
 
-#[test]
-fn save_plan_package_with_timestamp_uses_existing_daily_max_sequence() {
+#[tokio::test]
+async fn save_plan_package_with_timestamp_uses_existing_daily_max_sequence() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("plans/2026042900-old")).unwrap();
     std::fs::create_dir_all(dir.path().join("plans/2026042903-other")).unwrap();
@@ -23,6 +23,7 @@ fn save_plan_package_with_timestamp_uses_existing_daily_max_sequence() {
             created_at: "2026-04-29T14:00:00+0800".into(),
         },
     )
+    .await
     .expect("package should be saved");
 
     assert_eq!(saved.paths.plan_id, "2026042904-add-lid-vents");

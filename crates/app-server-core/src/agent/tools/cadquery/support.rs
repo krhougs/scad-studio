@@ -26,7 +26,7 @@ pub(super) struct SourceContract {
     pub(super) invalid_imports: Vec<String>,
 }
 
-pub(super) fn analyze_success(
+pub(super) async fn analyze_success(
     workspace_root: &Path,
     call: &LlmToolCall,
     target_path: &str,
@@ -44,7 +44,7 @@ pub(super) fn analyze_success(
         "has_build_function": has_build_function(source),
         "has_refs": has_refs(source),
         "has_model_description": has_model_description,
-        "paired_doc_path": include_paired_doc.then(|| paired_doc_path(workspace_root, target_path)).flatten(),
+        "paired_doc_path": if include_paired_doc { paired_doc_path(workspace_root, target_path).await } else { None },
         "local_dependencies": if include_dependencies { local_dependencies(source) } else { Vec::new() },
         "ref_keys": feature_keys(source),
         "warnings": analyze_warnings(source, has_model_description)
@@ -203,9 +203,12 @@ pub(super) fn target_type_from_path(path: &str) -> CadQueryObjectKind {
     }
 }
 
-fn paired_doc_path(root: &Path, source: &str) -> Option<String> {
+async fn paired_doc_path(root: &Path, source: &str) -> Option<String> {
     let doc = source.strip_suffix(".py")?.to_owned() + ".md";
-    root.join(&doc).is_file().then_some(doc)
+    tokio::fs::metadata(root.join(&doc))
+        .await
+        .is_ok_and(|metadata| metadata.is_file())
+        .then_some(doc)
 }
 
 fn has_build_function(source: &str) -> bool {

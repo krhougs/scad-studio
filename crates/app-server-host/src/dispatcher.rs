@@ -4,11 +4,11 @@ use app_server_core::{
     CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError,
     CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
     CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
-    SlicerInstall, cadquery_result_ready, current_workspace, detect_slicer_paths, export_model,
-    list_workspace_entries, load_config_dto, preview_ready_response, read_file_response,
-    resolve_workspace_path, resolve_workspace_write_path, run_cadquery_contract,
-    run_cadquery_runner, run_cadquery_runner_with_cancel, save_config_dto, send_to_slicer,
-    stage_cadquery_project,
+    SlicerInstall, cadquery_result_ready, current_workspace_owned, detect_slicer_paths,
+    export_model, list_workspace_entries_owned, load_config_dto, preview_ready_response,
+    read_file_response_owned, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
+    run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel, save_config_dto,
+    send_to_slicer, stage_cadquery_project_owned,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -28,7 +28,6 @@ use app_server_protocol::{
 
 use crate::cadquery_python_path;
 use std::collections::{HashMap, VecDeque};
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -36,6 +35,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
 
 use crate::HostSession;
 
@@ -139,7 +139,7 @@ impl HostRequestDispatcher {
                 active_index: None,
             },
             push_sink,
-            session: HostSession::new(session_token, server_capabilities()),
+            session: HostSession::new(session_token, server_capabilities(false)),
         }
     }
 
@@ -151,7 +151,8 @@ impl HostRequestDispatcher {
         &mut self,
         request: CapabilityHandshakeRequest,
     ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
-        let server_capabilities = server_capabilities_for_request(&request);
+        let requested_preview_kinds = request.capabilities.supported_preview_kinds.clone();
+        let server_capabilities = server_capabilities_for_request(requested_preview_kinds).await;
         let negotiated_version = negotiate_protocol_version(
             request.capabilities.protocol_version,
             server_capabilities.protocol_version,
@@ -192,55 +193,70 @@ impl HostRequestDispatcher {
     ) -> Result<CommandSuccess, ProtocolError> {
         match command {
             ClientCommand::WorkspaceCurrent => {
-                let workspace_path = self.workspace_root()?;
-                let current = current_workspace(workspace_path, self.workspace_id.clone());
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let current =
+                    current_workspace_owned(workspace_path, self.workspace_id.clone()).await;
                 self.session.bind_workspace(current.clone());
                 Ok(CommandSuccess::WorkspaceCurrent(current))
             }
             ClientCommand::WorkspaceList(request) => {
                 let workspace_path = self.workspace_root()?;
-                let response = list_workspace_entries(
-                    workspace_path,
+                let response = list_workspace_entries_owned(
+                    workspace_path.to_path_buf(),
                     self.workspace_id.clone(),
-                    request.directory.as_ref(),
-                )?;
+                    request.directory,
+                )
+                .await?;
                 self.record_workspace_entries(&response);
                 Ok(CommandSuccess::WorkspaceList(response))
             }
             ClientCommand::FileRead(request) => {
                 let workspace_path = self.workspace_root()?.to_path_buf();
                 self.session.issue_handle(request.path.clone());
-                read_file_response(&workspace_path, &request.path, &self.denied_extensions)
-                    .map(CommandSuccess::FileRead)
+                read_file_response_owned(
+                    workspace_path,
+                    request.path,
+                    self.denied_extensions.clone(),
+                )
+                .await
+                .map(CommandSuccess::FileRead)
             }
             ClientCommand::FileWriteText(request) => {
-                let workspace_path = self.workspace_root()?;
-                let resolved = resolve_workspace_write_path(workspace_path, &request.path)?;
-                fs::write(&resolved, request.contents).map_err(internal_error)?;
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let resolved =
+                    resolve_workspace_write_path_owned(workspace_path, request.path.clone())
+                        .await?;
+                tokio::fs::write(resolved, request.contents)
+                    .await
+                    .map_err(internal_error)?;
                 self.session.issue_handle(request.path.clone());
                 Ok(CommandSuccess::FileWritten(FileWriteTextResponse {
                     path: request.path,
                 }))
             }
             ClientCommand::ConfigLoad => {
-                let config = load_config_dto().map_err(internal_error)?;
+                let config = load_config_dto().await.map_err(internal_error)?;
                 Ok(CommandSuccess::ConfigLoaded(ConfigLoadResponse { config }))
             }
             ClientCommand::ConfigSave(request) => {
-                save_config_dto(&request.config).map_err(internal_error)?;
+                save_config_dto(request.config)
+                    .await
+                    .map_err(internal_error)?;
                 Ok(CommandSuccess::ConfigSaved)
             }
             ClientCommand::PreviewRequest(request) => {
-                let workspace_path = self.workspace_root()?;
-                let source_path = resolve_workspace_path(workspace_path, &request.source)?;
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let source_path =
+                    resolve_workspace_path_owned(workspace_path, request.source.clone()).await?;
                 self.session.issue_handle(request.source.clone());
                 preview_ready_response(
                     request
                         .configured_openscad_path
                         .map(|path| path.to_path_buf()),
-                    &source_path,
-                    &request.defines,
+                    source_path,
+                    request.defines,
                 )
+                .await
                 .map(CommandSuccess::PreviewReady)
                 .map_err(internal_error)
             }
@@ -252,13 +268,20 @@ impl HostRequestDispatcher {
                     ));
                 }
                 let workspace_path = self.workspace_root()?.to_path_buf();
-                let source_path = resolve_workspace_path(&workspace_path, &request.target_path)?;
-                let code = fs::read_to_string(&source_path).map_err(internal_error)?;
+                let source_path = resolve_workspace_path_owned(
+                    workspace_path.clone(),
+                    request.target_path.clone(),
+                )
+                .await?;
+                let code = tokio::fs::read_to_string(source_path)
+                    .await
+                    .map_err(internal_error)?;
                 let script = path_handle_to_relative_path(&request.target_path);
-                let staged = stage_cadquery_project(&workspace_path, &script, &code)
+                let staged = stage_cadquery_project_owned(workspace_path, script.clone(), code)
+                    .await
                     .map_err(internal_error)?;
                 self.session.issue_handle(request.target_path);
-                let result = run_cadquery_runner(&CadQueryRunConfig {
+                let result = match run_cadquery_runner(CadQueryRunConfig {
                     python: cadquery_python_path(),
                     project_root: staged.root().to_path_buf(),
                     script: display_relative_path(&script),
@@ -267,7 +290,15 @@ impl HostRequestDispatcher {
                     params_json: request.params_json,
                     timeout: CADQUERY_RUNNER_TIMEOUT,
                 })
-                .map_err(internal_error)?;
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        staged.cleanup().await;
+                        return Err(internal_error(error));
+                    }
+                };
+                staged.cleanup().await;
                 let ready = result.ready.clone();
                 self.cache_cadquery_mesh(result)?;
                 Ok(CommandSuccess::CadQueryResultReady(ready))
@@ -293,34 +324,39 @@ impl HostRequestDispatcher {
             ClientCommand::ChatCreate(request) => {
                 self.issue_handles(&request.related_files);
                 self.chat_store()?
-                    .create(&request.title, request.goal, request.related_files)
+                    .create_owned(request.title, request.goal, request.related_files)
+                    .await
                     .map(CommandSuccess::ChatCreated)
             }
             ClientCommand::ChatList(request) => self
                 .chat_store()?
-                .list(request.include_archived)
+                .list_owned(request.include_archived)
+                .await
                 .map(CommandSuccess::ChatList),
             ClientCommand::ChatSend(request) => {
                 self.issue_handles(&request.related_files);
                 self.chat_store()?
-                    .append_message(
-                        &request.session_id,
+                    .append_message_owned(
+                        request.session_id,
                         ChatRole::User,
-                        &request.content,
+                        request.content,
                         request.related_files,
                         None,
                     )
+                    .await
                     .map(CommandSuccess::ChatAck)
             }
             ClientCommand::ChatHistory(request) => self
                 .chat_store()?
-                .history(&request.session_id, request.limit)
+                .history_owned(request.session_id, request.limit)
+                .await
                 .map(CommandSuccess::ChatHistory),
             ClientCommand::ChatArchive(request) => self
                 .chat_store()?
-                .archive(&request.session_id)
+                .archive_owned(request.session_id)
+                .await
                 .map(CommandSuccess::ChatArchived),
-            ClientCommand::AgentInvoke(request) => self.start_agent(request),
+            ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request),
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
             ClientCommand::AgentPlanConfirm(request) => self.confirm_agent_plan(request),
             ClientCommand::AgentPlanReject(request) => self.reject_agent_plan(request),
@@ -336,7 +372,8 @@ impl HostRequestDispatcher {
                         path: item.path.to_path_buf(),
                     })
                     .collect::<Vec<_>>();
-                let slicers = detect_slicer_paths(&configured)
+                let slicers = detect_slicer_paths(configured)
+                    .await
                     .into_iter()
                     .map(|item| {
                         Ok(app_server_protocol::SlicerInstallRecord {
@@ -350,10 +387,13 @@ impl HostRequestDispatcher {
                 ))
             }
             ClientCommand::ExportRun(request) => {
-                let workspace_path = self.workspace_root()?;
-                let source_path = resolve_workspace_path(workspace_path, &request.source)?;
+                let workspace_path = self.workspace_root()?.to_path_buf();
+                let source_path =
+                    resolve_workspace_path_owned(workspace_path.clone(), request.source).await?;
                 let output_handle = request.output_path.clone();
-                let output_path = resolve_workspace_write_path(workspace_path, &output_handle)?;
+                let output_path =
+                    resolve_workspace_write_path_owned(workspace_path, output_handle.clone())
+                        .await?;
                 let configured_slicers = request
                     .configured_slicers
                     .iter()
@@ -366,14 +406,16 @@ impl HostRequestDispatcher {
                     request
                         .configured_openscad_path
                         .map(|path| path.to_path_buf()),
-                    &source_path,
-                    &request.defines,
-                    &output_path,
+                    source_path,
+                    request.defines,
+                    output_path.clone(),
                     request.format,
                 )
+                .await
                 .map_err(internal_error)?;
                 if let Some(name) = request.slicer_name {
-                    let slicer = detect_slicer_paths(&configured_slicers)
+                    let slicer = detect_slicer_paths(configured_slicers)
+                        .await
                         .into_iter()
                         .find(|item| item.name == name)
                         .ok_or_else(|| {
@@ -382,14 +424,16 @@ impl HostRequestDispatcher {
                                 format!("未找到切片软件 {name}"),
                             )
                         })?;
-                    send_to_slicer(&slicer.path, &output_path).map_err(internal_error)?;
+                    send_to_slicer(slicer.path, output_path.clone())
+                        .await
+                        .map_err(internal_error)?;
                 }
                 Ok(CommandSuccess::ExportRun(ExportRunResponse {
                     output_path: output_handle,
                 }))
             }
             ClientCommand::WatchSubscribe(request) => {
-                let workspace_path = self.workspace_root()?;
+                let workspace_path = self.workspace_root()?.to_path_buf();
                 let watched_handle = request.directory.unwrap_or_else(|| {
                     app_server_protocol::PathHandle::new(
                         self.workspace_id.clone(),
@@ -397,7 +441,8 @@ impl HostRequestDispatcher {
                     )
                     .expect("root workspace handle should be valid")
                 });
-                let watched_path = resolve_workspace_path(workspace_path, &watched_handle)?;
+                let watched_path =
+                    resolve_workspace_path_owned(workspace_path, watched_handle.clone()).await?;
                 let subscription_id = SubscriptionId(format!("sub-{}", self.next_subscription_id));
                 self.next_subscription_id += 1;
                 let watcher = build_watcher(
@@ -495,11 +540,10 @@ impl HostRequestDispatcher {
         Ok(SelectionUpdateResponse { accepted_count })
     }
 
-    fn start_agent(
+    fn start_agent_after_history(
         &mut self,
         request: AgentInvokeRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
-        self.chat_store()?.history(&request.session_id, Some(1))?;
         let run = self
             .agent_runs
             .lock()
@@ -664,16 +708,18 @@ struct HostCadQueryToolRuntime {
     run: AgentRunHandle,
 }
 
+#[async_trait::async_trait]
 impl CadQueryToolRuntime for HostCadQueryToolRuntime {
-    fn model_contract(
+    async fn model_contract(
         &self,
         request: &CadQueryToolRunRequest,
     ) -> Option<Result<CadQueryModelContract, CadQueryToolRuntimeError>> {
-        let result = run_cadquery_contract(&CadQueryContractConfig {
+        let result = run_cadquery_contract(CadQueryContractConfig {
             python: self.python.clone(),
             code: request.code.clone(),
             timeout: CADQUERY_RUNNER_TIMEOUT,
         })
+        .await
         .map(|contract| CadQueryModelContract {
             has_model_description: contract.has_model_description,
         })
@@ -681,18 +727,19 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
         Some(result)
     }
 
-    fn dry_run(
+    async fn dry_run(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
-        let staged = stage_cadquery_project(
-            &self.workspace_root,
-            &PathBuf::from(&request.target_path),
-            &request.code,
+        let staged = stage_cadquery_project_owned(
+            self.workspace_root.clone(),
+            PathBuf::from(request.target_path.clone()),
+            request.code.clone(),
         )
+        .await
         .map_err(cadquery_tool_error)?;
-        let result = run_cadquery_runner_with_cancel(
-            &CadQueryRunConfig {
+        let result = match run_cadquery_runner_with_cancel(
+            CadQueryRunConfig {
                 python: self.python.clone(),
                 project_root: staged.root().to_path_buf(),
                 script: staged.script_arg(),
@@ -703,7 +750,15 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
             },
             &|| self.run.cancelled.load(Ordering::SeqCst),
         )
-        .map_err(cadquery_tool_error)?;
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                staged.cleanup().await;
+                return Err(cadquery_tool_error(error));
+            }
+        };
+        staged.cleanup().await;
         self.finish_result(
             result,
             request.target_type,
@@ -713,21 +768,26 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
         )
     }
 
-    fn execute(
+    async fn execute(
         &self,
         request: CadQueryToolRunRequest,
     ) -> Result<CadQueryToolRunResult, CadQueryToolRuntimeError> {
         let commit_scope = CadQueryCommitScope::ExactOutputs(
-            request.export_targets.iter().map(PathBuf::from).collect(),
+            request
+                .export_targets
+                .iter()
+                .map(|path| PathBuf::from(path.clone()))
+                .collect(),
         );
-        let staged = stage_cadquery_project(
-            &self.workspace_root,
-            &PathBuf::from(&request.target_path),
-            &request.code,
+        let staged = stage_cadquery_project_owned(
+            self.workspace_root.clone(),
+            PathBuf::from(request.target_path.clone()),
+            request.code.clone(),
         )
+        .await
         .map_err(cadquery_tool_error)?;
-        let result = run_cadquery_runner_with_cancel(
-            &CadQueryRunConfig {
+        let result = match run_cadquery_runner_with_cancel(
+            CadQueryRunConfig {
                 python: self.python.clone(),
                 project_root: staged.root().to_path_buf(),
                 script: staged.script_arg(),
@@ -738,20 +798,37 @@ impl CadQueryToolRuntime for HostCadQueryToolRuntime {
             },
             &|| self.run.cancelled.load(Ordering::SeqCst),
         )
-        .map_err(cadquery_tool_error)?;
-        validate_result_kind(&result.mesh, request.target_type)?;
-        if let Some(doc_path) = request.doc_update_path.as_deref() {
-            self.preflight_cadquery_doc_update(doc_path)?;
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                staged.cleanup().await;
+                return Err(cadquery_tool_error(error));
+            }
+        };
+        if let Err(error) = validate_result_kind(&result.mesh, request.target_type) {
+            staged.cleanup().await;
+            return Err(error);
+        }
+        if let Some(doc_path) = request.doc_update_path.clone() {
+            if let Err(error) = self.preflight_cadquery_doc_update(doc_path).await {
+                staged.cleanup().await;
+                return Err(error);
+            }
         }
         staged
             .commit_success_with_scope_cancellable(&commit_scope, &|| {
                 self.run.cancelled.load(Ordering::SeqCst)
             })
+            .await
             .map_err(cadquery_tool_error)?;
         let mut committed_files = vec![request.target_path];
         let mut extra_warnings = Vec::new();
         if let Some(doc_path) = request.doc_update_path {
-            match self.append_cadquery_doc_update(&doc_path, &result) {
+            match self
+                .append_cadquery_doc_update(doc_path.clone(), result.clone())
+                .await
+            {
                 Ok(()) => committed_files.push(doc_path),
                 Err(warning) => extra_warnings.push(warning),
             }
@@ -809,18 +886,20 @@ impl HostCadQueryToolRuntime {
         })
     }
 
-    fn preflight_cadquery_doc_update(
+    async fn preflight_cadquery_doc_update(
         &self,
-        doc_path: &str,
+        doc_path: String,
     ) -> Result<(), CadQueryToolRuntimeError> {
         let absolute = self.workspace_root.join(doc_path);
-        let metadata = fs::symlink_metadata(&absolute).map_err(|error| {
-            CadQueryToolRuntimeError::new(
-                "file_conflict",
-                format!("读取 CadQuery 说明文档失败: {error}"),
-                false,
-            )
-        })?;
+        let metadata = tokio::fs::symlink_metadata(absolute.clone())
+            .await
+            .map_err(|error| {
+                CadQueryToolRuntimeError::new(
+                    "file_conflict",
+                    format!("读取 CadQuery 说明文档失败: {error}"),
+                    false,
+                )
+            })?;
         if metadata.file_type().is_symlink() {
             return Err(CadQueryToolRuntimeError::new(
                 "permission_denied",
@@ -835,9 +914,10 @@ impl HostCadQueryToolRuntime {
                 false,
             ));
         }
-        fs::OpenOptions::new()
+        tokio::fs::OpenOptions::new()
             .append(true)
-            .open(&absolute)
+            .open(absolute)
+            .await
             .map(|_| ())
             .map_err(|error| {
                 CadQueryToolRuntimeError::new(
@@ -848,23 +928,24 @@ impl HostCadQueryToolRuntime {
             })
     }
 
-    fn append_cadquery_doc_update(
+    async fn append_cadquery_doc_update(
         &self,
-        doc_path: &str,
-        result: &CadQueryRunResult,
+        doc_path: String,
+        result: CadQueryRunResult,
     ) -> Result<(), String> {
         let absolute = self.workspace_root.join(doc_path);
         let note = format!(
             "\n\n## budn' CadQuery 执行记录\n\n- result_id: `{}`\n- build_id: `{}`\n",
             result.mesh.result_id, result.mesh.build_id
         );
-        fs::OpenOptions::new()
+        let mut file = tokio::fs::OpenOptions::new()
             .append(true)
-            .open(&absolute)
-            .and_then(|mut file| {
-                use std::io::Write;
-                file.write_all(note.as_bytes())
-            })
+            .open(absolute)
+            .await
+            .map_err(|error| format!("更新 CadQuery 说明文档失败: {error}"))?;
+        let bytes = note.into_bytes();
+        file.write_all(&bytes)
+            .await
             .map_err(|error| format!("更新 CadQuery 说明文档失败: {error}"))
     }
 }
@@ -874,7 +955,7 @@ fn run_agent_worker(worker: AgentWorker) {
 }
 
 fn run_text_agent(worker: AgentWorker) {
-    let provider = match app_server_core::llm::create_provider() {
+    let provider = match block_on_old_agent_future(app_server_core::llm::create_provider()) {
         Ok(p) => p,
         Err(error) => {
             let message = error.message;
@@ -921,9 +1002,8 @@ fn run_text_agent(worker: AgentWorker) {
 }
 
 fn latest_saved_plan_for_worker(worker: &AgentWorker) -> Option<SavedCadPlan> {
-    let history = ChatStore::new(worker.workspace_root.clone())
-        .history(&worker.run.session_id, None)
-        .ok()?;
+    let store = ChatStore::new(worker.workspace_root.clone());
+    let history = block_on_old_agent_future(store.history(&worker.run.session_id, None)).ok()?;
     latest_saved_cad_plan(&history.messages, &worker.run.run_id)
 }
 
@@ -984,8 +1064,7 @@ fn run_text_agent_llm(
     provider: &dyn app_server_core::llm::LlmProvider,
 ) -> Option<String> {
     let store = ChatStore::new(worker.workspace_root.clone());
-    let history = store
-        .history(&worker.run.session_id, None)
+    let history = block_on_old_agent_future(store.history(&worker.run.session_id, None))
         .map(|response| response.messages)
         .unwrap_or_default();
     let mode = app_server_core::mode_for_tool_loop(worker.mode);
@@ -1043,30 +1122,38 @@ fn run_text_agent_llm(
     let push_sink = Arc::clone(&worker.push_sink);
     let run = worker.run.clone();
     let cancelled = Arc::clone(&worker.run.cancelled);
-    match app_server_core::stream_agent_turn_with_tools_and_reasoning(
-        input,
-        provider,
-        &tool_executor,
-        tool_context,
-        &tool_observer,
-        &|token| {
-            if cancelled.load(Ordering::SeqCst) {
-                return false;
-            }
-            push_agent_token(&push_sink, &run, token);
-            true
-        },
-        &|delta| {
-            if cancelled.load(Ordering::SeqCst) {
-                return false;
-            }
-            push_agent_reasoning(&push_sink, &run, delta);
-            true
-        },
-    ) {
+    let turn_result = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+        .and_then(|runtime| {
+            runtime
+                .block_on(app_server_core::stream_agent_turn_with_tools_and_reasoning(
+                    input,
+                    provider,
+                    &tool_executor,
+                    tool_context,
+                    &tool_observer,
+                    &|token| {
+                        if cancelled.load(Ordering::SeqCst) {
+                            return false;
+                        }
+                        push_agent_token(&push_sink, &run, token);
+                        true
+                    },
+                    &|delta| {
+                        if cancelled.load(Ordering::SeqCst) {
+                            return false;
+                        }
+                        push_agent_reasoning(&push_sink, &run, delta);
+                        true
+                    },
+                ))
+                .map_err(|error| error.message)
+        });
+    match turn_result {
         Ok(draft) => Some(draft.text),
-        Err(error) => {
-            let message = error.message;
+        Err(message) => {
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
@@ -1094,7 +1181,11 @@ fn execution_scope_for_worker(
     let Some(plan_ref) = &worker.plan_ref else {
         return Ok(None);
     };
-    execution_scope_from_plan_ref(&worker.workspace_root, plan_ref).map(Some)
+    block_on_old_agent_future(execution_scope_from_plan_ref(
+        &worker.workspace_root,
+        plan_ref,
+    ))
+    .map(Some)
 }
 
 pub fn validate_cadquery_confirmation(
@@ -1200,14 +1291,15 @@ fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
 }
 
 fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_message_with_run_id(
+    let store = ChatStore::new(workspace_root.to_path_buf());
+    let _ = block_on_old_agent_future(store.append_message_with_run_id(
         &run.session_id,
         ChatRole::Assistant,
         content,
         Vec::new(),
         None,
         Some(run.run_id.clone()),
-    );
+    ));
 }
 
 fn append_agent_error_message(
@@ -1224,7 +1316,8 @@ fn append_agent_error_message(
 }
 
 fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmToolCall) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_call(
+    let store = ChatStore::new(workspace_root.to_path_buf());
+    let _ = block_on_old_agent_future(store.append_tool_call(
         &run.session_id,
         "agent tool started",
         ChatToolCallRecord {
@@ -1232,7 +1325,7 @@ fn append_llm_tool_call(workspace_root: &Path, run: &AgentRunHandle, call: &LlmT
             tool_name: call.function_name.clone(),
             args_json: call.arguments.clone(),
         },
-    );
+    ));
 }
 
 fn append_llm_tool_result(
@@ -1242,7 +1335,8 @@ fn append_llm_tool_result(
     result: &str,
     mesh_result: Option<app_server_protocol::CadQueryResultReady>,
 ) {
-    let _ = ChatStore::new(workspace_root.to_path_buf()).append_tool_result(
+    let store = ChatStore::new(workspace_root.to_path_buf());
+    let _ = block_on_old_agent_future(store.append_tool_result(
         &run.session_id,
         "agent tool completed",
         ChatToolResultRecord {
@@ -1251,7 +1345,18 @@ fn append_llm_tool_result(
             result_json: result.to_owned(),
         },
         mesh_result,
-    );
+    ));
+}
+
+fn block_on_old_agent_future<T>(future: impl std::future::Future<Output = T>) -> T {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return tokio::task::block_in_place(|| handle.block_on(future));
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("old Agent worker runtime should build")
+        .block_on(future)
 }
 
 fn cadquery_ready_for_tool_result(
@@ -1425,14 +1530,14 @@ fn runner_warnings(stderr: &str) -> Vec<String> {
 }
 
 #[cfg(unix)]
-fn is_hard_link(metadata: &fs::Metadata) -> bool {
+fn is_hard_link(metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
     metadata.nlink() > 1
 }
 
 #[cfg(not(unix))]
-fn is_hard_link(_metadata: &fs::Metadata) -> bool {
+fn is_hard_link(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 
@@ -1558,7 +1663,7 @@ fn display_relative_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn server_capabilities() -> ServerCapabilities {
+fn server_capabilities(llm_configured: bool) -> ServerCapabilities {
     ServerCapabilities {
         protocol_version: ProtocolVersionRange::new(
             CURRENT_PROTOCOL_VERSION,
@@ -1571,21 +1676,22 @@ fn server_capabilities() -> ServerCapabilities {
         cadquery: true,
         agent: true,
         selection_sync: true,
-        llm_configured: app_server_core::llm::load_llm_config()
-            .ok()
-            .flatten()
-            .is_some(),
+        llm_configured,
     }
 }
 
-fn server_capabilities_for_request(request: &CapabilityHandshakeRequest) -> ServerCapabilities {
-    let mut capabilities = server_capabilities();
-    capabilities.supported_preview_kinds = request
-        .capabilities
-        .supported_preview_kinds
-        .iter()
+async fn server_capabilities_for_request(
+    requested_preview_kinds: Vec<PreviewRequestKind>,
+) -> ServerCapabilities {
+    let llm_configured = app_server_core::llm::load_llm_config()
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let mut capabilities = server_capabilities(llm_configured);
+    capabilities.supported_preview_kinds = requested_preview_kinds
+        .into_iter()
         .filter(|kind| matches!(kind, PreviewRequestKind::GeometryArtifact))
-        .cloned()
         .collect();
     if capabilities.supported_preview_kinds.is_empty() {
         capabilities.supported_preview_kinds = vec![PreviewRequestKind::GeometryArtifact];

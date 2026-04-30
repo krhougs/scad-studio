@@ -54,8 +54,8 @@ fn success_json() -> String {
     .into()
 }
 
-#[test]
-fn cadquery_staging_rejects_cancel_after_runner_before_commit() {
+#[tokio::test]
+async fn cadquery_staging_rejects_cancel_after_runner_before_commit() {
     let root = workspace_with_part("old = True\n");
     let marker = root.join("runner-finished");
     let runner = fake_runner_with_marker(&root, &success_json(), &marker);
@@ -79,6 +79,7 @@ fn cadquery_staging_rejects_cancel_after_runner_before_commit() {
         },
         &CadQueryCommitScope::ExactOutputs(vec![Path::new("outputs/top_lid.step").into()]),
     )
+    .await
     .expect_err("post-run cancellation should abort commit");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
@@ -87,13 +88,74 @@ fn cadquery_staging_rejects_cancel_after_runner_before_commit() {
         "old = True\n"
     );
     assert!(!root.join("outputs/top_lid.step").exists());
+    assert!(!root.join(".budn_staging").exists());
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rolls_back_when_cancelled_between_commit_files() {
+#[tokio::test]
+async fn cadquery_staging_cleans_up_when_cancelled_after_stage_before_runner() {
+    let root = workspace_with_part("old = True\n");
+    let runner = fake_runner(&root, &success_json());
+    let cancel_checks = AtomicU64::new(0);
+
+    let error = execute_cadquery_with_staging_cancellable_scoped(
+        &CadQueryExecuteConfig {
+            python: runner,
+            workspace_root: root.clone(),
+            target_relative_path: Path::new("parts/top_lid.py").into(),
+            code: "new = True\n".into(),
+            export_formats: Vec::new(),
+            params_json: "{}".into(),
+            timeout: Duration::from_secs(5),
+        },
+        &|| cancel_checks.fetch_add(1, Ordering::SeqCst) >= 1,
+        &CadQueryCommitScope::ExactOutputs(vec![Path::new("outputs/top_lid.step").into()]),
+    )
+    .await
+    .expect_err("cancellation after staging should abort before runner");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("runner-args.json").exists());
+    assert!(!root.join(".budn_staging").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn cadquery_staging_cleans_up_after_runner_timeout() {
+    let root = workspace_with_part("old = True\n");
+    let runner = sleeping_runner(&root);
+
+    let error = execute_cadquery_with_staging(&CadQueryExecuteConfig {
+        python: runner,
+        workspace_root: root.clone(),
+        target_relative_path: Path::new("parts/top_lid.py").into(),
+        code: "new = True\n".into(),
+        export_formats: Vec::new(),
+        params_json: "{}".into(),
+        timeout: Duration::from_millis(50),
+    })
+    .await
+    .expect_err("timeout should abort staged execute");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Timeout);
+    assert_eq!(
+        fs::read_to_string(root.join("parts/top_lid.py")).unwrap(),
+        "old = True\n"
+    );
+    assert!(!root.join("outputs").exists());
+    assert!(!root.join(".budn_staging").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn cadquery_staging_rolls_back_when_cancelled_between_commit_files() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir()).unwrap();
     fs::write(staged.output_dir().join("top_lid.step"), "new artifact\n").unwrap();
@@ -104,6 +166,7 @@ fn cadquery_staging_rolls_back_when_cancelled_between_commit_files() {
             &CadQueryCommitScope::ExactOutputs(vec![Path::new("outputs/top_lid.step").into()]),
             &|| cancel_checks.fetch_add(1, Ordering::SeqCst) >= 2,
         )
+        .await
         .expect_err("cancellation between commit files should roll back");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
@@ -116,10 +179,11 @@ fn cadquery_staging_rolls_back_when_cancelled_between_commit_files() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir() {
+#[tokio::test]
+async fn cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir().join("nested")).unwrap();
     fs::write(
@@ -135,6 +199,7 @@ fn cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir() {
             ]),
             &|| true,
         )
+        .await
         .expect_err("pre-commit cancellation should not prepare directories");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
@@ -146,8 +211,8 @@ fn cadquery_staging_rejects_pre_commit_cancel_without_creating_outputs_dir() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_commits_target_only_after_successful_runner() {
+#[tokio::test]
+async fn cadquery_staging_commits_target_only_after_successful_runner() {
     let root = workspace_with_part("old = True\n");
     let runner = fake_runner(&root, &success_json());
 
@@ -160,6 +225,7 @@ fn cadquery_staging_commits_target_only_after_successful_runner() {
         params_json: "{}".into(),
         timeout: Duration::from_secs(5),
     })
+    .await
     .expect("staged execute");
 
     assert_eq!(
@@ -178,15 +244,17 @@ fn cadquery_staging_commits_target_only_after_successful_runner() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rejects_commit_when_original_file_changed() {
+#[tokio::test]
+async fn cadquery_staging_rejects_commit_when_original_file_changed() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::write(root.join("parts/top_lid.py"), "external = True\n").unwrap();
 
     let error = staged
         .commit_target()
+        .await
         .expect_err("commit should detect conflict");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::FileConflict);
@@ -197,8 +265,8 @@ fn cadquery_staging_rejects_commit_when_original_file_changed() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_baseline_is_captured_before_workspace_copy() {
+#[tokio::test]
+async fn cadquery_staging_baseline_is_captured_before_workspace_copy() {
     let root = workspace_with_part("old = True\n");
     let bulk_dir = root.join("bulk");
     fs::create_dir_all(&bulk_dir).unwrap();
@@ -220,11 +288,13 @@ fn cadquery_staging_baseline_is_captured_before_workspace_copy() {
     });
 
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     handle.join().expect("external edit thread");
 
     let error = staged
         .commit_target()
+        .await
         .expect_err("commit should detect edit during staging");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::FileConflict);
@@ -235,10 +305,11 @@ fn cadquery_staging_baseline_is_captured_before_workspace_copy() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rolls_back_outputs_when_output_commit_fails() {
+#[tokio::test]
+async fn cadquery_staging_rolls_back_outputs_when_output_commit_fails() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     let staged_outputs = staged.output_dir();
     fs::create_dir_all(staged_outputs.join("b_dir")).unwrap();
@@ -250,6 +321,7 @@ fn cadquery_staging_rolls_back_outputs_when_output_commit_fails() {
 
     let error = staged
         .commit_outputs()
+        .await
         .expect_err("commit should fail on conflicting output path");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::InvalidProjectPath);
@@ -264,16 +336,17 @@ fn cadquery_staging_rolls_back_outputs_when_output_commit_fails() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_does_not_recommit_outputs_copied_from_workspace() {
+#[tokio::test]
+async fn cadquery_staging_does_not_recommit_outputs_copied_from_workspace() {
     let root = workspace_with_part("old = True\n");
     fs::create_dir_all(root.join("outputs")).unwrap();
     fs::write(root.join("outputs/stale.step"), "old artifact\n").unwrap();
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::write(root.join("outputs/stale.step"), "external artifact\n").unwrap();
 
-    staged.commit_outputs().expect("no generated outputs");
+    staged.commit_outputs().await.expect("no generated outputs");
 
     assert_eq!(
         fs::read_to_string(root.join("outputs/stale.step")).unwrap(),
@@ -282,10 +355,11 @@ fn cadquery_staging_does_not_recommit_outputs_copied_from_workspace() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rejects_output_commit_when_original_file_changed() {
+#[tokio::test]
+async fn cadquery_staging_rejects_output_commit_when_original_file_changed() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir()).unwrap();
     fs::write(staged.output_dir().join("top_lid.step"), "artifact\n").unwrap();
@@ -293,6 +367,7 @@ fn cadquery_staging_rejects_output_commit_when_original_file_changed() {
 
     let error = staged
         .commit_outputs()
+        .await
         .expect_err("output commit should detect source conflict");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::FileConflict);
@@ -300,10 +375,11 @@ fn cadquery_staging_rejects_output_commit_when_original_file_changed() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_staging_rejects_unlisted_outputs_when_scope_is_exact() {
+#[tokio::test]
+async fn cadquery_staging_rejects_unlisted_outputs_when_scope_is_exact() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir()).unwrap();
     fs::write(staged.output_dir().join("top_lid.step"), "artifact\n").unwrap();
@@ -313,6 +389,7 @@ fn cadquery_staging_rejects_unlisted_outputs_when_scope_is_exact() {
         .commit_success_with_scope(&CadQueryCommitScope::ExactOutputs(vec![
             Path::new("outputs/top_lid.step").into(),
         ]))
+        .await
         .expect_err("unlisted output should be rejected");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::PermissionDenied);
@@ -326,19 +403,21 @@ fn cadquery_staging_rejects_unlisted_outputs_when_scope_is_exact() {
 }
 
 #[cfg(unix)]
-#[test]
-fn cadquery_staging_rejects_output_symlink_escape() {
+#[tokio::test]
+async fn cadquery_staging_rejects_output_symlink_escape() {
     let root = workspace_with_part("old = True\n");
     let outside = temp_dir("cadquery-output-escape");
     fs::create_dir_all(&outside).unwrap();
     std::os::unix::fs::symlink(&outside, root.join("outputs")).unwrap();
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir()).unwrap();
     fs::write(staged.output_dir().join("top_lid.step"), "artifact\n").unwrap();
 
     let error = staged
         .commit_outputs()
+        .await
         .expect_err("output commit should reject symlink escape");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::InvalidProjectPath);
@@ -348,10 +427,11 @@ fn cadquery_staging_rejects_output_symlink_escape() {
     let _ = fs::remove_dir_all(outside);
 }
 
-#[test]
-fn cadquery_staging_rolls_back_outputs_when_target_commit_fails() {
+#[tokio::test]
+async fn cadquery_staging_rolls_back_outputs_when_target_commit_fails() {
     let root = workspace_with_part("old = True\n");
     let staged = stage_cadquery_project(&root, Path::new("parts/top_lid.py"), "new = True\n")
+        .await
         .expect("stage project");
     fs::create_dir_all(staged.output_dir()).unwrap();
     fs::write(staged.output_dir().join("top_lid.step"), "new artifact\n").unwrap();
@@ -361,6 +441,7 @@ fn cadquery_staging_rolls_back_outputs_when_target_commit_fails() {
 
     let error = staged
         .commit_success()
+        .await
         .expect_err("commit should fail when staged target is missing");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::Io);
@@ -398,6 +479,13 @@ fn fake_runner_with_marker(root: &Path, stdout_json: &str, marker: &Path) -> std
         ),
     )
     .expect("write fake runner");
+    make_executable(&runner);
+    runner
+}
+
+fn sleeping_runner(root: &Path) -> std::path::PathBuf {
+    let runner = root.join("sleep-runner.sh");
+    fs::write(&runner, "#!/bin/sh\nsleep 5\n").expect("write sleep runner");
     make_executable(&runner);
     runner
 }

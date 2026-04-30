@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use app_server_protocol::{
     AgentMode, CadQueryExportFormat, CadQueryObjectKind, PathHandle, WorkspaceId,
@@ -240,7 +237,7 @@ pub(super) fn validate_execute_scope(
     Ok(())
 }
 
-pub(super) fn doc_update_path_for_execute(
+pub(super) async fn doc_update_path_for_execute(
     workspace_root: &Path,
     call: &LlmToolCall,
     request: &CadQueryToolRunRequest,
@@ -251,7 +248,7 @@ pub(super) fn doc_update_path_for_execute(
     };
     let doc_path = format!("{path}.md");
     let absolute = workspace_root.join(&doc_path);
-    if !absolute.exists() {
+    if !tokio::fs::try_exists(&absolute).await.unwrap_or(false) {
         return Ok(None);
     }
     let Some(scope) = &context.execution_scope else {
@@ -264,12 +261,12 @@ pub(super) fn doc_update_path_for_execute(
             "permission_denied",
         ));
     }
-    reject_symlink_workspace_path(workspace_root, &doc_path, call)?;
-    reject_hard_link(&absolute, call)?;
+    reject_symlink_workspace_path(workspace_root, &doc_path, call).await?;
+    reject_hard_link(&absolute, call).await?;
     Ok(Some(doc_path))
 }
 
-pub(super) fn existing_model_path(
+pub(super) async fn existing_model_path(
     root: &Path,
     relative: &str,
     call: &LlmToolCall,
@@ -282,21 +279,22 @@ pub(super) fn existing_model_path(
             "invalid_arguments",
         ));
     }
-    reject_symlink_segments(root, handle.path_segments(), call)?;
+    reject_symlink_segments(root, handle.path_segments(), call).await?;
     crate::resolve_workspace_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "permission_denied"))
 }
 
-fn reject_symlink_workspace_path(
+async fn reject_symlink_workspace_path(
     root: &Path,
     path: &str,
     call: &LlmToolCall,
 ) -> Result<(), String> {
     let handle = path_handle(path, call)?;
-    reject_symlink_segments(root, handle.path_segments(), call)
+    reject_symlink_segments(root, handle.path_segments(), call).await
 }
 
-fn reject_symlink_segments(
+async fn reject_symlink_segments(
     root: &Path,
     segments: &[String],
     call: &LlmToolCall,
@@ -304,7 +302,8 @@ fn reject_symlink_segments(
     let mut current = root.to_path_buf();
     for segment in segments {
         current.push(segment);
-        if fs::symlink_metadata(&current)
+        if tokio::fs::symlink_metadata(&current)
+            .await
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
         {
@@ -319,10 +318,11 @@ fn reject_symlink_segments(
 }
 
 #[cfg(unix)]
-fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
-    if fs::metadata(path)
+    if tokio::fs::metadata(path)
+        .await
         .map(|metadata| metadata.nlink() > 1)
         .unwrap_or(false)
     {
@@ -336,7 +336,7 @@ fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn reject_hard_link(_path: &Path, _call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(_path: &Path, _call: &LlmToolCall) -> Result<(), String> {
     Ok(())
 }
 

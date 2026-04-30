@@ -22,7 +22,7 @@ const DENIED_RELATION_ROOTS: &[&str] = &[
 pub(super) const PLAN_SCOPE_ROOTS: &[&str] =
     &["components", "parts", "assemblies", "plans", "refs", "docs"];
 
-pub(super) fn save_cad_plan(
+pub(super) async fn save_cad_plan(
     workspace_root: &Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
@@ -32,7 +32,7 @@ pub(super) fn save_cad_plan(
         Err(result) => return result,
     };
     args.source_chat_session = context.session_id.as_ref().map(|session| session.0.clone());
-    let saved = match save_plan_package(workspace_root, &args) {
+    let saved = match save_plan_package(workspace_root, &args).await {
         Ok(saved) => saved,
         Err(error) => return tool_error_json(call, &error.message, error.error_type),
     };

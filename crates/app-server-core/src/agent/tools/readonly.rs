@@ -1,8 +1,8 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::fs;
 
 use crate::llm::LlmToolCall;
 
@@ -18,17 +18,17 @@ const MAX_FILE_READ_BYTES: usize = 64 * 1024;
 const MAX_DIR_ENTRIES: usize = 500;
 const DENIED_ROOTS: &[&str] = &[".git", "target", "node_modules", "outputs", ".budn_staging"];
 
-pub(super) fn read_file(workspace_root: &Path, call: &LlmToolCall) -> String {
-    let workspace_root = canonical_or_original(workspace_root);
+pub(super) async fn read_file(workspace_root: &Path, call: &LlmToolCall) -> String {
+    let workspace_root = canonical_or_original(workspace_root).await;
     let args = match read_file_args(call) {
         Ok(args) => args,
         Err(result) => return result,
     };
-    let resolved = match resolve_existing_path(&workspace_root, &args.path, call) {
+    let resolved = match resolve_existing_path(&workspace_root, &args.path, call).await {
         Ok(path) => path,
         Err(result) => return result,
     };
-    let file = match read_utf8_file(call, &resolved) {
+    let file = match read_utf8_file(call, &resolved).await {
         Ok(file) => file,
         Err(result) => return result,
     };
@@ -75,8 +75,9 @@ fn read_file_args(call: &LlmToolCall) -> Result<ReadFileArgs, String> {
     })
 }
 
-fn read_utf8_file(call: &LlmToolCall, path: &Path) -> Result<Utf8File, String> {
+async fn read_utf8_file(call: &LlmToolCall, path: &Path) -> Result<Utf8File, String> {
     let bytes = fs::read(path)
+        .await
         .map_err(|error| tool_error_json(call, &format!("读取文件失败: {error}"), "not_found"))?;
     if text::is_probably_binary(&bytes) {
         return Err(tool_error_json(
@@ -138,17 +139,20 @@ fn read_file_success(call: &LlmToolCall, path: &str, bytes: &[u8], slice: TextSl
     })
 }
 
-pub(super) fn list_directory(workspace_root: &Path, call: &LlmToolCall) -> String {
-    let workspace_root = canonical_or_original(workspace_root);
+pub(super) async fn list_directory(workspace_root: &Path, call: &LlmToolCall) -> String {
+    let workspace_root = canonical_or_original(workspace_root).await;
     let args = match list_directory_args(call) {
         Ok(args) => args,
         Err(result) => return result,
     };
-    let base = match resolve_existing_path(&workspace_root, &args.path, call) {
+    let base = match resolve_existing_path(&workspace_root, &args.path, call).await {
         Ok(path) => path,
         Err(result) => return result,
     };
-    if !base.is_dir() {
+    if !fs::metadata(&base)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
         return tool_error_json(
             call,
             "list_directory path must refer to a directory",
@@ -157,7 +161,7 @@ pub(super) fn list_directory(workspace_root: &Path, call: &LlmToolCall) -> Strin
     }
     let mut entries = Vec::new();
     let mut truncated = false;
-    collect_directory_entries(&workspace_root, &base, &args, &mut entries, &mut truncated);
+    collect_directory_entries(&workspace_root, &base, &args, &mut entries, &mut truncated).await;
     filter_directory_entries(&mut entries, &args, &mut truncated);
     list_directory_success(call, &args.path, &entries, truncated).to_string()
 }
@@ -226,12 +230,12 @@ fn list_directory_success(
     })
 }
 
-pub(super) fn search_files(workspace_root: &Path, call: &LlmToolCall) -> String {
-    search::search_files(workspace_root, call)
+pub(super) async fn search_files(workspace_root: &Path, call: &LlmToolCall) -> String {
+    search::search_files(workspace_root, call).await
 }
 
-pub(super) fn get_project_context(workspace_root: &Path, call: &LlmToolCall) -> String {
-    project::get_project_context(workspace_root, call)
+pub(super) async fn get_project_context(workspace_root: &Path, call: &LlmToolCall) -> String {
+    project::get_project_context(workspace_root, call).await
 }
 
 pub(super) fn get_selection(call: &LlmToolCall, context: &AgentToolRunContext) -> String {
@@ -246,13 +250,13 @@ pub(super) fn get_selection(call: &LlmToolCall, context: &AgentToolRunContext) -
     .to_string()
 }
 
-pub(super) fn resolve_ref(
+pub(super) async fn resolve_ref(
     workspace_root: &Path,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
 ) -> String {
-    let workspace_root = canonical_or_original(workspace_root);
-    refs::resolve_ref(&workspace_root, call, context)
+    let workspace_root = canonical_or_original(workspace_root).await;
+    refs::resolve_ref(&workspace_root, call, context).await
 }
 
 #[derive(Debug)]
@@ -300,7 +304,7 @@ fn usize_arg(args: &Value, key: &str) -> Option<usize> {
         .and_then(|value| usize::try_from(value).ok())
 }
 
-fn resolve_existing_path(
+async fn resolve_existing_path(
     workspace_root: &Path,
     relative: &str,
     call: &LlmToolCall,
@@ -314,9 +318,9 @@ fn resolve_existing_path(
             "permission_denied",
         ));
     }
-    let root_path = canonical_or_original(workspace_root);
+    let root_path = canonical_or_original(workspace_root).await;
     let target = root_path.join(&relative);
-    let canonical = match target.canonicalize() {
+    let canonical = match fs::canonicalize(&target).await {
         Ok(path) => path,
         Err(error) => {
             return Err(tool_error_json(
@@ -347,79 +351,89 @@ fn resolve_existing_path(
     Ok(canonical)
 }
 
-fn collect_directory_entries(
+async fn collect_directory_entries(
     workspace_root: &Path,
     directory: &Path,
     args: &ListDirectoryArgs,
     entries: &mut Vec<DirEntrySummary>,
     truncated: &mut bool,
 ) {
-    let Ok(read_dir) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in read_dir.filter_map(Result::ok) {
-        if entries.len() > args.max_entries {
-            *truncated = true;
-            return;
-        }
-        let path = entry.path();
-        let relative = match safe_list_entry_relative_path(workspace_root, &path) {
-            Some(relative) if !is_denied_path(&relative) => relative,
-            _ => continue,
-        };
-        let Ok(file_type) = entry.file_type() else {
+    let mut directories = vec![directory.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        let Ok(mut read_dir) = fs::read_dir(&directory).await else {
             continue;
         };
-        let is_dir = file_type.is_dir();
-        if matches_kind_text(if is_dir { "directory" } else { "file" }, &args.kind)
-            && matches_pattern(&relative, &args.pattern)
-        {
-            if entries.len() >= args.max_entries {
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            if entries.len() > args.max_entries {
                 *truncated = true;
                 return;
             }
-            entries.push(DirEntrySummary {
-                name: entry.file_name().to_string_lossy().to_string(),
-                path: relative.clone(),
-                kind: if is_dir { "directory" } else { "file" },
-                size_bytes: if is_dir {
-                    None
-                } else {
-                    entry.metadata().ok().map(|metadata| metadata.len())
-                },
-            });
-        }
-        if args.recursive && is_dir {
-            collect_directory_entries(workspace_root, &path, args, entries, truncated);
+            let path = entry.path();
+            let relative = match safe_list_entry_relative_path(workspace_root, &path).await {
+                Some(relative) if !is_denied_path(&relative) => relative,
+                _ => continue,
+            };
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+            let is_dir = file_type.is_dir();
+            if matches_kind_text(if is_dir { "directory" } else { "file" }, &args.kind)
+                && matches_pattern(&relative, &args.pattern)
+            {
+                if entries.len() >= args.max_entries {
+                    *truncated = true;
+                    return;
+                }
+                entries.push(DirEntrySummary {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    path: relative.clone(),
+                    kind: if is_dir { "directory" } else { "file" },
+                    size_bytes: if is_dir {
+                        None
+                    } else {
+                        entry.metadata().await.ok().map(|metadata| metadata.len())
+                    },
+                });
+            }
+            if args.recursive && is_dir {
+                directories.push(path);
+            }
         }
     }
 }
 
-pub(super) fn collect_files(workspace_root: &Path, directory: &Path, files: &mut Vec<String>) {
-    let Ok(directory) = directory.canonicalize() else {
+pub(super) async fn collect_files(
+    workspace_root: &Path,
+    directory: &Path,
+    files: &mut Vec<String>,
+) {
+    let Ok(directory) = fs::canonicalize(directory).await else {
         return;
     };
     if relative_path(workspace_root, &directory).is_none_or(|relative| is_denied_path(&relative)) {
         return;
     }
-    let Ok(read_dir) = fs::read_dir(&directory) else {
-        return;
-    };
-    for entry in read_dir.filter_map(Result::ok) {
-        let path = entry.path();
-        let Some(relative) = relative_path(workspace_root, &path) else {
+    let mut directories = vec![directory];
+    while let Some(directory) = directories.pop() {
+        let Ok(mut read_dir) = fs::read_dir(&directory).await else {
             continue;
         };
-        if is_denied_path(&relative) {
-            continue;
-        }
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            collect_files(workspace_root, &path, files);
-        } else if file_type.is_file() {
-            files.push(relative);
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let path = entry.path();
+            let Some(relative) = relative_path(workspace_root, &path) else {
+                continue;
+            };
+            if is_denied_path(&relative) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+            if file_type.is_dir() {
+                directories.push(path);
+            } else if file_type.is_file() {
+                files.push(relative);
+            }
         }
     }
 }
@@ -442,8 +456,8 @@ fn relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
     path::workspace_relative_path(workspace_root, path)
 }
 
-fn safe_list_entry_relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
-    path::safe_existing_relative_path(workspace_root, path)?;
+async fn safe_list_entry_relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
+    path::safe_existing_relative_path(workspace_root, path).await?;
     relative_path(workspace_root, path)
 }
 
@@ -457,8 +471,10 @@ fn first_path_segment(path: &str) -> &str {
         .unwrap_or("")
 }
 
-fn canonical_or_original(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+async fn canonical_or_original(path: &Path) -> PathBuf {
+    fs::canonicalize(path)
+        .await
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {

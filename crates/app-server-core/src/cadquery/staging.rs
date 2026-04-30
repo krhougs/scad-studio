@@ -1,9 +1,9 @@
 use std::{
     collections::HashSet,
-    fs,
     path::{Component, Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::fs;
 
 mod commit;
 
@@ -26,6 +26,7 @@ pub struct CadQueryExecuteConfig {
     pub timeout: Duration,
 }
 
+#[must_use = "StagedCadQueryProject must be committed or cleaned up"]
 pub struct StagedCadQueryProject {
     root: PathBuf,
     workspace_root: PathBuf,
@@ -45,26 +46,27 @@ struct FileBaseline {
     bytes: Option<Vec<u8>>,
 }
 
-pub fn execute_cadquery_with_staging(
+pub async fn execute_cadquery_with_staging(
     config: &CadQueryExecuteConfig,
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
-    execute_cadquery_with_staging_cancellable(config, &|| false)
+    execute_cadquery_with_staging_cancellable(config, &|| false).await
 }
 
-pub fn execute_cadquery_with_staging_cancellable(
+pub async fn execute_cadquery_with_staging_cancellable(
     config: &CadQueryExecuteConfig,
-    is_cancelled: &dyn Fn() -> bool,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
     execute_cadquery_with_staging_cancellable_scoped(
         config,
         is_cancelled,
         &CadQueryCommitScope::AllOutputs,
     )
+    .await
 }
 
-pub fn execute_cadquery_with_staging_cancellable_scoped(
+pub async fn execute_cadquery_with_staging_cancellable_scoped(
     config: &CadQueryExecuteConfig,
-    is_cancelled: &dyn Fn() -> bool,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
     commit_scope: &CadQueryCommitScope,
 ) -> Result<CadQueryRunResult, CadQueryRunnerError> {
     ensure_not_cancelled(is_cancelled)?;
@@ -72,10 +74,14 @@ pub fn execute_cadquery_with_staging_cancellable_scoped(
         &config.workspace_root,
         &config.target_relative_path,
         &config.code,
-    )?;
-    ensure_not_cancelled(is_cancelled)?;
+    )
+    .await?;
+    if let Err(error) = ensure_not_cancelled(is_cancelled) {
+        staged.cleanup().await;
+        return Err(error);
+    }
     let result = run_cadquery_runner_with_cancel(
-        &CadQueryRunConfig {
+        CadQueryRunConfig {
             python: config.python.clone(),
             project_root: staged.root().to_path_buf(),
             script: staged.script_arg(),
@@ -85,31 +91,58 @@ pub fn execute_cadquery_with_staging_cancellable_scoped(
             timeout: config.timeout,
         },
         is_cancelled,
-    )?;
-    ensure_not_cancelled(is_cancelled)?;
-    staged.commit_success_with_scope_cancellable(commit_scope, is_cancelled)?;
+    )
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            staged.cleanup().await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = ensure_not_cancelled(is_cancelled) {
+        staged.cleanup().await;
+        return Err(error);
+    }
+    staged
+        .commit_success_with_scope_cancellable(commit_scope, is_cancelled)
+        .await?;
     Ok(result)
 }
 
-pub fn stage_cadquery_project(
+pub async fn stage_cadquery_project(
     workspace_root: &Path,
     target_relative_path: &Path,
     code: &str,
 ) -> Result<StagedCadQueryProject, CadQueryRunnerError> {
-    let relative_path = validate_relative_path(target_relative_path)?;
+    stage_cadquery_project_owned(
+        workspace_root.to_path_buf(),
+        target_relative_path.to_path_buf(),
+        code.to_owned(),
+    )
+    .await
+}
+
+pub async fn stage_cadquery_project_owned(
+    workspace_root: PathBuf,
+    target_relative_path: PathBuf,
+    code: String,
+) -> Result<StagedCadQueryProject, CadQueryRunnerError> {
+    let relative_path = validate_relative_path(&target_relative_path)?;
     let original_target_path = workspace_root.join(&relative_path);
-    let baseline = FileBaseline::capture(&original_target_path)?;
+    let baseline = FileBaseline::capture(original_target_path.clone()).await?;
     let root = workspace_root.join(".budn_staging").join(staging_id());
     let staged = build_staged_project(
-        workspace_root,
+        workspace_root.clone(),
         root,
         relative_path,
         original_target_path,
         baseline,
         code,
-    );
+    )
+    .await;
     if let Err(_) = &staged {
-        let _ = fs::remove_dir_all(workspace_root.join(".budn_staging"));
+        let _ = fs::remove_dir_all(workspace_root.join(".budn_staging")).await;
     }
     staged
 }
@@ -129,46 +162,70 @@ impl StagedCadQueryProject {
             .replace('\\', "/")
     }
 
-    pub fn commit_target(self) -> Result<(), CadQueryRunnerError> {
-        self.baseline.ensure_unchanged(&self.original_target_path)?;
-        commit_files(&self.workspace_root, vec![self.target_commit_file()])
+    pub async fn commit_target(self) -> Result<(), CadQueryRunnerError> {
+        let result = if let Err(error) = self
+            .baseline
+            .ensure_unchanged(self.original_target_path.clone())
+            .await
+        {
+            Err(error)
+        } else {
+            commit_files(self.workspace_root.clone(), vec![self.target_commit_file()]).await
+        };
+        self.cleanup().await;
+        result
     }
 
-    pub fn commit_success(self) -> Result<(), CadQueryRunnerError> {
+    pub async fn commit_success(self) -> Result<(), CadQueryRunnerError> {
         self.commit_success_with_scope(&CadQueryCommitScope::AllOutputs)
+            .await
     }
 
-    pub fn commit_success_with_scope(
+    pub async fn commit_success_with_scope(
         self,
         scope: &CadQueryCommitScope,
     ) -> Result<(), CadQueryRunnerError> {
         self.commit_success_with_scope_cancellable(scope, &|| false)
+            .await
     }
 
-    pub fn commit_success_with_scope_cancellable(
+    pub async fn commit_success_with_scope_cancellable(
         self,
         scope: &CadQueryCommitScope,
-        is_cancelled: &dyn Fn() -> bool,
+        is_cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Result<(), CadQueryRunnerError> {
-        self.baseline.ensure_unchanged(&self.original_target_path)?;
-        let mut files = self.output_commit_files_for_scope(scope)?;
-        files.push(self.target_commit_file());
-        commit_files_cancellable(&self.workspace_root, files, is_cancelled)
+        let result = async {
+            self.baseline
+                .ensure_unchanged(self.original_target_path.clone())
+                .await?;
+            let mut files = self.output_commit_files_for_scope(scope).await?;
+            files.push(self.target_commit_file());
+            commit_files_cancellable(self.workspace_root.clone(), files, is_cancelled).await
+        }
+        .await;
+        self.cleanup().await;
+        result
     }
 
-    pub fn commit_outputs(self) -> Result<(), CadQueryRunnerError> {
+    pub async fn commit_outputs(self) -> Result<(), CadQueryRunnerError> {
         self.commit_outputs_with_scope(&CadQueryCommitScope::AllOutputs)
+            .await
     }
 
-    pub fn commit_outputs_with_scope(
+    pub async fn commit_outputs_with_scope(
         self,
         scope: &CadQueryCommitScope,
     ) -> Result<(), CadQueryRunnerError> {
-        self.baseline.ensure_unchanged(&self.original_target_path)?;
-        commit_files(
-            &self.workspace_root,
-            self.output_commit_files_for_scope(scope)?,
-        )
+        let result = async {
+            self.baseline
+                .ensure_unchanged(self.original_target_path.clone())
+                .await?;
+            let files = self.output_commit_files_for_scope(scope).await?;
+            commit_files(self.workspace_root.clone(), files).await
+        }
+        .await;
+        self.cleanup().await;
+        result
     }
 
     fn target_commit_file(&self) -> CommitFile {
@@ -178,26 +235,30 @@ impl StagedCadQueryProject {
         }
     }
 
-    fn output_commit_files(&self) -> Result<Vec<CommitFile>, CadQueryRunnerError> {
+    async fn output_commit_files(&self) -> Result<Vec<CommitFile>, CadQueryRunnerError> {
         let staged_outputs = self.output_dir();
-        if !staged_outputs.exists() {
+        if !fs::try_exists(staged_outputs.clone())
+            .await
+            .unwrap_or(false)
+        {
             return Ok(Vec::new());
         }
         let mut files = Vec::new();
         collect_dir_commit_files(
-            &staged_outputs,
-            &self.workspace_root.join("outputs"),
+            staged_outputs,
+            self.workspace_root.join("outputs"),
             &mut files,
-        )?;
+        )
+        .await?;
         files.sort_by(|left, right| left.target.cmp(&right.target));
         Ok(files)
     }
 
-    fn output_commit_files_for_scope(
+    async fn output_commit_files_for_scope(
         &self,
         scope: &CadQueryCommitScope,
     ) -> Result<Vec<CommitFile>, CadQueryRunnerError> {
-        let files = self.output_commit_files()?;
+        let files = self.output_commit_files().await?;
         match scope {
             CadQueryCommitScope::AllOutputs => Ok(files),
             CadQueryCommitScope::ExactOutputs(paths) => {
@@ -207,29 +268,26 @@ impl StagedCadQueryProject {
             }
         }
     }
-}
-
-impl Drop for StagedCadQueryProject {
-    fn drop(&mut self) {
+    pub async fn cleanup(self) {
         let parent = self.root.parent().map(Path::to_path_buf);
-        let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(self.root.clone()).await;
         if let Some(parent) = parent {
-            let _ = fs::remove_dir(&parent);
+            let _ = fs::remove_dir(parent).await;
         }
     }
 }
 
 impl FileBaseline {
-    fn capture(path: &Path) -> Result<Self, CadQueryRunnerError> {
-        match fs::read(path) {
+    async fn capture(path: PathBuf) -> Result<Self, CadQueryRunnerError> {
+        match fs::read(path).await {
             Ok(bytes) => Ok(Self { bytes: Some(bytes) }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self { bytes: None }),
             Err(error) => Err(error_io(format!("读取 CadQuery 文件基线失败: {error}"))),
         }
     }
 
-    fn ensure_unchanged(&self, path: &Path) -> Result<(), CadQueryRunnerError> {
-        if *self == Self::capture(path)? {
+    async fn ensure_unchanged(&self, path: PathBuf) -> Result<(), CadQueryRunnerError> {
+        if *self == Self::capture(path).await? {
             return Ok(());
         }
         Err(CadQueryRunnerError {
@@ -239,54 +297,69 @@ impl FileBaseline {
     }
 }
 
-fn build_staged_project(
-    workspace_root: &Path,
+async fn build_staged_project(
+    workspace_root: PathBuf,
     root: PathBuf,
     relative_path: PathBuf,
     original_target_path: PathBuf,
     baseline: FileBaseline,
-    code: &str,
+    code: String,
 ) -> Result<StagedCadQueryProject, CadQueryRunnerError> {
-    copy_workspace(workspace_root, &root)?;
-    write_staged_target(&root, &relative_path, code)?;
+    copy_workspace(workspace_root.clone(), root.clone()).await?;
+    write_staged_target(root.clone(), relative_path.clone(), code).await?;
     Ok(StagedCadQueryProject {
         root,
-        workspace_root: workspace_root.to_path_buf(),
+        workspace_root,
         target_relative_path: relative_path,
         original_target_path,
         baseline,
     })
 }
 
-fn copy_workspace(source: &Path, target: &Path) -> Result<(), CadQueryRunnerError> {
-    copy_workspace_inner(source, target, source)
+async fn copy_workspace(source: PathBuf, target: PathBuf) -> Result<(), CadQueryRunnerError> {
+    copy_workspace_inner(source.clone(), target, source).await
 }
 
-fn copy_workspace_inner(
-    source: &Path,
-    target: &Path,
-    root: &Path,
+async fn copy_workspace_inner(
+    source: PathBuf,
+    target: PathBuf,
+    root: PathBuf,
 ) -> Result<(), CadQueryRunnerError> {
-    fs::create_dir_all(target)
+    fs::create_dir_all(target.clone())
+        .await
         .map_err(|error| error_io(format!("创建 CadQuery staging 目录失败: {error}")))?;
-    for entry in fs::read_dir(source)
-        .map_err(|error| error_io(format!("读取 workspace 目录失败: {error}")))?
-    {
-        copy_workspace_entry(
-            &entry.map_err(|error| error_io(error.to_string()))?,
-            source,
-            target,
-            root,
-        )?;
+    let mut directories = vec![(source, target)];
+    while let Some((source, target)) = directories.pop() {
+        fs::create_dir_all(target.clone())
+            .await
+            .map_err(|error| error_io(format!("创建 CadQuery staging 目录失败: {error}")))?;
+        let mut entries = fs::read_dir(source.clone())
+            .await
+            .map_err(|error| error_io(format!("读取 workspace 目录失败: {error}")))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| error_io(error.to_string()))?
+        {
+            copy_workspace_entry(
+                entry,
+                source.clone(),
+                target.clone(),
+                root.clone(),
+                &mut directories,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
 
-fn copy_workspace_entry(
-    entry: &fs::DirEntry,
-    source: &Path,
-    target: &Path,
-    root: &Path,
+async fn copy_workspace_entry(
+    entry: fs::DirEntry,
+    source: PathBuf,
+    target: PathBuf,
+    root: PathBuf,
+    directories: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<(), CadQueryRunnerError> {
     let file_name = entry.file_name();
     if file_name == ".budn_staging" || (source == root && file_name == "outputs") {
@@ -294,6 +367,7 @@ fn copy_workspace_entry(
     }
     let metadata = entry
         .file_type()
+        .await
         .map_err(|error| error_io(format!("读取 workspace 条目类型失败: {error}")))?;
     let next_source = source.join(&file_name);
     let next_target = target.join(&file_name);
@@ -301,47 +375,59 @@ fn copy_workspace_entry(
         return Err(error_invalid_path("CadQuery staging 不复制符号链接"));
     }
     if metadata.is_dir() {
-        return copy_workspace_inner(&next_source, &next_target, root);
+        directories.push((next_source, next_target));
+        return Ok(());
     }
-    fs::copy(&next_source, &next_target)
+    fs::copy(next_source, next_target)
+        .await
         .map_err(|error| error_io(format!("复制 workspace 文件失败: {error}")))?;
     Ok(())
 }
 
-fn write_staged_target(
-    root: &Path,
-    target_relative_path: &Path,
-    code: &str,
+async fn write_staged_target(
+    root: PathBuf,
+    target_relative_path: PathBuf,
+    code: String,
 ) -> Result<(), CadQueryRunnerError> {
     let target = root.join(target_relative_path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
+            .await
             .map_err(|error| error_io(format!("创建 CadQuery staging 目标目录失败: {error}")))?;
     }
     fs::write(target, code)
+        .await
         .map_err(|error| error_io(format!("写入 CadQuery staging 目标失败: {error}")))
 }
 
-fn collect_dir_commit_files(
-    source: &Path,
-    target: &Path,
+async fn collect_dir_commit_files(
+    source: PathBuf,
+    target: PathBuf,
     files: &mut Vec<CommitFile>,
 ) -> Result<(), CadQueryRunnerError> {
-    for entry in fs::read_dir(source)
-        .map_err(|error| error_io(format!("读取 CadQuery 输出目录失败: {error}")))?
-    {
-        let entry = entry.map_err(|error| error_io(error.to_string()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| error_io(format!("读取 CadQuery 输出条目失败: {error}")))?;
-        let target_path = target.join(entry.file_name());
-        if file_type.is_dir() {
-            collect_dir_commit_files(&entry.path(), &target_path, files)?;
-        } else if file_type.is_file() {
-            files.push(CommitFile {
-                source: entry.path(),
-                target: target_path,
-            });
+    let mut directories = vec![(source, target)];
+    while let Some((source, target)) = directories.pop() {
+        let mut entries = fs::read_dir(source)
+            .await
+            .map_err(|error| error_io(format!("读取 CadQuery 输出目录失败: {error}")))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| error_io(error.to_string()))?
+        {
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|error| error_io(format!("读取 CadQuery 输出条目失败: {error}")))?;
+            let target_path = target.join(entry.file_name());
+            if file_type.is_dir() {
+                directories.push((entry.path(), target_path));
+            } else if file_type.is_file() {
+                files.push(CommitFile {
+                    source: entry.path(),
+                    target: target_path,
+                });
+            }
         }
     }
     Ok(())
@@ -400,7 +486,9 @@ fn display_relative_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn ensure_not_cancelled(is_cancelled: &dyn Fn() -> bool) -> Result<(), CadQueryRunnerError> {
+fn ensure_not_cancelled(
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<(), CadQueryRunnerError> {
     if is_cancelled() {
         return Err(CadQueryRunnerError {
             kind: CadQueryRunnerErrorKind::Cancelled,

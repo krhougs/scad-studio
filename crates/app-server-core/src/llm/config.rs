@@ -1,5 +1,6 @@
 use serde::Deserialize;
-use std::{env, fmt, fs, path::Path};
+use std::{env, fmt, path::PathBuf};
+use tokio::fs;
 
 #[derive(Clone)]
 pub struct LlmConfig {
@@ -95,10 +96,12 @@ pub fn build_model_string(
     model
 }
 
-fn load_from_file(path: &Path) -> Result<LlmConfig, LlmConfigError> {
-    let content = fs::read_to_string(path).map_err(|e| LlmConfigError {
-        message: format!("Cannot read LLM config file {}: {e}", path.display()),
-    })?;
+async fn load_from_file(path: PathBuf) -> Result<LlmConfig, LlmConfigError> {
+    let content = fs::read_to_string(path.clone())
+        .await
+        .map_err(|e| LlmConfigError {
+            message: format!("Cannot read LLM config file {}: {e}", path.display()),
+        })?;
     let file: LlmConfigFile = toml::from_str(&content).map_err(|e| LlmConfigError {
         message: format!("Cannot parse LLM config file {}: {e}", path.display()),
     })?;
@@ -138,9 +141,9 @@ fn load_from_env() -> Option<LlmConfig> {
     })
 }
 
-pub fn load_llm_config() -> Result<Option<LlmConfig>, LlmConfigError> {
+pub async fn load_llm_config() -> Result<Option<LlmConfig>, LlmConfigError> {
     if let Ok(path) = env::var("BUDN_LLM_CONFIG") {
-        return load_from_file(Path::new(&path)).map(Some);
+        return load_from_file(PathBuf::from(path)).await.map(Some);
     }
     Ok(load_from_env())
 }

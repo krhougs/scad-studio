@@ -17,7 +17,16 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let args = parse_args(std::env::args().skip(1).collect())?;
     let python = cadquery_python_path();
-    verify_cadquery_runner_environment(&python)?;
+    verify_cadquery_runner_environment(&python).await?;
+    if !tokio::fs::metadata(&args.workspace_path)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        return Err(format!(
+            "workspace 路径不存在或不是目录: {}",
+            args.workspace_path.display()
+        ));
+    }
     let url = run_websocket_host(WebSocketHostConfig {
         bind_addr: args.bind_addr,
         workspace_path: args.workspace_path,
@@ -57,13 +66,6 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
     }
 
     let workspace_path = workspace_path.ok_or_else(usage)?;
-    if !workspace_path.is_dir() {
-        return Err(format!(
-            "workspace 路径不存在或不是目录: {}",
-            workspace_path.display()
-        ));
-    }
-
     Ok(Args {
         bind_addr,
         workspace_path,

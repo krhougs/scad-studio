@@ -1,16 +1,15 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
-    fmt, fs,
+    fmt,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
-    thread,
     time::{Duration, Instant},
 };
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
 pub struct FileWatcher {
-    tx: Sender<WatchCommand>,
+    tx: UnboundedSender<WatchCommand>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,8 +38,8 @@ impl FileWatcher {
     where
         F: Fn(WatchMessage) + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || worker_loop(rx, notify_change));
+        let (tx, rx) = unbounded_channel();
+        tokio::spawn(worker_loop(rx, notify_change));
         Self { tx }
     }
 
@@ -49,18 +48,31 @@ impl FileWatcher {
     }
 }
 
-fn worker_loop<F>(rx: Receiver<WatchCommand>, notify_change: F)
+async fn worker_loop<F>(mut rx: UnboundedReceiver<WatchCommand>, notify_change: F)
 where
     F: Fn(WatchMessage) + Send + 'static,
 {
-    let (raw_tx, raw_rx) = mpsc::channel();
+    let (raw_tx, mut raw_rx) = unbounded_channel();
     let mut watcher: Option<RecommendedWatcher> = None;
     let mut coalescer = WatchCoalescer::default();
+    let mut tick = tokio::time::interval(Duration::from_millis(50));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(WatchCommand::Watch(paths)) => {
-                coalescer.subscribe(paths.clone());
-                match create_watcher(&paths, raw_tx.clone()) {
+        tokio::select! {
+            command = rx.recv() => {
+                let Some(command) = command else {
+                    break;
+                };
+                match command {
+                    WatchCommand::Watch(paths) => {
+                        match normalize_paths(&paths).await {
+                            Ok(normalized_paths) => coalescer.subscribe(normalized_paths),
+                            Err(error) => {
+                                notify_change(WatchMessage::Error(error.to_string()));
+                                continue;
+                            }
+                        }
+                        match create_watcher(&paths, raw_tx.clone()).await {
                     Ok(created) => watcher = Some(created),
                     Err(error) => {
                         watcher = None;
@@ -68,30 +80,34 @@ where
                     }
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-        for path in drain_events(&raw_rx, &notify_change) {
-            coalescer.push_raw_path(Instant::now(), path);
-        }
-        if let Some(message) = coalescer.take_due_notification(Instant::now()) {
-            notify_change(message);
-        }
-        if watcher.is_none() && !coalescer.subscribed {
-            continue;
+                }
+            }
+            event = raw_rx.recv() => {
+                if let Some(event) = event {
+                    for path in event_paths(event, &notify_change) {
+                        coalescer.push_raw_path(Instant::now(), canonical_or_original(path).await);
+                    }
+                }
+            }
+            _ = tick.tick() => {
+                if let Some(message) = coalescer.take_due_notification(Instant::now()) {
+                    notify_change(message);
+                }
+                let _keep_alive = &watcher;
+            }
         }
     }
 }
 
-fn create_watcher(
+async fn create_watcher(
     paths: &[PathBuf],
-    raw_tx: Sender<notify::Result<notify::Event>>,
+    raw_tx: UnboundedSender<notify::Result<notify::Event>>,
 ) -> Result<RecommendedWatcher, WatchError> {
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = raw_tx.send(event);
     })
     .map_err(|error| WatchError(format!("创建文件监控失败: {error}")))?;
-    for (root, mode) in watch_roots(paths)? {
+    for (root, mode) in watch_roots(paths).await? {
         watcher
             .watch(&root, mode)
             .map_err(|error| WatchError(format!("注册文件监控失败: {error}")))?;
@@ -99,55 +115,73 @@ fn create_watcher(
     Ok(watcher)
 }
 
-fn drain_events(
-    raw_rx: &Receiver<notify::Result<notify::Event>>,
+fn event_paths(
+    event: notify::Result<notify::Event>,
     notify_change: &impl Fn(WatchMessage),
 ) -> Vec<PathBuf> {
-    let mut changed = Vec::new();
-    while let Ok(event) = raw_rx.try_recv() {
-        let Ok(event) = event else {
-            if let Err(error) = event {
-                notify_change(WatchMessage::Error(format!("文件监控事件失败: {error}")));
-            }
-            continue;
-        };
-        changed.extend(event.paths);
+    match event {
+        Ok(event) => event.paths,
+        Err(error) => {
+            notify_change(WatchMessage::Error(format!("文件监控事件失败: {error}")));
+            Vec::new()
+        }
     }
-    changed
 }
 
-pub fn matches_path(paths: &[PathBuf], watched_file: Option<&std::path::Path>) -> bool {
+pub async fn matches_path(paths: &[PathBuf], watched_file: Option<&std::path::Path>) -> bool {
     let Some(watched_file) = watched_file else {
         return false;
     };
-    let watched_file = normalize_path(watched_file.to_path_buf());
+    let watched_file = canonical_or_original(watched_file.to_path_buf()).await;
+    let mut candidates = Vec::with_capacity(paths.len());
+    for path in paths {
+        candidates.push(canonical_or_original(path.clone()).await);
+    }
+    matches_normalized_path(&candidates, &watched_file)
+}
+
+pub async fn matches_any_path(paths: &[PathBuf], watched_files: &[PathBuf]) -> bool {
+    for watched in watched_files {
+        if matches_path(paths, Some(watched.as_path())).await {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_normalized_path(paths: &[PathBuf], watched_file: &std::path::Path) -> bool {
     paths.iter().any(|path| {
         let candidate = normalize_path(path.clone());
-        candidate == watched_file || candidate.starts_with(&watched_file)
+        candidate == watched_file || candidate.starts_with(watched_file)
     })
 }
 
-pub fn matches_any_path(paths: &[PathBuf], watched_files: &[PathBuf]) -> bool {
+fn matches_any_normalized_path(paths: &[PathBuf], watched_files: &[PathBuf]) -> bool {
     watched_files
         .iter()
-        .any(|watched| matches_path(paths, Some(watched.as_path())))
+        .any(|watched| matches_normalized_path(paths, watched))
 }
 
-fn ready_to_notify(deadline: Option<Instant>) -> bool {
-    deadline.is_some_and(|deadline| Instant::now() >= deadline)
-}
-
-fn watch_roots(paths: &[PathBuf]) -> Result<Vec<(PathBuf, RecursiveMode)>, WatchError> {
+async fn watch_roots(paths: &[PathBuf]) -> Result<Vec<(PathBuf, RecursiveMode)>, WatchError> {
     let mut roots = Vec::new();
     for path in paths {
-        let root = if path.is_dir() {
-            (normalize_path(path.clone()), RecursiveMode::Recursive)
+        let is_dir = tokio::fs::metadata(path)
+            .await
+            .is_ok_and(|metadata| metadata.is_dir());
+        let root = if is_dir {
+            (
+                canonical_or_original(path.clone()).await,
+                RecursiveMode::Recursive,
+            )
         } else {
             let parent = path
                 .parent()
                 .map(PathBuf::from)
                 .ok_or_else(|| WatchError("待监听文件缺少父目录".into()))?;
-            (normalize_path(parent), RecursiveMode::NonRecursive)
+            (
+                canonical_or_original(parent).await,
+                RecursiveMode::NonRecursive,
+            )
         };
         if !roots.contains(&root) {
             roots.push(root);
@@ -157,7 +191,19 @@ fn watch_roots(paths: &[PathBuf]) -> Result<Vec<(PathBuf, RecursiveMode)>, Watch
 }
 
 fn normalize_path(path: PathBuf) -> PathBuf {
-    fs::canonicalize(&path).unwrap_or(path)
+    path
+}
+
+async fn normalize_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, WatchError> {
+    let mut normalized = Vec::with_capacity(paths.len());
+    for path in paths {
+        normalized.push(canonical_or_original(path.clone()).await);
+    }
+    Ok(normalized)
+}
+
+async fn canonical_or_original(path: PathBuf) -> PathBuf {
+    tokio::fs::canonicalize(&path).await.unwrap_or(path)
 }
 
 impl std::error::Error for WatchError {}
@@ -170,22 +216,25 @@ impl fmt::Display for WatchError {
 
 impl WatchCoalescer {
     fn subscribe(&mut self, paths: Vec<PathBuf>) {
-        self.watched_files = paths.into_iter().map(normalize_path).collect();
+        self.watched_files = paths;
         self.subscribed = true;
         self.pending_deadline = None;
         self.pending_paths.clear();
     }
 
+    #[cfg(test)]
     fn unsubscribe(&mut self) {
         self.subscribed = false;
         self.pending_deadline = None;
         self.pending_paths.clear();
     }
 
+    #[cfg(test)]
     fn disconnect(&mut self) {
         self.unsubscribe();
     }
 
+    #[cfg(test)]
     fn reconnect(&mut self) {
         self.pending_deadline = None;
         self.pending_paths.clear();
@@ -199,7 +248,7 @@ impl WatchCoalescer {
             return;
         }
         let normalized = normalize_path(path);
-        if !matches_any_path(std::slice::from_ref(&normalized), &self.watched_files) {
+        if !matches_any_normalized_path(std::slice::from_ref(&normalized), &self.watched_files) {
             return;
         }
         if !self.pending_paths.contains(&normalized) {

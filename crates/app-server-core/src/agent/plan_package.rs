@@ -1,10 +1,8 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use app_server_protocol::CadQueryObjectKind;
 use jiff::Zoned;
+use tokio::fs;
 
 mod front_matter;
 use front_matter::{parse_plan_metadata, target_type_label};
@@ -89,26 +87,26 @@ pub struct ParsedPlanPackage {
     pub export_targets: Vec<String>,
 }
 
-pub fn save_plan_package(
+pub async fn save_plan_package(
     workspace_root: &Path,
     input: &SaveCadPlanPackageInput,
 ) -> Result<SavedPlanPackage, PlanPackageError> {
-    save_plan_package_with_timestamp(workspace_root, input, PlanTimestamp::now())
+    save_plan_package_with_timestamp(workspace_root, input, PlanTimestamp::now()).await
 }
 
-pub fn save_plan_package_with_timestamp(
+pub async fn save_plan_package_with_timestamp(
     workspace_root: &Path,
     input: &SaveCadPlanPackageInput,
     timestamp: PlanTimestamp,
 ) -> Result<SavedPlanPackage, PlanPackageError> {
-    let plans_dir = safe_plans_dir(workspace_root)?;
-    let plan_id = allocate_plan_id(&plans_dir, &timestamp.date_prefix, &input.title)?;
+    let plans_dir = safe_plans_dir(workspace_root).await?;
+    let plan_id = allocate_plan_id(&plans_dir, &timestamp.date_prefix, &input.title).await?;
     let paths = package_paths(&plan_id);
     let absolute_dir = workspace_root.join(&paths.plan_ref);
-    fs::create_dir(&absolute_dir).map_err(|error| {
+    fs::create_dir(&absolute_dir).await.map_err(|error| {
         PlanPackageError::new(format!("创建 plan package 失败: {error}"), "file_conflict")
     })?;
-    write_package_files(&absolute_dir, input, &paths, &timestamp)?;
+    write_package_files(&absolute_dir, input, &paths, &timestamp).await?;
     Ok(SavedPlanPackage {
         paths,
         hash_source: render_plan_markdown(input, &plan_id, &timestamp),
@@ -116,18 +114,18 @@ pub fn save_plan_package_with_timestamp(
     })
 }
 
-pub fn parse_plan_package(
+pub async fn parse_plan_package(
     workspace_root: &Path,
     plan_ref: &str,
 ) -> Result<ParsedPlanPackage, PlanPackageError> {
     let normalized_ref = normalize_workspace_path(plan_ref, "plan_ref")?;
     let plan_id = plan_id_from_ref(&normalized_ref)?;
-    let plans_dir = safe_existing_plans_dir(workspace_root)?;
-    let dir = safe_package_dir(&plans_dir.join(&plan_id))?;
-    require_package_file(&dir, "request.md")?;
-    let plan_path = require_package_file(&dir, "plan.md")?;
-    require_package_file(&dir, "plan-result.md")?;
-    let plan_text = read_utf8(&plan_path, "plan.md")?;
+    let plans_dir = safe_existing_plans_dir(workspace_root).await?;
+    let dir = safe_package_dir(&plans_dir.join(&plan_id)).await?;
+    require_package_file(&dir, "request.md").await?;
+    let plan_path = require_package_file(&dir, "plan.md").await?;
+    require_package_file(&dir, "plan-result.md").await?;
+    let plan_text = read_utf8(&plan_path, "plan.md").await?;
     let metadata = parse_plan_metadata(&plan_text, &plan_id)?;
     let title = extract_plan_title(&plan_text).unwrap_or_else(|| plan_id.clone());
     let paths = package_paths(&plan_id);
@@ -147,10 +145,10 @@ pub fn parse_plan_package(
     })
 }
 
-pub fn collect_plan_packages(workspace_root: &Path) -> (Vec<ParsedPlanPackage>, Vec<String>) {
+pub async fn collect_plan_packages(workspace_root: &Path) -> (Vec<ParsedPlanPackage>, Vec<String>) {
     let mut packages = Vec::new();
     let mut warnings = Vec::new();
-    let plans_dir = match safe_existing_plans_dir(workspace_root) {
+    let plans_dir = match safe_existing_plans_dir(workspace_root).await {
         Ok(dir) => dir,
         Err(error) if error.error_type == "not_found" => return (packages, warnings),
         Err(error) => {
@@ -158,15 +156,20 @@ pub fn collect_plan_packages(workspace_root: &Path) -> (Vec<ParsedPlanPackage>, 
             return (packages, warnings);
         }
     };
-    let Ok(entries) = fs::read_dir(&plans_dir) else {
+    let Ok(mut entries) = fs::read_dir(&plans_dir).await else {
         return (packages, warnings);
     };
-    for entry in entries.flatten() {
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(_) => continue,
+        };
         let file_name = entry.file_name().to_string_lossy().to_string();
         if !looks_like_plan_id(&file_name) {
             continue;
         }
-        match parse_plan_package(workspace_root, &format!("plans/{file_name}")) {
+        match parse_plan_package(workspace_root, &format!("plans/{file_name}")).await {
             Ok(package) => packages.push(package),
             Err(error) => warnings.push(format!("plans/{file_name}: {}", error.message)),
         }
@@ -192,7 +195,7 @@ pub fn slugify_plan_title(title: &str) -> String {
     }
 }
 
-fn write_package_files(
+async fn write_package_files(
     absolute_dir: &Path,
     input: &SaveCadPlanPackageInput,
     paths: &PlanPackagePaths,
@@ -201,26 +204,31 @@ fn write_package_files(
     let request = render_request_markdown(input);
     let plan = render_plan_markdown(input, &paths.plan_id, timestamp);
     let result = render_initial_result_markdown(input, &paths.plan_id, timestamp);
-    write_file_or_rollback(absolute_dir, "request.md", &request)?;
-    write_file_or_rollback(absolute_dir, "plan.md", &plan)?;
-    write_file_or_rollback(absolute_dir, "plan-result.md", &result)?;
+    write_file_or_rollback(absolute_dir, "request.md", &request).await?;
+    write_file_or_rollback(absolute_dir, "plan.md", &plan).await?;
+    write_file_or_rollback(absolute_dir, "plan-result.md", &result).await?;
     Ok(())
 }
 
-fn write_file_or_rollback(
+async fn write_file_or_rollback(
     absolute_dir: &Path,
     file_name: &str,
     contents: &str,
 ) -> Result<(), PlanPackageError> {
-    fs::write(absolute_dir.join(file_name), contents.as_bytes()).map_err(|error| {
-        let _ = fs::remove_dir_all(absolute_dir);
-        PlanPackageError::new(format!("写入 plan package 失败: {error}"), "file_conflict")
-    })
+    if let Err(error) = fs::write(absolute_dir.join(file_name), contents.as_bytes()).await {
+        let _ = fs::remove_dir_all(absolute_dir).await;
+        Err(PlanPackageError::new(
+            format!("写入 plan package 失败: {error}"),
+            "file_conflict",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
-fn safe_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
+async fn safe_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
     let plans_dir = workspace_root.join("plans");
-    match fs::symlink_metadata(&plans_dir) {
+    match fs::symlink_metadata(&plans_dir).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(PlanPackageError::new(
             "plans directory must not be a symlink",
             "permission_denied",
@@ -231,7 +239,7 @@ fn safe_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
             "invalid_arguments",
         )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&plans_dir).map_err(|error| {
+            fs::create_dir(&plans_dir).await.map_err(|error| {
                 PlanPackageError::new(format!("创建 plans 目录失败: {error}"), "file_conflict")
             })?;
             Ok(plans_dir)
@@ -243,20 +251,20 @@ fn safe_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
     }
 }
 
-fn allocate_plan_id(
+async fn allocate_plan_id(
     plans_dir: &Path,
     date_prefix: &str,
     title: &str,
 ) -> Result<String, PlanPackageError> {
-    let next = next_daily_sequence(plans_dir, date_prefix)?;
+    let next = next_daily_sequence(plans_dir, date_prefix).await?;
     let slug = slugify_plan_title(title);
     Ok(format!("{date_prefix}{next:02}-{slug}"))
 }
 
-fn next_daily_sequence(plans_dir: &Path, date_prefix: &str) -> Result<u8, PlanPackageError> {
+async fn next_daily_sequence(plans_dir: &Path, date_prefix: &str) -> Result<u8, PlanPackageError> {
     let mut max_seen: Option<u8> = None;
-    for entry in fs::read_dir(plans_dir).map_err(read_dir_error)? {
-        let entry = entry.map_err(read_dir_error)?;
+    let mut entries = fs::read_dir(plans_dir).await.map_err(read_dir_error)?;
+    while let Some(entry) = entries.next_entry().await.map_err(read_dir_error)? {
         let name = entry.file_name().to_string_lossy().to_string();
         let Some(sequence) = sequence_for_date(&name, date_prefix) else {
             continue;
@@ -374,9 +382,9 @@ fn markdown_list(items: &[String]) -> String {
     }
 }
 
-fn safe_existing_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
+async fn safe_existing_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackageError> {
     let plans_dir = workspace_root.join("plans");
-    match fs::symlink_metadata(&plans_dir) {
+    match fs::symlink_metadata(&plans_dir).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(PlanPackageError::new(
             "plans directory must not be a symlink",
             "permission_denied",
@@ -397,8 +405,8 @@ fn safe_existing_plans_dir(workspace_root: &Path) -> Result<PathBuf, PlanPackage
     }
 }
 
-fn safe_package_dir(dir: &Path) -> Result<PathBuf, PlanPackageError> {
-    let metadata = fs::symlink_metadata(&dir).map_err(|error| {
+async fn safe_package_dir(dir: &Path) -> Result<PathBuf, PlanPackageError> {
+    let metadata = fs::symlink_metadata(&dir).await.map_err(|error| {
         PlanPackageError::new(
             format!("读取 plan package 失败: {error}"),
             "invalid_arguments",
@@ -413,9 +421,9 @@ fn safe_package_dir(dir: &Path) -> Result<PathBuf, PlanPackageError> {
     Ok(dir.to_path_buf())
 }
 
-fn require_package_file(dir: &Path, file_name: &str) -> Result<PathBuf, PlanPackageError> {
+async fn require_package_file(dir: &Path, file_name: &str) -> Result<PathBuf, PlanPackageError> {
     let path = dir.join(file_name);
-    let metadata = fs::symlink_metadata(&path).map_err(|_| {
+    let metadata = fs::symlink_metadata(&path).await.map_err(|_| {
         PlanPackageError::new(
             format!("plan package missing {file_name}"),
             "invalid_arguments",
@@ -431,8 +439,8 @@ fn require_package_file(dir: &Path, file_name: &str) -> Result<PathBuf, PlanPack
     }
 }
 
-fn read_utf8(path: &Path, label: &str) -> Result<String, PlanPackageError> {
-    fs::read_to_string(path).map_err(|error| {
+async fn read_utf8(path: &Path, label: &str) -> Result<String, PlanPackageError> {
+    fs::read_to_string(path).await.map_err(|error| {
         PlanPackageError::new(format!("读取 {label} 失败: {error}"), "invalid_arguments")
     })
 }

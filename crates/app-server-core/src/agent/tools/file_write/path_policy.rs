@@ -1,7 +1,5 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+use tokio::fs;
 
 use app_server_protocol::{PathHandle, WorkspaceId};
 
@@ -45,17 +43,17 @@ pub(super) enum ExistingFilePolicy {
     CopySource,
 }
 
-pub(super) fn safe_write_target(
+pub(super) async fn safe_write_target(
     root: &Path,
     path: &str,
     call: &LlmToolCall,
     context: &AgentToolRunContext,
     policy: WriteTargetPolicy,
 ) -> Result<WriteTarget, String> {
-    let absolute = resolve_write_path(root, path, call)?;
-    let relative = workspace_relative_path(root, &absolute, call)?;
+    let absolute = resolve_write_path(root, path, call).await?;
+    let relative = workspace_relative_path(root, &absolute, call).await?;
     validate_actual_write_path(&relative, policy.allows_model_target(), call)?;
-    let existed = target_status(&absolute, call)?;
+    let existed = target_status(&absolute, call).await?;
     validate_write_execution_scope(
         &relative,
         existed,
@@ -70,18 +68,19 @@ pub(super) fn safe_write_target(
     })
 }
 
-pub(super) fn safe_existing_file(
+pub(super) async fn safe_existing_file(
     root: &Path,
     path: &str,
     call: &LlmToolCall,
     policy: ExistingFilePolicy,
 ) -> Result<ExistingFile, String> {
     let handle = path_handle(path, call)?;
-    let literal = literal_workspace_path(root, &handle);
-    validate_existing_literal_file(&literal, call)?;
+    let literal = literal_workspace_path(root, &handle).await;
+    validate_existing_literal_file(&literal, call).await?;
     let absolute = crate::resolve_workspace_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "permission_denied"))?;
-    let relative = workspace_relative_path(root, &absolute, call)?;
+    let relative = workspace_relative_path(root, &absolute, call).await?;
     validate_actual_write_path(&relative, policy.allows_model_source(), call)?;
     Ok(ExistingFile { absolute, relative })
 }
@@ -111,8 +110,8 @@ pub(super) fn validate_existing_affected_scope(
     ))
 }
 
-fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
+async fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
+    match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
             "target path must not be a symlink",
@@ -136,8 +135,8 @@ fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
     }
 }
 
-fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
+async fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Result<(), String> {
+    match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
             "source path must not be a symlink",
@@ -180,9 +179,14 @@ fn validate_no_hard_link_alias(
     Ok(())
 }
 
-fn resolve_write_path(root: &Path, path: &str, call: &LlmToolCall) -> Result<PathBuf, String> {
+async fn resolve_write_path(
+    root: &Path,
+    path: &str,
+    call: &LlmToolCall,
+) -> Result<PathBuf, String> {
     let handle = path_handle(path, call)?;
     crate::resolve_workspace_write_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "invalid_arguments"))
 }
 
@@ -200,20 +204,24 @@ fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
     })
 }
 
-fn literal_workspace_path(root: &Path, handle: &PathHandle) -> PathBuf {
-    let mut path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+async fn literal_workspace_path(root: &Path, handle: &PathHandle) -> PathBuf {
+    let mut path = fs::canonicalize(root)
+        .await
+        .unwrap_or_else(|_| root.to_path_buf());
     for segment in handle.path_segments() {
         path.push(segment);
     }
     path
 }
 
-fn workspace_relative_path(
+async fn workspace_relative_path(
     root: &Path,
     absolute: &Path,
     call: &LlmToolCall,
 ) -> Result<String, String> {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = fs::canonicalize(root)
+        .await
+        .unwrap_or_else(|_| root.to_path_buf());
     absolute
         .strip_prefix(&root)
         .ok()

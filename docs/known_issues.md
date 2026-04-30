@@ -1,5 +1,23 @@
 # 已知问题记录
 
+## 2026-05-01 00:00:00: WebSocket 连接处理 future 曾不满足 `Send`
+
+- 状态：已处理，`prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 3 已恢复普通 `tokio::spawn`。
+- 来源：执行 Phase 3 时，将 app server core / host 的文件系统、预览、导出、ChatStore、CadQuery runner 与 staging 路径改为 async 后，`app-server-host` websocket smoke 编译暴露 `tokio::spawn` 要求连接处理 future 满足 `Send`。
+- 原因：
+  - dispatcher 中部分 async 路径曾通过借用参数进入同一个连接处理 future，例如 ChatStore、CadQuery staging、preview / config / workspace helper 和若干路径参数。
+  - `tokio::spawn` 会把升级后的 websocket 连接 future 放入多线程 runtime；这些借用 future 不能跨 worker 线程移动。
+- 影响范围：
+  - 影响 `app-server-host/src/websocket.rs` 的 websocket upgrade 后连接处理。
+  - 若保留 blocking runtime 包装，会为连接处理占用 blocking 线程，不适合作为长期 WebSocket 运行模型。
+- 可能的解法：
+  - 将 dispatcher 生产路径经过的 async helper 改为 owned 参数或在 await 前完成借用转换。
+  - 为 `handle_connection` 内的 request dispatch future 保留编译期 `Send` 断言。
+  - 恢复普通 `tokio::spawn` 后补跑 websocket smoke 与 host 全量测试。
+- 当前处理方式：
+  - 已按上述方案处理。WebSocket upgrade 后直接使用普通 `tokio::spawn`，request dispatch 通过 `require_send(...)` 编译期断言。
+  - `cargo test -p app-server-host` 已通过，包含 `websocket_smoke_roundtrip` 相关用例。
+
 ## 2026-04-30 22:24:00: 重载后 Chat history 没有恢复 CadQuery artifact relation
 
 - 状态：已处理，`prompt-archives/2026043002-cadquery-web-polish-replan/plan-00.md` Phase 5 已让 CadQuery tool result history 携带 `mesh_result`，并在 Studio common 读取 chat history 时恢复 CadQuery result 缓存。

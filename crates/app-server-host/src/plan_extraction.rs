@@ -66,19 +66,20 @@ pub fn validate_saved_plan_confirmation(
     Ok(())
 }
 
-pub fn parse_plan_package(
+pub async fn parse_plan_package(
     workspace_root: &Path,
     plan_ref: &PathHandle,
 ) -> Result<ParsedPlanPackage, ProtocolError> {
     app_server_core::parse_plan_package(workspace_root, &plan_ref.display_path())
+        .await
         .map_err(|error| ProtocolError::new(ProtocolErrorCode::InvalidPathHandle, error.message))
 }
 
-pub fn execution_scope_from_plan_ref(
+pub async fn execution_scope_from_plan_ref(
     workspace_root: &Path,
     plan_ref: &PathHandle,
 ) -> Result<AgentExecutionScope, ProtocolError> {
-    parse_plan_package(workspace_root, plan_ref)
+    parse_plan_package(workspace_root, plan_ref).await
         .map(|plan| AgentExecutionScope::from_plan_package(&plan))
 }
 

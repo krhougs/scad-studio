@@ -122,8 +122,9 @@ pub trait LlmProvider: Send + Sync {
     }
 }
 
-pub fn create_provider() -> Result<Box<dyn LlmProvider>, LlmError> {
+pub async fn create_provider() -> Result<Box<dyn LlmProvider>, LlmError> {
     let config = load_llm_config()
+        .await
         .map_err(|e| LlmError { message: e.message })?
         .ok_or_else(|| LlmError {
             message: "LLM not configured. Set BUDN_LLM_CONFIG or BUDN_LLM_BASE_URL + BUDN_LLM_API_KEY environment variables.".into(),

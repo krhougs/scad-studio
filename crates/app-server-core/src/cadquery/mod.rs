@@ -14,4 +14,5 @@ pub use staging::{
     CadQueryCommitScope, CadQueryExecuteConfig, StagedCadQueryProject,
     execute_cadquery_with_staging, execute_cadquery_with_staging_cancellable,
     execute_cadquery_with_staging_cancellable_scoped, stage_cadquery_project,
+    stage_cadquery_project_owned,
 };

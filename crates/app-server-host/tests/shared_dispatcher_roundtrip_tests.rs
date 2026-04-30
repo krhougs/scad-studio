@@ -833,8 +833,9 @@ fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessio
         ),
         run_id
     );
-    ChatStore::new(workspace.to_path_buf())
-        .append_tool_result(
+    tokio::runtime::Runtime::new()
+        .expect("test runtime should build")
+        .block_on(ChatStore::new(workspace.to_path_buf()).append_tool_result(
             session_id,
             "agent tool completed",
             ChatToolResultRecord {
@@ -843,7 +844,7 @@ fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessio
                 result_json,
             },
             None,
-        )
+        ))
         .expect("saved plan tool result");
 }
 

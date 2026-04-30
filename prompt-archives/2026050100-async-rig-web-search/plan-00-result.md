@@ -69,7 +69,45 @@
 
 ### Phase 3 — 核心 I/O、ChatStore、预览与子进程路径 async 化
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 未重新引入 Rust 桌面端、`studio-app`、`scad-ui`、`scad-viewer` 或 in-process / mpsc host 生产路径。
+  - 保持 Phase 2 的 async dispatcher 入口；WebSocket host 继续通过 async dispatcher 处理 protocol request。
+  - CadQuery staging 仍保持先 staging、成功后提交、失败 / 取消 / 超时不污染真实 workspace 的边界。
+- 变更摘要：
+  - 将 workspace、file、config、presets、plan package、Agent readonly / file_write / semantic 工具、ChatStore 等文件系统路径改为 async。
+  - 将 preview / export / CadQuery runner / CadQuery contract / CadQuery staging / host CadQuery env check 改为 `tokio::fs` 与 `tokio::process`。
+  - 删除不再使用的 `child_terminator` 同步 `std::process::Child` 终止路径。
+  - 将 watcher 从 `std::sync::mpsc + recv_timeout + thread::spawn` 改为 Tokio channel 与 interval 驱动；公开匹配函数保留 canonical 路径语义并改为 async。
+  - 将 ChatStore JSONL 会话创建、追加、history、archive、summary 更新改为 async，并同步调整 host dispatcher 与 Agent tool observer 的调用。
+  - 将 WebSocket 连接处理恢复为普通 `tokio::spawn`，并对 request dispatch future 增加编译期 `Send` 断言。
+  - CadQuery runner 取消 / 超时路径已显式 kill 并等待子进程退出，再返回错误；contract runner 出错和超时路径会先删除临时 contract 文件。
+- 第一轮独立复审记录：
+  - 发现 CadQuery contract 临时文件在 spawn / wait 错误路径可能泄漏；已改为所有返回前执行 `contract_file.remove().await`。
+  - 发现 runner 取消 / 超时仅依赖 `kill_on_drop(true)`，staging cleanup 可能早于子进程完全退出；已改为显式 `start_kill`、`wait` 并等待 stdout / stderr 读取任务结束。
+  - 发现超时与 cleanup 测试覆盖不足；已补充 runner timeout marker、contract timeout 临时文件清理、staging timeout cleanup 测试，并增强 cancel 后 staging 根目录清理断言。
+  - 发现 Phase 3 结果记录仍为未执行；本节已更新。
+- 第二轮独立复审记录：
+  - 发现 WebSocket 连接处理使用 `spawn_blocking + current_thread runtime` 包装，违反 Phase 3 对生产 async WebSocket 路径的验收；已改为普通 `tokio::spawn`，并将 dispatcher 生产路径经过的 ChatStore、staging、preview、config、workspace helper 改为 owned 参数或 await 前完成借用转换。
+  - 发现 `StagedCadQueryProject` 公共 API 缺少误用提示；已增加 `#[must_use]`，并保持 commit / cleanup 消费 `self`，降低 staging 目录被遗留的风险。
+  - 发现结果记录仍缺少最终验证证据；本节已补充 `git diff --check` 与完整 core / host 测试结果。
+- 第三轮独立复审记录：
+  - 发现 CadQuery staging 成功后、runner 启动前的取消检查会直接返回，导致 `.budn_staging` 遗留；已在该取消分支显式 cleanup，并补充 `cadquery_staging_cleans_up_when_cancelled_after_stage_before_runner` 回归测试。
+  - 发现 Chat JSONL owned append 路径使用 read-modify-write 覆盖文件，可能丢失并发追加；已恢复 `OpenOptions::append(true)` 语义，同时保留 WebSocket dispatch future 的 `Send` 编译断言。
+  - 发现 CadQuery 配对说明文档追加记录使用 read-modify-write 覆盖文件；已恢复 append 写入语义。
+- 第四轮独立复审记录：
+  - 未发现阻塞项、高风险或普通问题。
+  - 确认 staging 取消清理、Chat JSONL append 语义、CadQuery 说明文档 append 语义、WebSocket `tokio::spawn` / dispatch future `Send` 约束和结果文档记录均满足 Phase 3 要求。
+- 验证结果：
+  - `cargo test -p app-server-core cadquery_staging_cleans_up_when_cancelled_after_stage_before_runner` 通过。
+  - `cargo test -p app-server-core cadquery_runner` 通过，覆盖 runner 成功、取消、超时、Python import error 与大 stdout。
+  - `cargo test -p app-server-core cadquery_contract_removes_temp_file_on_timeout` 通过。
+  - `cargo test -p app-server-core cadquery_staging_cleans_up_after_runner_timeout` 通过。
+  - `cargo test -p app-server-core` 通过。
+  - `cargo test -p app-server-host` 通过，包含 WebSocket smoke roundtrip、压缩与大 frame 用例。
+  - `git diff --check` 通过。
+- 遗留问题：
+  - 旧 Agent worker 的 `std::thread` / `thread::sleep` 路径按计划留到 Phase 4 与 Rig-only 迁移一起删除。
 
 ### Phase 4 — Rig 成为唯一生产 Agent 执行引擎
 

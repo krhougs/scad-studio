@@ -5,12 +5,13 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use app_server_core::{
-    CadQueryRunConfig, CadQueryRunnerErrorKind, cadquery_result_ready, parse_cadquery_success_json,
-    run_cadquery_runner, run_cadquery_runner_with_cancel,
+    CadQueryContractConfig, CadQueryRunConfig, CadQueryRunnerErrorKind, cadquery_result_ready,
+    parse_cadquery_success_json, run_cadquery_contract, run_cadquery_runner,
+    run_cadquery_runner_with_cancel,
 };
 use app_server_protocol::{
     CadQueryExportFormat, CadQueryObjectKind, PreviewUnit, ProtocolErrorCode,
@@ -126,13 +127,13 @@ fn rejects_cadquery_arrays_with_invalid_lengths_or_indices() {
     assert_eq!(err.code, ProtocolErrorCode::InvalidWireFrame);
 }
 
-#[test]
-fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
+#[tokio::test]
+async fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
     let root = temp_dir("cadquery-runner");
     fs::create_dir_all(&root).expect("temp root");
     let runner = fake_runner(&root, &success_json());
 
-    let result = run_cadquery_runner(&CadQueryRunConfig {
+    let result = run_cadquery_runner(CadQueryRunConfig {
         python: runner,
         project_root: root.clone(),
         script: "parts/top_lid.py".into(),
@@ -141,6 +142,7 @@ fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
         params_json: "{}".into(),
         timeout: Duration::from_secs(5),
     })
+    .await
     .expect("runner should parse");
 
     assert_eq!(result.ready.result_id, "cq_abc");
@@ -148,13 +150,13 @@ fn cadquery_runner_invokes_subprocess_and_parses_mesh_payload() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_runner_drains_large_stdout_before_process_exit() {
+#[tokio::test]
+async fn cadquery_runner_drains_large_stdout_before_process_exit() {
     let root = temp_dir("cadquery-runner-large-stdout");
     fs::create_dir_all(&root).expect("temp root");
     let runner = fake_runner(&root, &large_success_json());
 
-    let result = run_cadquery_runner(&CadQueryRunConfig {
+    let result = run_cadquery_runner(CadQueryRunConfig {
         python: runner,
         project_root: root.clone(),
         script: "parts/top_lid.py".into(),
@@ -163,14 +165,15 @@ fn cadquery_runner_drains_large_stdout_before_process_exit() {
         params_json: "{}".into(),
         timeout: Duration::from_secs(2),
     })
+    .await
     .expect("runner should drain stdout while child is running");
 
     assert!(result.mesh.parts[0].faces[0].positions.len() > 64 * 1024);
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_runner_maps_python_import_failure_to_error_kind() {
+#[tokio::test]
+async fn cadquery_runner_maps_python_import_failure_to_error_kind() {
     let root = temp_dir("cadquery-python-import");
     fs::create_dir_all(&root).expect("temp root");
     let runner = fake_error_runner(
@@ -179,7 +182,7 @@ fn cadquery_runner_maps_python_import_failure_to_error_kind() {
         r#"{"status":"runner_error","error_type":"ModuleNotFoundError","error":"No module named 'cadquery'"}"#,
     );
 
-    let error = run_cadquery_runner(&CadQueryRunConfig {
+    let error = run_cadquery_runner(CadQueryRunConfig {
         python: runner,
         project_root: root.clone(),
         script: "parts/top_lid.py".into(),
@@ -188,6 +191,7 @@ fn cadquery_runner_maps_python_import_failure_to_error_kind() {
         params_json: "{}".into(),
         timeout: Duration::from_secs(5),
     })
+    .await
     .expect_err("python import failure should be classified");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::PythonImport);
@@ -195,14 +199,16 @@ fn cadquery_runner_maps_python_import_failure_to_error_kind() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn cadquery_runner_cancels_subprocess_before_timeout() {
+#[tokio::test]
+async fn cadquery_runner_cancels_subprocess_before_timeout() {
     let root = temp_dir("cadquery-cancel");
     fs::create_dir_all(&root).expect("temp root");
-    let runner = sleeping_runner(&root);
+    let marker = root.join("runner-finished");
+    let runner = sleeping_runner_with_marker(&root, &marker);
     let cancelled = Arc::new(AtomicBool::new(true));
+    let started = Instant::now();
     let error = run_cadquery_runner_with_cancel(
-        &CadQueryRunConfig {
+        CadQueryRunConfig {
             python: runner,
             project_root: root.clone(),
             script: "parts/top_lid.py".into(),
@@ -213,9 +219,58 @@ fn cadquery_runner_cancels_subprocess_before_timeout() {
         },
         &|| cancelled.load(Ordering::SeqCst),
     )
+    .await
     .expect_err("cancelled runner should fail");
 
     assert_eq!(error.kind, CadQueryRunnerErrorKind::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!marker.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn cadquery_runner_kills_subprocess_on_timeout() {
+    let root = temp_dir("cadquery-timeout");
+    fs::create_dir_all(&root).expect("temp root");
+    let marker = root.join("runner-finished");
+    let runner = sleeping_runner_with_marker(&root, &marker);
+
+    let error = run_cadquery_runner(CadQueryRunConfig {
+        python: runner,
+        project_root: root.clone(),
+        script: "parts/top_lid.py".into(),
+        output_dir: root.join("outputs"),
+        export_formats: Vec::new(),
+        params_json: "{}".into(),
+        timeout: Duration::from_millis(50),
+    })
+    .await
+    .expect_err("timeout should fail");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Timeout);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!marker.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn cadquery_contract_removes_temp_file_on_timeout() {
+    let root = temp_dir("cadquery-contract-timeout");
+    fs::create_dir_all(&root).expect("temp root");
+    let runner = sleeping_runner(&root);
+    let marker = format!("contract-marker-{}", unique_suffix());
+
+    let error = run_cadquery_contract(CadQueryContractConfig {
+        python: runner,
+        code: format!("# {marker}\n"),
+        timeout: Duration::from_millis(50),
+    })
+    .await
+    .expect_err("contract timeout should fail");
+
+    assert_eq!(error.kind, CadQueryRunnerErrorKind::Timeout);
+    assert!(contract_temp_files_containing(&marker).is_empty());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -306,6 +361,39 @@ fn sleeping_runner(root: &Path) -> std::path::PathBuf {
     fs::write(&runner, "#!/bin/sh\nsleep 5\n").expect("write sleep runner");
     make_executable(&runner);
     runner
+}
+
+fn sleeping_runner_with_marker(root: &Path, marker: &Path) -> std::path::PathBuf {
+    let runner = root.join("sleep-runner-marker.sh");
+    fs::write(
+        &runner,
+        format!(
+            "#!/bin/sh\nsleep 0.3\nprintf done > '{}'\n",
+            marker.to_string_lossy().replace('\'', "'\\''")
+        ),
+    )
+    .expect("write sleep runner");
+    make_executable(&runner);
+    runner
+}
+
+fn contract_temp_files_containing(marker: &str) -> Vec<std::path::PathBuf> {
+    let prefix = format!("budn-cq-contract-{}-", std::process::id());
+    fs::read_dir(std::env::temp_dir())
+        .expect("read temp dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .filter(|path| {
+            fs::read_to_string(path)
+                .map(|contents| contents.contains(marker))
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
