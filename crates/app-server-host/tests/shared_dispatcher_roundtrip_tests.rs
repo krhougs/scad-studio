@@ -159,6 +159,7 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
         ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
     ]);
     let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let config_before = std::fs::read_to_string(workspace.join("agents.toml")).unwrap();
 
     let registry =
         dispatch_agent_model_command(&mut dispatcher, 10, ClientCommand::AgentModelRegistry).await;
@@ -215,6 +216,28 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
         .expect("configured mini model");
     assert!(disabled_search.native_web_search_enabled);
     assert!(!disabled_search.native_web_search_applied);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("agents.toml")).unwrap(),
+        config_before,
+    );
+
+    let handshake = dispatcher
+        .handshake(handshake_request())
+        .await
+        .expect("handshake should expose runtime model state");
+    let handshake_registry = handshake
+        .server_capabilities
+        .agent_model_registry
+        .expect("model registry capability");
+    assert_eq!(handshake_registry.active_model_id, "gpt-5-mini");
+    assert_eq!(
+        handshake_registry.active_reasoning_effort.as_deref(),
+        Some("medium")
+    );
+    assert_eq!(
+        handshake_registry.active_service_label.as_deref(),
+        Some("flex")
+    );
     cleanup_workspace(&workspace);
 }
 

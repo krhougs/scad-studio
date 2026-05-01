@@ -5,7 +5,8 @@
 - Phase 1 已完成并通过独立 review。
 - Phase 2 已完成并通过独立 review。
 - Phase 3 已完成并通过独立 review。
-- Phase 4 已完成并通过独立 review，准备进入 Phase 5。
+- Phase 4 已完成并通过独立 review。
+- Phase 5 已完成并通过独立 review，准备进入 Phase 6。
 - 执行前已检查：当前计划无 `TBD`、`TODO`、待确认项、未选择方案或缺失验收标准。
 - 约束来源已核对：原始用户需求、后续补充需求、根 `AGENTS.md` 的 Plan Mode / 工具链 / app server / protocol / Web 边界要求。
 
@@ -41,7 +42,7 @@
 | 2 | Provider registry 与 Agent 执行分发 | 已完成 |
 | 3 | Protocol 与 Studio common capability 扩展 | 已完成 |
 | 4 | Web 模型选择 UI 与状态管理 | 已完成 |
-| 5 | Host 切换命令持久状态与 `bun run web` 验证 | 未执行 |
+| 5 | Host 切换命令持久状态与 `bun run web` 验证 | 已完成 |
 | 6 | 文档、已知问题与最终验证 | 未执行 |
 
 ## Phase 1 — 配置格式与 ignore 基线
@@ -278,3 +279,53 @@
 
 - `ChatZone2` 测试中仍有两个既有 React `act(...)` 警告；本 Phase 未扩大该问题范围。
 - registry snapshot、模型切换和 handshake capability 仍可能触发带 discovery 的 registry 读取；如果 provider 网络慢，后续 Phase 5 启动链路验证时需要继续观察体验与超时表现。
+
+## Phase 5 — Host 切换命令持久状态与 `bun run web` 验证
+
+### 完成情况
+
+- Phase 3 已提前实现 host 侧模型命令处理：
+  - `agent.model.select` 更新当前进程内 active provider/model。
+  - `agent.model.params.update` 更新当前进程内 reasoning effort / service label runtime override。
+  - 更新 runtime state 后返回最新 `agent_model_registry`。
+  - `agent.invoke` 将本次请求携带的 provider/model/reasoning/service 快照复制到 `AgentWorker`，已运行中的 run 不会被后续模型切换改写。
+- 本 Phase 补齐 handshake 状态边界：
+  - `handshake` 现在使用当前 `agent_model_state` 构造 `server_capabilities.agent_model_registry`。
+  - 模型切换或参数更新后再次 handshake，不会退回 `agents.toml` 默认 active model。
+- 扩展 host roundtrip 测试：
+  - 断言模型切换和参数更新后 `agents.toml` 内容保持不变。
+  - 断言后续 handshake 暴露最新 active model、reasoning effort 和 service label。
+- 执行 `bun run web` 实际启动验证：
+  - WASM build 成功。
+  - websocket host 成功监听 `127.0.0.1:38433`。
+  - Vite 在 `http://localhost:5197/` ready。
+  - 验证后已停止进程，端口 `5197` 与 `38433` 均已释放。
+
+### 验证证据
+
+- `cargo test -p app-server-host dispatcher_agent_model_commands_update_active_snapshot` 通过；目标用例 1 个通过。
+- `cargo test -p app-server-host agent` 通过；lib 中 4 个 agent 相关用例通过，shared dispatcher 中 4 个 agent 相关用例通过。
+- `bun run web -- --workspace /tmp/budn-agent-provider-web --web-port 5197 --ws-url ws://127.0.0.1:38433` 启动成功：
+  - 输出 `ws://127.0.0.1:38433`。
+  - 输出 `VITE v6.4.2 ready`。
+  - 输出 `Local: http://localhost:5197/`。
+- 启动验证后执行端口检查，`5197 stopped`、`38433 stopped`。
+
+### 独立 Review 结果
+
+- Phase 5 review 结论：未发现阻塞问题，可以进入 Phase 5 结果归档与阶段提交。
+- reviewer 复核的关键证据：
+  - handshake 已使用运行时 active state。
+  - select / params.update 只更新 `agent_model_state`。
+  - 新 run 启动时复制模型状态到 worker，后续切换不会改动已运行 run。
+  - `agents.toml` 未写回已有测试断言覆盖。
+  - reviewer 复跑 `cargo test -p app-server-host agent` 通过。
+
+### 阶段提交
+
+- `86986fe Persist agent model state in handshake`
+
+### 遗留问题
+
+- `agent.invoke` 的 provider/model/reasoning/service 字段仍为 optional，host 对缺字段会回退当前运行时状态，用于兼容旧客户端和测试 fallback；Web 生产路径已在 Phase 4 发送完整模型快照。
+- `.env` / `BUDN_AGENT_CONFIG` 传递目前由本机 `bun run web` 实际启动验证覆盖，尚未新增自动 smoke 用例；Phase 6 最终验证仍需运行既有 smoke 套件。

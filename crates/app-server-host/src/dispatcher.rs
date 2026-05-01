@@ -163,7 +163,9 @@ impl HostRequestDispatcher {
         request: CapabilityHandshakeRequest,
     ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
         let requested_preview_kinds = request.capabilities.supported_preview_kinds.clone();
-        let server_capabilities = server_capabilities_for_request(requested_preview_kinds).await;
+        let server_capabilities =
+            server_capabilities_for_request(requested_preview_kinds, &self.agent_model_state)
+                .await;
         let negotiated_version = negotiate_protocol_version(
             request.capabilities.protocol_version,
             server_capabilities.protocol_version,
@@ -2119,13 +2121,14 @@ fn server_capabilities(agent_provider: Option<AgentProviderCapabilities>) -> Ser
 
 async fn server_capabilities_for_request(
     requested_preview_kinds: Vec<PreviewRequestKind>,
+    agent_model_state: &AgentModelRuntimeState,
 ) -> ServerCapabilities {
     let registry = app_server_core::llm::load_agent_provider_registry_with_discovery()
         .await
         .ok()
         .flatten();
     let agent_model_registry = registry.as_ref().map(|registry| {
-        agent_model_registry_response(registry, &AgentModelRuntimeState::default())
+        agent_model_registry_response(registry, agent_model_state)
     });
     let agent_provider = agent_model_registry
         .as_ref()
