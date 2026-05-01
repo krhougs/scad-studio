@@ -10,9 +10,9 @@ use app_server_protocol::{
     AgentProviderCapabilities, CadQueryArtifactExport, CadQueryArtifactRelation,
     CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
     CadQueryResultGetRequest, CancelRequest, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope,
-    ClientPlatform, ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup, FileReadContents,
-    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
+    CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
+    ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup, FileReadContents, PathHandle,
+    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
     PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewUnit,
     ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerResponseEnvelope,
     SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest, WatchSubscriptionAck,
@@ -57,9 +57,7 @@ fn handshake_ack_bytes() -> Vec<u8> {
     handshake_ack_bytes_with_provider(None)
 }
 
-fn handshake_ack_bytes_with_provider(
-    agent_provider: Option<AgentProviderCapabilities>,
-) -> Vec<u8> {
+fn handshake_ack_bytes_with_provider(agent_provider: Option<AgentProviderCapabilities>) -> Vec<u8> {
     let ack = CapabilityHandshakeResponse {
         negotiated_version: 4,
         session_token: SessionToken("test-session".into()),
@@ -74,6 +72,7 @@ fn handshake_ack_bytes_with_provider(
             selection_sync: false,
             llm_configured: agent_provider.is_some(),
             agent_provider,
+            agent_model_registry: None,
         },
     };
     encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")

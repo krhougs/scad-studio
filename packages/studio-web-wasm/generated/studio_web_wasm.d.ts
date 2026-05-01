@@ -74,6 +74,12 @@ export function client_dispatch_agent_cancel(handle: ClientHandle, params: any):
 
 export function client_dispatch_agent_invoke(handle: ClientHandle, params: any): bigint;
 
+export function client_dispatch_agent_model_params_update(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_model_registry(handle: ClientHandle): bigint;
+
+export function client_dispatch_agent_model_select(handle: ClientHandle, params: any): bigint;
+
 export function client_dispatch_agent_plan_confirm(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_agent_plan_reject(handle: ClientHandle, params: any): bigint;

@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest, AgentMode,
+    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelRegistryModel,
+    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSource,
     AgentProviderCapabilities, AgentStartedResponse, AgentTokenEvent, CadQueryArtifactExport,
     CadQueryArtifactRelation, CadQueryResultReady, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
@@ -9,10 +11,10 @@ use app_server_protocol::{
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
     ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
-    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
-    encode_server_frame, web_file_read_capability,
+    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
+    decode_client_frame, encode_server_frame, web_file_read_capability,
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
@@ -106,6 +108,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
             selection_sync: false,
             llm_configured: false,
             agent_provider: None,
+            agent_model_registry: None,
         },
     }
 }
@@ -165,6 +168,41 @@ fn sample_subscription_id() -> SubscriptionId {
     SubscriptionId("watch-1".into())
 }
 
+fn sample_agent_model_registry() -> AgentModelRegistryResponse {
+    AgentModelRegistryResponse {
+        active_provider_id: "openai".into(),
+        active_model_id: "gpt-5.2".into(),
+        active_reasoning_effort: Some("high".into()),
+        active_reasoning_effort_applied: true,
+        active_service_label: Some("flex".into()),
+        active_service_label_applied: true,
+        reasoning_effort_options: vec!["low".into(), "medium".into(), "high".into()],
+        service_label_options: vec!["default".into(), "flex".into()],
+        providers: vec![AgentModelRegistryProvider {
+            id: "openai".into(),
+            kind: "openai_responses".into(),
+            label: None,
+            discovery: AgentModelDiscoveryState {
+                enabled: true,
+                status: AgentModelDiscoveryStatus::Succeeded,
+                error: None,
+            },
+            models: vec![AgentModelRegistryModel {
+                id: "gpt-5.2".into(),
+                label: Some("GPT 5.2".into()),
+                source: AgentModelSource::DiscoveredWithOverride,
+                reasoning_effort: Some("high".into()),
+                service_label: Some("flex".into()),
+                native_web_search_enabled: true,
+                native_web_search_applied: true,
+                web_search_supported: true,
+                web_search_unsupported_reason: None,
+                search_sources_supported: false,
+            }],
+        }],
+    }
+}
+
 #[test]
 fn dispatch_before_handshake_returns_not_ready() {
     let mut client = ManagedClient::new(FakeTransport::default());
@@ -222,6 +260,41 @@ fn handshake_provider_capability_updates_snapshot() {
     assert_eq!(provider.model.as_deref(), Some("gpt-5.2"));
     assert!(provider.native_web_search_enabled);
     assert!(!provider.search_sources_supported);
+    assert!(snapshot.llm_configured);
+}
+
+#[test]
+fn agent_model_registry_response_updates_snapshot_and_legacy_provider() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    let request_id = client
+        .dispatch_agent_model_registry()
+        .expect("dispatch agent.model.registry");
+    assert_eq!(request_id, RequestId(1));
+    let _ = drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::AgentModelRegistry(
+                sample_agent_model_registry(),
+            )),
+        }))
+        .expect("agent model registry response");
+
+    let snapshot = client.snapshot();
+    let registry = snapshot
+        .agent_model_registry
+        .expect("agent model registry snapshot");
+    assert_eq!(registry.active_provider_id, "openai");
+    assert_eq!(registry.active_model_id, "gpt-5.2");
+    assert_eq!(registry.active_reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(registry.active_service_label.as_deref(), Some("flex"));
+    let provider = snapshot.agent_provider.expect("legacy provider capability");
+    assert_eq!(provider.provider, "openai_responses");
+    assert_eq!(provider.model.as_deref(), Some("gpt-5.2"));
+    assert!(provider.native_web_search_enabled);
     assert!(snapshot.llm_configured);
 }
 
@@ -747,6 +820,10 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             mode: AgentMode::Agent,
             plan_ref: None,
             context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
         })
         .expect("dispatch agent.invoke");
     let _ = drain_outbound(&mut client);
@@ -784,6 +861,10 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
             mode: AgentMode::Agent,
             plan_ref: None,
             context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
         })
         .expect("dispatch agent.invoke");
     let _ = drain_outbound(&mut client);

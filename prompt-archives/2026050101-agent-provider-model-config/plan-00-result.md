@@ -3,7 +3,8 @@
 ## 当前状态
 
 - Phase 1 已完成并通过独立 review。
-- Phase 2 已完成并通过独立 review，准备进入 Phase 3。
+- Phase 2 已完成并通过独立 review。
+- Phase 3 已完成并通过独立 review，准备进入 Phase 4。
 - 执行前已检查：当前计划无 `TBD`、`TODO`、待确认项、未选择方案或缺失验收标准。
 - 约束来源已核对：原始用户需求、后续补充需求、根 `AGENTS.md` 的 Plan Mode / 工具链 / app server / protocol / Web 边界要求。
 
@@ -37,7 +38,7 @@
 | --- | --- | --- |
 | 1 | 配置格式与 ignore 基线 | 已完成 |
 | 2 | Provider registry 与 Agent 执行分发 | 已完成 |
-| 3 | Protocol 与 Studio common capability 扩展 | 未执行 |
+| 3 | Protocol 与 Studio common capability 扩展 | 已完成 |
 | 4 | Web 模型选择 UI 与状态管理 | 未执行 |
 | 5 | Host 切换命令持久状态与 `bun run web` 验证 | 未执行 |
 | 6 | 文档、已知问题与最终验证 | 未执行 |
@@ -162,3 +163,65 @@
 - legacy handshake capability 当前仍只暴露简化的 active provider/model 信息，完整 provider/model registry、discovery status、reasoning/service 应用状态按计划在 Phase 3 扩展 protocol。
 - discovery 当前在加载 discovery registry 时逐个 provider 执行，单 provider 超时 10 秒；后续 Phase 3/5 接入 Web registry 与启动链路时需要评估是否增加缓存或后台刷新。
 - Web UI 中旧配置提示和模型切换控件仍未更新，属于 Phase 4 范围。
+
+## Phase 3 — Protocol 与 Studio common capability 扩展
+
+### 完成情况
+
+- `app-server-protocol` 已升级到 protocol version 8。
+- protocol 新增 provider/model registry DTO：
+  - provider id、kind、label、模型发现状态与模型列表。
+  - model id、label、来源、reasoning effort、service label、native web search 意图、native web search 实际应用状态、web search 支持状态和不支持原因。
+  - active provider/model、active reasoning/service 当前值、可选值和是否已应用到 provider request。
+- protocol 新增 command：
+  - `agent.model.registry`
+  - `agent.model.select`
+  - `agent.model.params.update`
+- `agent.invoke` 已扩展 provider/model/reasoning/service 快照字段。
+- host 已实现 registry 读取、模型切换和模型参数运行时更新；参数更新只影响运行时状态，不写入 `agents.toml`。
+- host handshake capability 已暴露完整 `agent_model_registry`，同时保留 legacy `agent_provider`，避免旧客户端丢失配置状态提示。
+- host Agent run 已按本次 `agent.invoke` 携带的 provider/model/reasoning/service 参数生成运行快照；同模型缺省参数可保留当前运行时选择，不同 provider/model 不继承旧模型参数。
+- `studio-common` managed client snapshot 已保存并更新 `agent_model_registry`，并从 registry 继续生成 legacy `agent_provider` capability。
+- `studio-web-wasm` bridge 已暴露 registry 读取、模型切换和模型参数更新 dispatch。
+- `packages/app-server-protocol/src/index.ts` 已同步 protocol version 8 与新增 DTO 字段。
+- `packages/app-server-protocol/generated/*` 与 `packages/studio-web-wasm/generated/*` 已重新生成。
+
+### 验证证据
+
+- `bun run protocol:build` 通过。
+- `bun run protocol:check-generated` 通过。
+- `cargo test -p app-server-protocol` 通过。
+- `cargo test -p app-server-protocol-wasm` 通过。
+- `cargo test -p studio-common` 通过。
+- `cargo test -p studio-web-wasm` 通过。
+- `cargo test -p app-server-host` 通过。
+- 额外验证：`bun run web:build` 通过；仅有 Vite 既有大 chunk 警告。
+- 额外回归：`cargo test -p app-server-host agent_invoke_model_state_does_not_inherit_params_across_models` 通过。
+- `git diff --check` 与 `git diff --cached --check` 通过。
+
+### 独立 Review 结果
+
+- 第一轮 Phase 3 review 发现 3 个阻塞项和 1 个测试缺口：
+  - registry 未暴露 reasoning/service 是否已应用到 provider request。
+  - registry 将 native web search 配置意图和实际应用状态合并，导致 Web 无法区分“用户开启但模型不支持”和“用户关闭”。
+  - `agent.model.params.update` 中 `None` 会清空另一个未修改参数。
+  - wire payload contract 未覆盖 protocol version 8 与 registry 新字段。
+- 已修复并补充测试：
+  - `active_reasoning_effort_applied`
+  - `active_service_label_applied`
+  - `native_web_search_applied`
+  - `protocol_v8_capabilities_expose_agent_model_registry_fields`
+  - `dispatcher_agent_model_commands_update_active_snapshot`
+- 第二轮 Phase 3 review 发现 `agent.invoke` 跨 provider/model 时仍会继承旧运行时参数，已修复并补充测试：
+  - `agent_invoke_model_state_does_not_inherit_params_across_models`
+- 第三轮 Phase 3 review 结论：未发现阻塞问题。
+
+### 阶段提交
+
+- 阶段提交随本结果段一并提交；提交哈希以提交后的 `git log -1 --oneline` 为准。
+
+### 遗留问题
+
+- Anthropic registry response 对 `active_reasoning_effort_applied` 的边界测试仍可加强，尤其是 `max_tokens <= 1024` 和 unknown effort。
+- Web TypeScript adapter `packages/studio-web/src/wasm-bridge/client.ts` 尚未封装 `agent.model.registry/select/params.update`；底层 Rust WASM bridge 已可用，Phase 4 接 UI 时需要补齐。
+- registry snapshot、模型切换和 handshake capability 当前会重新加载带 discovery 的 registry；多 provider 或 provider 网络慢时可能增加握手和切换延迟，后续可评估缓存或后台刷新。

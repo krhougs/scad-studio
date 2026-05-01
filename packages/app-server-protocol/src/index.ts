@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 7;
+export const CURRENT_PROTOCOL_VERSION = 8;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -116,6 +116,7 @@ export interface ServerCapabilities {
   selection_sync: boolean;
   llm_configured: boolean;
   agent_provider: AgentProviderCapabilities | null;
+  agent_model_registry?: AgentModelRegistryResponse | null;
 }
 
 export interface AgentProviderCapabilities {
@@ -123,6 +124,68 @@ export interface AgentProviderCapabilities {
   model: string | null;
   native_web_search_enabled: boolean;
   search_sources_supported: boolean;
+}
+
+export type AgentModelSource =
+  | "manual"
+  | "discovered"
+  | "discovered_with_override";
+
+export type AgentModelDiscoveryStatus =
+  | "disabled"
+  | "not_started"
+  | "succeeded"
+  | "failed";
+
+export interface AgentModelDiscoveryState {
+  enabled: boolean;
+  status: AgentModelDiscoveryStatus;
+  error: string | null;
+}
+
+export interface AgentModelRegistryModel {
+  id: string;
+  label: string | null;
+  source: AgentModelSource;
+  reasoning_effort: string | null;
+  service_label: string | null;
+  native_web_search_enabled: boolean;
+  native_web_search_applied: boolean;
+  web_search_supported: boolean;
+  web_search_unsupported_reason: string | null;
+  search_sources_supported: boolean;
+}
+
+export interface AgentModelRegistryProvider {
+  id: string;
+  kind: string;
+  label: string | null;
+  discovery: AgentModelDiscoveryState;
+  models: AgentModelRegistryModel[];
+}
+
+export interface AgentModelRegistryResponse {
+  active_provider_id: string;
+  active_model_id: string;
+  active_reasoning_effort: string | null;
+  active_reasoning_effort_applied: boolean;
+  active_service_label: string | null;
+  active_service_label_applied: boolean;
+  reasoning_effort_options: string[];
+  service_label_options: string[];
+  providers: AgentModelRegistryProvider[];
+}
+
+export interface AgentModelSelectRequest {
+  provider_id: string;
+  model_id: string;
+}
+
+export interface AgentModelParamsUpdateRequest {
+  provider_id: string;
+  model_id: string;
+  reasoning_effort: string | null;
+  service_label: string | null;
 }
 
 export interface CapabilityHandshakeRequest {
@@ -449,6 +512,10 @@ export interface AgentInvokeRequest {
   mode: AgentMode;
   plan_ref: PathHandle | null;
   context_refs?: string[];
+  provider_id?: string | null;
+  model_id?: string | null;
+  reasoning_effort?: string | null;
+  service_label?: string | null;
 }
 
 /** Deprecated: use AgentInvokeRequest { mode: "agent", plan_ref }. */
@@ -647,6 +714,7 @@ export type CommandSuccess =
   | { type: "agent_cancelled"; payload: AgentCancelledResponse }
   | { type: "agent_plan_confirmed"; payload: AgentStartedResponse }
   | { type: "agent_plan_rejected" }
+  | { type: "agent_model_registry"; payload: AgentModelRegistryResponse }
   | { type: "selection_updated"; payload: SelectionUpdateResponse }
   | { type: "slicer_listed"; payload: SlicerListResponse }
   | { type: "export_run"; payload: ExportRunResponse }

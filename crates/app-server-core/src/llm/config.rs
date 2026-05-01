@@ -18,6 +18,14 @@ pub struct RigAgentConfig {
     pub anthropic_version: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RigAgentConfigSelection {
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_label: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum AgentProviderKind {
     #[serde(rename = "openai_responses")]
@@ -448,7 +456,10 @@ fn apply_manual_model_override(existing: &mut ResolvedAgentModel, manual: &Resol
 async fn load_from_file(path: PathBuf) -> Result<RigAgentConfig, RigAgentConfigError> {
     let content = read_config_file(&path).await?;
     if is_agents_config(&content)? {
-        return registry_to_rig_config(parse_agents_config(&content, &path)?.into_registry()?);
+        return rig_config_from_registry_selection(
+            parse_agents_config(&content, &path)?.into_registry()?,
+            &RigAgentConfigSelection::default(),
+        );
     }
     let file: LegacyRigAgentConfigFile =
         toml::from_str(&content).map_err(|e| RigAgentConfigError {
@@ -512,7 +523,7 @@ pub async fn load_rig_agent_config_with_discovery()
     let Some(registry) = load_agent_provider_registry_with_discovery().await? else {
         return Ok(None);
     };
-    registry_to_rig_config(registry).map(Some)
+    rig_config_from_registry_selection(registry, &RigAgentConfigSelection::default()).map(Some)
 }
 
 pub async fn load_agent_provider_registry()
@@ -682,17 +693,30 @@ fn is_agents_config(content: &str) -> Result<bool, RigAgentConfigError> {
     Ok(value.get("providers").is_some() || value.get("active_provider").is_some())
 }
 
-fn registry_to_rig_config(
+pub fn rig_config_from_registry_selection(
     registry: AgentProviderRegistry,
+    selection: &RigAgentConfigSelection,
 ) -> Result<RigAgentConfig, RigAgentConfigError> {
+    let provider_id = selection
+        .provider_id
+        .as_deref()
+        .unwrap_or(&registry.active_provider_id);
+    let model_id = selection
+        .model_id
+        .as_deref()
+        .unwrap_or(&registry.active_model_id);
     let provider = registry
-        .active_provider()
+        .provider(provider_id)
         .ok_or_else(|| RigAgentConfigError {
             message: "active provider is missing".into(),
         })?;
-    let model = registry.active_model().ok_or_else(|| RigAgentConfigError {
-        message: "active model is missing".into(),
-    })?;
+    let model = provider
+        .models
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| RigAgentConfigError {
+            message: "active model is missing".into(),
+        })?;
     Ok(RigAgentConfig {
         provider_id: provider.id.clone(),
         provider_kind: provider.kind,
@@ -706,8 +730,14 @@ fn registry_to_rig_config(
         timeout_secs: registry.defaults.timeout_secs,
         max_tokens: model.max_tokens,
         temperature: model.temperature,
-        reasoning_effort: model.reasoning_effort.clone(),
-        service_label: model.service_label.clone(),
+        reasoning_effort: selection
+            .reasoning_effort
+            .clone()
+            .or_else(|| model.reasoning_effort.clone()),
+        service_label: selection
+            .service_label
+            .clone()
+            .or_else(|| model.service_label.clone()),
         native_web_search: model.native_web_search && model.web_search_supported,
         anthropic_version: provider.anthropic_version.clone(),
     })

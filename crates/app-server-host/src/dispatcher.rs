@@ -12,10 +12,12 @@ use app_server_core::{
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
-    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest,
-    AgentProviderCapabilities, AgentReasoningEvent, AgentStartedResponse, AgentTokenEvent,
-    AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION, CadQueryExportFormat,
-    CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
+    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest,
+    AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
+    AgentModelSelectRequest, AgentModelSource, AgentPlanConfirmRequest, AgentPlanProposedEvent,
+    AgentPlanRejectRequest, AgentProviderCapabilities, AgentReasoningEvent, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
+    CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
     ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
     ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
@@ -90,6 +92,14 @@ impl CadQueryResultCache {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct AgentModelRuntimeState {
+    provider_id: Option<String>,
+    model_id: Option<String>,
+    reasoning_effort: Option<String>,
+    service_label: Option<String>,
+}
+
 pub struct HostRequestDispatcher {
     workspace_id: WorkspaceId,
     workspace_path: Option<PathBuf>,
@@ -98,6 +108,7 @@ pub struct HostRequestDispatcher {
     watchers: HashMap<String, FileWatcher>,
     cadquery_results: Arc<Mutex<CadQueryResultCache>>,
     agent_runs: Arc<Mutex<AgentRunRegistry>>,
+    agent_model_state: AgentModelRuntimeState,
     selection_snapshot: SelectionUpdateRequest,
     push_sink: ServerPushSink,
     session: HostSession,
@@ -133,6 +144,7 @@ impl HostRequestDispatcher {
                 CADQUERY_RESULT_CACHE_LIMIT,
             ))),
             agent_runs: Arc::new(Mutex::new(AgentRunRegistry::default())),
+            agent_model_state: AgentModelRuntimeState::default(),
             selection_snapshot: SelectionUpdateRequest {
                 selections: Vec::new(),
                 active_index: None,
@@ -357,6 +369,18 @@ impl HostRequestDispatcher {
                 .map(CommandSuccess::ChatArchived),
             ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request),
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
+            ClientCommand::AgentModelRegistry => {
+                let registry = self.agent_model_registry_snapshot().await?;
+                Ok(CommandSuccess::AgentModelRegistry(registry))
+            }
+            ClientCommand::AgentModelSelect(request) => {
+                let registry = self.select_agent_model(request).await?;
+                Ok(CommandSuccess::AgentModelRegistry(registry))
+            }
+            ClientCommand::AgentModelParamsUpdate(request) => {
+                let registry = self.update_agent_model_params(request).await?;
+                Ok(CommandSuccess::AgentModelRegistry(registry))
+            }
             ClientCommand::AgentPlanConfirm(request) => self.confirm_agent_plan(request),
             ClientCommand::AgentPlanReject(request) => self.reject_agent_plan(request),
             ClientCommand::SelectionUpdate(request) => self
@@ -539,6 +563,63 @@ impl HostRequestDispatcher {
         Ok(SelectionUpdateResponse { accepted_count })
     }
 
+    async fn agent_model_registry_snapshot(
+        &self,
+    ) -> Result<AgentModelRegistryResponse, ProtocolError> {
+        let registry = load_agent_model_registry().await?;
+        Ok(agent_model_registry_response(
+            &registry,
+            &self.agent_model_state,
+        ))
+    }
+
+    async fn select_agent_model(
+        &mut self,
+        request: AgentModelSelectRequest,
+    ) -> Result<AgentModelRegistryResponse, ProtocolError> {
+        let registry = load_agent_model_registry().await?;
+        ensure_agent_model_exists(&registry, &request.provider_id, &request.model_id)?;
+        self.agent_model_state = AgentModelRuntimeState {
+            provider_id: Some(request.provider_id),
+            model_id: Some(request.model_id),
+            reasoning_effort: None,
+            service_label: None,
+        };
+        Ok(agent_model_registry_response(
+            &registry,
+            &self.agent_model_state,
+        ))
+    }
+
+    async fn update_agent_model_params(
+        &mut self,
+        request: AgentModelParamsUpdateRequest,
+    ) -> Result<AgentModelRegistryResponse, ProtocolError> {
+        let registry = load_agent_model_registry().await?;
+        ensure_agent_model_exists(&registry, &request.provider_id, &request.model_id)?;
+        let same_model = self.agent_model_state.provider_id.as_deref()
+            == Some(request.provider_id.as_str())
+            && self.agent_model_state.model_id.as_deref() == Some(request.model_id.as_str());
+        self.agent_model_state = AgentModelRuntimeState {
+            provider_id: Some(request.provider_id),
+            model_id: Some(request.model_id),
+            reasoning_effort: request.reasoning_effort.or_else(|| {
+                same_model
+                    .then(|| self.agent_model_state.reasoning_effort.clone())
+                    .flatten()
+            }),
+            service_label: request.service_label.or_else(|| {
+                same_model
+                    .then(|| self.agent_model_state.service_label.clone())
+                    .flatten()
+            }),
+        };
+        Ok(agent_model_registry_response(
+            &registry,
+            &self.agent_model_state,
+        ))
+    }
+
     fn start_agent_after_history(
         &mut self,
         request: AgentInvokeRequest,
@@ -552,12 +633,14 @@ impl HostRequestDispatcher {
             session_id: run.session_id.clone(),
             run_id: run.run_id.clone(),
         };
+        let model_state = agent_model_state_for_request(&self.agent_model_state, &request);
         let worker = AgentWorker {
             run,
             prompt: request.prompt,
             mode: request.mode,
             plan_ref: request.plan_ref,
             context_refs: request.context_refs,
+            model_state,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
             python: cadquery_python_path(),
@@ -671,6 +754,7 @@ struct AgentWorker {
     mode: AgentMode,
     plan_ref: Option<PathHandle>,
     context_refs: Vec<String>,
+    model_state: AgentModelRuntimeState,
     selection_snapshot: SelectionUpdateRequest,
     workspace_root: PathBuf,
     python: PathBuf,
@@ -1096,6 +1180,270 @@ fn path_handles_for(workspace_root: &Path, paths: &[String]) -> Vec<PathHandle> 
         .collect()
 }
 
+async fn load_agent_model_registry()
+-> Result<app_server_core::llm::AgentProviderRegistry, ProtocolError> {
+    app_server_core::llm::load_agent_provider_registry_with_discovery()
+        .await
+        .map_err(|error| internal_error(error.message))?
+        .ok_or_else(|| internal_error("Rig Agent is not configured"))
+}
+
+fn ensure_agent_model_exists(
+    registry: &app_server_core::llm::AgentProviderRegistry,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), ProtocolError> {
+    let provider = registry.provider(provider_id).ok_or_else(|| {
+        ProtocolError::new(
+            ProtocolErrorCode::InvalidCommand,
+            format!("unknown agent provider `{provider_id}`"),
+        )
+    })?;
+    if provider.models.iter().any(|model| model.id == model_id) {
+        Ok(())
+    } else {
+        Err(ProtocolError::new(
+            ProtocolErrorCode::InvalidCommand,
+            format!("unknown agent model `{model_id}`"),
+        ))
+    }
+}
+
+fn agent_model_state_for_request(
+    current: &AgentModelRuntimeState,
+    request: &AgentInvokeRequest,
+) -> AgentModelRuntimeState {
+    let provider_id = request
+        .provider_id
+        .clone()
+        .or_else(|| current.provider_id.clone());
+    let model_id = request
+        .model_id
+        .clone()
+        .or_else(|| current.model_id.clone());
+    let same_model = provider_id == current.provider_id && model_id == current.model_id;
+    AgentModelRuntimeState {
+        provider_id,
+        model_id,
+        reasoning_effort: request.reasoning_effort.clone().or_else(|| {
+            same_model
+                .then(|| current.reasoning_effort.clone())
+                .flatten()
+        }),
+        service_label: request
+            .service_label
+            .clone()
+            .or_else(|| same_model.then(|| current.service_label.clone()).flatten()),
+    }
+}
+
+fn agent_model_registry_response(
+    registry: &app_server_core::llm::AgentProviderRegistry,
+    state: &AgentModelRuntimeState,
+) -> AgentModelRegistryResponse {
+    let (active_provider_id, active_model_id) = active_agent_model_ids(registry, state);
+    let active_provider = registry.provider(&active_provider_id);
+    let active_model = active_provider.and_then(|provider| {
+        provider
+            .models
+            .iter()
+            .find(|model| model.id == active_model_id)
+    });
+    let active_reasoning_effort = state
+        .reasoning_effort
+        .clone()
+        .or_else(|| active_model.and_then(|model| model.reasoning_effort.clone()));
+    let active_service_label = state
+        .service_label
+        .clone()
+        .or_else(|| active_model.and_then(|model| model.service_label.clone()));
+    let provider_kind = active_provider.map(|provider| provider.kind);
+    AgentModelRegistryResponse {
+        active_provider_id,
+        active_model_id,
+        active_reasoning_effort_applied: active_reasoning_effort_applied(
+            provider_kind,
+            active_reasoning_effort.as_deref(),
+            active_model,
+        ),
+        active_reasoning_effort,
+        active_service_label_applied: active_service_label_applied(
+            provider_kind,
+            active_service_label.as_deref(),
+        ),
+        active_service_label,
+        reasoning_effort_options: reasoning_effort_options(),
+        service_label_options: service_label_options(registry, state),
+        providers: registry
+            .providers
+            .iter()
+            .map(agent_provider_registry_provider)
+            .collect(),
+    }
+}
+
+fn active_agent_model_ids(
+    registry: &app_server_core::llm::AgentProviderRegistry,
+    state: &AgentModelRuntimeState,
+) -> (String, String) {
+    if let (Some(provider_id), Some(model_id)) = (&state.provider_id, &state.model_id)
+        && registry
+            .provider(provider_id)
+            .is_some_and(|provider| provider.models.iter().any(|model| &model.id == model_id))
+    {
+        return (provider_id.clone(), model_id.clone());
+    }
+    (
+        registry.active_provider_id.clone(),
+        registry.active_model_id.clone(),
+    )
+}
+
+fn agent_provider_registry_provider(
+    provider: &app_server_core::llm::ResolvedAgentProvider,
+) -> AgentModelRegistryProvider {
+    AgentModelRegistryProvider {
+        id: provider.id.clone(),
+        kind: provider.kind.as_str().into(),
+        label: None,
+        discovery: agent_model_discovery_state(&provider.model_discovery_status),
+        models: provider
+            .models
+            .iter()
+            .map(agent_model_registry_model)
+            .collect(),
+    }
+}
+
+fn agent_model_registry_model(
+    model: &app_server_core::llm::ResolvedAgentModel,
+) -> AgentModelRegistryModel {
+    AgentModelRegistryModel {
+        id: model.id.clone(),
+        label: model.label.clone(),
+        source: agent_model_source(model.source.clone()),
+        reasoning_effort: model.reasoning_effort.clone(),
+        service_label: model.service_label.clone(),
+        native_web_search_enabled: model.native_web_search,
+        native_web_search_applied: model.native_web_search && model.web_search_supported,
+        web_search_supported: model.web_search_supported,
+        web_search_unsupported_reason: model.web_search_unsupported_reason.clone(),
+        search_sources_supported: false,
+    }
+}
+
+fn agent_model_source(source: app_server_core::llm::AgentModelSource) -> AgentModelSource {
+    match source {
+        app_server_core::llm::AgentModelSource::Manual => AgentModelSource::Manual,
+        app_server_core::llm::AgentModelSource::Discovered => AgentModelSource::Discovered,
+        app_server_core::llm::AgentModelSource::DiscoveredWithOverride => {
+            AgentModelSource::DiscoveredWithOverride
+        }
+    }
+}
+
+fn agent_model_discovery_state(
+    status: &app_server_core::llm::ModelDiscoveryStatus,
+) -> AgentModelDiscoveryState {
+    match status {
+        app_server_core::llm::ModelDiscoveryStatus::Disabled => AgentModelDiscoveryState {
+            enabled: false,
+            status: AgentModelDiscoveryStatus::Disabled,
+            error: None,
+        },
+        app_server_core::llm::ModelDiscoveryStatus::NotStarted => AgentModelDiscoveryState {
+            enabled: true,
+            status: AgentModelDiscoveryStatus::NotStarted,
+            error: None,
+        },
+        app_server_core::llm::ModelDiscoveryStatus::Succeeded => AgentModelDiscoveryState {
+            enabled: true,
+            status: AgentModelDiscoveryStatus::Succeeded,
+            error: None,
+        },
+        app_server_core::llm::ModelDiscoveryStatus::Failed(error) => AgentModelDiscoveryState {
+            enabled: true,
+            status: AgentModelDiscoveryStatus::Failed,
+            error: Some(error.clone()),
+        },
+    }
+}
+
+fn reasoning_effort_options() -> Vec<String> {
+    ["minimal", "low", "medium", "high", "xhigh"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn service_label_options(
+    registry: &app_server_core::llm::AgentProviderRegistry,
+    state: &AgentModelRuntimeState,
+) -> Vec<String> {
+    let (provider_id, _) = active_agent_model_ids(registry, state);
+    match registry
+        .provider(&provider_id)
+        .map(|provider| provider.kind)
+    {
+        Some(app_server_core::llm::AgentProviderKind::OpenAiResponses) => {
+            ["auto", "default", "flex"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn active_reasoning_effort_applied(
+    provider_kind: Option<app_server_core::llm::AgentProviderKind>,
+    effort: Option<&str>,
+    model: Option<&app_server_core::llm::ResolvedAgentModel>,
+) -> bool {
+    let Some(effort) = effort else {
+        return false;
+    };
+    match provider_kind {
+        Some(app_server_core::llm::AgentProviderKind::OpenAiResponses) => true,
+        Some(app_server_core::llm::AgentProviderKind::AnthropicMessages) => {
+            model.is_some_and(|model| {
+                anthropic_thinking_budget_tokens(effort, model.max_tokens).is_some()
+            })
+        }
+        None => false,
+    }
+}
+
+fn active_service_label_applied(
+    provider_kind: Option<app_server_core::llm::AgentProviderKind>,
+    service_label: Option<&str>,
+) -> bool {
+    matches!(
+        provider_kind,
+        Some(app_server_core::llm::AgentProviderKind::OpenAiResponses)
+    ) && service_label.and_then(openai_service_tier).is_some()
+}
+
+fn openai_service_tier(service_label: &str) -> Option<&'static str> {
+    match service_label.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some("auto"),
+        "default" => Some("default"),
+        "flex" => Some("flex"),
+        _ => None,
+    }
+}
+
+fn anthropic_thinking_budget_tokens(effort: &str, max_tokens: u64) -> Option<u64> {
+    let requested = match effort.trim().to_ascii_lowercase().as_str() {
+        "minimal" | "low" => 1024,
+        "medium" => 4096,
+        "high" => 8192,
+        "xhigh" => 16384,
+        _ => return None,
+    };
+    (max_tokens > 1024).then_some(requested.min(max_tokens - 1))
+}
+
 use crate::plan_extraction::{
     SavedCadPlan, execution_scope_from_plan_ref, latest_saved_cad_plan, plan_target_handle,
 };
@@ -1107,9 +1455,18 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         .await
         .map(|response| response.messages)
         .unwrap_or_default();
-    let config = match app_server_core::llm::load_rig_agent_config_with_discovery().await {
-        Ok(Some(config)) => config,
-        Ok(None) => {
+    let config = match load_agent_model_registry().await.and_then(|registry| {
+        let selection = app_server_core::llm::RigAgentConfigSelection {
+            provider_id: worker.model_state.provider_id.clone(),
+            model_id: worker.model_state.model_id.clone(),
+            reasoning_effort: worker.model_state.reasoning_effort.clone(),
+            service_label: worker.model_state.service_label.clone(),
+        };
+        app_server_core::llm::rig_config_from_registry_selection(registry, &selection)
+            .map_err(|error| internal_error(error.message))
+    }) {
+        Ok(config) => config,
+        Err(error) if error.message == "Rig Agent is not configured" => {
             let message =
                 "Rig Agent is not configured. Set BUDN_AGENT_CONFIG or a provider API key env.";
             push_agent_error(
@@ -1756,23 +2113,25 @@ fn server_capabilities(agent_provider: Option<AgentProviderCapabilities>) -> Ser
         selection_sync: true,
         llm_configured,
         agent_provider,
+        agent_model_registry: None,
     }
 }
 
 async fn server_capabilities_for_request(
     requested_preview_kinds: Vec<PreviewRequestKind>,
 ) -> ServerCapabilities {
-    let agent_provider = app_server_core::llm::load_rig_agent_config()
+    let registry = app_server_core::llm::load_agent_provider_registry_with_discovery()
         .await
         .ok()
-        .flatten()
-        .map(|config| AgentProviderCapabilities {
-            provider: config.provider_kind.as_str().into(),
-            model: Some(config.model),
-            native_web_search_enabled: config.native_web_search,
-            search_sources_supported: false,
-        });
+        .flatten();
+    let agent_model_registry = registry.as_ref().map(|registry| {
+        agent_model_registry_response(registry, &AgentModelRuntimeState::default())
+    });
+    let agent_provider = agent_model_registry
+        .as_ref()
+        .and_then(agent_provider_capability_from_registry);
     let mut capabilities = server_capabilities(agent_provider);
+    capabilities.agent_model_registry = agent_model_registry;
     capabilities.supported_preview_kinds = requested_preview_kinds
         .into_iter()
         .filter(|kind| matches!(kind, PreviewRequestKind::GeometryArtifact))
@@ -1783,12 +2142,32 @@ async fn server_capabilities_for_request(
     capabilities
 }
 
+fn agent_provider_capability_from_registry(
+    registry: &AgentModelRegistryResponse,
+) -> Option<AgentProviderCapabilities> {
+    let provider = registry
+        .providers
+        .iter()
+        .find(|provider| provider.id == registry.active_provider_id)?;
+    let model = provider
+        .models
+        .iter()
+        .find(|model| model.id == registry.active_model_id)?;
+    Some(AgentProviderCapabilities {
+        provider: provider.kind.clone(),
+        model: Some(model.id.clone()),
+        native_web_search_enabled: model.native_web_search_applied,
+        search_sources_supported: model.search_sources_supported,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use app_server_core::AgentToolObserver as _;
     use app_server_protocol::{
-        CadQueryFeatureFaces, CadQueryPartMesh, EdgeGroup, FaceGroup, PreviewUnit, VertexPoint,
+        CadQueryFeatureFaces, CadQueryPartMesh, ChatSessionId, EdgeGroup, FaceGroup, PreviewUnit,
+        VertexPoint,
     };
 
     #[tokio::test]
@@ -1917,6 +2296,51 @@ mod tests {
             agent_error_type_for_rig_message("authentication failed"),
             AgentErrorType::LlmError
         );
+    }
+
+    #[test]
+    fn agent_invoke_model_state_does_not_inherit_params_across_models() {
+        let current = AgentModelRuntimeState {
+            provider_id: Some("openai".into()),
+            model_id: Some("gpt-5.2".into()),
+            reasoning_effort: Some("high".into()),
+            service_label: Some("flex".into()),
+        };
+
+        let same_model = agent_model_state_for_request(
+            &current,
+            &agent_invoke_request("openai", "gpt-5.2", None, None),
+        );
+        assert_eq!(same_model.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(same_model.service_label.as_deref(), Some("flex"));
+
+        let different_model = agent_model_state_for_request(
+            &current,
+            &agent_invoke_request("anthropic", "claude-sonnet", None, None),
+        );
+        assert_eq!(different_model.provider_id.as_deref(), Some("anthropic"));
+        assert_eq!(different_model.model_id.as_deref(), Some("claude-sonnet"));
+        assert!(different_model.reasoning_effort.is_none());
+        assert!(different_model.service_label.is_none());
+    }
+
+    fn agent_invoke_request(
+        provider_id: &str,
+        model_id: &str,
+        reasoning_effort: Option<&str>,
+        service_label: Option<&str>,
+    ) -> AgentInvokeRequest {
+        AgentInvokeRequest {
+            session_id: ChatSessionId("main".into()),
+            prompt: "inspect".into(),
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: Vec::new(),
+            provider_id: Some(provider_id.into()),
+            model_id: Some(model_id.into()),
+            reasoning_effort: reasoning_effort.map(str::to_owned),
+            service_label: service_label.map(str::to_owned),
+        }
     }
 
     fn sample_mesh(result_id: &str) -> CadQueryMeshPayload {

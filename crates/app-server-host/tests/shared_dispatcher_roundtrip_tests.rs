@@ -4,15 +4,15 @@ use app_server_core::ChatStore;
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentPlanConfirmRequest, CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest,
-    CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest,
-    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole, ChatSendRequest,
-    ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest, HostLocalPath,
-    PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolErrorCode,
-    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
-    ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId, WorkspaceListRequest,
-    web_file_read_capability,
+    AgentModelParamsUpdateRequest, AgentModelSelectRequest, AgentPlanConfirmRequest,
+    CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
+    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
+    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
+    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
+    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
+    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
 };
 
 #[tokio::test]
@@ -146,6 +146,75 @@ async fn shared_dispatcher_rejects_unsupported_protocol_version() {
         .expect_err("protocol version without overlap should reject");
 
     assert_eq!(error.code, ProtocolErrorCode::UnsupportedProtocolVersion);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_model_commands_update_active_snapshot() {
+    let workspace = temp_workspace("dispatcher-agent-model-registry");
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(&config_path, agent_model_registry_config()).unwrap();
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let registry =
+        dispatch_agent_model_command(&mut dispatcher, 10, ClientCommand::AgentModelRegistry).await;
+    assert_eq!(registry.active_model_id, "gpt-5.2");
+
+    let selected = dispatch_agent_model_command(
+        &mut dispatcher,
+        11,
+        ClientCommand::AgentModelSelect(AgentModelSelectRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5-mini".into(),
+        }),
+    )
+    .await;
+    assert_eq!(selected.active_model_id, "gpt-5-mini");
+
+    let updated = dispatch_agent_model_command(
+        &mut dispatcher,
+        12,
+        ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5-mini".into(),
+            reasoning_effort: Some("low".into()),
+            service_label: Some("flex".into()),
+        }),
+    )
+    .await;
+    assert_eq!(updated.active_reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(updated.active_service_label.as_deref(), Some("flex"));
+    assert!(updated.active_reasoning_effort_applied);
+    assert!(updated.active_service_label_applied);
+
+    let reasoning_only = dispatch_agent_model_command(
+        &mut dispatcher,
+        13,
+        ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5-mini".into(),
+            reasoning_effort: Some("medium".into()),
+            service_label: None,
+        }),
+    )
+    .await;
+    assert_eq!(
+        reasoning_only.active_reasoning_effort.as_deref(),
+        Some("medium")
+    );
+    assert_eq!(reasoning_only.active_service_label.as_deref(), Some("flex"));
+
+    let disabled_search = reasoning_only.providers[0]
+        .models
+        .iter()
+        .find(|model| model.id == "gpt-5-mini")
+        .expect("configured mini model");
+    assert!(disabled_search.native_web_search_enabled);
+    assert!(!disabled_search.native_web_search_applied);
     cleanup_workspace(&workspace);
 }
 
@@ -284,11 +353,7 @@ async fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
         })
         .expect("agent failure should be persisted as assistant history");
     assert!(assistant.content.contains("Agent run failed"));
-    assert!(
-        assistant
-            .content
-            .contains("Rig OpenAI Responses Agent is not configured")
-    );
+    assert!(assistant.content.contains("Rig Agent is not configured"));
 
     cleanup_workspace(&workspace);
 }
@@ -312,6 +377,10 @@ async fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload()
             mode: AgentMode::Agent,
             plan_ref: Some(path_handle(["plans", "2026050100-add-lid-vents"])),
             context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
         }),
     )
     .await
@@ -865,6 +934,10 @@ async fn invoke_agent_async(
             mode: AgentMode::Agent,
             plan_ref: None,
             context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
         }),
     )
     .await
@@ -923,6 +996,21 @@ async fn dispatch_async(
             command,
         })
         .await
+}
+
+async fn dispatch_agent_model_command(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    command: ClientCommand,
+) -> app_server_protocol::AgentModelRegistryResponse {
+    match dispatch_async(dispatcher, request_id, command)
+        .await
+        .result
+        .expect("agent model command succeeds")
+    {
+        CommandSuccess::AgentModelRegistry(response) => response,
+        other => panic!("unexpected agent model response: {other:?}"),
+    }
 }
 
 fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {
@@ -985,6 +1073,31 @@ fn temp_workspace(label: &str) -> std::path::PathBuf {
 
 fn cleanup_workspace(root: &std::path::Path) {
     let _ = std::fs::remove_dir_all(root);
+}
+
+fn agent_model_registry_config() -> &'static str {
+    r#"active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+discover_models = false
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-5.2"
+reasoning_effort = "high"
+service_label = "default"
+
+[[providers.models]]
+id = "gpt-5-mini"
+native_web_search = true
+web_search_supported = false
+"#
 }
 
 fn fake_capturing_cadquery_runner(
@@ -1116,6 +1229,26 @@ impl EnvGuard {
         }
         Self {
             previous: vec![(key, previous)],
+            _lock: lock,
+        }
+    }
+
+    fn set_many(entries: Vec<(&'static str, std::ffi::OsString)>) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = entries
+            .into_iter()
+            .map(|(key, value)| {
+                let previous = std::env::var_os(key);
+                unsafe {
+                    std::env::set_var(key, value);
+                }
+                (key, previous)
+            })
+            .collect();
+        Self {
+            previous,
             _lock: lock,
         }
     }

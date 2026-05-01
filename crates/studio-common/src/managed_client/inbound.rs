@@ -20,6 +20,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         self.pending_handshake = None;
         self.llm_configured = ack.server_capabilities.llm_configured;
         self.agent_provider = ack.server_capabilities.agent_provider.clone();
+        self.agent_model_registry = ack.server_capabilities.agent_model_registry.clone();
         self.events.push_back(ClientEvent::HandshakeAccepted {
             session_token: ack.session_token.clone(),
             server_capabilities: ack.server_capabilities.clone(),
@@ -163,6 +164,11 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             }
             CommandSuccess::AgentStarted(response) => {
                 self.agent_run = Some(response.clone());
+            }
+            CommandSuccess::AgentModelRegistry(response) => {
+                self.agent_model_registry = Some(response.clone());
+                self.agent_provider = agent_provider_capability(response);
+                self.llm_configured = !response.providers.is_empty();
             }
             CommandSuccess::AgentPlanConfirmed(response) => {
                 self.agent_run = Some(response.clone());
@@ -335,6 +341,25 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             payload,
         });
     }
+}
+
+fn agent_provider_capability(
+    registry: &app_server_protocol::AgentModelRegistryResponse,
+) -> Option<app_server_protocol::AgentProviderCapabilities> {
+    let provider = registry
+        .providers
+        .iter()
+        .find(|provider| provider.id == registry.active_provider_id)?;
+    let model = provider
+        .models
+        .iter()
+        .find(|model| model.id == registry.active_model_id)?;
+    Some(app_server_protocol::AgentProviderCapabilities {
+        provider: provider.kind.clone(),
+        model: Some(model.id.clone()),
+        native_web_search_enabled: model.native_web_search_applied,
+        search_sources_supported: model.search_sources_supported,
+    })
 }
 
 fn protocol_error_code_label(code: ProtocolErrorCode) -> &'static str {

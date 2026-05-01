@@ -1,17 +1,20 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent,
-    AgentProviderCapabilities, AgentReasoningEvent, AgentSearchSource, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
-    CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryFeatureFaces, CadQueryMeshPayload,
-    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest,
-    ChatArchivedResponse, ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest,
-    ChatHistoryResponse, ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole,
-    ChatSendRequest, ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord,
-    ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope,
-    CommandSuccess, EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse,
-    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
+    AgentInvokeRequest, AgentMode, AgentModelDiscoveryState, AgentModelDiscoveryStatus,
+    AgentModelParamsUpdateRequest, AgentModelRegistryModel, AgentModelRegistryProvider,
+    AgentModelRegistryResponse, AgentModelSelectRequest, AgentModelSource, AgentPlanPackageRef,
+    AgentPlanSavedEvent, AgentProviderCapabilities, AgentReasoningEvent, AgentSearchSource,
+    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
+    CURRENT_PROTOCOL_VERSION, CadQueryArtifactExport, CadQueryArtifactRelation,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
+    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
+    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
+    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
+    ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
+    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
     PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
     PreviewResponseFormat, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
     RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
@@ -21,6 +24,41 @@ use app_server_protocol::{
     decode_server_frame, encode_client_frame, encode_server_frame, negotiate_protocol_version,
     web_file_read_capability,
 };
+
+fn sample_agent_model_registry() -> AgentModelRegistryResponse {
+    AgentModelRegistryResponse {
+        active_provider_id: "openai".into(),
+        active_model_id: "gpt-5.2".into(),
+        active_reasoning_effort: Some("high".into()),
+        active_reasoning_effort_applied: true,
+        active_service_label: Some("flex".into()),
+        active_service_label_applied: true,
+        reasoning_effort_options: vec!["low".into(), "medium".into(), "high".into()],
+        service_label_options: vec!["default".into(), "flex".into()],
+        providers: vec![AgentModelRegistryProvider {
+            id: "openai".into(),
+            kind: "openai_responses".into(),
+            label: Some("OpenAI".into()),
+            discovery: AgentModelDiscoveryState {
+                enabled: true,
+                status: AgentModelDiscoveryStatus::Succeeded,
+                error: None,
+            },
+            models: vec![AgentModelRegistryModel {
+                id: "gpt-5.2".into(),
+                label: Some("GPT-5.2".into()),
+                source: AgentModelSource::DiscoveredWithOverride,
+                reasoning_effort: Some("high".into()),
+                service_label: Some("flex".into()),
+                native_web_search_enabled: true,
+                native_web_search_applied: true,
+                web_search_supported: true,
+                web_search_unsupported_reason: None,
+                search_sources_supported: false,
+            }],
+        }],
+    }
+}
 
 #[test]
 fn path_handle_borsh_roundtrip() {
@@ -166,6 +204,7 @@ fn reclaim_and_artifact_variants_roundtrip() {
                 native_web_search_enabled: true,
                 search_sources_supported: false,
             }),
+            agent_model_registry: Some(sample_agent_model_registry()),
         },
     };
     let bytes = borsh::to_vec(&response).unwrap();
@@ -505,10 +544,67 @@ fn agent_push_events_and_busy_error_roundtrip() {
             mode: AgentMode::Plan,
             plan_ref: None,
             context_refs: Vec::new(),
+            provider_id: Some("openai".into()),
+            model_id: Some("gpt-5.2".into()),
+            reasoning_effort: Some("high".into()),
+            service_label: Some("flex".into()),
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&invoke).unwrap()).unwrap();
     assert_eq!(decoded, invoke);
+
+    let registry_get = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(61),
+        command: ClientCommand::AgentModelRegistry,
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&registry_get).unwrap()).unwrap();
+    assert_eq!(decoded, registry_get);
+
+    let model_select = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(62),
+        command: ClientCommand::AgentModelSelect(AgentModelSelectRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5.2".into(),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&model_select).unwrap()).unwrap();
+    assert_eq!(decoded, model_select);
+
+    let params_update = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(63),
+        command: ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5.2".into(),
+            reasoning_effort: Some("high".into()),
+            service_label: Some("flex".into()),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&params_update).unwrap()).unwrap();
+    assert_eq!(decoded, params_update);
+
+    let reasoning_update = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(64),
+        command: ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5.2".into(),
+            reasoning_effort: Some("medium".into()),
+            service_label: None,
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&reasoning_update).unwrap()).unwrap();
+    assert_eq!(decoded, reasoning_update);
+
+    let service_update = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(65),
+        command: ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5.2".into(),
+            reasoning_effort: None,
+            service_label: Some("default".into()),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&service_update).unwrap()).unwrap();
+    assert_eq!(decoded, service_update);
 
     let response = ServerEnvelope::Response(ServerResponseEnvelope {
         request_id: RequestId(60),
@@ -519,6 +615,15 @@ fn agent_push_events_and_busy_error_roundtrip() {
     });
     let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
     assert_eq!(decoded, response);
+
+    let registry_response = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(61),
+        result: Ok(CommandSuccess::AgentModelRegistry(
+            sample_agent_model_registry(),
+        )),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&registry_response).unwrap()).unwrap();
+    assert_eq!(decoded, registry_response);
 
     let token = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::AgentToken(AgentTokenEvent {
@@ -636,6 +741,10 @@ fn agent_push_events_and_busy_error_roundtrip() {
             mode: AgentMode::Agent,
             plan_ref: Some(plan_ref),
             context_refs: vec!["@part[top_lid]".into()],
+            provider_id: Some("anthropic".into()),
+            model_id: Some("claude-sonnet".into()),
+            reasoning_effort: Some("medium".into()),
+            service_label: None,
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&run_plan).unwrap()).unwrap();

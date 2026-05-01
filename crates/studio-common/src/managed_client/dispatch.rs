@@ -1,9 +1,10 @@
 use app_server_protocol::{
-    AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
-    CadQueryExecuteRequest, CadQueryPreviewRequest, CadQueryResultGetRequest, ChatArchiveRequest,
-    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId,
-    ClientCommand, ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest,
-    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
+    AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, CadQueryExecuteRequest,
+    CadQueryPreviewRequest, CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest,
+    ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId, ClientCommand,
+    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
+    RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
@@ -238,6 +239,36 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
     ) -> Result<RequestId, ClientError> {
         self.enqueue_command(
             ClientCommand::AgentCancel(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_model_registry(&mut self) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentModelRegistry,
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_model_select(
+        &mut self,
+        params: AgentModelSelectRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentModelSelect(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_model_params_update(
+        &mut self,
+        params: AgentModelParamsUpdateRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentModelParamsUpdate(params),
             PendingKind::Agent,
             self.timeouts.agent,
         )

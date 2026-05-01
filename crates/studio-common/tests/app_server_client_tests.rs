@@ -188,6 +188,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
             selection_sync: false,
             llm_configured: false,
             agent_provider: None,
+            agent_model_registry: None,
         },
     }
 }

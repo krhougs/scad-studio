@@ -9,13 +9,13 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 
 use app_server_protocol::{
-    AgentCancelRequest, AgentInvokeRequest, AgentPlanConfirmRequest, AgentPlanRejectRequest,
-    CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest,
-    CadQueryResultReady, CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest,
-    ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId, CommandSuccess,
-    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle,
-    PreviewArtifact, PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest,
-    WorkspaceListRequest,
+    AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, CadQueryExecuteRequest, CadQueryMeshPayload,
+    CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
+    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatSendRequest, ChatSessionId, CommandSuccess, ConfigSaveRequest,
+    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
+    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
@@ -408,6 +408,45 @@ pub fn client_dispatch_agent_cancel(
     handle
         .borrow_mut()?
         .dispatch_agent_cancel(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_model_registry(handle: &mut ClientHandle) -> Result<u64, JsValue> {
+    handle
+        .borrow_mut()?
+        .dispatch_agent_model_registry()
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_model_select(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentModelSelectRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent.model.select params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_model_select(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_model_params_update(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentModelParamsUpdateRequest =
+        serde_wasm_bindgen::from_value(params).map_err(|err| {
+            JsValue::from_str(&format!("invalid agent.model.params.update params: {err}"))
+        })?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_model_params_update(parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

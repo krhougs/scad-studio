@@ -269,6 +269,40 @@ pub fn protocol_encode_agent_cancel_request(
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn protocol_encode_agent_model_registry_request(request_id: u64) -> Result<Vec<u8>, JsValue> {
+    encode_command(request_id, ClientCommand::AgentModelRegistry)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_agent_model_select_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid agent.model.select request",
+        ClientCommand::AgentModelSelect,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn protocol_encode_agent_model_params_update_request(
+    request_id: u64,
+    request: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    encode_typed_command(
+        request_id,
+        request,
+        "invalid agent.model.params.update request",
+        ClientCommand::AgentModelParamsUpdate,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn protocol_encode_selection_update_request(
     request_id: u64,
     request: JsValue,

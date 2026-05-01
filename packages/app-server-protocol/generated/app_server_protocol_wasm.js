@@ -63,6 +63,50 @@ export function protocol_encode_agent_invoke_request(request_id, request) {
  * @param {any} request
  * @returns {Uint8Array}
  */
+export function protocol_encode_agent_model_params_update_request(request_id, request) {
+    const ret = wasm.protocol_encode_agent_model_params_update_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_agent_model_registry_request(request_id) {
+    const ret = wasm.protocol_encode_agent_model_registry_request(request_id);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
+export function protocol_encode_agent_model_select_request(request_id, request) {
+    const ret = wasm.protocol_encode_agent_model_select_request(request_id, request);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
+ * @param {bigint} request_id
+ * @param {any} request
+ * @returns {Uint8Array}
+ */
 export function protocol_encode_cadquery_execute_request(request_id, request) {
     const ret = wasm.protocol_encode_cadquery_execute_request(request_id, request);
     if (ret[3]) {

@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 7;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 8;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -119,6 +119,8 @@ pub struct ServerCapabilities {
     pub llm_configured: bool,
     #[serde(default)]
     pub agent_provider: Option<AgentProviderCapabilities>,
+    #[serde(default)]
+    pub agent_model_registry: Option<AgentModelRegistryResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -127,6 +129,86 @@ pub struct AgentProviderCapabilities {
     pub model: Option<String>,
     pub native_web_search_enabled: bool,
     pub search_sources_supported: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentModelSource {
+    Manual = 0,
+    Discovered = 1,
+    DiscoveredWithOverride = 2,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentModelDiscoveryStatus {
+    Disabled = 0,
+    NotStarted = 1,
+    Succeeded = 2,
+    Failed = 3,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelDiscoveryState {
+    pub enabled: bool,
+    pub status: AgentModelDiscoveryStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelRegistryModel {
+    pub id: String,
+    pub label: Option<String>,
+    pub source: AgentModelSource,
+    pub reasoning_effort: Option<String>,
+    pub service_label: Option<String>,
+    pub native_web_search_enabled: bool,
+    pub native_web_search_applied: bool,
+    pub web_search_supported: bool,
+    pub web_search_unsupported_reason: Option<String>,
+    pub search_sources_supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelRegistryProvider {
+    pub id: String,
+    pub kind: String,
+    pub label: Option<String>,
+    pub discovery: AgentModelDiscoveryState,
+    pub models: Vec<AgentModelRegistryModel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelRegistryResponse {
+    pub active_provider_id: String,
+    pub active_model_id: String,
+    pub active_reasoning_effort: Option<String>,
+    pub active_reasoning_effort_applied: bool,
+    pub active_service_label: Option<String>,
+    pub active_service_label_applied: bool,
+    pub reasoning_effort_options: Vec<String>,
+    pub service_label_options: Vec<String>,
+    pub providers: Vec<AgentModelRegistryProvider>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelSelectRequest {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentModelParamsUpdateRequest {
+    pub provider_id: String,
+    pub model_id: String,
+    pub reasoning_effort: Option<String>,
+    pub service_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -668,6 +750,14 @@ pub struct AgentInvokeRequest {
     pub plan_ref: Option<PathHandle>,
     #[serde(default)]
     pub context_refs: Vec<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub service_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -953,6 +1043,12 @@ pub enum ClientCommand {
     AgentPlanConfirm(AgentPlanConfirmRequest) = 24,
     #[serde(rename = "agent.plan.reject")]
     AgentPlanReject(AgentPlanRejectRequest) = 25,
+    #[serde(rename = "agent.model.registry")]
+    AgentModelRegistry = 26,
+    #[serde(rename = "agent.model.select")]
+    AgentModelSelect(AgentModelSelectRequest) = 27,
+    #[serde(rename = "agent.model.params.update")]
+    AgentModelParamsUpdate(AgentModelParamsUpdateRequest) = 28,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -991,6 +1087,7 @@ pub enum CommandSuccess {
     SelectionUpdated(SelectionUpdateResponse) = 22,
     AgentPlanConfirmed(AgentStartedResponse) = 23,
     AgentPlanRejected = 24,
+    AgentModelRegistry(AgentModelRegistryResponse) = 25,
 }
 
 #[derive(
