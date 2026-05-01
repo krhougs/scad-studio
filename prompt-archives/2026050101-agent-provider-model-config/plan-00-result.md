@@ -323,7 +323,7 @@
 
 ### 阶段提交
 
-- `86986fe Persist agent model state in handshake`
+- `077f2ad Persist agent model state in handshake`
 
 ### 遗留问题
 
