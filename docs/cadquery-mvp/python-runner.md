@@ -31,7 +31,7 @@ PYTHONPATH="$PWD" python3.11 -m budn_cad_runner \
 本地 `.env` 建议显式配置：
 
 ```bash
-BUDN_LLM_CONFIG=llm.toml
+BUDN_AGENT_CONFIG=agent.toml
 CADQUERY_RUNNER_PYTHON=/opt/homebrew/bin/python3.11
 ```
 

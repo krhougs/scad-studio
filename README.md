@@ -1,6 +1,6 @@
 # budn' (`budn`)
 
-`budn'` 是一个跨端 OpenSCAD 工作台；代码与配置标识符中统一使用 `budn`。桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
+`budn'` 是一个 Web CAD 工作台；代码与配置标识符中统一使用 `budn`。当前生产 GUI 端是 `packages/studio-web`，通过 WebSocket 连接 app server，并共享 `app-server-protocol` 与 `studio-common` client 状态机。
 
 ## 坐标系约定
 
@@ -23,12 +23,11 @@ scad-studio/
 ├── crates/                        # Rust workspace
 │   ├── app-server-protocol/       # 协议类型与线格式（ClientEnvelope/ServerEnvelope）
 │   ├── app-server-core/           # 文件系统 I/O、OpenSCAD 调用、watch 聚合
-│   ├── app-server-host/           # 可执行入口（websocket-host、in-process host）
+│   ├── app-server-host/           # 可执行入口（websocket-host）
 │   ├── app-server-transport/      # transport trait + WebSocket 客户端实现
-│   ├── studio-common/             # 跨端共享 client 状态机（ManagedClient）
+│   ├── studio-common/             # 共享 client 状态机（ManagedClient）
 │   ├── studio-web-wasm/           # wasm-bindgen 桥接（client / mesh / renderer）
-│   ├── studio-app/                # 桌面 egui 壳
-│   ├── scad-ui / scad-scene / scad-data / scad-viewer
+│   └── scad-scene/                # mesh / STL / 3MF 纯数据能力
 ├── packages/                      # pnpm workspace（实际由 bun 驱动）
 │   ├── studio-web-wasm/           # wasm 产物 npm 包（只 re-export generated/）
 │   └── studio-web/                # React PWA：Vite 6 + React 18 + Zustand
@@ -90,14 +89,6 @@ bun run web:build
 
 产物在 `packages/studio-web/dist/`：带 hash 的 wasm + Workbox Service Worker + `index.html`。`bun run --cwd packages/studio-web preview` 起静态服务器预览；Service Worker 仅在生产模式启用。
 
-### 桌面端
-
-```bash
-cargo run -p studio-app
-```
-
-桌面端内嵌 `app-server-host`（`tokio::mpsc` transport），与 web 端共用 `studio-common::ManagedClient` 状态机与 `app-server-protocol` 类型。
-
 ### 测试与 smoke
 
 ```bash
@@ -111,7 +102,7 @@ bun run web:smoke -- --case browser_watch_smoke
 bun run web:smoke -- --case wasm_package_smoke
 bun run web:smoke -- --case markdown_view        # Phase 6 扩展
 bun run web:smoke -- --case image_view           # Phase 6 扩展
-bun run web:smoke -- --case scad_viewer          # Phase 6 扩展
+bun run web:smoke -- --case scad_preview         # Phase 6 扩展
 bun run web:smoke -- --case canvas_interaction   # Phase 7 扩展
 bun run web:smoke -- --case parameters_presets   # Phase 7 扩展
 bun run web:smoke -- --case export_slicer        # Phase 7 扩展
@@ -130,7 +121,7 @@ bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版
 - `docs/getting-started.md`：完整安装流程、环境变量、故障排查
 - `docs/architecture.md`：crate / package 能力边界与交互图
 - `docs/design-system/studio-datasheet-workbench.md`：Buddin datasheet 设计规范
-- `docs/web-platform-limits.md`：Web 端相对桌面端的平台限制
+- `docs/web-platform-limits.md`：Web 平台约束
 - `docs/known_issues.md`：已确认但当前 phase 不处理的协议 / 能力缺口
 - `docs/feature-roadmap.md`：整体功能路线图
 - `AGENTS.md`：项目协作规范（工具链、plan mode、架构长期约束）

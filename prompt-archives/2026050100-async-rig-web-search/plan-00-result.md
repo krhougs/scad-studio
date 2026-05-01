@@ -227,4 +227,33 @@
 
 ### Phase 7 — 文档、已知问题、最终验证与独立 review
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 保持 Phase 1 删除 Rust 桌面端、viewer app、桌面 transport 和桌面专属生产路径的结果。
+  - 保持 Phase 2/3 async service 与 async I/O 边界，未引入同步 dispatcher 或桌面 in-process host。
+  - 保持 Phase 4/5/6 的 Rig-only Agent、provider hosted native web search、protocol capability / sources 接入与 Web-only GUI 边界。
+- 变更摘要：
+  - 更新 `docs/cadquery-mvp/decisions.md`，将旧“自建 LLM 抽象 / SDK fallback”决策改为当前 Rig OpenAI Responses 生产 Agent 运行时，并明确 native web search 只通过 provider hosted `web_search` 接入。
+  - 更新 `docs/cadquery-mvp/python-runner.md`，将本地 `.env` 示例从旧 `BUDN_LLM_CONFIG` 改为 `BUDN_AGENT_CONFIG`。
+  - 更新 `docs/known_issues.md`，关闭 Phase 5/6 后已过时的“来源展示留到 Phase 6”与“capability / 来源字段仍待后续 Phase”描述，保留 Rig 0.35.0 暂未暴露结构化 sources / annotations 的上游限制。
+  - 更新根 `README.md`，移除 `studio-app`、`scad-ui`、`scad-viewer`、`cargo run -p studio-app`、`tokio::mpsc` 桌面 transport 和旧 `scad_viewer` smoke case 文案，明确当前生产 GUI 端为 Web。
+- 搜索检查：
+  - 旧桌面入口搜索未发现生产源码残留；`docs/known_issues.md` 中剩余桌面相关命中均为历史记录或兼容旧 `.scad.json` 预设格式说明。
+  - 旧 Agent / LLM 路径搜索未发现生产源码残留；`crates/app-server-core/src/agent.rs` 的 `stream_chat` 命中是当前 Rig API 调用，不是旧 provider 路径。
+  - app-server-core / app-server-host 生产源码的同步 I/O 候选命中均为 `tokio::fs`、`tokio::process::Command`、`tokio::fs::OpenOptions` 或 `std::fs::Metadata` 类型判断；未发现同步 dispatcher、同步子进程或线程式等待生产入口回归。
+- Plan 级独立复审记录：
+  - 第一轮 Plan 级复审发现两个阻塞项：Phase 7 结果归档未更新；根 `README.md` 仍描述已删除的桌面 GUI / viewer app 生产入口，并保留旧 `scad_viewer` smoke case。均已修复。
+  - 第二轮 Plan 级复审未发现剩余阻塞项、高风险问题或普通问题；确认剩余旧关键词命中仅为结果归档与已知问题历史记录。
+- 验证结果：
+  - `cargo test --workspace` 通过。
+  - `bun run protocol:build` 通过。
+  - `bun run protocol:check-generated` 通过。
+  - `bun run --cwd packages/studio-web typecheck` 通过。
+  - `bun run --cwd packages/studio-web test:unit` 通过；仍有既有 React `act(...)` warning，未在本计划中扩大处理范围。
+  - `bun run web:build` 通过；仍有既有 Vite 大 chunk warning，未在本计划中扩大处理范围。
+  - `bun run web:smoke` 通过。
+  - `bun run web:smoke:browser` 通过，75 个 Playwright 用例通过。
+  - `git diff --check` 通过。
+- 遗留问题：
+  - Rig 0.35.0 暂未暴露 OpenAI web search 结构化 sources / annotations，已保留在 `docs/known_issues.md`。
+  - Web 单元测试中的 React `act(...)` warning 与 Vite 大 chunk warning 为既有非阻塞问题，未在本计划中处理。

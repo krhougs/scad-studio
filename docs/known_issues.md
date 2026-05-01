@@ -13,7 +13,7 @@
   - 升级到暴露 OpenAI Responses web search sources / annotations 的 Rig 版本。
   - 若上游暂不支持，在 `app-server-core` 内增加最小 OpenAI Responses stream 适配，但仍必须保持 Rig-only Agent 边界与 hosted tool 语义，不得回退到自建互联网搜索工具。
   - protocol 侧先设计可选 sources 字段，并允许当前 provider capability record 作为降级路径。
-- 当前处理方式：Phase 5 默认关闭 native web search；开启后仅注册 OpenAI hosted `web_search`，记录 `agent_run_capabilities.native_web_search_enabled`，并保留最终文本。来源展示能力留到 Phase 6 结合上游支持情况处理。
+- 当前处理方式：native web search 默认关闭；开启后仅注册 OpenAI hosted `web_search`，记录 `agent_run_capabilities.native_web_search_enabled`，并保留最终文本。Phase 6 已在 protocol、Chat history 和 Web UI 中加入可选来源字段与展示路径；在 Rig 暴露结构化 sources / annotations 前，该字段保持空列表，Web 端显示 capability 状态但不会伪造来源。
 
 ## 2026-05-01 00:00:00: WebSocket 连接处理 future 曾不满足 `Send`
 
@@ -216,11 +216,11 @@
 - 影响范围：
   - 未配置 Rig OpenAI Responses provider 时，Agent run 会通过 `agent.error` 返回 `LlmError`，并在 Chat history 中记录失败消息。
   - 当前生产 Agent 不再有本地文本草稿或固定几何模板后备路径；复杂 CAD 修改必须由 Rig multi-turn tool loop 完成。
+  - native web search capability 和可选来源字段已接入 protocol / Web；真实来源列表仍受 Rig 结构化输出能力限制，见本文件 2026-05-01 记录。
 - 可能的解法：
-  - 在后续 Phase 中通过 Rig OpenAI Responses hosted tool 接入模型原生联网搜索，并把 capability 与来源记录纳入 protocol。
   - 为 Rig streaming、tool call、cancel 和 provider error mapping 建立更细的 provider mock / test support。
   - 将 provider 的认证失败、限流和 hosted tool 不可用错误映射为更具体的协议错误与 Chat 事件。
-- 当前处理方式：生产 Agent 入口只走 Rig OpenAI Responses API；缺少 provider 配置时返回清晰错误并保持 workspace 不变。
+- 当前处理方式：生产 Agent 入口只走 Rig OpenAI Responses API；缺少 provider 配置时返回清晰错误并保持 workspace 不变。模型原生联网搜索通过 provider hosted tool 接入，Web 只展示 app server protocol 暴露的 capability 与来源字段。
 
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 
@@ -427,7 +427,7 @@
 - 来源：执行 Phase 7 步骤 E（`.scad` 自动重渲染）时，Playwright smoke 观察 `client_drain_events` 产出的 `WatchEvent` payload：`changed_paths` 往往只包含目录级 `PathHandle`（`path_segments: []`），没有被修改的具体文件 handle。
 - 原因：`app-server-host::watch` 聚合 notify 事件后目前只回传监听的目录 handle；文件级变更事件未投递到 `WatchChangedEvent`。
 - 影响范围：
-  - Web 端 WorkbenchLayout 不能仅凭 `changed_paths` 判断"当前激活的 scad 文件是否被修改"。现行退让方案：凡是 scad tab 激活且有任何 watch 事件，均触发 refreshSignal，smoke 写入 "auto rerender triggered by {path} (directory change)"。桌面端不受影响（桌面 client 可直接观察 notify 事件）。
+  - 当时 Web 端 WorkbenchLayout 不能仅凭 `changed_paths` 判断"当前激活的 scad 文件是否被修改"。当时退让方案是：凡是 scad tab 激活且有任何 watch 事件，均触发 refreshSignal，smoke 写入 "auto rerender triggered by {path} (directory change)"。
   - 若多个文件同时变更，Web 端会做一次粗粒度重渲染而不是按文件去抖；对 preview 成本可控但理论上浪费。
 - 可能的解法：
   - 服务端把 notify 事件里的文件 handle 透传到 `WatchChangedEvent.changed_paths` 而不是只回目录；需要在 `app-server-host::watch` 中按事件类型填充 `changed_paths`。
