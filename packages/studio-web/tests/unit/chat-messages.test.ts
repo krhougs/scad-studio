@@ -5,7 +5,7 @@ describe("friendlyErrorMessage", () => {
   it("returns specific message for llm_error", () => {
     const result = friendlyErrorMessage("llm_error");
     expect(result.title).toBe("AI service error");
-    expect(result.hint).toContain("Rig OpenAI Responses configuration");
+    expect(result.hint).toContain("active provider configuration");
   });
 
   it("returns specific message for cadquery_build_error", () => {

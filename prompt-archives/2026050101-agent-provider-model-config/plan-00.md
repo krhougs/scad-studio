@@ -207,6 +207,9 @@
 2. 增加 provider/model 列表读取 command 或 snapshot 字段，保证 Web 可以通过 wire protocol 获取完整 provider/model registry。
 3. 增加模型切换 command，payload 使用 provider id 与 model id。
 4. 增加模型参数切换 command，payload 使用 provider id、model id、可选 `reasoning_effort` 和可选 `service_label`；该 command 只更新运行时状态，不写入 `agents.toml`。
+   - 执行中补充决定（2026-05-01）：`agent.model.params.update` 使用完整 active model 参数快照，不使用 patch 语义。
+   - 原因：业务场景只需要表达“这个参数是否传给 provider/LLM”。`Option<String>` 已完整覆盖语义：`None` 表示不发送该参数，`Some(value)` 表示将字符串原样发送给 provider/LLM；不需要用 `Option<Option<String>>` 表达“保留当前值 / 清空 / 设置”，也不需要默认 reasoning 字符串。
+   - 验收要求：Phase 3 protocol、Phase 4 Web 发送路径和 Phase 5 host 运行时状态必须按该完整快照语义重新验收。
 5. 扩展 `agent.invoke` / 发消息 request，必须携带本次使用的 provider id、model id、reasoning effort 和 service label；后端必须以请求携带参数作为本次 run 的模型参数快照。
 6. host handshake snapshot 和 managed client snapshot 暴露 provider/model registry。
 7. 切换模型或模型参数成功后通过 snapshot 或 response 反映新的 active model 与 active model params。

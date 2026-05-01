@@ -136,6 +136,8 @@ printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
 
 `agents.toml` 支持多个 provider 和多个模型。`discover_models` 默认开启，provider 发现到的模型会与手动配置模型合并；同 id 手动模型只覆盖显式字段。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
 
+`reasoning_effort` 和 `service_label` 既可以在 `agents.toml` 中作为模型默认值配置，也可以在 Web Chat header 中运行时切换。运行时切换只影响当前 host 进程，不会写回 `agents.toml`。
+
 手动试验不同工作目录：
 
 ```bash

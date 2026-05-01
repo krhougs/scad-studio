@@ -82,9 +82,9 @@ export type AgentProviderCapabilities = {
   search_sources_supported: boolean;
 };
 
-type AgentModelParamPatch = {
-  reasoning_effort?: string | null;
-  service_label?: string | null;
+type AgentModelParamsSnapshot = {
+  reasoning_effort: string | null;
+  service_label: string | null;
 };
 
 export type AgentSearchSource = {
@@ -363,11 +363,11 @@ function useChatActions(input: {
       }),
     selectAgentModel: (value: string) =>
       void selectAgentModel(input.client, value, input.onStatus, input.setModelBusy),
-    updateAgentModelParams: (patch: AgentModelParamPatch) =>
+    updateAgentModelParams: (params: AgentModelParamsSnapshot) =>
       void updateAgentModelParams(
         input.client,
         input.agentModelSelection,
-        patch,
+        params,
         input.onStatus,
         input.setModelBusy,
       ),
@@ -387,7 +387,7 @@ function ChatHeader(props: {
   onSelect: (id: string) => void;
   onCancel: () => void;
   onModelSelect: (value: string) => void;
-  onParamsUpdate: (patch: AgentModelParamPatch) => void;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
   const active = props.sessions.find(
     (session) => session.session_id === props.currentSessionId,
@@ -454,7 +454,7 @@ function AgentModelControls(props: {
   registry: AgentModelRegistry | null;
   disabled: boolean;
   onModelSelect: (value: string) => void;
-  onParamsUpdate: (patch: AgentModelParamPatch) => void;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
   const active = activeAgentModel(props.registry);
   if (!props.registry || !active) {
@@ -495,7 +495,7 @@ function AgentModelControls(props: {
 function AgentParamSelects(props: {
   registry: AgentModelRegistry;
   disabled: boolean;
-  onParamsUpdate: (patch: AgentModelParamPatch) => void;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
   return (
     <>
@@ -504,9 +504,14 @@ function AgentParamSelects(props: {
         className="agent-param-select"
         disabled={props.disabled || props.registry.reasoning_effort_options.length === 0}
         value={props.registry.active_reasoning_effort ?? ""}
-        onChange={(event) => props.onParamsUpdate({ reasoning_effort: event.target.value || null })}
+        onChange={(event) =>
+          props.onParamsUpdate({
+            reasoning_effort: event.target.value || null,
+            service_label: props.registry.active_service_label,
+          })
+        }
       >
-        <option value="">provider default</option>
+        <option value="">none</option>
         {props.registry.reasoning_effort_options.map((option) => (
           <option key={option} value={option}>{option}</option>
         ))}
@@ -516,7 +521,12 @@ function AgentParamSelects(props: {
         className="agent-param-select"
         disabled={props.disabled || props.registry.service_label_options.length === 0}
         value={props.registry.active_service_label ?? ""}
-        onChange={(event) => props.onParamsUpdate({ service_label: event.target.value || null })}
+        onChange={(event) =>
+          props.onParamsUpdate({
+            reasoning_effort: props.registry.active_reasoning_effort,
+            service_label: event.target.value || null,
+          })
+        }
       >
         <option value="">none</option>
         {props.registry.service_label_options.map((option) => (
@@ -581,24 +591,18 @@ async function selectAgentModel(
 async function updateAgentModelParams(
   client: WasmClient | null,
   selection: AgentModelSelection | null,
-  patch: AgentModelParamPatch,
+  params: AgentModelParamsSnapshot,
   onStatus: ((message: string) => void) | undefined,
   setModelBusy: (value: boolean) => void,
 ): Promise<void> {
   if (!client || !selection) return;
   setModelBusy(true);
   try {
-    const reasoningEffort = Object.hasOwn(patch, "reasoning_effort")
-      ? patch.reasoning_effort ?? null
-      : selection.reasoning_effort;
-    const serviceLabel = Object.hasOwn(patch, "service_label")
-      ? patch.service_label ?? null
-      : selection.service_label;
     await client.dispatchAgentModelParamsUpdate({
       provider_id: selection.provider_id,
       model_id: selection.model_id,
-      reasoning_effort: reasoningEffort,
-      service_label: serviceLabel,
+      reasoning_effort: params.reasoning_effort,
+      service_label: params.service_label,
     });
   } catch (err) {
     reportError(onStatus)(err);

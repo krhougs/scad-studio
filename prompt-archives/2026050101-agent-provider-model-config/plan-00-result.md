@@ -6,7 +6,8 @@
 - Phase 2 已完成并通过独立 review。
 - Phase 3 已完成并通过独立 review。
 - Phase 4 已完成并通过独立 review。
-- Phase 5 已完成并通过独立 review，准备进入 Phase 6。
+- Phase 5 已完成并通过独立 review。
+- Phase 6 已完成文档修订、最终验证、搜索复核和 Plan 级独立 review；review 发现的问题均已修复并完成回归验证。
 - 执行前已检查：当前计划无 `TBD`、`TODO`、待确认项、未选择方案或缺失验收标准。
 - 约束来源已核对：原始用户需求、后续补充需求、根 `AGENTS.md` 的 Plan Mode / 工具链 / app server / protocol / Web 边界要求。
 
@@ -43,7 +44,7 @@
 | 3 | Protocol 与 Studio common capability 扩展 | 已完成 |
 | 4 | Web 模型选择 UI 与状态管理 | 已完成 |
 | 5 | Host 切换命令持久状态与 `bun run web` 验证 | 已完成 |
-| 6 | 文档、已知问题与最终验证 | 未执行 |
+| 6 | 文档、已知问题与最终验证 | 已完成 |
 
 ## Phase 1 — 配置格式与 ignore 基线
 
@@ -182,7 +183,7 @@
 - `agent.invoke` 已扩展 provider/model/reasoning/service 快照字段。
 - host 已实现 registry 读取、模型切换和模型参数运行时更新；参数更新只影响运行时状态，不写入 `agents.toml`。
 - host handshake capability 已暴露完整 `agent_model_registry`，同时保留 legacy `agent_provider`，避免旧客户端丢失配置状态提示。
-- host Agent run 已按本次 `agent.invoke` 携带的 provider/model/reasoning/service 参数生成运行快照；同模型缺省参数可保留当前运行时选择，不同 provider/model 不继承旧模型参数。
+- host Agent run 已按本次 `agent.invoke` 携带的 provider/model/reasoning/service 参数生成运行快照；Web 生产路径发送完整快照，旧客户端缺省 provider/model 字段仍由 host 兼容性 fallback 处理，缺省 reasoning/service 字段按 `None` 处理。
 - `studio-common` managed client snapshot 已保存并更新 `agent_model_registry`，并从 registry 继续生成 legacy `agent_provider` capability。
 - `studio-web-wasm` bridge 已暴露 registry 读取、模型切换和模型参数更新 dispatch。
 - `packages/app-server-protocol/src/index.ts` 已同步 protocol version 8 与新增 DTO 字段。
@@ -206,7 +207,7 @@
 - 第一轮 Phase 3 review 发现 3 个阻塞项和 1 个测试缺口：
   - registry 未暴露 reasoning/service 是否已应用到 provider request。
   - registry 将 native web search 配置意图和实际应用状态合并，导致 Web 无法区分“用户开启但模型不支持”和“用户关闭”。
-  - `agent.model.params.update` 中 `None` 会清空另一个未修改参数。
+  - `agent.model.params.update` 原先按 patch 语义设计，无法清晰表达完整 active model 参数快照。
   - wire payload contract 未覆盖 protocol version 8 与 registry 新字段。
 - 已修复并补充测试：
   - `active_reasoning_effort_applied`
@@ -329,3 +330,84 @@
 
 - `agent.invoke` 的 provider/model/reasoning/service 字段仍为 optional，host 对缺字段会回退当前运行时状态，用于兼容旧客户端和测试 fallback；Web 生产路径已在 Phase 4 发送完整模型快照。
 - `.env` / `BUDN_AGENT_CONFIG` 传递目前由本机 `bun run web` 实际启动验证覆盖，尚未新增自动 smoke 用例；Phase 6 最终验证仍需运行既有 smoke 套件。
+
+## Phase 6 — 文档、已知问题与最终验证
+
+### 完成情况
+
+- `README.md` 已新增 Agent Provider 配置入口，说明 `agents.toml` / `BUDN_AGENT_CONFIG`、真实 API key 存放方式、OpenAI Responses 与 Anthropic Messages provider、多模型、`discover_models` 合并规则、`reasoning_effort` / `service_label` 运行时切换，以及 native web search 的意图与实际应用状态。
+- `README.md` 的工具链说明已改为：项目内脚本默认使用 `bun`，Python 只允许作为 `budn_cad_runner` 外部 CAD 工具边界存在。
+- `docs/getting-started.md` 已补充 `reasoning_effort` / `service_label` 可在配置文件中设为默认值，也可在 Web Chat header 中运行时切换；运行时切换不写回 `agents.toml`。
+- `docs/cadquery-mvp/decisions.md` 已从固定 OpenAI provider 更新为 Rig provider 路径，当前支持 OpenAI Responses API provider 与 Anthropic Messages API provider。
+- `packages/studio-web/src/workbench/chat-messages.tsx` 的 `llm_error` 用户提示已从 OpenAI 专属配置改为 active provider configuration。
+- `crates/app-server-transport/tests/in_memory_transport_tests.rs` 补齐 `ServerCapabilities.agent_model_registry` fixture，修复全 workspace 测试中暴露的缺字段编译失败。
+- 用户复核后明确 `agent.model.params.update` 不是 patch 语义，而是完整 active model 参数快照；已撤回 `Option<Option<String>>` 和临时 protocol bump，继续使用 protocol version 8。
+- 补充决策已写入 `plan-00.md` Phase 3：`reasoning_effort` / `service_label` 使用 `Option<String>`。`None` 表示不向 provider/LLM 发送该参数，`Some(value)` 表示将字符串原样发送给 provider/LLM。
+- 决策原因：业务语义只需要表达“是否发送该参数”，不需要额外表达默认 reasoning 字符串，也不需要同时支持“保留当前值 / 清空 / 设置”的 patch 状态；完整快照语义还能避免 JS/WASM `null` 与 `undefined` 差异带来的协议复杂度。
+- Phase 3 protocol、Phase 4 Web 发送路径和 Phase 5 host 运行时状态已按完整快照语义重新验收：Web 每次根据当前选择发送 provider id、model id、reasoning effort 和 service label；host 收到后直接替换当前运行时 active model 参数。
+- 第二轮 Plan 级 review 发现两个问题并已修复：
+  - registry response 与 run config 曾在 `None` 时回退到模型默认值，已改为显式 active model 快照优先生效；只有没有显式模型选择的默认配置加载路径继续使用模型配置默认值。
+  - Web 内部曾保留 patch 形态和 `Object.hasOwn` 字段区分逻辑，已改为控件直接发送完整参数快照。
+- 第三轮 Plan 级 review 发现 `service_label: Some(value)` 仍被 OpenAI service tier 白名单过滤，已改为 OpenAI provider 直接把字符串原样写入 `service_tier`；host registry 的 service label applied 状态也同步改为 OpenAI 下任意 `Some(value)` 均为已应用。
+- `docs/known_issues.md` 已新增 Anthropic web search citations 尚未映射到 protocol sources 的已知问题，记录来源、原因、影响范围、可能解法和当前处理方式。
+- `docs/known_issues.md` 中历史 Agent provider 配置记录已更新为当前 `agents.toml` 多 provider / 多模型 registry 语境，旧模型 env fallback 只作为历史描述保留；当前问题记录中的 OpenAI-only provider 表述已改为 provider 中性表述。
+
+### 验证证据
+
+- `bun run --cwd packages/studio-web test:unit -- chat-messages` 通过；2 个测试文件、14 个用例通过。
+- `cargo test -p app-server-core` 通过。
+- `cargo test -p app-server-host` 通过。
+- `cargo test -p app-server-protocol` 通过。
+- `cargo test -p app-server-protocol-wasm` 通过。
+- `cargo test -p studio-common` 通过。
+- `cargo test -p studio-web-wasm` 通过。
+- 用户补充决策后重新验收 Phase 3/4/5 相关边界：
+  - `cargo test -p app-server-host dispatcher_agent_model_commands_update_active_snapshot` 通过；覆盖 host 按完整快照替换运行时 active model 参数，`None` 不会保留旧值。
+  - `cargo test -p app-server-host agent_invoke_model_state_uses_request_param_snapshot` 通过；覆盖 `agent.invoke` 使用请求携带的参数快照，`None` 不继承旧运行时参数。
+  - `cargo test -p app-server-core rig_agent_config_selection_none_does_not_fall_back_to_model_defaults` 通过；覆盖显式模型选择下 `None` 不回退模型默认 `reasoning_effort` / `service_label`。
+  - `cargo test -p app-server-core -p app-server-host` 通过；覆盖 provider config、Agent run config、host dispatcher 和 roundtrip 回归。
+  - `cargo test -p app-server-core rig_agent_additional_params_include_openai_service_label_raw` 通过；覆盖 OpenAI `service_label: Some(value)` 原样写入 `service_tier`。
+  - `cargo test -p app-server-protocol` 通过；覆盖 protocol v8 与 `agent.model.params.update` 的 `Option<String>` payload Borsh roundtrip。
+  - `cargo test -p app-server-protocol-wasm` 通过。
+  - `cargo test -p studio-common` 通过。
+  - `bun run --cwd packages/studio-web test:unit -- chat-zone` 通过；29 个用例通过，覆盖 Web 按当前选择发送完整参数快照。
+  - `bun run --cwd packages/studio-web test:unit -- chat-zone protocol-package-import wasm-client protocol-store` 通过；4 个测试文件、72 个用例通过。
+- `cargo check --workspace` 通过。
+- 首次 `cargo test --workspace` 暴露 `app-server-transport` 测试 fixture 缺少 `agent_model_registry` 字段；修复后 `cargo test -p app-server-transport` 通过。
+- 用户补充决策后重新运行 `cargo test --workspace` 通过；最终 Plan 级复审后再次重新运行 `cargo test --workspace` 通过。
+- `bun run protocol:build` 通过。
+- 用户补充决策后重新运行 `bun run protocol:build` 通过；`bun run protocol:check-generated` 通过，确认 protocol v8 生成物无残留差异。
+- `bun run --cwd packages/studio-web typecheck` 通过。
+- 用户补充决策后重新运行 `bun run --cwd packages/studio-web test:unit` 通过；37 个测试文件、275 个用例通过。输出中仍有既有 `ChatZone2` React `act(...)` warning，未新增失败。
+- 用户补充决策后重新运行 `bun run web:smoke` 通过；覆盖 Rust smoke、WASM bridge、WASM package 生成一致性、浏览器 smoke、watch smoke 和 PWA build smoke。Vite build 仍输出既有大 chunk warning。
+- review 阻塞项修复后重新运行 `bun run web:smoke:browser` 通过；75 个 Playwright 用例通过。
+- review 阻塞项修复后重新运行 `bun run --cwd packages/studio-web test:e2e -- tests/playwright/agent-chat-interaction.spec.ts tests/playwright/canvas-interaction.spec.ts tests/playwright/config-settings.spec.ts` 通过；28 个聚焦 Playwright 用例通过。
+- `git diff --check` 与 `git diff --cached --check` 通过。
+- 额外执行 `cargo fmt --check` 时，命中既有全仓库格式差异，包括未触碰的 `app-server-core` 测试文件；本 Phase 未执行全量格式化，避免扩大无关 diff。该问题已在 `docs/known_issues.md` 的历史记录中存在。
+
+### 搜索复核
+
+- review 阻塞项修复后搜索 `未配置 Rig OpenAI`、`生产 Agent 入口走 Rig OpenAI`、`Rig OpenAI Responses configuration`、`BUDN_AGENT_MODEL`、`BUDN_AGENT_PROVIDER`、`OpenAI-compatible`、`Chat Completions`、`BUDN_LLM_CONFIG`、`BUDN_LLM_BASE_URL`、`llm.toml`，排除 `packages/studio-web/dist` 后，旧配置相关命中只保留在历史 `docs/known_issues.md` 语境中；当前 README / getting-started / decisions / Web 文案均指向 `agents.toml` 与 active provider。
+- 搜索 `sk-*`、`OPENAI_API_KEY=`、`ANTHROPIC_API_KEY=` 和明文 `api_key` 后，命中只来自测试中的假 key。
+- 搜索 `python` / `python3` / `.py` / `budn_cad_runner` 后，命中属于 CadQuery runner 既有边界、CadQuery 文档、测试夹具或历史计划记录；本 Phase 未新增项目通用 Python 脚本或调用。
+
+### 独立 Review 结果
+
+- 第一轮 Plan 级独立 review 发现两个阻塞项：
+  - `agent.model.params.update` 无法从 Web 清空 `reasoning_effort` / `service_label`。
+  - `docs/known_issues.md` 当前问题记录中仍有 OpenAI-only provider 表述。
+- 用户复核后指出 `Option<Option<String>>` 过度复杂，`Option<String>` 已完整覆盖业务语义；该决定与原因已写入 `plan-00.md` Phase 3，并按要求重新验收 Phase 3、Phase 4 和 Phase 5。
+- 第二轮 Plan 级独立 review 发现显式 `None` 仍会回退模型默认参数、Web 仍保留 patch 形态；两个问题均已修复并完成上述回归验证。
+- 第三轮 Plan 级独立 review 发现 OpenAI `service_label: Some(value)` 仍被白名单过滤，文档记录中存在旧 fallback 表述，当前 known issue 仍有 OpenAI-only provider 表述；三个问题均已修复并完成上述回归验证。
+- 最终 Plan 级独立 review 结论：未发现阻塞项或高风险问题。
+
+### 阶段提交
+
+- 待提交。
+
+### 遗留问题
+
+- Anthropic web search citations 尚未映射到 protocol sources，已记录到 `docs/known_issues.md`。
+- `ChatZone2` 单元测试仍有既有 React `act(...)` warning，本 Phase 未扩大该问题范围。
+- Web production build 仍输出既有 Vite 大 chunk warning，本 Phase 未改变 bundle 切分策略。
+- 全仓库 `cargo fmt --check` 仍命中既有无关格式差异；本 Phase 只保证本次 diff 的空白检查通过。

@@ -164,8 +164,7 @@ impl HostRequestDispatcher {
     ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
         let requested_preview_kinds = request.capabilities.supported_preview_kinds.clone();
         let server_capabilities =
-            server_capabilities_for_request(requested_preview_kinds, &self.agent_model_state)
-                .await;
+            server_capabilities_for_request(requested_preview_kinds, &self.agent_model_state).await;
         let negotiated_version = negotiate_protocol_version(
             request.capabilities.protocol_version,
             server_capabilities.protocol_version,
@@ -581,11 +580,19 @@ impl HostRequestDispatcher {
     ) -> Result<AgentModelRegistryResponse, ProtocolError> {
         let registry = load_agent_model_registry().await?;
         ensure_agent_model_exists(&registry, &request.provider_id, &request.model_id)?;
+        let selected_model = registry
+            .provider(&request.provider_id)
+            .and_then(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .find(|model| model.id == request.model_id)
+            });
         self.agent_model_state = AgentModelRuntimeState {
             provider_id: Some(request.provider_id),
             model_id: Some(request.model_id),
-            reasoning_effort: None,
-            service_label: None,
+            reasoning_effort: selected_model.and_then(|model| model.reasoning_effort.clone()),
+            service_label: selected_model.and_then(|model| model.service_label.clone()),
         };
         Ok(agent_model_registry_response(
             &registry,
@@ -599,22 +606,11 @@ impl HostRequestDispatcher {
     ) -> Result<AgentModelRegistryResponse, ProtocolError> {
         let registry = load_agent_model_registry().await?;
         ensure_agent_model_exists(&registry, &request.provider_id, &request.model_id)?;
-        let same_model = self.agent_model_state.provider_id.as_deref()
-            == Some(request.provider_id.as_str())
-            && self.agent_model_state.model_id.as_deref() == Some(request.model_id.as_str());
         self.agent_model_state = AgentModelRuntimeState {
             provider_id: Some(request.provider_id),
             model_id: Some(request.model_id),
-            reasoning_effort: request.reasoning_effort.or_else(|| {
-                same_model
-                    .then(|| self.agent_model_state.reasoning_effort.clone())
-                    .flatten()
-            }),
-            service_label: request.service_label.or_else(|| {
-                same_model
-                    .then(|| self.agent_model_state.service_label.clone())
-                    .flatten()
-            }),
+            reasoning_effort: request.reasoning_effort,
+            service_label: request.service_label,
         };
         Ok(agent_model_registry_response(
             &registry,
@@ -1223,19 +1219,11 @@ fn agent_model_state_for_request(
         .model_id
         .clone()
         .or_else(|| current.model_id.clone());
-    let same_model = provider_id == current.provider_id && model_id == current.model_id;
     AgentModelRuntimeState {
         provider_id,
         model_id,
-        reasoning_effort: request.reasoning_effort.clone().or_else(|| {
-            same_model
-                .then(|| current.reasoning_effort.clone())
-                .flatten()
-        }),
-        service_label: request
-            .service_label
-            .clone()
-            .or_else(|| same_model.then(|| current.service_label.clone()).flatten()),
+        reasoning_effort: request.reasoning_effort.clone(),
+        service_label: request.service_label.clone(),
     }
 }
 
@@ -1251,14 +1239,18 @@ fn agent_model_registry_response(
             .iter()
             .find(|model| model.id == active_model_id)
     });
-    let active_reasoning_effort = state
-        .reasoning_effort
-        .clone()
-        .or_else(|| active_model.and_then(|model| model.reasoning_effort.clone()));
-    let active_service_label = state
-        .service_label
-        .clone()
-        .or_else(|| active_model.and_then(|model| model.service_label.clone()));
+    let state_matches_active = state.provider_id.as_deref() == Some(active_provider_id.as_str())
+        && state.model_id.as_deref() == Some(active_model_id.as_str());
+    let active_reasoning_effort = if state_matches_active {
+        state.reasoning_effort.clone()
+    } else {
+        active_model.and_then(|model| model.reasoning_effort.clone())
+    };
+    let active_service_label = if state_matches_active {
+        state.service_label.clone()
+    } else {
+        active_model.and_then(|model| model.service_label.clone())
+    };
     let provider_kind = active_provider.map(|provider| provider.kind);
     AgentModelRegistryResponse {
         active_provider_id,
@@ -1423,16 +1415,7 @@ fn active_service_label_applied(
     matches!(
         provider_kind,
         Some(app_server_core::llm::AgentProviderKind::OpenAiResponses)
-    ) && service_label.and_then(openai_service_tier).is_some()
-}
-
-fn openai_service_tier(service_label: &str) -> Option<&'static str> {
-    match service_label.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some("auto"),
-        "default" => Some("default"),
-        "flex" => Some("flex"),
-        _ => None,
-    }
+    ) && service_label.is_some()
 }
 
 fn anthropic_thinking_budget_tokens(effort: &str, max_tokens: u64) -> Option<u64> {
@@ -2127,9 +2110,9 @@ async fn server_capabilities_for_request(
         .await
         .ok()
         .flatten();
-    let agent_model_registry = registry.as_ref().map(|registry| {
-        agent_model_registry_response(registry, agent_model_state)
-    });
+    let agent_model_registry = registry
+        .as_ref()
+        .map(|registry| agent_model_registry_response(registry, agent_model_state));
     let agent_provider = agent_model_registry
         .as_ref()
         .and_then(agent_provider_capability_from_registry);
@@ -2302,7 +2285,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_invoke_model_state_does_not_inherit_params_across_models() {
+    fn agent_invoke_model_state_uses_request_param_snapshot() {
         let current = AgentModelRuntimeState {
             provider_id: Some("openai".into()),
             model_id: Some("gpt-5.2".into()),
@@ -2314,8 +2297,10 @@ mod tests {
             &current,
             &agent_invoke_request("openai", "gpt-5.2", None, None),
         );
-        assert_eq!(same_model.reasoning_effort.as_deref(), Some("high"));
-        assert_eq!(same_model.service_label.as_deref(), Some("flex"));
+        assert_eq!(same_model.provider_id.as_deref(), Some("openai"));
+        assert_eq!(same_model.model_id.as_deref(), Some("gpt-5.2"));
+        assert!(same_model.reasoning_effort.is_none());
+        assert!(same_model.service_label.is_none());
 
         let different_model = agent_model_state_for_request(
             &current,

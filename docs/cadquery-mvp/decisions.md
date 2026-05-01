@@ -14,7 +14,7 @@ CadQuery 替代 OpenSCAD。CadQuery Agent 是产品新方向。MVP 期间不删 
 
 ### 3. Agent 运行时
 
-生产 Agent 运行时固定为 Rig OpenAI Responses API provider。app server 负责读取 provider 配置、注册 workspace / CadQuery 工具、映射 streaming event、写入 Chat history 和处理取消；前端只通过 app server protocol 消费 Agent 状态。
+生产 Agent 运行时基于 Rig provider 路径，当前支持 OpenAI Responses API provider 与 Anthropic Messages API provider。app server 负责读取 `agents.toml` provider 配置、注册 workspace / CadQuery 工具、映射 streaming event、写入 Chat history 和处理取消；前端只通过 app server protocol 消费 Agent 状态并切换当前 provider/model。
 
 模型原生联网搜索只通过 provider hosted / server web search tool 接入，在 `agents.toml` 中默认开启，可由 provider 或模型级配置关闭。项目不提供自建互联网搜索工具。
 

@@ -495,7 +495,7 @@ type FriendlyError = { title: string; hint: string };
 const ERROR_MESSAGES: Record<string, FriendlyError> = {
   llm_error: {
     title: "AI service error",
-    hint: "The AI service returned an error. Check the Rig OpenAI Responses configuration and try again.",
+    hint: "The AI service returned an error. Check the active provider configuration and try again.",
   },
   llm_refused: {
     title: "Request refused",

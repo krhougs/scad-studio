@@ -120,6 +120,18 @@ describe("ChatZone", () => {
         service_label: "default",
       });
     });
+
+    fireEvent.change(screen.getByLabelText("reasoning effort"), {
+      target: { value: "" },
+    });
+    await waitFor(() => {
+      expect(client.dispatchAgentModelParamsUpdate).toHaveBeenCalledWith({
+        provider_id: "openai",
+        model_id: "gpt-5.2",
+        reasoning_effort: null,
+        service_label: "flex",
+      });
+    });
   });
 
   it("disables model controls while a model switch request is pending", async () => {

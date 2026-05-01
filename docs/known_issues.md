@@ -1,5 +1,20 @@
 # 已知问题记录
 
+## 2026-05-01 16:30:00: Anthropic web search citations 尚未映射到 protocol sources
+
+- 来源：执行 `prompt-archives/2026050101-agent-provider-model-config/plan-00.md` Phase 6 文档与最终验证时，复核 Anthropic Messages provider 接入方式。当前 Anthropic web search 通过 `additional_params.tools` 注入 `web_search_20250305` server tool，但 app server 尚未把 Anthropic response citation 结构映射到 budn' protocol 的 `search_sources` 字段。
+- 原因：
+  - Anthropic API 可在响应内容中提供 citation / search result 相关结构。
+  - 当前 Rig Anthropic provider 路径把 additional tools 传递到 provider request，但 app server 侧没有稳定消费 Anthropic citation 的结构化适配层。
+- 影响范围：
+  - Anthropic native web search 可按 provider server tool 执行，但 Web Chat 暂时不能稳定展示 Anthropic citation URL 列表。
+  - `search_sources` protocol 字段仍保持可选；在结构化 citation 映射完成前，前端不得从文本或文件名推断来源。
+- 可能的解法：
+  - 升级或扩展 Rig Anthropic provider，使其暴露稳定 citation / search result 结构。
+  - 在保持 Rig-only Agent 边界的前提下，在 app server 内增加受控的 Anthropic response citation 适配层。
+  - 为 OpenAI 与 Anthropic 的 `search_sources` 统一补充 provider-specific contract tests。
+- 当前处理方式：保留 protocol 可选 `search_sources` 与 capability 状态；Web 只展示 provider/model web search 能力与实际返回的 sources，不伪造 Anthropic citations。
+
 ## 2026-05-01 07:45:00: Rig 0.35.0 暂未暴露 OpenAI web search sources / annotations
 
 - 来源：执行 `prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 5 时，核对 OpenAI 官方 web search 文档与本地 `rig-core-0.35.0` 源码。OpenAI Responses API 会在 `web_search_call.action.sources` 与 message annotations 中提供来源信息；但 Rig 当前 `AdditionalParameters::Include` 未包含 `web_search_call.action.sources`，流式 `MultiTurnStreamItem` 也没有把 URL citation / sources 暴露为可直接消费的结构。
@@ -149,13 +164,13 @@
 - 影响范围：
   - prompt 中出现 move / replace / 移动 / 替换 等词不会再改变确认范围，也不会生成几何修改。
   - 在结构化 edit intent 接入前，instance move / replacement 这类语义需要通过显式 target、plan package 或后续结构化 tool call 才能准确表达。
-  - 未配置 Rig OpenAI Responses provider 时，Agent 会返回 `LlmError` 并记录错误消息；不会执行本地固定 CadQuery 几何模板。
+  - 未配置可用 Rig provider 时，Agent 会返回 `LlmError` 并记录错误消息；不会执行本地固定 CadQuery 几何模板。
   - 这不扩大写入权限；Agent mode 仍受 `target_path`、`affected_files` / `new_files`、`export_targets` 和 staging exact output scope 限制。
 - 可能的解法：
   - 在 protocol 中增加模型 tool output 专用的结构化 edit intent enum，并把它作为 Agent mode execution scope 的一部分展示给用户。
   - Rig Agent 输出 target path、target type、affected files、export targets 和 edit intent，由 app server 校验结构化字段，不从 prompt 文本推断。
   - Web UI 只展示模型输出的结构化 execution scope；如果后续需要人工修正，应通过显式控件修改结构化字段，再由 Agent mode 执行，而不是恢复关键词词表。
-- 当前处理方式：已删除 prompt 关键词推断、本地 plan 草稿和本地 CadQuery 几何 codegen；生产 Agent 入口走 Rig OpenAI Responses API，当前执行范围来自显式 `plan_ref` / plan package 和结构化 selection context。
+- 当前处理方式：已删除 prompt 关键词推断、本地 plan 草稿和本地 CadQuery 几何 codegen；生产 Agent 入口走 Rig provider 路径，当前执行范围来自显式 `plan_ref` / plan package 和结构化 selection context。
 
 ## 2026-04-28 06:01:20: CadQuery Execute confirmation 尚未持久绑定 CAD Plan 文件
 
@@ -211,16 +226,16 @@
 - 来源：执行 `prompt-archives/2026042700-cadquery-mvp-design/plan-00.md` Phase 1，按计划评估 Rig 后实现 Agent / Chat / CadQuery tool 主链路；后续由 `prompt-archives/2026050100-async-rig-web-search/plan-00.md` Phase 4 完成架构替换。
 - 原因：
   - Phase 1 已确认 `rig-core` 当前评估版本为 `0.35.0`，其 provider 抽象、tool calling、stream API 和自定义 agent 控制 hook 方向符合后续接入需求。
-  - 当前实现已读取 `BUDN_AGENT_CONFIG`、`BUDN_AGENT_OPENAI_API_KEY` / `OPENAI_API_KEY`、`BUDN_AGENT_MODEL`、timeout、max tokens、temperature 和 reasoning effort。
-  - 仍缺少可复现的 provider mock 测试夹具，以及模型原生联网搜索 capability / 来源记录字段；这些属于后续 Phase 范围。
+  - 当时实现已读取 `BUDN_AGENT_CONFIG`、`BUDN_AGENT_OPENAI_API_KEY` / `OPENAI_API_KEY`、旧模型 env fallback、timeout、max tokens、temperature 和 reasoning effort。
+  - 当时仍缺少可复现的 provider mock 测试夹具，以及模型原生联网搜索 capability / 来源记录字段；这些后续已由 `prompt-archives/2026050101-agent-provider-model-config/plan-00.md` 扩展到 `agents.toml` 多 provider / 多模型配置与 protocol registry。
 - 影响范围：
-  - 未配置 Rig OpenAI Responses provider 时，Agent run 会通过 `agent.error` 返回 `LlmError`，并在 Chat history 中记录失败消息。
+  - 当时未配置 Rig OpenAI Responses provider 时，Agent run 会通过 `agent.error` 返回 `LlmError`，并在 Chat history 中记录失败消息。
   - 当前生产 Agent 不再有本地文本草稿或固定几何模板后备路径；复杂 CAD 修改必须由 Rig multi-turn tool loop 完成。
   - native web search capability 和可选来源字段已接入 protocol / Web；真实来源列表仍受 Rig 结构化输出能力限制，见本文件 2026-05-01 记录。
 - 可能的解法：
   - 为 Rig streaming、tool call、cancel 和 provider error mapping 建立更细的 provider mock / test support。
   - 将 provider 的认证失败、限流和 hosted tool 不可用错误映射为更具体的协议错误与 Chat 事件。
-- 当前处理方式：生产 Agent 入口只走 Rig OpenAI Responses API；缺少 provider 配置时返回清晰错误并保持 workspace 不变。模型原生联网搜索通过 provider hosted tool 接入，Web 只展示 app server protocol 暴露的 capability 与来源字段。
+- 当前处理方式：生产 Agent 入口走 Rig provider 路径，当前支持 OpenAI Responses 与 Anthropic Messages。推荐配置入口为本机私有 `agents.toml`，由 `BUDN_AGENT_CONFIG` 指向；缺少 provider 配置时返回清晰错误并保持 workspace 不变。模型原生联网搜索通过 provider hosted / server tool 接入，Web 只展示 app server protocol 暴露的 capability 与来源字段。
 
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 
@@ -452,7 +467,7 @@
 - 来源：执行 Phase 7 步骤 C（Export 流）时，检查 `app-server-protocol::ExportRunRequest.output_path: PathBuf` 与 `crates/app-server-core/src/export.rs::export_model`。Web 端发的是浏览器侧 UTF-8 字符串，该字符串被 server 作为 CLI `-o` 参数传给 OpenSCAD，按 server 进程 cwd 或绝对路径解析。
 - 原因：协议在定义 `ExportRunRequest` 时假定客户端知道 server 机器真实文件系统；这在桌面端成立，在 web 端不成立。没有 `PathHandle`-化的导出接口，也没有"写到 workspace 下某个相对路径"的语义。
 - 影响范围：
-  - Web 端 Phase 7 导出 UI 只接受用户输入文件名（默认 `<stem>.stl`），实际落地到 server 进程 cwd，不保证在 workspace 根目录下，也不保证对用户可见。
+  - Web 端 Phase 7 导出 UI 只接受用户输入文件名（默认 `<stem>.stl`），实际写入 server 进程 cwd，不保证在 workspace 根目录下，也不保证对用户可见。
   - smoke（`@export-slicer`）只能断言 `export done|export error`，不能验证导出文件位置。
 - 可能的解法：
   - 扩展协议：`ExportRunRequest.output` 改为 `PathHandleWritable`（新增路径类型），由 server 解析为 workspace 根下的相对路径；或复用现有 `PathHandle` 作为目录 + 文件名两字段。

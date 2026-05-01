@@ -116,6 +116,19 @@ bun run --cwd packages/studio-web test:unit
 bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版本对齐
 ```
 
+## Agent Provider 配置
+
+Agent provider 配置使用本机私有的 `agents.toml`。仓库只提交 `agents.example.toml` 作为模板，真实 API key 放在环境变量中，不写入 `agents.toml`：
+
+```bash
+cp agents.example.toml agents.toml
+printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
+```
+
+`agents.toml` 支持 OpenAI Responses 与 Anthropic Messages provider，也支持每个 provider 下配置多个模型。`discover_models` 默认开启；provider 发现到的模型会与手动配置模型合并，同 id 手动模型只覆盖显式字段。
+
+`reasoning_effort` 和 `service_label` 可以在配置文件中设定，也可以在 Web Chat header 中作为当前 host 进程内的运行时参数切换；运行时切换不会写回 `agents.toml`。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
+
 ## 进一步阅读
 
 - `docs/getting-started.md`：完整安装流程、环境变量、故障排查
@@ -135,4 +148,4 @@ bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版
 - Playwright 浏览器：chromium（`packages/studio-web/playwright.config.ts`）
 - 浏览器端 wasm：`wasm-bindgen` 0.2.117 + Vite `vite-plugin-wasm` + `vite-plugin-top-level-await`
 
-Python 禁止引入；所有脚本以 `bun` 运行 TypeScript。
+项目内脚本默认以 `bun` 运行 TypeScript。Python 只允许作为 `budn_cad_runner` 外部 CAD 工具边界存在；不要新增项目通用 Python 辅助脚本。

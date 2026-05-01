@@ -717,6 +717,7 @@ pub fn rig_config_from_registry_selection(
         .ok_or_else(|| RigAgentConfigError {
             message: "active model is missing".into(),
         })?;
+    let explicit_model_selection = selection.provider_id.is_some() || selection.model_id.is_some();
     Ok(RigAgentConfig {
         provider_id: provider.id.clone(),
         provider_kind: provider.kind,
@@ -730,14 +731,22 @@ pub fn rig_config_from_registry_selection(
         timeout_secs: registry.defaults.timeout_secs,
         max_tokens: model.max_tokens,
         temperature: model.temperature,
-        reasoning_effort: selection
-            .reasoning_effort
-            .clone()
-            .or_else(|| model.reasoning_effort.clone()),
-        service_label: selection
-            .service_label
-            .clone()
-            .or_else(|| model.service_label.clone()),
+        reasoning_effort: if explicit_model_selection {
+            selection.reasoning_effort.clone()
+        } else {
+            selection
+                .reasoning_effort
+                .clone()
+                .or_else(|| model.reasoning_effort.clone())
+        },
+        service_label: if explicit_model_selection {
+            selection.service_label.clone()
+        } else {
+            selection
+                .service_label
+                .clone()
+                .or_else(|| model.service_label.clone())
+        },
         native_web_search: model.native_web_search && model.web_search_supported,
         anthropic_version: provider.anthropic_version.clone(),
     })

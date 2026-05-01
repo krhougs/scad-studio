@@ -164,10 +164,27 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
     let registry =
         dispatch_agent_model_command(&mut dispatcher, 10, ClientCommand::AgentModelRegistry).await;
     assert_eq!(registry.active_model_id, "gpt-5.2");
+    assert_eq!(registry.active_reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(registry.active_service_label.as_deref(), Some("default"));
+
+    let cleared_defaults = dispatch_agent_model_command(
+        &mut dispatcher,
+        11,
+        ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5.2".into(),
+            reasoning_effort: None,
+            service_label: None,
+        }),
+    )
+    .await;
+    assert_eq!(cleared_defaults.active_model_id, "gpt-5.2");
+    assert_eq!(cleared_defaults.active_reasoning_effort, None);
+    assert_eq!(cleared_defaults.active_service_label, None);
 
     let selected = dispatch_agent_model_command(
         &mut dispatcher,
-        11,
+        12,
         ClientCommand::AgentModelSelect(AgentModelSelectRequest {
             provider_id: "openai".into(),
             model_id: "gpt-5-mini".into(),
@@ -178,7 +195,7 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
 
     let updated = dispatch_agent_model_command(
         &mut dispatcher,
-        12,
+        13,
         ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
             provider_id: "openai".into(),
             model_id: "gpt-5-mini".into(),
@@ -194,7 +211,7 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
 
     let reasoning_only = dispatch_agent_model_command(
         &mut dispatcher,
-        13,
+        14,
         ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
             provider_id: "openai".into(),
             model_id: "gpt-5-mini".into(),
@@ -207,7 +224,7 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
         reasoning_only.active_reasoning_effort.as_deref(),
         Some("medium")
     );
-    assert_eq!(reasoning_only.active_service_label.as_deref(), Some("flex"));
+    assert_eq!(reasoning_only.active_service_label, None);
 
     let disabled_search = reasoning_only.providers[0]
         .models
@@ -234,10 +251,7 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
         handshake_registry.active_reasoning_effort.as_deref(),
         Some("medium")
     );
-    assert_eq!(
-        handshake_registry.active_service_label.as_deref(),
-        Some("flex")
-    );
+    assert_eq!(handshake_registry.active_service_label, None);
     cleanup_workspace(&workspace);
 }
 

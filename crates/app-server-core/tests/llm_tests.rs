@@ -1,7 +1,8 @@
 use app_server_core::llm::{
     AgentModelSource, AgentProviderKind, DiscoveredProviderModel, ModelDiscoveryStatus,
-    RigAgentConfig, apply_provider_model_discovery, load_agent_provider_registry,
-    load_rig_agent_config, load_rig_agent_config_with_discovery, merge_provider_models,
+    RigAgentConfig, RigAgentConfigSelection, apply_provider_model_discovery,
+    load_agent_provider_registry, load_rig_agent_config, load_rig_agent_config_with_discovery,
+    merge_provider_models, rig_config_from_registry_selection,
 };
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
@@ -232,13 +233,13 @@ fn rig_agent_additional_params_include_hosted_web_search_when_enabled() {
 }
 
 #[test]
-fn rig_agent_additional_params_omit_unsupported_openai_service_label() {
+fn rig_agent_additional_params_include_openai_service_label_raw() {
     let mut config = test_config(false);
     config.service_label = Some("fast".into());
 
     let params = rig_agent_additional_params(&config).expect("reasoning params");
 
-    assert!(params.get("service_tier").is_none());
+    assert_eq!(params["service_tier"], "fast");
 }
 
 #[test]
@@ -479,6 +480,42 @@ reasoning_effort = "high"
     assert_eq!(config.anthropic_version.as_deref(), Some("2023-06-01"));
     assert_eq!(config.model, "claude-sonnet");
     assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[tokio::test]
+async fn rig_agent_config_selection_none_does_not_fall_back_to_model_defaults() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+reasoning_effort = "high"
+service_label = "default"
+"#,
+    )
+    .await
+    .expect("registry should load");
+
+    let selected = rig_config_from_registry_selection(
+        registry,
+        &RigAgentConfigSelection {
+            provider_id: Some("openai".into()),
+            model_id: Some("gpt-5.2".into()),
+            reasoning_effort: None,
+            service_label: None,
+        },
+    )
+    .expect("selected model config should build");
+
+    assert_eq!(selected.reasoning_effort, None);
+    assert_eq!(selected.service_label, None);
 }
 
 #[tokio::test]

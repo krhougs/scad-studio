@@ -309,26 +309,13 @@ fn openai_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json:
     if let Some(effort) = config.reasoning_effort.as_deref() {
         params.insert("reasoning".into(), json!({ "effort": effort }));
     }
-    if let Some(service_label) = config
-        .service_label
-        .as_deref()
-        .and_then(openai_service_tier)
-    {
+    if let Some(service_label) = config.service_label.as_deref() {
         params.insert("service_tier".into(), json!(service_label));
     }
     if config.native_web_search {
         params.insert("tools".into(), json!([{ "type": "web_search" }]));
     }
     (!params.is_empty()).then(|| serde_json::Value::Object(params))
-}
-
-fn openai_service_tier(service_label: &str) -> Option<&'static str> {
-    match service_label.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some("auto"),
-        "default" => Some("default"),
-        "flex" => Some("flex"),
-        _ => None,
-    }
 }
 
 fn anthropic_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
