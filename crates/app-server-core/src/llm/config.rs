@@ -1,24 +1,53 @@
+use rig::prelude::ModelListingClient;
 use serde::Deserialize;
-use std::{collections::HashSet, env, fmt, path::PathBuf};
-use tokio::fs;
+use std::{collections::HashSet, env, fmt, path::PathBuf, time::Duration};
+use tokio::{fs, time};
 
 #[derive(Clone)]
 pub struct RigAgentConfig {
+    pub provider_id: String,
+    pub provider_kind: AgentProviderKind,
     pub api_key: String,
     pub model: String,
     pub timeout_secs: u64,
     pub max_tokens: u64,
     pub temperature: f64,
     pub reasoning_effort: Option<String>,
+    pub service_label: Option<String>,
     pub native_web_search: bool,
+    pub anthropic_version: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum AgentProviderKind {
     #[serde(rename = "openai_responses")]
     OpenAiResponses,
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
+}
+
+impl AgentProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentModelSource {
+    Manual,
+    Discovered,
+    DiscoveredWithOverride,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelDiscoveryStatus {
+    Disabled,
+    NotStarted,
+    Succeeded,
+    Failed(String),
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +92,7 @@ pub struct ResolvedAgentProvider {
     pub api_key_env: String,
     pub anthropic_version: Option<String>,
     pub discover_models: bool,
+    pub model_discovery_status: ModelDiscoveryStatus,
     defaults: AgentConfigDefaults,
     pub models: Vec<ResolvedAgentModel>,
 }
@@ -78,6 +108,7 @@ pub struct ResolvedAgentModel {
     pub native_web_search: bool,
     pub web_search_supported: bool,
     pub web_search_unsupported_reason: Option<String>,
+    pub source: AgentModelSource,
     explicit: ModelExplicitFields,
 }
 
@@ -143,13 +174,17 @@ impl LegacyRigAgentConfigFile {
             });
         }
         Ok(RigAgentConfig {
+            provider_id: "openai".into(),
+            provider_kind: AgentProviderKind::OpenAiResponses,
             api_key: self.api_key,
             model: self.model.unwrap_or_else(default_model),
             timeout_secs: self.timeout_secs.unwrap_or(120),
             max_tokens: self.max_tokens.unwrap_or(8192),
             temperature: self.temperature.unwrap_or(0.7),
             reasoning_effort: non_empty(self.reasoning_effort),
+            service_label: None,
             native_web_search: self.native_web_search.unwrap_or(true),
+            anthropic_version: None,
         })
     }
 }
@@ -253,6 +288,11 @@ fn resolve_provider(
         api_key_env,
         anthropic_version: resolve_anthropic_version(&provider.kind, provider.anthropic_version),
         discover_models: provider.discover_models.unwrap_or(defaults.discover_models),
+        model_discovery_status: if provider.discover_models.unwrap_or(defaults.discover_models) {
+            ModelDiscoveryStatus::NotStarted
+        } else {
+            ModelDiscoveryStatus::Disabled
+        },
         defaults: defaults.clone(),
         models,
     })
@@ -309,6 +349,7 @@ fn resolve_model(
             .unwrap_or(defaults.native_web_search),
         web_search_supported,
         web_search_unsupported_reason: reason,
+        source: AgentModelSource::Manual,
         explicit,
     })
 }
@@ -330,6 +371,27 @@ pub fn merge_provider_models(
     merged
 }
 
+pub fn apply_provider_model_discovery(
+    provider: &ResolvedAgentProvider,
+    discovered: Result<Vec<DiscoveredProviderModel>, String>,
+) -> ResolvedAgentProvider {
+    let mut provider = provider.clone();
+    if !provider.discover_models {
+        provider.model_discovery_status = ModelDiscoveryStatus::Disabled;
+        return provider;
+    }
+    match discovered {
+        Ok(models) => {
+            provider.models = merge_provider_models(&provider, models);
+            provider.model_discovery_status = ModelDiscoveryStatus::Succeeded;
+        }
+        Err(error) => {
+            provider.model_discovery_status = ModelDiscoveryStatus::Failed(error);
+        }
+    }
+    provider
+}
+
 fn discovered_to_resolved_model(
     provider: &ResolvedAgentProvider,
     discovered: DiscoveredProviderModel,
@@ -349,6 +411,7 @@ fn discovered_to_resolved_model(
                 provider.id
             )
         }),
+        source: AgentModelSource::Discovered,
         explicit: ModelExplicitFields::default(),
     }
 }
@@ -379,6 +442,7 @@ fn apply_manual_model_override(existing: &mut ResolvedAgentModel, manual: &Resol
     if manual.explicit.web_search_unsupported_reason {
         existing.web_search_unsupported_reason = manual.web_search_unsupported_reason.clone();
     }
+    existing.source = AgentModelSource::DiscoveredWithOverride;
 }
 
 async fn load_from_file(path: PathBuf) -> Result<RigAgentConfig, RigAgentConfigError> {
@@ -420,15 +484,19 @@ fn load_from_env() -> Option<RigAgentConfig> {
     let native_web_search = env_flag("BUDN_AGENT_NATIVE_WEB_SEARCH");
 
     Some(RigAgentConfig {
+        provider_id: "openai".into(),
+        provider_kind: AgentProviderKind::OpenAiResponses,
         api_key,
         model,
         timeout_secs,
         max_tokens,
         temperature,
         reasoning_effort,
+        service_label: None,
         native_web_search: env::var("BUDN_AGENT_NATIVE_WEB_SEARCH")
             .map(|_| native_web_search)
             .unwrap_or(true),
+        anthropic_version: None,
     })
 }
 
@@ -437,6 +505,14 @@ pub async fn load_rig_agent_config() -> Result<Option<RigAgentConfig>, RigAgentC
         return load_from_file(PathBuf::from(path)).await.map(Some);
     }
     Ok(load_from_env())
+}
+
+pub async fn load_rig_agent_config_with_discovery()
+-> Result<Option<RigAgentConfig>, RigAgentConfigError> {
+    let Some(registry) = load_agent_provider_registry_with_discovery().await? else {
+        return Ok(None);
+    };
+    registry_to_rig_config(registry).map(Some)
 }
 
 pub async fn load_agent_provider_registry()
@@ -451,6 +527,88 @@ pub async fn load_agent_provider_registry()
     Ok(load_registry_from_env())
 }
 
+pub async fn load_agent_provider_registry_with_discovery()
+-> Result<Option<AgentProviderRegistry>, RigAgentConfigError> {
+    let Some(mut registry) = load_agent_provider_registry().await? else {
+        return Ok(None);
+    };
+    let providers = registry
+        .providers
+        .iter()
+        .map(discover_and_apply_provider_models)
+        .collect::<Vec<_>>();
+    let mut resolved = Vec::with_capacity(providers.len());
+    for provider in providers {
+        resolved.push(provider.await);
+    }
+    registry.providers = resolved;
+    Ok(Some(registry))
+}
+
+async fn discover_and_apply_provider_models(
+    provider: &ResolvedAgentProvider,
+) -> ResolvedAgentProvider {
+    let result = discover_provider_models(provider).await;
+    apply_provider_model_discovery(provider, result)
+}
+
+pub async fn discover_provider_models(
+    provider: &ResolvedAgentProvider,
+) -> Result<Vec<DiscoveredProviderModel>, String> {
+    if !provider.discover_models {
+        return Ok(Vec::new());
+    }
+    let Some(api_key) = provider.api_key.as_deref() else {
+        return Err(format!(
+            "provider API key env `{}` is not set",
+            provider.api_key_env
+        ));
+    };
+    let discovery = async {
+        match provider.kind {
+            AgentProviderKind::OpenAiResponses => {
+                let client = rig::providers::openai::Client::new(api_key)
+                    .map_err(|error| error.to_string())?;
+                let models = client
+                    .list_models()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(models_to_discovered(models.data))
+            }
+            AgentProviderKind::AnthropicMessages => {
+                let version = provider
+                    .anthropic_version
+                    .as_deref()
+                    .unwrap_or("2023-06-01");
+                let client = rig::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_owned())
+                    .anthropic_version(version)
+                    .build()
+                    .map_err(|error| error.to_string())?;
+                let models = client
+                    .list_models()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(models_to_discovered(models.data))
+            }
+        }
+    };
+    time::timeout(Duration::from_secs(10), discovery)
+        .await
+        .map_err(|_| "provider model discovery timed out".to_owned())?
+}
+
+fn models_to_discovered(models: Vec<rig::model::Model>) -> Vec<DiscoveredProviderModel> {
+    models
+        .into_iter()
+        .map(|model| DiscoveredProviderModel {
+            label: model.name.unwrap_or_else(|| model.id.clone()),
+            id: model.id,
+            web_search_supported: true,
+        })
+        .collect()
+}
+
 fn load_registry_from_env() -> Option<AgentProviderRegistry> {
     let config = load_from_env()?;
     let model = ResolvedAgentModel {
@@ -463,6 +621,7 @@ fn load_registry_from_env() -> Option<AgentProviderRegistry> {
         native_web_search: config.native_web_search,
         web_search_supported: true,
         web_search_unsupported_reason: None,
+        source: AgentModelSource::Manual,
         explicit: ModelExplicitFields::default(),
     };
     Some(registry_from_openai_model(config.api_key, model))
@@ -487,6 +646,7 @@ fn registry_from_openai_model(api_key: String, model: ResolvedAgentModel) -> Age
             api_key_env: "BUDN_AGENT_OPENAI_API_KEY".into(),
             anthropic_version: None,
             discover_models: true,
+            model_discovery_status: ModelDiscoveryStatus::NotStarted,
             defaults,
             models: vec![model],
         }],
@@ -530,13 +690,12 @@ fn registry_to_rig_config(
         .ok_or_else(|| RigAgentConfigError {
             message: "active provider is missing".into(),
         })?;
-    if provider.kind != AgentProviderKind::OpenAiResponses {
-        return config_error("active provider is not supported by the current Rig OpenAI runner");
-    }
     let model = registry.active_model().ok_or_else(|| RigAgentConfigError {
         message: "active model is missing".into(),
     })?;
     Ok(RigAgentConfig {
+        provider_id: provider.id.clone(),
+        provider_kind: provider.kind,
         api_key: provider
             .api_key
             .clone()
@@ -548,7 +707,9 @@ fn registry_to_rig_config(
         max_tokens: model.max_tokens,
         temperature: model.temperature,
         reasoning_effort: model.reasoning_effort.clone(),
+        service_label: model.service_label.clone(),
         native_web_search: model.native_web_search && model.web_search_supported,
+        anthropic_version: provider.anthropic_version.clone(),
     })
 }
 

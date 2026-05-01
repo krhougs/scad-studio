@@ -1107,10 +1107,11 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         .await
         .map(|response| response.messages)
         .unwrap_or_default();
-    let config = match app_server_core::llm::load_rig_agent_config().await {
+    let config = match app_server_core::llm::load_rig_agent_config_with_discovery().await {
         Ok(Some(config)) => config,
         Ok(None) => {
-            let message = "Rig OpenAI Responses Agent is not configured. Set BUDN_AGENT_CONFIG or BUDN_AGENT_OPENAI_API_KEY / OPENAI_API_KEY.";
+            let message =
+                "Rig Agent is not configured. Set BUDN_AGENT_CONFIG or a provider API key env.";
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
@@ -1147,6 +1148,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
     append_agent_capability_meta(
         &worker.workspace_root,
         &worker.run,
+        config.provider_kind.as_str(),
         config.native_web_search,
     )
     .await;
@@ -1398,11 +1400,12 @@ async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, conte
 async fn append_agent_capability_meta(
     workspace_root: &Path,
     run: &AgentRunHandle,
+    provider: &str,
     native_web_search_enabled: bool,
 ) {
     let content = serde_json::json!({
         "type": "agent_run_capabilities",
-        "provider": "openai_responses",
+        "provider": provider,
         "native_web_search_enabled": native_web_search_enabled,
     })
     .to_string();
@@ -1764,7 +1767,7 @@ async fn server_capabilities_for_request(
         .ok()
         .flatten()
         .map(|config| AgentProviderCapabilities {
-            provider: "openai_responses".into(),
+            provider: config.provider_kind.as_str().into(),
             model: Some(config.model),
             native_web_search_enabled: config.native_web_search,
             search_sources_supported: false,
@@ -1874,7 +1877,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
         };
 
-        append_agent_capability_meta(&workspace_root, &run, true).await;
+        append_agent_capability_meta(&workspace_root, &run, "anthropic_messages", true).await;
 
         let history = store
             .history(&created.session_id, None)
@@ -1891,7 +1894,7 @@ mod tests {
             .next()
             .expect("capability meta should be present");
         assert_eq!(value["type"], "agent_run_capabilities");
-        assert_eq!(value["provider"], "openai_responses");
+        assert_eq!(value["provider"], "anthropic_messages");
         assert_eq!(value["native_web_search_enabled"], true);
         assert_eq!(meta.run_id.as_deref(), Some("agent-1"));
     }
@@ -1899,7 +1902,7 @@ mod tests {
     #[test]
     fn rig_agent_errors_map_timeout_separately_from_provider_errors() {
         assert_eq!(
-            agent_error_type_for_rig_message("Rig OpenAI Responses Agent request timed out"),
+            agent_error_type_for_rig_message("Rig Agent request timed out"),
             AgentErrorType::Timeout
         );
         assert_eq!(

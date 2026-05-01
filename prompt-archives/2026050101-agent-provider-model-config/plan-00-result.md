@@ -2,7 +2,8 @@
 
 ## 当前状态
 
-- Phase 1 已完成并通过独立 review，准备进入 Phase 2。
+- Phase 1 已完成并通过独立 review。
+- Phase 2 已完成并通过独立 review，准备进入 Phase 3。
 - 执行前已检查：当前计划无 `TBD`、`TODO`、待确认项、未选择方案或缺失验收标准。
 - 约束来源已核对：原始用户需求、后续补充需求、根 `AGENTS.md` 的 Plan Mode / 工具链 / app server / protocol / Web 边界要求。
 
@@ -35,7 +36,7 @@
 | Phase | 名称 | 状态 |
 | --- | --- | --- |
 | 1 | 配置格式与 ignore 基线 | 已完成 |
-| 2 | Provider registry 与 Agent 执行分发 | 未执行 |
+| 2 | Provider registry 与 Agent 执行分发 | 已完成 |
 | 3 | Protocol 与 Studio common capability 扩展 | 未执行 |
 | 4 | Web 模型选择 UI 与状态管理 | 未执行 |
 | 5 | Host 切换命令持久状态与 `bun run web` 验证 | 未执行 |
@@ -83,3 +84,81 @@
 
 - Phase 1 未实现真实 provider 模型发现请求与 Agent 分发；这些属于 Phase 2 范围。
 - Web UI 中仍有旧配置提示文案，按计划在 Phase 4 更新。
+
+## Phase 2 — Provider registry 与 Agent 执行分发
+
+### 完成情况
+
+- `RigAgentConfig` 已扩展为携带 active provider/model 的运行配置：
+  - `provider_id`
+  - `provider_kind`
+  - `service_label`
+  - `anthropic_version`
+- `AgentProviderKind` 已支持：
+  - `openai_responses`
+  - `anthropic_messages`
+- 增加 provider/model registry 的 discovery 状态模型：
+  - `AgentModelSource`
+  - `ModelDiscoveryStatus`
+- 增加 provider 模型发现入口：
+  - OpenAI 通过 Rig `ModelListingClient` 调用 models list。
+  - Anthropic 通过 Rig `ModelListingClient` 调用 models list。
+  - discovery 单 provider 超时为 10 秒。
+  - discovery 失败时保留手动模型，并记录 `ModelDiscoveryStatus::Failed`。
+- Agent 执行已按 provider 分发：
+  - OpenAI 分支继续走 Rig OpenAI Responses provider。
+  - Anthropic 分支走 Rig Anthropic Messages provider。
+  - 两个分支复用同一套 tool registry、stream drain、timeout、cancel、tool observer 和 Chat history 写入路径。
+- provider 请求参数已按 Phase 2 目标收敛：
+  - OpenAI `reasoning_effort` 映射到 `reasoning.effort`。
+  - OpenAI `service_label` 只在值为 `auto`、`default`、`flex` 时映射到 `service_tier`。
+  - Anthropic `reasoning_effort` 映射到 `thinking.budget_tokens`。
+  - Anthropic thinking budget 保持 `>= 1024` 且 `< max_tokens`；当 `max_tokens <= 1024` 或 unknown effort 时不注入 thinking。
+  - Anthropic 启用 thinking 时不设置 temperature，避免生成 provider 不接受的请求组合。
+  - Anthropic `service_label` 不注入 provider 请求参数。
+- native web search 注入已按 provider 分发：
+  - OpenAI 注入 hosted `web_search`。
+  - Anthropic 注入 `web_search_20250305` server tool。
+  - `native_web_search = true` 且 `web_search_supported = false` 时不注入 provider web search tool。
+- 生产路径已接入 discovery：
+  - core 默认 `run_rig_agent_turn` 使用 `load_rig_agent_config_with_discovery`。
+  - host Agent run 使用 `load_rig_agent_config_with_discovery`。
+- host legacy capability 与 run meta 已按 active provider 输出 provider kind，不再硬编码为 OpenAI。
+- timeout 错误文案已改为 provider 中性。
+
+### 验证证据
+
+- 新增函数行数核算通过：
+  - `run_openai_rig_agent_turn_with_config`：47 行。
+  - `run_anthropic_rig_agent_turn_with_config`：44 行。
+  - `run_rig_stream_future`：45 行。
+  - `anthropic_client`：12 行。
+- `cargo test -p app-server-core rig_agent_additional_params` 通过；7 个相关用例通过。
+- `cargo test -p app-server-core rig_agent_temperature_param` 通过；3 个相关用例通过。
+- `cargo test -p app-server-core rig_agent_config` 通过；16 个相关用例通过。
+- `cargo test -p app-server-core agent_model_discovery` 通过；1 个相关用例通过。
+- `cargo check -p app-server-core` 通过。
+- `cargo test -p app-server-core agent` 通过；其中 `llm_tests` 相关过滤运行 29 个用例通过。
+- `cargo check -p app-server-host` 通过。
+- `cargo test -p app-server-host agent_capability_meta_records_native_web_search_state` 通过。
+- `cargo test -p app-server-host rig_agent_errors_map_timeout_separately_from_provider_errors` 通过。
+- `git diff --check` 通过。
+
+### 独立 Review 结果
+
+- 第一轮 Phase 2 review 发现 OpenAI `service_label` 被无条件写入 `service_tier`，已修复为只允许 `auto`、`default`、`flex`。
+- 第二轮 Phase 2 review 发现 Anthropic thinking budget 可能不小于 `max_tokens`，已修复为 clamp 到 `max_tokens - 1`，并在预算不足时不注入 thinking。
+- 第三轮 Phase 2 review 发现 Anthropic thinking 会与 temperature 同时发送，已修复为启用 thinking 时不设置 temperature。
+- 第四轮 Phase 2 review 发现 provider 分支函数超过 50 行硬约束，已抽出共享 stream helper 和 Anthropic client helper。
+- 第五轮 Phase 2 review 发现 discovery 未接入生产 run 路径、host capability 仍硬编码 OpenAI，已修复。
+- 最终 Phase 2 review 结论：未发现阻塞项，Phase 2 可以提交。
+
+### 阶段提交
+
+- 阶段提交随本结果段一并提交；提交哈希以提交后的 `git log -1 --oneline` 为准。
+
+### 遗留问题
+
+- legacy handshake capability 当前仍只暴露简化的 active provider/model 信息，完整 provider/model registry、discovery status、reasoning/service 应用状态按计划在 Phase 3 扩展 protocol。
+- discovery 当前在加载 discovery registry 时逐个 provider 执行，单 provider 超时 10 秒；后续 Phase 3/5 接入 Web registry 与启动链路时需要评估是否增加缓存或后台刷新。
+- Web UI 中旧配置提示和模型切换控件仍未更新，属于 Phase 4 范围。

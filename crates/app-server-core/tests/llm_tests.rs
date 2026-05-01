@@ -1,10 +1,12 @@
 use app_server_core::llm::{
-    AgentProviderKind, DiscoveredProviderModel, RigAgentConfig, load_agent_provider_registry,
-    load_rig_agent_config, merge_provider_models,
+    AgentModelSource, AgentProviderKind, DiscoveredProviderModel, ModelDiscoveryStatus,
+    RigAgentConfig, apply_provider_model_discovery, load_agent_provider_registry,
+    load_rig_agent_config, load_rig_agent_config_with_discovery, merge_provider_models,
 };
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
     cadquery_agent_system_prompt, extract_cadquery_code, rig_agent_additional_params,
+    rig_agent_temperature_param,
 };
 use app_server_protocol::{
     AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
@@ -181,19 +183,35 @@ fn build_turn_context_includes_context_refs() {
 #[test]
 fn rig_agent_config_debug_hides_api_key() {
     let config = RigAgentConfig {
+        provider_id: "openai".into(),
+        provider_kind: AgentProviderKind::OpenAiResponses,
         api_key: "sk-secret-key-12345".into(),
         model: "gpt-5.2".into(),
         timeout_secs: 60,
         max_tokens: 8192,
         temperature: 0.7,
         reasoning_effort: Some("high".into()),
+        service_label: Some("default".into()),
         native_web_search: true,
+        anthropic_version: None,
     };
     let debug = format!("{:?}", config);
     assert!(!debug.contains("sk-secret-key-12345"));
     assert!(debug.contains("***"));
     assert!(debug.contains("gpt-5.2"));
     assert!(debug.contains("native_web_search"));
+}
+
+#[test]
+fn agent_provider_kind_as_str_matches_config_values() {
+    assert_eq!(
+        AgentProviderKind::OpenAiResponses.as_str(),
+        "openai_responses"
+    );
+    assert_eq!(
+        AgentProviderKind::AnthropicMessages.as_str(),
+        "anthropic_messages"
+    );
 }
 
 #[test]
@@ -209,7 +227,96 @@ fn rig_agent_additional_params_include_hosted_web_search_when_enabled() {
     let config = test_config(true);
     let params = rig_agent_additional_params(&config).expect("web search params");
     assert_eq!(params["reasoning"]["effort"], "high");
+    assert_eq!(params["service_tier"], "default");
     assert_eq!(params["tools"][0]["type"], "web_search");
+}
+
+#[test]
+fn rig_agent_additional_params_omit_unsupported_openai_service_label() {
+    let mut config = test_config(false);
+    config.service_label = Some("fast".into());
+
+    let params = rig_agent_additional_params(&config).expect("reasoning params");
+
+    assert!(params.get("service_tier").is_none());
+}
+
+#[test]
+fn rig_agent_additional_params_include_supported_openai_service_label() {
+    let mut config = test_config(false);
+    config.service_label = Some("flex".into());
+
+    let params = rig_agent_additional_params(&config).expect("service params");
+
+    assert_eq!(params["service_tier"], "flex");
+}
+
+#[test]
+fn rig_agent_additional_params_include_anthropic_thinking_and_web_search() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.service_label = Some("fast".into());
+
+    let params = rig_agent_additional_params(&config).expect("anthropic params");
+
+    assert_eq!(params["thinking"]["type"], "enabled");
+    assert_eq!(params["thinking"]["budget_tokens"], 8191);
+    assert_eq!(params["tools"][0]["type"], "web_search_20250305");
+    assert!(params.get("service_tier").is_none());
+}
+
+#[test]
+fn rig_agent_additional_params_clamps_anthropic_thinking_below_max_tokens() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.reasoning_effort = Some("xhigh".into());
+    config.max_tokens = 8192;
+
+    let params = rig_agent_additional_params(&config).expect("anthropic params");
+
+    assert_eq!(params["thinking"]["budget_tokens"], 8191);
+}
+
+#[test]
+fn rig_agent_additional_params_omits_anthropic_thinking_when_budget_too_small() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.reasoning_effort = Some("low".into());
+    config.max_tokens = 1024;
+
+    let params = rig_agent_additional_params(&config).expect("web search params");
+
+    assert!(params.get("thinking").is_none());
+    assert_eq!(params["tools"][0]["type"], "web_search_20250305");
+}
+
+#[test]
+fn rig_agent_temperature_param_omits_anthropic_temperature_when_thinking_enabled() {
+    let mut config = test_config(false);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.reasoning_effort = Some("high".into());
+
+    assert_eq!(rig_agent_temperature_param(&config), None);
+}
+
+#[test]
+fn rig_agent_temperature_param_keeps_anthropic_temperature_without_thinking() {
+    let mut config = test_config(false);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.reasoning_effort = Some("low".into());
+    config.max_tokens = 1024;
+
+    assert_eq!(rig_agent_temperature_param(&config), Some(0.7));
+}
+
+#[test]
+fn rig_agent_temperature_param_keeps_anthropic_temperature_for_unknown_effort() {
+    let mut config = test_config(false);
+    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.reasoning_effort = Some("experimental".into());
+
+    assert!(rig_agent_additional_params(&config).is_none());
+    assert_eq!(rig_agent_temperature_param(&config), Some(0.7));
 }
 
 #[tokio::test]
@@ -331,6 +438,86 @@ api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
     assert_eq!(active.service_label.as_deref(), Some("fast"));
     assert!(active.native_web_search);
     assert!(active.web_search_supported);
+}
+
+#[tokio::test]
+async fn rig_agent_config_loads_anthropic_active_provider() {
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(
+        &config_path,
+        r#"
+active_provider = "anthropic"
+active_model = "claude-sonnet"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+
+[[providers.models]]
+id = "claude-sonnet"
+reasoning_effort = "high"
+"#,
+    )
+    .await
+    .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_ANTHROPIC_API_KEY", "sk-anthropic"),
+    ]);
+
+    let config = load_rig_agent_config()
+        .await
+        .expect("config should load")
+        .expect("config should be present");
+
+    assert_eq!(config.provider_kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(config.anthropic_version.as_deref(), Some("2023-06-01"));
+    assert_eq!(config.model, "claude-sonnet");
+    assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[tokio::test]
+async fn rig_agent_config_with_discovery_uses_provider_registry_path() {
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(
+        &config_path,
+        r#"
+active_provider = "anthropic"
+active_model = "claude-sonnet"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+discover_models = false
+
+[[providers.models]]
+id = "claude-sonnet"
+"#,
+    )
+    .await
+    .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_ANTHROPIC_API_KEY", "sk-anthropic"),
+    ]);
+
+    let config = load_rig_agent_config_with_discovery()
+        .await
+        .expect("config should load")
+        .expect("config should be present");
+
+    assert_eq!(config.provider_kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(config.model, "claude-sonnet");
 }
 
 #[tokio::test]
@@ -559,6 +746,46 @@ web_search_supported = false
 }
 
 #[tokio::test]
+async fn rig_agent_config_disables_web_search_tool_when_model_does_not_support_it() {
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(
+        &config_path,
+        r#"
+active_provider = "openai"
+active_model = "local-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "local-model"
+native_web_search = true
+web_search_supported = false
+"#,
+    )
+    .await
+    .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_OPENAI_API_KEY", "sk-openai"),
+    ]);
+
+    let config = load_rig_agent_config()
+        .await
+        .expect("config load should succeed")
+        .expect("file config should be present");
+
+    assert!(!config.native_web_search);
+    assert!(rig_agent_additional_params(&config).is_none());
+}
+
+#[tokio::test]
 async fn rig_agent_config_supports_discovery_defaults_and_provider_override() {
     let registry = load_registry_from_toml(
         r#"
@@ -622,12 +849,14 @@ label = "Manual Only"
 
     assert_eq!(merged.len(), 2);
     assert_eq!(merged[0].id, "gpt-5.2");
+    assert_eq!(merged[0].source, AgentModelSource::DiscoveredWithOverride);
     assert_eq!(merged[0].label.as_deref(), Some("Pinned GPT"));
     assert_eq!(merged[0].reasoning_effort.as_deref(), Some("xhigh"));
     assert_eq!(merged[0].service_label.as_deref(), Some("fast"));
     assert!(merged[0].web_search_supported);
     assert_eq!(merged[1].id, "manual-only");
     assert_eq!(merged[1].label.as_deref(), Some("Manual Only"));
+    assert_eq!(merged[1].source, AgentModelSource::Manual);
 }
 
 #[tokio::test]
@@ -705,6 +934,37 @@ id = "manual-model"
     assert_eq!(discovered.max_tokens, 2048);
     assert_eq!(discovered.temperature, 0.25);
     assert!(!discovered.native_web_search);
+    assert_eq!(discovered.source, AgentModelSource::Discovered);
+}
+
+#[tokio::test]
+async fn agent_model_discovery_failure_keeps_manual_models() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "manual-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "manual-model"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+
+    let provider = apply_provider_model_discovery(provider, Err("401 unauthorized".into()));
+
+    assert_eq!(provider.models.len(), 1);
+    assert_eq!(provider.models[0].id, "manual-model");
+    assert_eq!(
+        provider.model_discovery_status,
+        ModelDiscoveryStatus::Failed("401 unauthorized".into())
+    );
 }
 
 async fn load_registry_from_toml(
@@ -731,13 +991,17 @@ async fn load_registry_from_toml(
 
 fn test_config(native_web_search: bool) -> RigAgentConfig {
     RigAgentConfig {
+        provider_id: "openai".into(),
+        provider_kind: AgentProviderKind::OpenAiResponses,
         api_key: "sk-test".into(),
         model: "gpt-5.2".into(),
         timeout_secs: 60,
         max_tokens: 8192,
         temperature: 0.7,
         reasoning_effort: Some("high".into()),
+        service_label: Some("default".into()),
         native_web_search,
+        anthropic_version: None,
     }
 }
 

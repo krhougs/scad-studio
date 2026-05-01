@@ -4,6 +4,7 @@ pub mod tools;
 use std::{
     collections::VecDeque,
     fmt::Display,
+    future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
     time::Duration,
@@ -25,7 +26,7 @@ use rig::{
 use serde_json::json;
 use tokio::time::{self, MissedTickBehavior, Sleep};
 
-use crate::llm::{RigAgentConfig, load_rig_agent_config};
+use crate::llm::{AgentProviderKind, RigAgentConfig, load_rig_agent_config_with_discovery};
 
 use self::tools::{
     AgentToolCall, AgentToolObserver, AgentToolRunContext, ToolExecutor,
@@ -75,14 +76,15 @@ pub async fn run_rig_agent_turn(
     tool_observer: &dyn AgentToolObserver,
     callbacks: RigAgentCallbacks,
 ) -> Result<RigAgentTurnResult, RigAgentError> {
-    let config = load_rig_agent_config()
+    let config = load_rig_agent_config_with_discovery()
         .await
         .map_err(|error| RigAgentError {
             message: error.message,
         })?
         .ok_or_else(|| RigAgentError {
-            message: "Rig OpenAI Responses Agent is not configured. Set BUDN_AGENT_CONFIG or BUDN_AGENT_OPENAI_API_KEY / OPENAI_API_KEY."
-                .into(),
+            message:
+                "Rig Agent is not configured. Set BUDN_AGENT_CONFIG or a provider API key env."
+                    .into(),
         })?;
     run_rig_agent_turn_with_config(
         input,
@@ -96,6 +98,40 @@ pub async fn run_rig_agent_turn(
 }
 
 pub async fn run_rig_agent_turn_with_config(
+    input: AgentTurnInput,
+    config: RigAgentConfig,
+    tool_executor: Arc<dyn ToolExecutor>,
+    tool_context: AgentToolRunContext,
+    tool_observer: &dyn AgentToolObserver,
+    callbacks: RigAgentCallbacks,
+) -> Result<RigAgentTurnResult, RigAgentError> {
+    match config.provider_kind {
+        AgentProviderKind::OpenAiResponses => {
+            run_openai_rig_agent_turn_with_config(
+                input,
+                config,
+                tool_executor,
+                tool_context,
+                tool_observer,
+                callbacks,
+            )
+            .await
+        }
+        AgentProviderKind::AnthropicMessages => {
+            run_anthropic_rig_agent_turn_with_config(
+                input,
+                config,
+                tool_executor,
+                tool_context,
+                tool_observer,
+                callbacks,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_openai_rig_agent_turn_with_config(
     input: AgentTurnInput,
     config: RigAgentConfig,
     tool_executor: Arc<dyn ToolExecutor>,
@@ -117,9 +153,11 @@ pub async fn run_rig_agent_turn_with_config(
     let mut builder = client
         .agent(config.model.clone())
         .preamble(cadquery_agent_system_prompt())
-        .temperature(config.temperature)
         .max_tokens(config.max_tokens)
         .default_max_turns(MAX_RIG_TOOL_TURNS);
+    if let Some(temperature) = rig_agent_temperature_param(&config) {
+        builder = builder.temperature(temperature);
+    }
     if let Some(additional_params) = rig_agent_additional_params(&config) {
         builder = builder.additional_params(additional_params);
     }
@@ -131,8 +169,88 @@ pub async fn run_rig_agent_turn_with_config(
             .multi_turn(MAX_RIG_TOOL_TURNS)
             .await
     };
+    run_rig_stream_future(
+        stream_future,
+        config.timeout_secs,
+        pending_calls,
+        tool_observer,
+        callbacks,
+    )
+    .await
+}
+
+async fn run_anthropic_rig_agent_turn_with_config(
+    input: AgentTurnInput,
+    config: RigAgentConfig,
+    tool_executor: Arc<dyn ToolExecutor>,
+    tool_context: AgentToolRunContext,
+    tool_observer: &dyn AgentToolObserver,
+    callbacks: RigAgentCallbacks,
+) -> Result<RigAgentTurnResult, RigAgentError> {
+    let client = anthropic_client(&config)?;
+    let pending_calls = Arc::new(Mutex::new(VecDeque::new()));
+    let tools = rig_tools_for_context(
+        tool_context.clone(),
+        Arc::clone(&tool_executor),
+        Arc::clone(&pending_calls),
+        Arc::clone(&callbacks.cancelled),
+    );
+    let mut builder = client
+        .agent(config.model.clone())
+        .preamble(cadquery_agent_system_prompt())
+        .max_tokens(config.max_tokens)
+        .default_max_turns(MAX_RIG_TOOL_TURNS);
+    if let Some(temperature) = rig_agent_temperature_param(&config) {
+        builder = builder.temperature(temperature);
+    }
+    if let Some(additional_params) = rig_agent_additional_params(&config) {
+        builder = builder.additional_params(additional_params);
+    }
+    let (prompt, history) = build_rig_prompt_and_history(&input);
+    let agent = builder.tools(tools).build();
+    let stream_future = async {
+        agent
+            .stream_chat(prompt, history)
+            .multi_turn(MAX_RIG_TOOL_TURNS)
+            .await
+    };
+    run_rig_stream_future(
+        stream_future,
+        config.timeout_secs,
+        pending_calls,
+        tool_observer,
+        callbacks,
+    )
+    .await
+}
+
+fn anthropic_client(
+    config: &RigAgentConfig,
+) -> Result<rig::providers::anthropic::Client, RigAgentError> {
+    let version = config.anthropic_version.as_deref().unwrap_or("2023-06-01");
+    rig::providers::anthropic::Client::builder()
+        .api_key(config.api_key.clone())
+        .anthropic_version(version)
+        .build()
+        .map_err(|error| RigAgentError {
+            message: format!("Cannot create Rig Anthropic Messages client: {error}"),
+        })
+}
+
+async fn run_rig_stream_future<R, E, S, F>(
+    stream_future: F,
+    timeout_secs: u64,
+    pending_calls: Arc<Mutex<VecDeque<AgentToolCall>>>,
+    tool_observer: &dyn AgentToolObserver,
+    callbacks: RigAgentCallbacks,
+) -> Result<RigAgentTurnResult, RigAgentError>
+where
+    F: Future<Output = S>,
+    S: Stream<Item = Result<MultiTurnStreamItem<R>, E>> + Unpin,
+    E: Display,
+{
     tokio::pin!(stream_future);
-    let mut timeout = Box::pin(time::sleep(Duration::from_secs(config.timeout_secs)));
+    let mut timeout = Box::pin(time::sleep(Duration::from_secs(timeout_secs)));
     let mut cancellation_tick = cancellation_interval();
     let stream = loop {
         tokio::select! {
@@ -166,14 +284,87 @@ pub async fn run_rig_agent_turn_with_config(
 }
 
 pub fn rig_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
+    match config.provider_kind {
+        AgentProviderKind::OpenAiResponses => openai_agent_additional_params(config),
+        AgentProviderKind::AnthropicMessages => anthropic_agent_additional_params(config),
+    }
+}
+
+pub fn rig_agent_temperature_param(config: &RigAgentConfig) -> Option<f64> {
+    match config.provider_kind {
+        AgentProviderKind::OpenAiResponses => Some(config.temperature),
+        AgentProviderKind::AnthropicMessages => {
+            let thinking_enabled = config
+                .reasoning_effort
+                .as_deref()
+                .and_then(|effort| anthropic_thinking_budget_tokens(effort, config.max_tokens))
+                .is_some();
+            (!thinking_enabled).then_some(config.temperature)
+        }
+    }
+}
+
+fn openai_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
     let mut params = serde_json::Map::new();
     if let Some(effort) = config.reasoning_effort.as_deref() {
         params.insert("reasoning".into(), json!({ "effort": effort }));
+    }
+    if let Some(service_label) = config
+        .service_label
+        .as_deref()
+        .and_then(openai_service_tier)
+    {
+        params.insert("service_tier".into(), json!(service_label));
     }
     if config.native_web_search {
         params.insert("tools".into(), json!([{ "type": "web_search" }]));
     }
     (!params.is_empty()).then(|| serde_json::Value::Object(params))
+}
+
+fn openai_service_tier(service_label: &str) -> Option<&'static str> {
+    match service_label.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some("auto"),
+        "default" => Some("default"),
+        "flex" => Some("flex"),
+        _ => None,
+    }
+}
+
+fn anthropic_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
+    let mut params = serde_json::Map::new();
+    if let Some(effort) = config.reasoning_effort.as_deref()
+        && let Some(budget_tokens) = anthropic_thinking_budget_tokens(effort, config.max_tokens)
+    {
+        params.insert(
+            "thinking".into(),
+            json!({
+                "type": "enabled",
+                "budget_tokens": budget_tokens,
+            }),
+        );
+    }
+    if config.native_web_search {
+        params.insert(
+            "tools".into(),
+            json!([{ "type": "web_search_20250305", "name": "web_search" }]),
+        );
+    }
+    (!params.is_empty()).then(|| serde_json::Value::Object(params))
+}
+
+fn anthropic_thinking_budget_tokens(effort: &str, max_tokens: u64) -> Option<u64> {
+    let requested = match effort.trim().to_ascii_lowercase().as_str() {
+        "minimal" | "low" => 1024,
+        "medium" => 4096,
+        "high" => 8192,
+        "xhigh" => 16384,
+        _ => return None,
+    };
+    if max_tokens <= 1024 {
+        return None;
+    }
+    Some(requested.min(max_tokens - 1))
 }
 
 async fn drain_rig_stream<R, E, S>(
@@ -224,7 +415,7 @@ fn cancellation_interval() -> time::Interval {
 
 fn rig_timeout_error() -> RigAgentError {
     RigAgentError {
-        message: "Rig OpenAI Responses Agent request timed out".into(),
+        message: "Rig Agent request timed out".into(),
     }
 }
 
