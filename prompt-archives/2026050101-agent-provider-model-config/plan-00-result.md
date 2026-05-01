@@ -272,7 +272,7 @@
 
 ### 阶段提交
 
-- `9ef85c0 Add web agent model controls`
+- `36959d0 Add web agent model controls`
 
 ### 遗留问题
 
