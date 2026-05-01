@@ -58,6 +58,155 @@ describe("ChatZone", () => {
     );
   });
 
+  it("renders provider models, discovery status, and web search state", () => {
+    const client = fakeClient();
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    const modelSelect = screen.getByLabelText("agent model") as HTMLSelectElement;
+    expect(modelSelect.value).toBe("openai/gpt-5.2");
+    expect(modelSelect.textContent).toContain("GPT 5.2");
+    expect(modelSelect.textContent).toContain("Claude Sonnet");
+    expect(screen.getAllByText(/override/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/discovery failed/)).toBeTruthy();
+    expect(screen.getByText(/manual fallback remains available/)).toBeTruthy();
+    expect(screen.getByText(/web search active/)).toBeTruthy();
+    expect(screen.queryByText(/web search unavailable/)).toBeNull();
+  });
+
+  it("dispatches model and parameter updates from the chat header", async () => {
+    const client = fakeClient();
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("agent model"), {
+      target: { value: "anthropic/claude-sonnet" },
+    });
+    await waitFor(() => {
+      expect(client.dispatchAgentModelSelect).toHaveBeenCalledWith({
+        provider_id: "anthropic",
+        model_id: "claude-sonnet",
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("reasoning effort"), {
+      target: { value: "medium" },
+    });
+    await waitFor(() => {
+      expect(client.dispatchAgentModelParamsUpdate).toHaveBeenCalledWith({
+        provider_id: "openai",
+        model_id: "gpt-5.2",
+        reasoning_effort: "medium",
+        service_label: "flex",
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText("service label"), {
+      target: { value: "default" },
+    });
+    await waitFor(() => {
+      expect(client.dispatchAgentModelParamsUpdate).toHaveBeenCalledWith({
+        provider_id: "openai",
+        model_id: "gpt-5.2",
+        reasoning_effort: "high",
+        service_label: "default",
+      });
+    });
+  });
+
+  it("disables model controls while a model switch request is pending", async () => {
+    let resolveSelect: (() => void) | undefined;
+    const client = fakeClient();
+    client.dispatchAgentModelSelect = vi.fn().mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveSelect = resolve;
+      }),
+    );
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    const modelSelect = screen.getByLabelText("agent model") as HTMLSelectElement;
+    fireEvent.change(modelSelect, {
+      target: { value: "anthropic/claude-sonnet" },
+    });
+
+    await waitFor(() => expect(modelSelect.disabled).toBe(true));
+    resolveSelect?.();
+    await waitFor(() => expect(modelSelect.disabled).toBe(false));
+  });
+
+  it("keeps null service label and shows active web search downgrade", async () => {
+    const client = fakeClient();
+    const registry = agentModelRegistry();
+    registry.active_provider_id = "anthropic";
+    registry.active_model_id = "claude-sonnet";
+    registry.active_reasoning_effort = "medium";
+    registry.active_service_label = null;
+    registry.active_service_label_applied = false;
+    setSnapshot(chatSnapshot(null, registry));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    expect((screen.getByLabelText("agent model") as HTMLSelectElement).value)
+      .toBe("anthropic/claude-sonnet");
+    expect((screen.getByLabelText("service label") as HTMLSelectElement).value)
+      .toBe("");
+    expect(screen.getByText(/model does not support web search/)).toBeTruthy();
+    expect(screen.getByText(/agents.toml/)).toBeTruthy();
+    expect(screen.getByText(/BUDN_AGENT_CONFIG/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("reasoning effort"), {
+      target: { value: "low" },
+    });
+    await waitFor(() => {
+      expect(client.dispatchAgentModelParamsUpdate).toHaveBeenCalledWith({
+        provider_id: "anthropic",
+        model_id: "claude-sonnet",
+        reasoning_effort: "low",
+        service_label: null,
+      });
+    });
+  });
+
+  it("sends the active provider model snapshot with agent invoke", async () => {
+    const client = fakeClient();
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.type(screen.getByTestId("chat-input"), "make the lid taller");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider_id: "openai",
+        model_id: "gpt-5.2",
+        reasoning_effort: "high",
+        service_label: "flex",
+      }),
+    );
+  });
+
   it("keeps IME composition text when chat state updates during composition", async () => {
     const client = fakeClient();
     setSnapshot(chatSnapshot());
@@ -745,6 +894,7 @@ function isBefore(left: Element, right: Element): boolean {
 
 function chatSnapshot(
   currentSelection: ChatSnapshot["current_selection"] = null,
+  agentModelRegistry: ChatSnapshot["agent_model_registry"] = null,
 ): ChatSnapshot {
   return {
     workspace_current: { workspace_id: "ws" },
@@ -761,6 +911,66 @@ function chatSnapshot(
     agent_run: null,
     agent_events: [],
     current_selection: currentSelection,
+    agent_model_registry: agentModelRegistry,
+  };
+}
+
+function agentModelRegistry(): NonNullable<ChatSnapshot["agent_model_registry"]> {
+  return {
+    active_provider_id: "openai",
+    active_model_id: "gpt-5.2",
+    active_reasoning_effort: "high",
+    active_reasoning_effort_applied: true,
+    active_service_label: "flex",
+    active_service_label_applied: true,
+    reasoning_effort_options: ["low", "medium", "high"],
+    service_label_options: ["default", "flex"],
+    providers: [
+      {
+        id: "openai",
+        kind: "openai_responses",
+        label: "OpenAI",
+        discovery: { enabled: true, status: "succeeded", error: null },
+        models: [
+          {
+            id: "gpt-5.2",
+            label: "GPT 5.2",
+            source: "discovered_with_override",
+            reasoning_effort: "high",
+            service_label: "flex",
+            native_web_search_enabled: true,
+            native_web_search_applied: true,
+            web_search_supported: true,
+            web_search_unsupported_reason: null,
+            search_sources_supported: false,
+          },
+        ],
+      },
+      {
+        id: "anthropic",
+        kind: "anthropic_messages",
+        label: "Anthropic",
+        discovery: {
+          enabled: true,
+          status: "failed",
+          error: "manual fallback remains available",
+        },
+        models: [
+          {
+            id: "claude-sonnet",
+            label: "Claude Sonnet",
+            source: "manual",
+            reasoning_effort: "medium",
+            service_label: null,
+            native_web_search_enabled: true,
+            native_web_search_applied: false,
+            web_search_supported: false,
+            web_search_unsupported_reason: "model does not support web search",
+            search_sources_supported: false,
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -856,6 +1066,9 @@ function fakeClient(): Pick<
   | "dispatchAgentInvoke"
   | "dispatchChatHistory"
   | "dispatchAgentCancel"
+  | "dispatchAgentModelRegistry"
+  | "dispatchAgentModelSelect"
+  | "dispatchAgentModelParamsUpdate"
   | "dispatchCadQueryPreview"
 > {
   return {
@@ -865,6 +1078,9 @@ function fakeClient(): Pick<
     dispatchAgentInvoke: vi.fn().mockResolvedValue({}),
     dispatchChatHistory: vi.fn().mockResolvedValue({}),
     dispatchAgentCancel: vi.fn().mockResolvedValue({}),
+    dispatchAgentModelRegistry: vi.fn().mockResolvedValue({}),
+    dispatchAgentModelSelect: vi.fn().mockResolvedValue({}),
+    dispatchAgentModelParamsUpdate: vi.fn().mockResolvedValue({}),
     dispatchCadQueryPreview: vi.fn().mockResolvedValue({}),
   };
 }

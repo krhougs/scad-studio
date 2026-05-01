@@ -7,6 +7,9 @@ import type {
   AgentEvent,
   ChatSnapshot,
   AgentProviderCapabilities,
+  AgentModelRegistry,
+  AgentModelRegistryModel,
+  AgentModelRegistryProvider,
 } from "../workbench/chat-zone";
 import type {
   CadQueryResultReady,
@@ -27,6 +30,7 @@ export type ChatSlice = {
   cadquery_results: CadQueryResultReady[];
   llm_configured: boolean;
   agent_provider: AgentProviderCapabilities | null;
+  agent_model_registry: AgentModelRegistry | null;
 };
 
 export type TransportSlice = {
@@ -53,6 +57,7 @@ const INITIAL_CHAT: ChatSlice = {
   cadquery_results: [],
   llm_configured: true,
   agent_provider: null,
+  agent_model_registry: null,
 };
 
 const INITIAL_TRANSPORT: TransportSlice = {
@@ -114,6 +119,7 @@ function chatSnapshotSelector(s: ProtocolState): ChatSnapshot {
     current_selection: s.current_selection,
     llm_configured: s.llm_configured,
     agent_provider: s.agent_provider,
+    agent_model_registry: s.agent_model_registry,
   };
 }
 
@@ -200,6 +206,12 @@ function applyChatFields(
     (snap["agent_provider"] as AgentProviderCapabilities | undefined) ?? null;
   if (!agentProviderEqual(state.agent_provider, agentProvider)) {
     patch.agent_provider = agentProvider;
+  }
+
+  const modelRegistry =
+    (snap["agent_model_registry"] as AgentModelRegistry | undefined) ?? null;
+  if (!agentModelRegistryEqual(state.agent_model_registry, modelRegistry)) {
+    patch.agent_model_registry = modelRegistry;
   }
 }
 
@@ -305,6 +317,91 @@ export function agentProviderEqual(
     a.native_web_search_enabled === b.native_web_search_enabled &&
     a.search_sources_supported === b.search_sources_supported
   );
+}
+
+export function agentModelRegistryEqual(
+  a: AgentModelRegistry | null,
+  b: AgentModelRegistry | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.active_provider_id === b.active_provider_id &&
+    a.active_model_id === b.active_model_id &&
+    a.active_reasoning_effort === b.active_reasoning_effort &&
+    a.active_reasoning_effort_applied === b.active_reasoning_effort_applied &&
+    a.active_service_label === b.active_service_label &&
+    a.active_service_label_applied === b.active_service_label_applied &&
+    stringArrayEqual(a.reasoning_effort_options, b.reasoning_effort_options) &&
+    stringArrayEqual(a.service_label_options, b.service_label_options) &&
+    registryProvidersEqual(a.providers, b.providers)
+  );
+}
+
+function registryProvidersEqual(
+  a: AgentModelRegistryProvider[],
+  b: AgentModelRegistryProvider[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!registryProviderEqual(a[i]!, b[i]!)) return false;
+  }
+  return true;
+}
+
+function registryProviderEqual(
+  a: AgentModelRegistryProvider,
+  b: AgentModelRegistryProvider,
+): boolean {
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.label === b.label &&
+    a.discovery.enabled === b.discovery.enabled &&
+    a.discovery.status === b.discovery.status &&
+    a.discovery.error === b.discovery.error &&
+    registryModelsEqual(a.models, b.models)
+  );
+}
+
+function registryModelsEqual(
+  a: AgentModelRegistryModel[],
+  b: AgentModelRegistryModel[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!registryModelEqual(a[i]!, b[i]!)) return false;
+  }
+  return true;
+}
+
+function registryModelEqual(
+  a: AgentModelRegistryModel,
+  b: AgentModelRegistryModel,
+): boolean {
+  return (
+    a.id === b.id &&
+    a.label === b.label &&
+    a.source === b.source &&
+    a.reasoning_effort === b.reasoning_effort &&
+    a.service_label === b.service_label &&
+    a.native_web_search_enabled === b.native_web_search_enabled &&
+    a.native_web_search_applied === b.native_web_search_applied &&
+    a.web_search_supported === b.web_search_supported &&
+    a.web_search_unsupported_reason === b.web_search_unsupported_reason &&
+    a.search_sources_supported === b.search_sources_supported
+  );
+}
+
+function stringArrayEqual(a: string[], b: string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 export function cadQueryResultsEqual(

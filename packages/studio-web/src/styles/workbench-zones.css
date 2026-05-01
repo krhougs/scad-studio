@@ -105,8 +105,12 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--ink-4s);
+}
+.chat-head-main {
+  min-width: 0;
 }
 .chat-head .title {
   font-family: var(--mono);
@@ -128,8 +132,11 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
-.chat-session-actions select {
+.chat-session-actions select,
+.agent-model-select,
+.agent-param-select {
   max-width: 112px;
   height: 28px;
   background: transparent;
@@ -139,6 +146,33 @@
   font-size: var(--fs-xxs);
   letter-spacing: var(--tr-wide);
   text-transform: uppercase;
+}
+.agent-model-controls {
+  margin-top: 8px;
+  min-width: 0;
+}
+.agent-model-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agent-model-select {
+  max-width: 164px;
+}
+.agent-param-select {
+  max-width: 84px;
+}
+.agent-model-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--t-5);
 }
 
 .chat-body {

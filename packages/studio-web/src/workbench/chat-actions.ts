@@ -1,6 +1,11 @@
 import type { AgentMode } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
-import type { ContextPill, AgentRun, ChatSessionSummary } from "./chat-zone";
+import type {
+  AgentModelSelection,
+  ContextPill,
+  AgentRun,
+  ChatSessionSummary,
+} from "./chat-zone";
 
 export async function createChatSession(
   client: WasmClient | null,
@@ -57,6 +62,7 @@ export async function sendChatMessage(params: {
   agentRun: AgentRun | null;
   busy: boolean;
   contextPills: ContextPill[];
+  agentModelSelection?: AgentModelSelection | null;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
 }, text: string): Promise<void> {
@@ -82,6 +88,7 @@ export async function runSavedPlan(params: {
   agentRun: AgentRun | null;
   busy: boolean;
   contextPills: ContextPill[];
+  agentModelSelection?: AgentModelSelection | null;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
 }): Promise<void> {
@@ -103,6 +110,7 @@ async function sendChatMessageInner(
     currentSessionId: string | null;
     sessions: ChatSessionSummary[];
     contextPills: ContextPill[];
+    agentModelSelection?: AgentModelSelection | null;
     onStatus?: (message: string) => void;
     setBusy: (value: boolean) => void;
   },
@@ -135,6 +143,7 @@ async function sendChatMessageInner(
     mode,
     plan_ref: null,
     context_refs,
+    ...agentModelInvokeFields(params.agentModelSelection ?? null),
   });
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
 }
@@ -146,6 +155,7 @@ async function runSavedPlanInner(params: {
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
   contextPills: ContextPill[];
+  agentModelSelection?: AgentModelSelection | null;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
 }): Promise<void> {
@@ -167,6 +177,7 @@ async function runSavedPlanInner(params: {
     mode: "agent",
     plan_ref: params.planRef,
     context_refs: params.contextPills.map((pill) => pill.ref_text),
+    ...agentModelInvokeFields(params.agentModelSelection ?? null),
   });
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
 }
@@ -206,6 +217,15 @@ function unwrapPayload(response: unknown): unknown {
   if (!response || typeof response !== "object") return response;
   const record = response as Record<string, unknown>;
   return record["payload"] ?? response;
+}
+
+function agentModelInvokeFields(selection: AgentModelSelection | null) {
+  return {
+    provider_id: selection?.provider_id ?? null,
+    model_id: selection?.model_id ?? null,
+    reasoning_effort: selection?.reasoning_effort ?? null,
+    service_label: selection?.service_label ?? null,
+  };
 }
 
 export function reportError(onStatus?: (message: string) => void) {

@@ -2,6 +2,9 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Stop } from "@phosphor-icons/react";
 import type {
   AgentMode,
+  AgentModelRegistryModel as ProtocolAgentModelRegistryModel,
+  AgentModelRegistryProvider as ProtocolAgentModelRegistryProvider,
+  AgentModelRegistryResponse,
   SelectionRef,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
@@ -37,6 +40,18 @@ export type ChatSnapshot = {
   current_selection?: SelectionUpdateRequest | null;
   llm_configured?: boolean;
   agent_provider?: AgentProviderCapabilities | null;
+  agent_model_registry?: AgentModelRegistry | null;
+};
+
+export type AgentModelRegistry = AgentModelRegistryResponse;
+export type AgentModelRegistryProvider = ProtocolAgentModelRegistryProvider;
+export type AgentModelRegistryModel = ProtocolAgentModelRegistryModel;
+
+export type AgentModelSelection = {
+  provider_id: string;
+  model_id: string;
+  reasoning_effort: string | null;
+  service_label: string | null;
 };
 
 export type ChatSessionSummary = {
@@ -65,6 +80,11 @@ export type AgentProviderCapabilities = {
   model?: string | null;
   native_web_search_enabled: boolean;
   search_sources_supported: boolean;
+};
+
+type AgentModelParamPatch = {
+  reasoning_effort?: string | null;
+  service_label?: string | null;
 };
 
 export type AgentSearchSource = {
@@ -112,9 +132,13 @@ export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }:
         agentRun={controller.agentRun}
         llmConfigured={snapshot.llm_configured ?? true}
         agentProvider={snapshot.agent_provider ?? null}
+        agentModelRegistry={controller.agentModelRegistry}
+        modelControlsDisabled={controller.modelControlsDisabled}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
+        onModelSelect={controller.selectAgentModel}
+        onParamsUpdate={controller.updateAgentModelParams}
       />
       <AssistantRuntimeProvider runtime={runtime}>
         <ChatBody
@@ -138,6 +162,7 @@ export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }:
 function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps & { snapshot: ChatSnapshot }) {
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
   const sessions = snapshot?.chat_sessions ?? [];
   const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
@@ -145,6 +170,11 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     snapshotCurrentSessionId ?? sessions[0]?.session_id ?? null;
   const messages = snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
+  const agentModelRegistry = snapshot?.agent_model_registry ?? null;
+  const agentModelSelection = useMemo(
+    () => activeAgentModelSelection(agentModelRegistry),
+    [agentModelRegistry],
+  );
   const rawEvents = snapshot?.agent_events ?? [];
   const sessionEvents = useMemo(
     () =>
@@ -179,6 +209,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     onStatus,
   );
   useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
+  useInitialAgentModelRegistry(client, onStatus);
 
   const actions = useChatActions({
     client,
@@ -188,8 +219,10 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     busy,
     mode,
     contextPills,
+    agentModelSelection,
     onStatus,
     setBusy,
+    setModelBusy,
   });
 
   return {
@@ -203,6 +236,9 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     contextPills,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
+    modelControlsDisabled: !client || busy || modelBusy || Boolean(agentRun),
+    agentModelRegistry,
+    agentModelSelection,
     removePill: (refText: string) => {
       setRemovedRefs((prev) => new Set(prev).add(refText));
     },
@@ -283,6 +319,16 @@ function useAgentDoneHistoryRefresh(
   }, [client, currentSessionId, doneKey, onStatus]);
 }
 
+function useInitialAgentModelRegistry(
+  client: WasmClient | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  useEffect(() => {
+    if (!client) return;
+    client.dispatchAgentModelRegistry().catch(reportError(onStatus));
+  }, [client, onStatus]);
+}
+
 function useChatActions(input: {
   client: WasmClient | null;
   sessions: ChatSessionSummary[];
@@ -291,8 +337,10 @@ function useChatActions(input: {
   busy: boolean;
   mode: AgentMode;
   contextPills: ContextPill[];
+  agentModelSelection: AgentModelSelection | null;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
+  setModelBusy: (value: boolean) => void;
 }) {
   return {
     createSession: () =>
@@ -313,6 +361,16 @@ function useChatActions(input: {
         planId: plan.planId,
         planRef: plan.planRef,
       }),
+    selectAgentModel: (value: string) =>
+      void selectAgentModel(input.client, value, input.onStatus, input.setModelBusy),
+    updateAgentModelParams: (patch: AgentModelParamPatch) =>
+      void updateAgentModelParams(
+        input.client,
+        input.agentModelSelection,
+        patch,
+        input.onStatus,
+        input.setModelBusy,
+      ),
   };
 }
 
@@ -323,9 +381,13 @@ function ChatHeader(props: {
   agentRun: AgentRun | null;
   llmConfigured: boolean;
   agentProvider: AgentProviderCapabilities | null;
+  agentModelRegistry: AgentModelRegistry | null;
+  modelControlsDisabled: boolean;
   onNew: () => void;
   onSelect: (id: string) => void;
   onCancel: () => void;
+  onModelSelect: (value: string) => void;
+  onParamsUpdate: (patch: AgentModelParamPatch) => void;
 }) {
   const active = props.sessions.find(
     (session) => session.session_id === props.currentSessionId,
@@ -333,11 +395,19 @@ function ChatHeader(props: {
   return (
     <header className="chat-head">
       <div>
-        <div className="title">
-          budn&apos; agent{" "}
-          <span
-            className={props.llmConfigured ? "llm-dot llm-dot--ok" : "llm-dot llm-dot--off"}
-            title={props.llmConfigured ? "AI connected" : "AI not configured"}
+        <div className="chat-head-main">
+          <div className="title">
+            budn&apos; agent{" "}
+            <span
+              className={props.llmConfigured ? "llm-dot llm-dot--ok" : "llm-dot llm-dot--off"}
+              title={props.llmConfigured ? "AI connected" : "AI not configured"}
+            />
+          </div>
+          <AgentModelControls
+            registry={props.agentModelRegistry}
+            disabled={props.modelControlsDisabled}
+            onModelSelect={props.onModelSelect}
+            onParamsUpdate={props.onParamsUpdate}
           />
         </div>
         <div className="sub">
@@ -378,6 +448,219 @@ function ChatHeader(props: {
       </div>
     </header>
   );
+}
+
+function AgentModelControls(props: {
+  registry: AgentModelRegistry | null;
+  disabled: boolean;
+  onModelSelect: (value: string) => void;
+  onParamsUpdate: (patch: AgentModelParamPatch) => void;
+}) {
+  const active = activeAgentModel(props.registry);
+  if (!props.registry || !active) {
+    return <div className="agent-model-status">model registry unavailable</div>;
+  }
+  return (
+    <div className="agent-model-controls">
+      <div className="agent-model-row">
+        <select
+          aria-label="agent model"
+          className="agent-model-select"
+          disabled={props.disabled}
+          value={modelOptionValue(active.provider.id, active.model.id)}
+          onChange={(event) => props.onModelSelect(event.target.value)}
+        >
+          {props.registry.providers.flatMap((provider) =>
+            provider.models.map((model) => (
+              <option
+                key={modelOptionValue(provider.id, model.id)}
+                value={modelOptionValue(provider.id, model.id)}
+              >
+                {modelOptionLabel(provider, model)}
+              </option>
+            )),
+          )}
+        </select>
+        <AgentParamSelects
+          registry={props.registry}
+          disabled={props.disabled}
+          onParamsUpdate={props.onParamsUpdate}
+        />
+      </div>
+      <AgentModelStatus registry={props.registry} active={active} />
+    </div>
+  );
+}
+
+function AgentParamSelects(props: {
+  registry: AgentModelRegistry;
+  disabled: boolean;
+  onParamsUpdate: (patch: AgentModelParamPatch) => void;
+}) {
+  return (
+    <>
+      <select
+        aria-label="reasoning effort"
+        className="agent-param-select"
+        disabled={props.disabled || props.registry.reasoning_effort_options.length === 0}
+        value={props.registry.active_reasoning_effort ?? ""}
+        onChange={(event) => props.onParamsUpdate({ reasoning_effort: event.target.value || null })}
+      >
+        <option value="">provider default</option>
+        {props.registry.reasoning_effort_options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+      <select
+        aria-label="service label"
+        className="agent-param-select"
+        disabled={props.disabled || props.registry.service_label_options.length === 0}
+        value={props.registry.active_service_label ?? ""}
+        onChange={(event) => props.onParamsUpdate({ service_label: event.target.value || null })}
+      >
+        <option value="">none</option>
+        {props.registry.service_label_options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+function AgentModelStatus(props: {
+  registry: AgentModelRegistry;
+  active: ActiveAgentModel;
+}) {
+  const failedDiscovery = props.registry.providers.find(
+    (provider) => provider.discovery.status === "failed",
+  );
+  const activeWebSearchUnsupported =
+    props.active.model.native_web_search_enabled &&
+    !props.active.model.native_web_search_applied;
+  return (
+    <div className="agent-model-status">
+      <span>{modelSourceLabel(props.active.model.source)}</span>
+      <span>{webSearchStateLabel(props.active.model)}</span>
+      {!props.registry.active_reasoning_effort_applied ? (
+        <span>reasoning not applied</span>
+      ) : null}
+      {!props.registry.active_service_label_applied ? (
+        <span>service label not applied</span>
+      ) : null}
+      {failedDiscovery ? (
+        <span>
+          discovery failed
+          {failedDiscovery.discovery.error ? `: ${failedDiscovery.discovery.error}` : ""}
+        </span>
+      ) : null}
+      {activeWebSearchUnsupported ? (
+        <span>switch model or update agents.toml / BUDN_AGENT_CONFIG</span>
+      ) : null}
+    </div>
+  );
+}
+
+async function selectAgentModel(
+  client: WasmClient | null,
+  value: string,
+  onStatus: ((message: string) => void) | undefined,
+  setModelBusy: (value: boolean) => void,
+): Promise<void> {
+  const [providerId, modelId] = parseModelOptionValue(value);
+  if (!client || !providerId || !modelId) return;
+  setModelBusy(true);
+  try {
+    await client.dispatchAgentModelSelect({ provider_id: providerId, model_id: modelId });
+  } catch (err) {
+    reportError(onStatus)(err);
+  } finally {
+    setModelBusy(false);
+  }
+}
+
+async function updateAgentModelParams(
+  client: WasmClient | null,
+  selection: AgentModelSelection | null,
+  patch: AgentModelParamPatch,
+  onStatus: ((message: string) => void) | undefined,
+  setModelBusy: (value: boolean) => void,
+): Promise<void> {
+  if (!client || !selection) return;
+  setModelBusy(true);
+  try {
+    const reasoningEffort = Object.hasOwn(patch, "reasoning_effort")
+      ? patch.reasoning_effort ?? null
+      : selection.reasoning_effort;
+    const serviceLabel = Object.hasOwn(patch, "service_label")
+      ? patch.service_label ?? null
+      : selection.service_label;
+    await client.dispatchAgentModelParamsUpdate({
+      provider_id: selection.provider_id,
+      model_id: selection.model_id,
+      reasoning_effort: reasoningEffort,
+      service_label: serviceLabel,
+    });
+  } catch (err) {
+    reportError(onStatus)(err);
+  } finally {
+    setModelBusy(false);
+  }
+}
+
+type ActiveAgentModel = {
+  provider: AgentModelRegistryProvider;
+  model: AgentModelRegistryModel;
+};
+
+function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel | null {
+  if (!registry) return null;
+  for (const provider of registry.providers) {
+    if (provider.id !== registry.active_provider_id) continue;
+    const model = provider.models.find((item) => item.id === registry.active_model_id);
+    return model ? { provider, model } : null;
+  }
+  return null;
+}
+
+function activeAgentModelSelection(
+  registry: AgentModelRegistry | null,
+): AgentModelSelection | null {
+  if (!activeAgentModel(registry) || !registry) return null;
+  return {
+    provider_id: registry.active_provider_id,
+    model_id: registry.active_model_id,
+    reasoning_effort: registry.active_reasoning_effort,
+    service_label: registry.active_service_label,
+  };
+}
+
+function modelOptionValue(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`;
+}
+
+function parseModelOptionValue(value: string): [string | null, string | null] {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) return [null, null];
+  return [value.slice(0, slash), value.slice(slash + 1)];
+}
+
+function modelOptionLabel(
+  provider: AgentModelRegistryProvider,
+  model: AgentModelRegistryModel,
+): string {
+  return `${provider.label ?? provider.id} / ${model.label ?? model.id} · ${model.source}`;
+}
+
+function modelSourceLabel(source: AgentModelRegistryModel["source"]): string {
+  if (source === "discovered_with_override") return "source: discovered override";
+  return `source: ${source}`;
+}
+
+function webSearchStateLabel(model: AgentModelRegistryModel): string {
+  if (!model.native_web_search_enabled) return "web search off";
+  if (model.native_web_search_applied) return "web search active";
+  const reason = model.web_search_unsupported_reason;
+  return reason ? `web search unavailable: ${reason}` : "web search unavailable";
 }
 
 function recentAgentEvents(

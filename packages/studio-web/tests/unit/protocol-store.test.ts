@@ -8,7 +8,13 @@ import {
   agentProviderEqual,
   cadQueryResultsEqual,
 } from "../../src/state/protocol-store";
-import type { ChatSessionSummary, ChatMessageRecord, AgentRun, AgentEvent } from "../../src/workbench/chat-zone";
+import type {
+  AgentEvent,
+  AgentModelRegistry,
+  AgentRun,
+  ChatMessageRecord,
+  ChatSessionSummary,
+} from "../../src/workbench/chat-zone";
 
 function makeSession(overrides: Partial<ChatSessionSummary> & { session_id: string }): ChatSessionSummary {
   return { title: "test", archived: false, message_count: 0, ...overrides };
@@ -35,6 +41,7 @@ describe("applySnapshot", () => {
       cadquery_results: [],
       llm_configured: true,
       agent_provider: null,
+      agent_model_registry: null,
       transport_status: null,
     });
   });
@@ -177,6 +184,17 @@ describe("applySnapshot", () => {
     });
   });
 
+  it("updates agent_model_registry and preserves equal snapshots", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    const registry = makeAgentModelRegistry();
+    applySnapshot({ agent_model_registry: registry });
+    expect(useProtocolStore.getState().agent_model_registry).toEqual(registry);
+    const before = useProtocolStore.getState().agent_model_registry;
+
+    applySnapshot({ agent_model_registry: makeAgentModelRegistry() });
+    expect(useProtocolStore.getState().agent_model_registry).toBe(before);
+  });
+
   it("updates cadquery_results with artifact relation", () => {
     const { applySnapshot } = useProtocolStore.getState();
     const results = [makeCadQueryReady("cq_1")];
@@ -194,6 +212,7 @@ describe("applySnapshot", () => {
         native_web_search_enabled: true,
         search_sources_supported: false,
       },
+      agent_model_registry: makeAgentModelRegistry(),
       transport_status: "connected",
     });
     const { applySnapshot } = useProtocolStore.getState();
@@ -202,6 +221,7 @@ describe("applySnapshot", () => {
     expect(state.workspace_current).toBeNull();
     expect(state.chat_sessions).toEqual([]);
     expect(state.agent_provider).toBeNull();
+    expect(state.agent_model_registry).toBeNull();
     expect(state.transport_status).toBeNull();
   });
 });
@@ -384,5 +404,40 @@ function makeCadQueryReady(resultId: string, exportPath = "outputs/model.step") 
         },
       ],
     },
+  };
+}
+
+function makeAgentModelRegistry(): AgentModelRegistry {
+  return {
+    active_provider_id: "openai",
+    active_model_id: "gpt-5.2",
+    active_reasoning_effort: "high",
+    active_reasoning_effort_applied: true,
+    active_service_label: "flex",
+    active_service_label_applied: true,
+    reasoning_effort_options: ["low", "medium", "high"],
+    service_label_options: ["default", "flex"],
+    providers: [
+      {
+        id: "openai",
+        kind: "openai_responses",
+        label: "OpenAI",
+        discovery: { enabled: true, status: "succeeded", error: null },
+        models: [
+          {
+            id: "gpt-5.2",
+            label: "GPT 5.2",
+            source: "discovered_with_override",
+            reasoning_effort: "high",
+            service_label: "flex",
+            native_web_search_enabled: true,
+            native_web_search_applied: true,
+            web_search_supported: true,
+            web_search_unsupported_reason: null,
+            search_sources_supported: false,
+          },
+        ],
+      },
+    ],
   };
 }

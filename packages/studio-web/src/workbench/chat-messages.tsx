@@ -201,16 +201,18 @@ function LlmSetupGuide() {
     <div className="chat-body chat-empty-state" data-testid="llm-setup-guide">
       <div className="welcome-title">AI service not configured</div>
       <p className="welcome-desc">
-        Set the following environment variables to enable the agent:
+        Configure a provider in <code>agents.toml</code> or point the server at
+        another config file with <code>BUDN_AGENT_CONFIG</code>.
       </p>
       <ul className="welcome-suggestions">
         <li><code>BUDN_AGENT_OPENAI_API_KEY</code> or <code>OPENAI_API_KEY</code></li>
-        <li><code>BUDN_AGENT_MODEL</code> (optional, defaults to gpt-5.2)</li>
-        <li><code>BUDN_AGENT_NATIVE_WEB_SEARCH=true</code> (optional)</li>
-        <li><code>BUDN_AGENT_CONFIG</code> (optional TOML config path)</li>
+        <li><code>BUDN_AGENT_ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_API_KEY</code></li>
+        <li><code>agents.example.toml</code> includes provider and model examples</li>
       </ul>
       <p className="welcome-hint">
-        Restart the server after setting the variables.
+        Restart the server after setting the variables. If a selected model does
+        not support web search, select another model or disable it in
+        <code>agents.toml</code>.
       </p>
     </div>
   );

@@ -4,7 +4,8 @@
 
 - Phase 1 已完成并通过独立 review。
 - Phase 2 已完成并通过独立 review。
-- Phase 3 已完成并通过独立 review，准备进入 Phase 4。
+- Phase 3 已完成并通过独立 review。
+- Phase 4 已完成并通过独立 review，准备进入 Phase 5。
 - 执行前已检查：当前计划无 `TBD`、`TODO`、待确认项、未选择方案或缺失验收标准。
 - 约束来源已核对：原始用户需求、后续补充需求、根 `AGENTS.md` 的 Plan Mode / 工具链 / app server / protocol / Web 边界要求。
 
@@ -39,7 +40,7 @@
 | 1 | 配置格式与 ignore 基线 | 已完成 |
 | 2 | Provider registry 与 Agent 执行分发 | 已完成 |
 | 3 | Protocol 与 Studio common capability 扩展 | 已完成 |
-| 4 | Web 模型选择 UI 与状态管理 | 未执行 |
+| 4 | Web 模型选择 UI 与状态管理 | 已完成 |
 | 5 | Host 切换命令持久状态与 `bun run web` 验证 | 未执行 |
 | 6 | 文档、已知问题与最终验证 | 未执行 |
 
@@ -156,7 +157,7 @@
 
 ### 阶段提交
 
-- 阶段提交随本结果段一并提交；提交哈希以提交后的 `git log -1 --oneline` 为准。
+- `d194fd2 Add multi-provider agent dispatch`
 
 ### 遗留问题
 
@@ -218,10 +219,62 @@
 
 ### 阶段提交
 
-- 阶段提交随本结果段一并提交；提交哈希以提交后的 `git log -1 --oneline` 为准。
+- `4d3dce0 Add agent model registry protocol`
 
 ### 遗留问题
 
 - Anthropic registry response 对 `active_reasoning_effort_applied` 的边界测试仍可加强，尤其是 `max_tokens <= 1024` 和 unknown effort。
 - Web TypeScript adapter `packages/studio-web/src/wasm-bridge/client.ts` 尚未封装 `agent.model.registry/select/params.update`；底层 Rust WASM bridge 已可用，Phase 4 接 UI 时需要补齐。
 - registry snapshot、模型切换和 handshake capability 当前会重新加载带 discovery 的 registry；多 provider 或 provider 网络慢时可能增加握手和切换延迟，后续可评估缓存或后台刷新。
+
+## Phase 4 — Web 模型选择 UI 与状态管理
+
+### 完成情况
+
+- `packages/studio-web/src/wasm-bridge/client.ts` 已封装：
+  - `dispatchAgentModelRegistry`
+  - `dispatchAgentModelSelect`
+  - `dispatchAgentModelParamsUpdate`
+- `packages/studio-web/src/state/protocol-store.ts` 已接入 `agent_model_registry`，并增加结构比较，避免相同 registry 快照造成不必要更新。
+- Chat header 已显示 provider/model registry：
+  - 模型选择下拉使用稳定 provider/model id。
+  - option 文案包含 provider、model label 和模型来源，能区分 `manual`、`discovered`、`discovered_with_override`。
+  - reasoning effort 和 service label 控件支持当前值为空的模型状态。
+  - 模型切换、参数更新全部通过 app server protocol command，不读取或写入 `.env`、`agents.toml` 或 API key。
+  - 模型切换请求 pending 时禁用模型控件，避免并发切换。
+- Chat header 已显示 active model 状态：
+  - active model 来源。
+  - active model native web search 状态。
+  - discovery 失败摘要，且手动模型仍可选择。
+  - active model 不支持 web search 时显示不支持原因，并提示切换模型或更新 `agents.toml` / `BUDN_AGENT_CONFIG`。
+  - inactive model 的 web search 降级状态不会混入 active model 状态。
+- `sendChatMessage` 和 `runSavedPlan` 已在 `agent.invoke` 中携带当前 provider id、model id、reasoning effort 和 service label，避免只依赖后端全局 active state。
+- LLM setup guide 文案已改为 `agents.toml` / `BUDN_AGENT_CONFIG` 配置入口，并列出 OpenAI 与 Anthropic API key env。
+- UI 样式沿用当前工作台紧凑布局，只在 `workbench-zones.css` 增加模型控件相关样式。
+
+### 验证证据
+
+- `bun run --cwd packages/studio-web test:unit -- chat-zone protocol-store wasm-client` 通过；3 个测试文件、70 个用例通过。
+- `bun run --cwd packages/studio-web typecheck` 通过。
+- `bun run --cwd packages/studio-web test:unit` 通过；37 个测试文件、275 个用例通过。
+- 测试输出中仍有既有 `ChatZone2` React `act(...)` 警告，未新增失败。
+
+### 独立 Review 结果
+
+- 第一轮 Phase 4 review 发现两个阻塞项：
+  - active model 状态曾会把 inactive 模型的 web search 降级状态一起显示。
+  - active model 不支持 web search 时，UI 未直接显示不支持原因和 `agents.toml` / `BUDN_AGENT_CONFIG` 处理提示。
+- 已修复并补充测试：
+  - active OpenAI 模型显示 `web search active`，不会显示 inactive Anthropic 的 `web search unavailable`。
+  - active Anthropic 模型不支持 web search 时显示 provider 不支持原因、`agents.toml` 和 `BUDN_AGENT_CONFIG`。
+  - 模型切换请求 pending 时模型控件被禁用，请求结束后恢复。
+- 复审结论：未发现剩余阻塞问题，可以进入 Phase 4 结果归档与阶段提交。
+
+### 阶段提交
+
+- `9ef85c0 Add web agent model controls`
+
+### 遗留问题
+
+- `ChatZone2` 测试中仍有两个既有 React `act(...)` 警告；本 Phase 未扩大该问题范围。
+- registry snapshot、模型切换和 handshake capability 仍可能触发带 discovery 的 registry 读取；如果 provider 网络慢，后续 Phase 5 启动链路验证时需要继续观察体验与超时表现。

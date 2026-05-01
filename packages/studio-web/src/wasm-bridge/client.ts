@@ -171,6 +171,18 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_invoke(h, params));
   }
 
+  dispatchAgentModelRegistry(): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_registry(h));
+  }
+
+  dispatchAgentModelSelect(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_select(h, params));
+  }
+
+  dispatchAgentModelParamsUpdate(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_params_update(h, params));
+  }
+
   dispatchAgentCancel(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
   }
