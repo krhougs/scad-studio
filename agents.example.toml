@@ -1,0 +1,35 @@
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+timeout_secs = 120
+max_tokens = 8192
+temperature = 0.7
+native_web_search = true
+discover_models = true
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+label = "GPT 5.2"
+reasoning_effort = "high"
+service_label = "default"
+native_web_search = true
+web_search_supported = true
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+
+[[providers.models]]
+id = "claude-sonnet"
+label = "Claude Sonnet"
+reasoning_effort = "medium"
+service_label = "default"
+native_web_search = true
+web_search_supported = true

@@ -1,4 +1,7 @@
-use app_server_core::llm::{RigAgentConfig, load_rig_agent_config};
+use app_server_core::llm::{
+    AgentProviderKind, DiscoveredProviderModel, RigAgentConfig, load_agent_provider_registry,
+    load_rig_agent_config, merge_provider_models,
+};
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
     cadquery_agent_system_prompt, extract_cadquery_code, rig_agent_additional_params,
@@ -225,7 +228,7 @@ async fn rig_agent_config_loads_native_web_search_from_env() {
 }
 
 #[tokio::test]
-async fn rig_agent_config_defaults_native_web_search_to_disabled() {
+async fn rig_agent_config_defaults_native_web_search_to_enabled() {
     let _env = EnvGuard::set_many(&[("BUDN_AGENT_OPENAI_API_KEY", "sk-test")]);
 
     let config = load_rig_agent_config()
@@ -233,7 +236,7 @@ async fn rig_agent_config_defaults_native_web_search_to_disabled() {
         .expect("config load should succeed")
         .expect("env config should be present");
 
-    assert!(!config.native_web_search);
+    assert!(config.native_web_search);
 }
 
 #[tokio::test]
@@ -264,14 +267,202 @@ native_web_search = true
 }
 
 #[tokio::test]
-async fn rig_agent_config_file_defaults_native_web_search_to_disabled() {
+async fn rig_agent_config_loads_agents_toml_registry() {
     let temp_dir = tempfile::tempdir().expect("temp config dir");
-    let config_path = temp_dir.path().join("agent.toml");
+    let config_path = temp_dir.path().join("agents.toml");
     tokio::fs::write(
         &config_path,
         r#"
-api_key = "sk-test"
-model = "gpt-5.2"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+timeout_secs = 45
+max_tokens = 4096
+temperature = 0.2
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+label = "GPT 5.2"
+reasoning_effort = "high"
+service_label = "fast"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+"#,
+    )
+    .await
+    .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_OPENAI_API_KEY", "sk-openai"),
+        ("BUDN_AGENT_ANTHROPIC_API_KEY", "sk-anthropic"),
+    ]);
+
+    let registry = load_agent_provider_registry()
+        .await
+        .expect("config load should succeed")
+        .expect("file config should be present");
+    let openai = registry.provider("openai").expect("openai provider");
+    let anthropic = registry.provider("anthropic").expect("anthropic provider");
+    let active = registry.active_model().expect("active model");
+
+    assert_eq!(registry.active_provider_id, "openai");
+    assert_eq!(registry.active_model_id, "gpt-5.2");
+    assert!(registry.defaults.native_web_search);
+    assert!(registry.defaults.discover_models);
+    assert_eq!(registry.defaults.timeout_secs, 45);
+    assert_eq!(openai.kind, AgentProviderKind::OpenAiResponses);
+    assert_eq!(openai.api_key.as_deref(), Some("sk-openai"));
+    assert!(openai.discover_models);
+    assert_eq!(anthropic.kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(anthropic.anthropic_version.as_deref(), Some("2023-06-01"));
+    assert_eq!(active.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(active.service_label.as_deref(), Some("fast"));
+    assert!(active.native_web_search);
+    assert!(active.web_search_supported);
+}
+
+#[tokio::test]
+async fn rig_agent_config_rejects_invalid_agents_toml() {
+    let cases = [
+        (
+            "duplicate provider",
+            r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+"#,
+            "provider id",
+        ),
+        (
+            "duplicate model",
+            r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers.models]]
+id = "gpt-5.2"
+"#,
+            "model id",
+        ),
+        (
+            "missing active model",
+            r#"
+active_provider = "openai"
+active_model = "missing"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+"#,
+            "active model",
+        ),
+        (
+            "anthropic version on openai",
+            r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+anthropic_version = "2023-06-01"
+
+[[providers.models]]
+id = "gpt-5.2"
+"#,
+            "anthropic_version",
+        ),
+        (
+            "empty anthropic version",
+            r#"
+active_provider = "anthropic"
+active_model = "claude-sonnet"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+anthropic_version = ""
+
+[[providers.models]]
+id = "claude-sonnet"
+"#,
+            "anthropic_version",
+        ),
+        (
+            "unsupported web search reason",
+            r#"
+active_provider = "openai"
+active_model = "local-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "local-model"
+web_search_supported = false
+web_search_unsupported_reason = ""
+"#,
+            "web_search_unsupported_reason",
+        ),
+    ];
+
+    for (name, toml, expected) in cases {
+        let error = load_registry_from_toml(toml).await.expect_err(name).message;
+        assert!(error.contains(expected), "{name}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn rig_agent_config_reports_missing_api_key_env() {
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(
+        &config_path,
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
 "#,
     )
     .await
@@ -281,12 +472,261 @@ model = "gpt-5.2"
         config_path.to_str().expect("utf8 config path"),
     )]);
 
-    let config = load_rig_agent_config()
+    let error = load_agent_provider_registry()
         .await
-        .expect("config load should succeed")
+        .expect_err("missing api key env")
+        .message;
+
+    assert!(error.contains("BUDN_AGENT_OPENAI_API_KEY"));
+}
+
+#[tokio::test]
+async fn rig_agent_config_allows_inactive_provider_without_api_key_env() {
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(
+        &config_path,
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic_messages"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+
+[[providers.models]]
+id = "claude-sonnet"
+"#,
+    )
+    .await
+    .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_OPENAI_API_KEY", "sk-openai"),
+    ]);
+
+    let registry = load_agent_provider_registry()
+        .await
+        .expect("inactive missing key should not block registry")
         .expect("file config should be present");
 
-    assert!(!config.native_web_search);
+    assert_eq!(
+        registry
+            .provider("anthropic")
+            .expect("anthropic provider")
+            .api_key,
+        None
+    );
+}
+
+#[tokio::test]
+async fn rig_agent_config_preserves_web_search_intent_when_model_does_not_support_it() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "local-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "local-model"
+native_web_search = true
+web_search_supported = false
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let active = registry.active_model().expect("active model");
+
+    assert!(active.native_web_search);
+    assert!(!active.web_search_supported);
+    assert!(active.web_search_unsupported_reason.is_some());
+}
+
+#[tokio::test]
+async fn rig_agent_config_supports_discovery_defaults_and_provider_override() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "manual-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+discover_models = false
+
+[[providers.models]]
+id = "manual-model"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+    let active = registry.active_model().expect("active model");
+
+    assert!(registry.defaults.discover_models);
+    assert!(!provider.discover_models);
+    assert!(active.web_search_supported);
+}
+
+#[tokio::test]
+async fn rig_agent_config_merges_discovered_models_with_manual_overrides() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+label = "Pinned GPT"
+reasoning_effort = "xhigh"
+service_label = "fast"
+
+[[providers.models]]
+id = "manual-only"
+label = "Manual Only"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+    let merged = merge_provider_models(
+        provider,
+        vec![DiscoveredProviderModel {
+            id: "gpt-5.2".into(),
+            label: "Discovered GPT".into(),
+            web_search_supported: true,
+        }],
+    );
+
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].id, "gpt-5.2");
+    assert_eq!(merged[0].label.as_deref(), Some("Pinned GPT"));
+    assert_eq!(merged[0].reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(merged[0].service_label.as_deref(), Some("fast"));
+    assert!(merged[0].web_search_supported);
+    assert_eq!(merged[1].id, "manual-only");
+    assert_eq!(merged[1].label.as_deref(), Some("Manual Only"));
+}
+
+#[tokio::test]
+async fn rig_agent_config_manual_override_preserves_unspecified_discovered_fields() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+reasoning_effort = "xhigh"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+    let merged = merge_provider_models(
+        provider,
+        vec![DiscoveredProviderModel {
+            id: "gpt-5.2".into(),
+            label: "Discovered GPT".into(),
+            web_search_supported: false,
+        }],
+    );
+
+    assert_eq!(merged[0].label.as_deref(), Some("Discovered GPT"));
+    assert_eq!(merged[0].reasoning_effort.as_deref(), Some("xhigh"));
+    assert!(!merged[0].web_search_supported);
+    assert!(merged[0].web_search_unsupported_reason.is_some());
+}
+
+#[tokio::test]
+async fn rig_agent_config_discovered_models_inherit_provider_defaults() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "manual-model"
+
+[defaults]
+max_tokens = 2048
+temperature = 0.25
+native_web_search = false
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "manual-model"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+    let merged = merge_provider_models(
+        provider,
+        vec![DiscoveredProviderModel {
+            id: "discovered-model".into(),
+            label: "Discovered Model".into(),
+            web_search_supported: true,
+        }],
+    );
+    let discovered = merged
+        .iter()
+        .find(|model| model.id == "discovered-model")
+        .expect("discovered model");
+
+    assert_eq!(discovered.max_tokens, 2048);
+    assert_eq!(discovered.temperature, 0.25);
+    assert!(!discovered.native_web_search);
+}
+
+async fn load_registry_from_toml(
+    content: &str,
+) -> Result<app_server_core::llm::AgentProviderRegistry, app_server_core::llm::RigAgentConfigError>
+{
+    let temp_dir = tempfile::tempdir().expect("temp config dir");
+    let config_path = temp_dir.path().join("agents.toml");
+    tokio::fs::write(&config_path, content)
+        .await
+        .expect("config file should be writable");
+    let _env = EnvGuard::set_many(&[
+        (
+            "BUDN_AGENT_CONFIG",
+            config_path.to_str().expect("utf8 config path"),
+        ),
+        ("BUDN_AGENT_OPENAI_API_KEY", "sk-openai"),
+        ("BUDN_AGENT_ANTHROPIC_API_KEY", "sk-anthropic"),
+    ]);
+    load_agent_provider_registry()
+        .await
+        .map(|config| config.expect("file config should be present"))
 }
 
 fn test_config(native_web_search: bool) -> RigAgentConfig {
@@ -316,6 +756,7 @@ impl EnvGuard {
         let keys = [
             "BUDN_AGENT_CONFIG",
             "BUDN_AGENT_OPENAI_API_KEY",
+            "BUDN_AGENT_ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
             "BUDN_AGENT_MODEL",
             "BUDN_AGENT_REASONING_EFFORT",

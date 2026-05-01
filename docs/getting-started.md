@@ -127,6 +127,15 @@ bun run web
 | `VITE_WS_URL` | Vite | 空 | 前端直接连接的 WebSocket URL；优先级低于 URL 参数 `?ws=...`，高于同源代理 fallback |
 | `VITE_WS_PROXY_TARGET` | Vite dev server | `ws://127.0.0.1:38421` | `/app-server/ws` 的代理目标，通常由 `bun run web` 自动注入 |
 
+Agent provider 配置使用本机私有的 `agents.toml`。仓库提交 `agents.example.toml` 作为模板，真实 API key 只放在环境变量中，不写入 `agents.toml`：
+
+```bash
+cp agents.example.toml agents.toml
+printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
+```
+
+`agents.toml` 支持多个 provider 和多个模型。`discover_models` 默认开启，provider 发现到的模型会与手动配置模型合并；同 id 手动模型只覆盖显式字段。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
+
 手动试验不同工作目录：
 
 ```bash

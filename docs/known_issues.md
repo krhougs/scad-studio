@@ -13,7 +13,7 @@
   - 升级到暴露 OpenAI Responses web search sources / annotations 的 Rig 版本。
   - 若上游暂不支持，在 `app-server-core` 内增加最小 OpenAI Responses stream 适配，但仍必须保持 Rig-only Agent 边界与 hosted tool 语义，不得回退到自建互联网搜索工具。
   - protocol 侧先设计可选 sources 字段，并允许当前 provider capability record 作为降级路径。
-- 当前处理方式：native web search 默认关闭；开启后仅注册 OpenAI hosted `web_search`，记录 `agent_run_capabilities.native_web_search_enabled`，并保留最终文本。Phase 6 已在 protocol、Chat history 和 Web UI 中加入可选来源字段与展示路径；在 Rig 暴露结构化 sources / annotations 前，该字段保持空列表，Web 端显示 capability 状态但不会伪造来源。
+- 当前处理方式：native web search 在 `agents.toml` 中默认开启；当前 OpenAI 路径仅注册 hosted `web_search`，记录 `agent_run_capabilities.native_web_search_enabled`，并保留最终文本。Phase 6 已在 protocol、Chat history 和 Web UI 中加入可选来源字段与展示路径；在 Rig 暴露结构化 sources / annotations 前，该字段保持空列表，Web 端显示 capability 状态但不会伪造来源。
 
 ## 2026-05-01 00:00:00: WebSocket 连接处理 future 曾不满足 `Send`
 
