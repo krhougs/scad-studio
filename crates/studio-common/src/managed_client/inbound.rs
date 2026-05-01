@@ -19,6 +19,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         self.transport_status = TransportStatus::Open;
         self.pending_handshake = None;
         self.llm_configured = ack.server_capabilities.llm_configured;
+        self.agent_provider = ack.server_capabilities.agent_provider.clone();
         self.events.push_back(ClientEvent::HandshakeAccepted {
             session_token: ack.session_token.clone(),
             server_capabilities: ack.server_capabilities.clone(),

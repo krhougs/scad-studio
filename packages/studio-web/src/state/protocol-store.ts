@@ -6,6 +6,7 @@ import type {
   AgentRun,
   AgentEvent,
   ChatSnapshot,
+  AgentProviderCapabilities,
 } from "../workbench/chat-zone";
 import type {
   CadQueryResultReady,
@@ -25,6 +26,7 @@ export type ChatSlice = {
   current_selection: SelectionUpdateRequest | null;
   cadquery_results: CadQueryResultReady[];
   llm_configured: boolean;
+  agent_provider: AgentProviderCapabilities | null;
 };
 
 export type TransportSlice = {
@@ -50,6 +52,7 @@ const INITIAL_CHAT: ChatSlice = {
   current_selection: null,
   cadquery_results: [],
   llm_configured: true,
+  agent_provider: null,
 };
 
 const INITIAL_TRANSPORT: TransportSlice = {
@@ -110,6 +113,7 @@ function chatSnapshotSelector(s: ProtocolState): ChatSnapshot {
     agent_events: s.agent_events,
     current_selection: s.current_selection,
     llm_configured: s.llm_configured,
+    agent_provider: s.agent_provider,
   };
 }
 
@@ -191,6 +195,12 @@ function applyChatFields(
   if (state.llm_configured !== llm) {
     patch.llm_configured = llm;
   }
+
+  const agentProvider =
+    (snap["agent_provider"] as AgentProviderCapabilities | undefined) ?? null;
+  if (!agentProviderEqual(state.agent_provider, agentProvider)) {
+    patch.agent_provider = agentProvider;
+  }
 }
 
 function applyTransportFields(
@@ -242,6 +252,30 @@ export function chatHistoryEqual(
     const ma = a[i]!;
     const mb = b[i]!;
     if (ma.message_id !== mb.message_id || ma.ts_ms !== mb.ts_ms) return false;
+    if (!searchSourcesEqual(ma.search_sources ?? [], mb.search_sources ?? [])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function searchSourcesEqual(
+  a: ChatMessageRecord["search_sources"],
+  b: ChatMessageRecord["search_sources"],
+): boolean {
+  if (a === b) return true;
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    const sa = left[i]!;
+    const sb = right[i]!;
+    if (
+      sa.title !== sb.title ||
+      sa.url !== sb.url ||
+      sa.start_index !== sb.start_index ||
+      sa.end_index !== sb.end_index
+    ) return false;
   }
   return true;
 }
@@ -257,6 +291,20 @@ export function agentEventsEqual(a: AgentEvent[], b: AgentEvent[]): boolean {
   if (a.length !== b.length) return false;
   if (a.length === 0) return true;
   return a[a.length - 1]!.event === b[b.length - 1]!.event;
+}
+
+export function agentProviderEqual(
+  a: AgentProviderCapabilities | null,
+  b: AgentProviderCapabilities | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.provider === b.provider &&
+    a.model === b.model &&
+    a.native_web_search_enabled === b.native_web_search_enabled &&
+    a.search_sources_supported === b.search_sources_supported
+  );
 }
 
 export function cadQueryResultsEqual(

@@ -480,6 +480,7 @@ fn tool_result_message(tool_call_id: &str, result_json: &str) -> ChatMessageReco
             result_json: result_json.into(),
         }),
         mesh_result: None,
+        search_sources: Vec::new(),
         run_id: None,
     }
 }

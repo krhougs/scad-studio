@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 6;
+export const CURRENT_PROTOCOL_VERSION = 7;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -115,6 +115,14 @@ export interface ServerCapabilities {
   agent: boolean;
   selection_sync: boolean;
   llm_configured: boolean;
+  agent_provider: AgentProviderCapabilities | null;
+}
+
+export interface AgentProviderCapabilities {
+  provider: string;
+  model: string | null;
+  native_web_search_enabled: boolean;
+  search_sources_supported: boolean;
 }
 
 export interface CapabilityHandshakeRequest {
@@ -399,7 +407,15 @@ export interface ChatMessageRecord {
   tool_calls: ChatToolCallRecord[];
   tool_result: ChatToolResultRecord | null;
   mesh_result: CadQueryResultReady | null;
+  search_sources: AgentSearchSource[];
   run_id: string | null;
+}
+
+export interface AgentSearchSource {
+  title: string;
+  url: string;
+  start_index: number | null;
+  end_index: number | null;
 }
 
 export interface ChatToolCallRecord {

@@ -1,8 +1,8 @@
 use app_server_protocol::{
-    AgentStartedResponse, CadQueryResultReady, ChatMessageRecord, ChatSessionId,
-    ChatSessionSummary, CommandSuccess, PathHandle, RequestId, SelectionUpdateRequest,
-    ServerCapabilities, ServerPushEvent, SessionToken, SubscriptionId, WatchSubscribeRequest,
-    WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceListResponse,
+    AgentProviderCapabilities, AgentStartedResponse, CadQueryResultReady, ChatMessageRecord,
+    ChatSessionId, ChatSessionSummary, CommandSuccess, PathHandle, RequestId,
+    SelectionUpdateRequest, ServerCapabilities, ServerPushEvent, SessionToken, SubscriptionId,
+    WatchSubscribeRequest, WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceListResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -182,4 +182,5 @@ pub struct ClientSnapshot {
     pub last_error: Option<ClientError>,
     pub transport_status: TransportStatus,
     pub llm_configured: bool,
+    pub agent_provider: Option<AgentProviderCapabilities>,
 }

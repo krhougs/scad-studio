@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 6;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 7;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -117,6 +117,16 @@ pub struct ServerCapabilities {
     pub agent: bool,
     pub selection_sync: bool,
     pub llm_configured: bool,
+    #[serde(default)]
+    pub agent_provider: Option<AgentProviderCapabilities>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentProviderCapabilities {
+    pub provider: String,
+    pub model: Option<String>,
+    pub native_web_search_enabled: bool,
+    pub search_sources_supported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -587,7 +597,17 @@ pub struct ChatMessageRecord {
     pub tool_result: Option<ChatToolResultRecord>,
     pub mesh_result: Option<CadQueryResultReady>,
     #[serde(default)]
+    pub search_sources: Vec<AgentSearchSource>,
+    #[serde(default)]
     pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentSearchSource {
+    pub title: String,
+    pub url: String,
+    pub start_index: Option<u32>,
+    pub end_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

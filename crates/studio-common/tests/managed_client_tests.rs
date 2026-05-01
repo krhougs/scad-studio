@@ -2,14 +2,14 @@ use std::collections::VecDeque;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentStartedResponse, AgentTokenEvent, CadQueryArtifactExport, CadQueryArtifactRelation,
-    CadQueryResultReady, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
-    ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
-    ChatSessionId, ChatSessionSummary, ClientCapabilities, ClientCommand, ClientEnvelope,
-    ClientPlatform, ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequest,
-    PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId,
-    SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
-    ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
+    AgentProviderCapabilities, AgentStartedResponse, AgentTokenEvent, CadQueryArtifactExport,
+    CadQueryArtifactRelation, CadQueryResultReady, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
+    ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
+    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope, ServerPushEvent,
     ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent, WatchSubscribeRequest,
     WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
     encode_server_frame, web_file_read_capability,
@@ -105,6 +105,7 @@ fn handshake_response() -> CapabilityHandshakeResponse {
             agent: false,
             selection_sync: false,
             llm_configured: false,
+            agent_provider: None,
         },
     }
 }
@@ -196,6 +197,32 @@ fn dispatch_after_handshake_enqueues_envelope() {
         }
         other => panic!("expected ClientEnvelope::Request, got {other:?}"),
     }
+}
+
+#[test]
+fn handshake_provider_capability_updates_snapshot() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    client.begin_handshake(handshake_request()).unwrap();
+    let mut ack = handshake_response();
+    ack.server_capabilities.llm_configured = true;
+    ack.server_capabilities.agent_provider = Some(AgentProviderCapabilities {
+        provider: "openai_responses".into(),
+        model: Some("gpt-5.2".into()),
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+    });
+
+    client
+        .receive_inbound(&encode_handshake_ack(&ack))
+        .expect("handshake ack");
+
+    let snapshot = client.snapshot();
+    let provider = snapshot.agent_provider.expect("provider capability");
+    assert_eq!(provider.provider, "openai_responses");
+    assert_eq!(provider.model.as_deref(), Some("gpt-5.2"));
+    assert!(provider.native_web_search_enabled);
+    assert!(!provider.search_sources_supported);
+    assert!(snapshot.llm_configured);
 }
 
 #[test]
@@ -1094,6 +1121,7 @@ fn chat_message(id: &str, role: ChatRole, content: &str) -> ChatMessageRecord {
         tool_calls: Vec::new(),
         tool_result: None,
         mesh_result: None,
+        search_sources: Vec::new(),
         run_id: None,
     }
 }

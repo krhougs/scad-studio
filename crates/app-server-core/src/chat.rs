@@ -4,9 +4,10 @@ use std::{
 };
 
 use app_server_protocol::{
-    ChatAckResponse, ChatArchivedResponse, ChatCreatedResponse, ChatHistoryResponse,
-    ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary,
-    ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolError, ProtocolErrorCode,
+    AgentSearchSource, ChatAckResponse, ChatArchivedResponse, ChatCreatedResponse,
+    ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId,
+    ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolError,
+    ProtocolErrorCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt};
@@ -38,6 +39,8 @@ struct JsonlMessage {
     tool_result: Option<ChatToolResultRecord>,
     #[serde(default)]
     mesh_result: Option<app_server_protocol::CadQueryResultReady>,
+    #[serde(default)]
+    search_sources: Vec<AgentSearchSource>,
     #[serde(default)]
     run_id: Option<String>,
 }
@@ -456,6 +459,7 @@ impl JsonlMessage {
             tool_calls: Vec::new(),
             tool_result: None,
             mesh_result: None,
+            search_sources: Vec::new(),
             run_id: None,
         }
     }
@@ -478,6 +482,7 @@ impl From<JsonlMessage> for ChatMessageRecord {
             tool_calls: value.tool_calls,
             tool_result: value.tool_result,
             mesh_result: value.mesh_result,
+            search_sources: value.search_sources,
             run_id: value.run_id,
         }
     }

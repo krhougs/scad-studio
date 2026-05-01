@@ -357,6 +357,34 @@
   max-height: 180px;
   overflow: auto;
 }
+.agent-search-sources {
+  margin-top: 8px;
+  width: min(100%, 52ch);
+  border-left: 2px solid var(--ink-4s);
+  padding: 8px 0 8px 12px;
+  color: var(--t-4);
+  font-size: var(--fs-xs);
+}
+.agent-search-sources__title {
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: var(--t-5);
+}
+.agent-search-sources ol {
+  margin: 0;
+  padding-left: 18px;
+}
+.agent-search-sources li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+.agent-search-sources a {
+  color: var(--t-2);
+  overflow-wrap: anywhere;
+}
 .plan-package-card {
   gap: 8px;
 }

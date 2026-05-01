@@ -377,6 +377,7 @@ fn chat_msg(role: &str, content: &str) -> ChatMessageRecord {
         tool_calls: Vec::new(),
         tool_result: None,
         mesh_result: None,
+        search_sources: Vec::new(),
         run_id: None,
     }
 }
@@ -396,6 +397,7 @@ fn tool_msg(content: &str) -> ChatMessageRecord {
         tool_calls: Vec::new(),
         tool_result: None,
         mesh_result: None,
+        search_sources: Vec::new(),
         run_id: None,
     }
 }

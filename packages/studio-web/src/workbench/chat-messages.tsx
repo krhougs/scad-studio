@@ -12,7 +12,7 @@ import type {
   TextMessagePartProps,
 } from "@assistant-ui/react";
 import { markdownSanitizeSchema } from "../viewers/markdown-security";
-import type { AgentEvent } from "./chat-zone";
+import type { AgentEvent, AgentSearchSource } from "./chat-zone";
 import { pathSegments } from "./path-utils";
 
 const mdWrapperElement = { "data-color-mode": "dark" } as const;
@@ -71,6 +71,7 @@ function ChatMessageItem() {
               "agent.error": AgentErrorPart,
               "agent.plan_saved": PlanSavedPart,
               "agent.reasoning": ReasoningPart,
+              "agent.search_sources": SearchSourcesPart,
             },
             Fallback: AgentEventPart,
           },
@@ -128,6 +129,47 @@ function ReasoningPart(props: DataMessagePartProps) {
       <div className="agent-reasoning__body">{text}</div>
     </div>
   );
+}
+
+export function SearchSourcesPart(props: DataMessagePartProps) {
+  const sources = searchSourcesFromData(props.data);
+  if (sources.length === 0) return null;
+  return (
+    <div className="agent-search-sources" data-testid="agent-search-sources">
+      <div className="agent-search-sources__title">Sources</div>
+      <ol>
+        {sources.map((source, index) => (
+          <li key={`${source.url}-${index}`}>
+            <a href={source.url} target="_blank" rel="noreferrer">
+              {source.title || source.url}
+            </a>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function searchSourcesFromData(
+  data: Record<string, unknown>,
+): AgentSearchSource[] {
+  const rawSources = data["sources"];
+  if (!Array.isArray(rawSources)) return [];
+  return rawSources.filter(isRenderableSearchSource);
+}
+
+function isRenderableSearchSource(value: unknown): value is AgentSearchSource {
+  if (!value || typeof value !== "object") return false;
+  const source = value as Partial<AgentSearchSource>;
+  return (
+    typeof source.url === "string" &&
+    isHttpUrl(source.url) &&
+    (source.title === undefined || typeof source.title === "string")
+  );
+}
+
+function isHttpUrl(url: string): boolean {
+  return url.startsWith("https://") || url.startsWith("http://");
 }
 
 function reconstructAgentEvent(

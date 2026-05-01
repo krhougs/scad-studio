@@ -51,6 +51,47 @@ describe("convertMessage", () => {
     expect((result.metadata as { custom: { run_id: string } }).custom.run_id).toBe("r1");
   });
 
+  it("converts history assistant search sources to data part", () => {
+    const msg: RuntimeMessage = {
+      source: "history",
+      id: "h-search",
+      record: makeRecord({
+        message_id: "search",
+        role: "assistant",
+        content: "The current API uses hosted tools.",
+        run_id: "r-search",
+        search_sources: [
+          {
+            title: "OpenAI web search",
+            url: "https://developers.openai.com/api/docs/guides/tools-web-search",
+            start_index: 0,
+            end_index: 12,
+          },
+        ],
+      }),
+    };
+
+    const result = convertMessage(msg);
+
+    expect(result.role).toBe("assistant");
+    expect(result.content).toEqual([
+      { type: "text", text: "The current API uses hosted tools." },
+      {
+        type: "data-agent.search_sources",
+        data: {
+          sources: [
+            {
+              title: "OpenAI web search",
+              url: "https://developers.openai.com/api/docs/guides/tools-web-search",
+              start_index: 0,
+              end_index: 12,
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("maps tool role to assistant", () => {
     const msg: RuntimeMessage = {
       source: "history",

@@ -36,6 +36,7 @@ export type ChatSnapshot = {
   agent_events?: AgentEvent[];
   current_selection?: SelectionUpdateRequest | null;
   llm_configured?: boolean;
+  agent_provider?: AgentProviderCapabilities | null;
 };
 
 export type ChatSessionSummary = {
@@ -55,7 +56,22 @@ export type ChatMessageRecord = {
   tool_calls?: unknown[];
   tool_result?: unknown | null;
   mesh_result?: unknown | null;
+  search_sources?: AgentSearchSource[];
   run_id?: string | null;
+};
+
+export type AgentProviderCapabilities = {
+  provider: string;
+  model?: string | null;
+  native_web_search_enabled: boolean;
+  search_sources_supported: boolean;
+};
+
+export type AgentSearchSource = {
+  title: string;
+  url: string;
+  start_index?: number | null;
+  end_index?: number | null;
 };
 
 export type AgentRun = {
@@ -95,6 +111,7 @@ export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }:
         disabled={controller.headerDisabled}
         agentRun={controller.agentRun}
         llmConfigured={snapshot.llm_configured ?? true}
+        agentProvider={snapshot.agent_provider ?? null}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
@@ -305,6 +322,7 @@ function ChatHeader(props: {
   disabled: boolean;
   agentRun: AgentRun | null;
   llmConfigured: boolean;
+  agentProvider: AgentProviderCapabilities | null;
   onNew: () => void;
   onSelect: (id: string) => void;
   onCancel: () => void;
@@ -322,7 +340,10 @@ function ChatHeader(props: {
             title={props.llmConfigured ? "AI connected" : "AI not configured"}
           />
         </div>
-        <div className="sub">{active?.title ?? "no session"}</div>
+        <div className="sub">
+          {active?.title ?? "no session"}
+          {props.agentProvider?.native_web_search_enabled ? " · web search" : ""}
+        </div>
       </div>
       <div className="chat-session-actions">
         <select

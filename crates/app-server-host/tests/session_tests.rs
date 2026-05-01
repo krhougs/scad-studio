@@ -64,6 +64,7 @@ fn build_session() -> HostSession {
             agent: false,
             selection_sync: false,
             llm_configured: false,
+            agent_provider: None,
         },
     )
 }

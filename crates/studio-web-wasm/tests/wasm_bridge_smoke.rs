@@ -7,16 +7,17 @@
 use std::io::{Cursor, Write};
 
 use app_server_protocol::{
-    CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryFeatureFaces, CadQueryMeshPayload,
-    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultGetRequest, CancelRequest,
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ClientCapabilities, ClientCommand,
-    ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup,
-    FileReadContents, PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl,
-    PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
-    PreviewUnit, ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope,
-    ServerResponseEnvelope, SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest,
-    WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId, decode_client_frame,
-    encode_server_frame, web_file_read_capability,
+    AgentProviderCapabilities, CadQueryArtifactExport, CadQueryArtifactRelation,
+    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
+    CadQueryResultGetRequest, CancelRequest, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, EdgeGroup, FaceGroup, FileReadContents,
+    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
+    PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind, PreviewUnit,
+    ProtocolVersionRange, RequestId, ServerCapabilities, ServerEnvelope, ServerResponseEnvelope,
+    SessionToken, SubscriptionId, VertexPoint, WatchSubscribeRequest, WatchSubscriptionAck,
+    WorkspaceCurrentResponse, WorkspaceId, decode_client_frame, encode_server_frame,
+    web_file_read_capability,
 };
 use js_sys::{Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,12 @@ fn handshake_params() -> CapabilityHandshakeRequest {
 }
 
 fn handshake_ack_bytes() -> Vec<u8> {
+    handshake_ack_bytes_with_provider(None)
+}
+
+fn handshake_ack_bytes_with_provider(
+    agent_provider: Option<AgentProviderCapabilities>,
+) -> Vec<u8> {
     let ack = CapabilityHandshakeResponse {
         negotiated_version: 4,
         session_token: SessionToken("test-session".into()),
@@ -65,7 +72,8 @@ fn handshake_ack_bytes() -> Vec<u8> {
             cadquery: true,
             agent: false,
             selection_sync: false,
-            llm_configured: false,
+            llm_configured: agent_provider.is_some(),
+            agent_provider,
         },
     };
     encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")
@@ -403,6 +411,49 @@ fn handshake_completes_and_emits_event() {
         events
             .iter()
             .any(|event| matches!(event, DrainedEvent::HandshakeAccepted { .. }))
+    );
+}
+
+#[wasm_bindgen_test]
+fn handshake_snapshot_exposes_agent_provider_capability() {
+    let mut handle = client_create();
+    client_begin_handshake(&mut handle, to_js(&handshake_params())).expect("begin_handshake");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("handshake outbound");
+    client_receive_inbound(
+        &mut handle,
+        &handshake_ack_bytes_with_provider(Some(AgentProviderCapabilities {
+            provider: "openai_responses".into(),
+            model: Some("gpt-5.2".into()),
+            native_web_search_enabled: true,
+            search_sources_supported: false,
+        })),
+    )
+    .expect("inbound ack");
+
+    let snapshot = client_snapshot(&handle).expect("snapshot");
+    let provider =
+        Reflect::get(&snapshot, &JsValue::from_str("agent_provider")).expect("agent_provider");
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("provider"))
+            .expect("provider")
+            .as_string()
+            .as_deref(),
+        Some("openai_responses")
+    );
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("model"))
+            .expect("model")
+            .as_string()
+            .as_deref(),
+        Some("gpt-5.2")
+    );
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("native_web_search_enabled"))
+            .expect("native_web_search_enabled")
+            .as_bool(),
+        Some(true)
     );
 }
 

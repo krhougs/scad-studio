@@ -8,6 +8,7 @@ import type {
   ChatMessageRecord,
   AgentEvent,
   AgentRun,
+  AgentSearchSource,
 } from "./chat-zone";
 
 export type RuntimeMessage = {
@@ -178,9 +179,20 @@ export function convertMessage(msg: RuntimeMessage): ThreadMessageLike {
         },
       };
     }
+    const sources = agentSearchSources(r);
+    const content =
+      r.role === "assistant" && sources.length > 0
+        ? [
+            { type: "text" as const, text: r.content },
+            {
+              type: "data-agent.search_sources" as const,
+              data: { sources },
+            },
+          ]
+        : r.content;
     return {
       role: r.role === "user" ? "user" : "assistant",
-      content: r.content,
+      content,
       id: r.message_id,
       createdAt: new Date(r.ts_ms),
       metadata: {
@@ -248,6 +260,14 @@ function historyToolEvent(record: ChatMessageRecord): AgentEvent | null {
     };
   }
   return null;
+}
+
+function agentSearchSources(record: ChatMessageRecord): AgentSearchSource[] {
+  if (!Array.isArray(record.search_sources)) return [];
+  return record.search_sources.filter(
+    (source) =>
+      typeof source?.title === "string" && typeof source?.url === "string",
+  );
 }
 
 function objectPayload(value: object): Record<string, unknown> {

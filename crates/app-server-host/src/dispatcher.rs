@@ -12,17 +12,18 @@ use app_server_core::{
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
     AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
-    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest, AgentReasoningEvent,
-    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
-    CURRENT_PROTOCOL_VERSION, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind,
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord,
-    ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
-    DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse, FileWriteTextResponse, HostLocalPath,
-    PathHandle, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
-    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionReclaimedResponse, SessionToken,
-    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
-    WorkspaceListResponse, negotiate_protocol_version,
+    AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest,
+    AgentProviderCapabilities, AgentReasoningEvent, AgentStartedResponse, AgentTokenEvent,
+    AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION, CadQueryExportFormat,
+    CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
+    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
+    ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
+    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, SelectionUpdateRequest,
+    SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
+    ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
+    WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
+    negotiate_protocol_version,
 };
 
 use crate::cadquery_python_path;
@@ -137,7 +138,7 @@ impl HostRequestDispatcher {
                 active_index: None,
             },
             push_sink,
-            session: HostSession::new(session_token, server_capabilities(false)),
+            session: HostSession::new(session_token, server_capabilities(None)),
         }
     }
 
@@ -1736,7 +1737,8 @@ fn display_relative_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn server_capabilities(llm_configured: bool) -> ServerCapabilities {
+fn server_capabilities(agent_provider: Option<AgentProviderCapabilities>) -> ServerCapabilities {
+    let llm_configured = agent_provider.is_some();
     ServerCapabilities {
         protocol_version: ProtocolVersionRange::new(
             CURRENT_PROTOCOL_VERSION,
@@ -1750,18 +1752,24 @@ fn server_capabilities(llm_configured: bool) -> ServerCapabilities {
         agent: true,
         selection_sync: true,
         llm_configured,
+        agent_provider,
     }
 }
 
 async fn server_capabilities_for_request(
     requested_preview_kinds: Vec<PreviewRequestKind>,
 ) -> ServerCapabilities {
-    let llm_configured = app_server_core::llm::load_rig_agent_config()
+    let agent_provider = app_server_core::llm::load_rig_agent_config()
         .await
         .ok()
         .flatten()
-        .is_some();
-    let mut capabilities = server_capabilities(llm_configured);
+        .map(|config| AgentProviderCapabilities {
+            provider: "openai_responses".into(),
+            model: Some(config.model),
+            native_web_search_enabled: config.native_web_search,
+            search_sources_supported: false,
+        });
+    let mut capabilities = server_capabilities(agent_provider);
     capabilities.supported_preview_kinds = requested_preview_kinds
         .into_iter()
         .filter(|kind| matches!(kind, PreviewRequestKind::GeometryArtifact))

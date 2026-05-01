@@ -8,9 +8,9 @@ mod watch;
 use std::collections::{HashMap, VecDeque};
 
 use app_server_protocol::{
-    AgentStartedResponse, CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord,
-    ChatSessionId, ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest,
-    ServerPushEvent,
+    AgentProviderCapabilities, AgentStartedResponse, CadQueryResultReady,
+    CapabilityHandshakeRequest, ChatMessageRecord, ChatSessionId, ChatSessionSummary, PathHandle,
+    RequestId, SelectionUpdateRequest, ServerPushEvent,
 };
 
 use crate::AppServerTransportPort;
@@ -58,6 +58,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) watch_resubscribe_count: u32,
     pub(super) pending_handshake: Option<Vec<u8>>,
     pub(super) llm_configured: bool,
+    pub(super) agent_provider: Option<AgentProviderCapabilities>,
 }
 
 impl<T: AppServerTransportPort> ManagedClient<T> {
@@ -98,6 +99,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             watch_resubscribe_count: 0,
             pending_handshake: None,
             llm_configured: false,
+            agent_provider: None,
         }
     }
 
@@ -194,6 +196,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             last_error: self.last_error.clone(),
             transport_status: self.transport_status,
             llm_configured: self.llm_configured,
+            agent_provider: self.agent_provider.clone(),
         }
     }
 

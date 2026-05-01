@@ -1,17 +1,17 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent, AgentReasoningEvent,
-    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
-    CURRENT_PROTOCOL_VERSION, CadQueryArtifactExport, CadQueryArtifactRelation,
-    CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
-    CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
-    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
-    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
-    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
-    ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
-    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
-    PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
+    AgentInvokeRequest, AgentMode, AgentPlanPackageRef, AgentPlanSavedEvent,
+    AgentProviderCapabilities, AgentReasoningEvent, AgentSearchSource, AgentStartedResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
+    CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryFeatureFaces, CadQueryMeshPayload,
+    CadQueryObjectKind, CadQueryPartMesh, CadQueryResultReady, CancelRequest,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatAckResponse, ChatArchiveRequest,
+    ChatArchivedResponse, ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest,
+    ChatHistoryResponse, ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole,
+    ChatSendRequest, ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord,
+    ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope,
+    CommandSuccess, EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse,
+    PathHandle, PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewMeshPayload,
     PreviewReadyResponse, PreviewRenderedImagePayload, PreviewRequest, PreviewRequestKind,
     PreviewResponseFormat, PreviewUnit, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
     RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest, SelectionUpdateResponse,
@@ -160,6 +160,12 @@ fn reclaim_and_artifact_variants_roundtrip() {
             agent: false,
             selection_sync: false,
             llm_configured: false,
+            agent_provider: Some(AgentProviderCapabilities {
+                provider: "openai_responses".into(),
+                model: Some("gpt-5.2".into()),
+                native_web_search_enabled: true,
+                search_sources_supported: false,
+            }),
         },
     };
     let bytes = borsh::to_vec(&response).unwrap();
@@ -451,6 +457,12 @@ fn chat_agent_and_selection_payloads_roundtrip() {
                 result_json: "{\"ok\":true}".into(),
             }),
             mesh_result: None,
+            search_sources: vec![AgentSearchSource {
+                title: "OpenAI web search".into(),
+                url: "https://developers.openai.com/api/docs/guides/tools-web-search".into(),
+                start_index: Some(0),
+                end_index: Some(12),
+            }],
             run_id: Some("agent-1".into()),
         }],
     };
@@ -725,6 +737,7 @@ fn chat_message_record_run_id_none_borsh_roundtrip() {
         tool_calls: Vec::new(),
         tool_result: None,
         mesh_result: None,
+        search_sources: Vec::new(),
         run_id: None,
     };
     let bytes = borsh::to_vec(&record).unwrap();

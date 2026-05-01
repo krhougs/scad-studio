@@ -194,7 +194,36 @@
 
 ### Phase 6 — Protocol、Web 端侧与配置接入
 
-- 状态：未执行。
+- 状态：已完成，准备提交。
+- 前序目标保护：
+  - 未重新引入 Rust 桌面端、`studio-app`、`scad-ui`、`scad-viewer` 或 in-process / mpsc host 生产路径。
+  - 保持 WebSocket async service、async I/O、Rig-only Agent 和 provider-native web search 边界。
+  - Web 端只消费 app server protocol snapshot 与 Chat history，不直接调用 provider 或联网搜索 API。
+- 变更摘要：
+  - protocol 版本提升到 7，新增 `AgentProviderCapabilities` 与 `AgentSearchSource`，并在 `ServerCapabilities.agent_provider`、`ChatMessageRecord.search_sources` 中持久化能力状态和搜索来源。
+  - ChatStore JSONL 读写兼容 `search_sources`，旧记录默认空来源。
+  - host handshake capability 统一从 Rig Agent 配置生成，向 Web 暴露 provider、model、native web search enabled 和当前 sources 支持状态。
+  - `studio-common` snapshot 保存 `agent_provider`，Web wasm snapshot 通过同一条 protocol / managed client 路径暴露该字段。
+  - TypeScript protocol package、Web Chat snapshot、Zustand store 和 Chat runtime 接入新增字段；历史 assistant 消息包含搜索来源时渲染 sources data part。
+  - Web Chat 增加搜索来源列表呈现，仅允许 `http://` / `https://` 链接；Chat header 在 native web search 开启时显示 capability 状态。
+  - 补充 Web store、Chat runtime、Chat message、protocol package、studio-common handshake 与 wasm snapshot 的测试覆盖。
+- 独立复审记录：
+  - 第一轮 Phase 6 复审发现三个问题：`protocol:check-generated` 需要在生成物 staged 后通过；Web `chatHistoryEqual` 未比较 `search_sources`；`studio-common` / `studio-web-wasm` 缺少非空 `agent_provider` 传递测试。均已修复。
+  - 第二轮 Phase 6 复审未发现剩余阻塞项或高风险问题；唯一普通问题为结果归档未更新，本节已补齐。
+- 验证结果：
+  - `cargo test -p app-server-protocol` 通过。
+  - `cargo test -p app-server-protocol-wasm` 通过。
+  - `cargo test -p studio-common` 通过。
+  - `cargo test -p studio-web-wasm` 通过。
+  - `cargo test -p app-server-host` 通过。
+  - `cargo test -p app-server-core` 通过；首次与其他编译并发运行时 CadQuery staging 出现两个超时 / 取消不稳定失败，单独重跑对应测试文件通过，随后单独完整重跑 `app-server-core` 通过。
+  - `bun run protocol:build` 通过。
+  - `bun run protocol:check-generated` 通过。
+  - `bun run --cwd packages/studio-web typecheck` 通过。
+  - `bun run --cwd packages/studio-web test:unit` 通过；仍有既有 React `act(...)` warning，未在本 Phase 扩大处理范围。
+  - `git diff --check` 通过。
+- 遗留问题：
+  - Rig 0.35.0 仍未暴露 OpenAI web search 的结构化 sources / annotations；protocol 与 Web 已具备字段和展示路径，真实来源填充需要等待 provider / Rig 暴露结构化数据，已在 `docs/known_issues.md` 记录。
 
 ### Phase 7 — 文档、已知问题、最终验证与独立 review
 

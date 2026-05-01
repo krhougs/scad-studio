@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentEventRow } from "../../src/workbench/chat-messages";
+import { AgentEventRow, SearchSourcesPart } from "../../src/workbench/chat-messages";
 
 describe("AgentEventRow", () => {
   afterEach(() => cleanup());
@@ -79,6 +79,36 @@ describe("AgentEventRow", () => {
     expect(modalText).toContain("parts/fixture_panel.py");
     expect(modalText).toContain("call_789");
     expect(modalText).toContain("run_999");
+  });
+});
+
+describe("SearchSourcesPart", () => {
+  afterEach(() => cleanup());
+
+  it("renders http search sources and filters unsafe urls", () => {
+    render(
+      <SearchSourcesPart
+        name="agent.search_sources"
+        data={{
+          sources: [
+            {
+              title: "OpenAI web search",
+              url: "https://developers.openai.com/api/docs/guides/tools-web-search",
+            },
+            { title: "unsafe", url: "javascript:alert(1)" },
+          ],
+        }}
+      />,
+    );
+
+    const sources = screen.getByTestId("agent-search-sources");
+    expect(sources.textContent).toContain("OpenAI web search");
+    expect(sources.textContent).not.toContain("unsafe");
+    const link = screen.getByRole("link", { name: "OpenAI web search" });
+    expect(link.getAttribute("href")).toBe(
+      "https://developers.openai.com/api/docs/guides/tools-web-search",
+    );
+    expect(link.getAttribute("rel")).toBe("noreferrer");
   });
 });
 

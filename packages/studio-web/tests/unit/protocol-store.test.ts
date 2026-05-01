@@ -5,6 +5,7 @@ import {
   chatHistoryEqual,
   agentRunEqual,
   agentEventsEqual,
+  agentProviderEqual,
   cadQueryResultsEqual,
 } from "../../src/state/protocol-store";
 import type { ChatSessionSummary, ChatMessageRecord, AgentRun, AgentEvent } from "../../src/workbench/chat-zone";
@@ -33,6 +34,7 @@ describe("applySnapshot", () => {
       current_selection: null,
       cadquery_results: [],
       llm_configured: true,
+      agent_provider: null,
       transport_status: null,
     });
   });
@@ -157,6 +159,24 @@ describe("applySnapshot", () => {
     expect(useProtocolStore.getState().llm_configured).toBe(false);
   });
 
+  it("updates agent_provider capability", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({
+      agent_provider: {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+      },
+    });
+    expect(useProtocolStore.getState().agent_provider).toEqual({
+      provider: "openai_responses",
+      model: "gpt-5.2",
+      native_web_search_enabled: true,
+      search_sources_supported: false,
+    });
+  });
+
   it("updates cadquery_results with artifact relation", () => {
     const { applySnapshot } = useProtocolStore.getState();
     const results = [makeCadQueryReady("cq_1")];
@@ -168,6 +188,12 @@ describe("applySnapshot", () => {
     useProtocolStore.setState({
       workspace_current: { root_name: "proj", workspace_id: "w1" },
       chat_sessions: [makeSession({ session_id: "s1" })],
+      agent_provider: {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+      },
       transport_status: "connected",
     });
     const { applySnapshot } = useProtocolStore.getState();
@@ -175,6 +201,7 @@ describe("applySnapshot", () => {
     const state = useProtocolStore.getState();
     expect(state.workspace_current).toBeNull();
     expect(state.chat_sessions).toEqual([]);
+    expect(state.agent_provider).toBeNull();
     expect(state.transport_status).toBeNull();
   });
 });
@@ -218,6 +245,21 @@ describe("chatHistoryEqual", () => {
 
   it("returns false when message_id differs", () => {
     expect(chatHistoryEqual([makeRecord("m1")], [makeRecord("m2")])).toBe(false);
+  });
+
+  it("returns false when search sources differ for the same message", () => {
+    expect(chatHistoryEqual(
+      [makeRecord("m1", "assistant")],
+      [{
+        ...makeRecord("m1", "assistant"),
+        search_sources: [
+          {
+            title: "OpenAI web search",
+            url: "https://developers.openai.com/api/docs/guides/tools-web-search",
+          },
+        ],
+      }],
+    )).toBe(false);
   });
 });
 
@@ -271,6 +313,42 @@ describe("agentEventsEqual", () => {
 
   it("returns false for different length", () => {
     expect(agentEventsEqual([], [makeEvent("agent.token")])).toBe(false);
+  });
+});
+
+describe("agentProviderEqual", () => {
+  it("returns true for same provider capability", () => {
+    expect(agentProviderEqual(
+      {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+      },
+      {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+      },
+    )).toBe(true);
+  });
+
+  it("returns false when web search capability differs", () => {
+    expect(agentProviderEqual(
+      {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: true,
+        search_sources_supported: false,
+      },
+      {
+        provider: "openai_responses",
+        model: "gpt-5.2",
+        native_web_search_enabled: false,
+        search_sources_supported: false,
+      },
+    )).toBe(false);
   });
 });
 
