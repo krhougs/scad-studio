@@ -403,7 +403,7 @@
 
 ### 阶段提交
 
-- 待提交。
+- `0670be9 Document agent provider configuration`
 
 ### 遗留问题
 
