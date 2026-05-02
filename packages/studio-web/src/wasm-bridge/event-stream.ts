@@ -85,6 +85,9 @@ function dispatchOne(event: ClientEventShape, ctx: DispatchContext): void {
       ctx.onAgentEvent?.(payload["payload"]);
       ctx.onSnapshotDirty();
       return;
+    case "snapshot_changed":
+      ctx.onSnapshotDirty();
+      return;
     case "transport_open":
       ctx.onTransportOpen?.();
       ctx.onSnapshotDirty();

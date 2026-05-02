@@ -443,6 +443,31 @@ fn watch_events_are_throttled_and_deduplicated() {
 }
 
 #[test]
+fn chat_list_changed_push_updates_snapshot_current_chat() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::ChatListChanged(chat_list_response()),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(
+        snapshot.current_chat_session,
+        Some(ChatSessionId("main".into()))
+    );
+    assert_eq!(snapshot.chat_sessions.len(), 1);
+    assert!(
+        client
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, ClientEvent::SnapshotChanged))
+    );
+}
+
+#[test]
 fn reconnect_replays_pending_and_resubscribes_watch() {
     let mut client = ManagedClient::new(FakeTransport::default());
     open_client_with_handshake(&mut client);
@@ -773,6 +798,8 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             title: "main".into(),
             goal: None,
             related_files: Vec::new(),
+            client_request_id: None,
+            initial_user_message: None,
         })
         .expect("dispatch chat.create");
     let _ = drain_outbound(&mut client);
@@ -781,6 +808,7 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             request_id: chat_create_id,
             result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
                 session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
                 title: "main".into(),
             })),
         }))
@@ -816,6 +844,7 @@ fn chat_agent_and_selection_successes_update_snapshot() {
     let invoke_id = client
         .dispatch_agent_invoke(AgentInvokeRequest {
             session_id: ChatSessionId("main".into()),
+            client_request_id: None,
             prompt: "inspect".into(),
             mode: AgentMode::Agent,
             plan_ref: None,
@@ -857,6 +886,7 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
     let invoke_id = client
         .dispatch_agent_invoke(AgentInvokeRequest {
             session_id: ChatSessionId("main".into()),
+            client_request_id: None,
             prompt: "inspect".into(),
             mode: AgentMode::Agent,
             plan_ref: None,
@@ -993,6 +1023,8 @@ fn chat_created_clears_previous_session_history() {
             title: "new chat".into(),
             goal: None,
             related_files: Vec::new(),
+            client_request_id: None,
+            initial_user_message: None,
         })
         .expect("dispatch chat.create");
     let _ = drain_outbound(&mut client);
@@ -1001,6 +1033,7 @@ fn chat_created_clears_previous_session_history() {
             request_id: create_request_id,
             result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
                 session_id: ChatSessionId("new-chat".into()),
+                agent_id: "agent-new-chat".into(),
                 title: "new chat".into(),
             })),
         }))
@@ -1142,8 +1175,10 @@ fn cancel_during_reconnect_is_deferred_until_handshake_replay() {
 
 fn chat_list_response() -> ChatListResponse {
     ChatListResponse {
+        active_chat_id: Some(ChatSessionId("main".into())),
         sessions: vec![ChatSessionSummary {
             session_id: ChatSessionId("main".into()),
+            agent_id: "agent-main".into(),
             title: "main".into(),
             archived: false,
             message_count: 1,

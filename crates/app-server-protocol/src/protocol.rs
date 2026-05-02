@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 8;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 9;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -621,11 +621,16 @@ pub struct ChatCreateRequest {
     pub title: String,
     pub goal: Option<String>,
     pub related_files: Vec<PathHandle>,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
+    #[serde(default)]
+    pub initial_user_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ChatCreatedResponse {
     pub session_id: ChatSessionId,
+    pub agent_id: String,
     pub title: String,
 }
 
@@ -637,6 +642,7 @@ pub struct ChatListRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ChatSessionSummary {
     pub session_id: ChatSessionId,
+    pub agent_id: String,
     pub title: String,
     pub archived: bool,
     pub message_count: u32,
@@ -646,6 +652,8 @@ pub struct ChatSessionSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ChatListResponse {
     pub sessions: Vec<ChatSessionSummary>,
+    #[serde(default)]
+    pub active_chat_id: Option<ChatSessionId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -653,6 +661,8 @@ pub struct ChatSendRequest {
     pub session_id: ChatSessionId,
     pub content: String,
     pub related_files: Vec<PathHandle>,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -745,6 +755,8 @@ pub struct AgentCadQueryConfirmation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentInvokeRequest {
     pub session_id: ChatSessionId,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
     pub prompt: String,
     pub mode: AgentMode,
     pub plan_ref: Option<PathHandle>,
@@ -1164,6 +1176,8 @@ pub enum ServerPushEvent {
     AgentPlanSaved(AgentPlanSavedEvent) = 9,
     #[serde(rename = "agent.reasoning")]
     AgentReasoning(AgentReasoningEvent) = 10,
+    #[serde(rename = "chat.list_changed")]
+    ChatListChanged(ChatListResponse) = 11,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

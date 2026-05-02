@@ -2,10 +2,11 @@ use app_server_core::{
     AgentToolCall, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
     CadQueryContractConfig, CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult,
     CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
-    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError, ChatStore, FileWatcher,
-    SlicerInstall, cadquery_result_ready, current_workspace_owned, detect_slicer_paths,
-    export_model, list_workspace_entries_owned, load_config_dto, preview_ready_response,
-    read_file_response_owned, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
+    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
+    ChatIndexListenerRegistration, ChatStore, FileWatcher, SlicerInstall, cadquery_result_ready,
+    current_workspace_owned, detect_slicer_paths, export_model, list_workspace_entries_owned,
+    load_config_dto, preview_ready_response, read_file_response_owned,
+    register_chat_index_listener, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
     run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel,
     run_rig_agent_turn_with_config, save_config_dto, send_to_slicer, stage_cadquery_project_owned,
 };
@@ -18,22 +19,22 @@ use app_server_protocol::{
     AgentPlanRejectRequest, AgentProviderCapabilities, AgentReasoningEvent, AgentStartedResponse,
     AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
     CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatRole, ChatToolCallRecord, ChatToolResultRecord, ClientCommand,
-    ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS,
-    ExportRunResponse, FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind,
-    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, SelectionUpdateRequest,
-    SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope, ServerPushEvent,
-    ServerResponseEnvelope, SessionReclaimedResponse, SessionToken, SubscriptionId,
-    WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse,
-    negotiate_protocol_version,
+    CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatToolCallRecord,
+    ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
+    DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse, FileWriteTextResponse, HostLocalPath,
+    PathHandle, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
+    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionReclaimedResponse, SessionToken,
+    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
+    WorkspaceListResponse, negotiate_protocol_version,
 };
 
 use crate::cadquery_python_path;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
@@ -44,6 +45,88 @@ pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 
 const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
 const CADQUERY_RUNNER_TIMEOUT: Duration = Duration::from_secs(180);
+static AGENT_RUN_REGISTRIES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<AgentRunRegistry>>>>> =
+    OnceLock::new();
+static CHAT_PUSH_SUBSCRIBERS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, ServerPushSink>>>> =
+    OnceLock::new();
+static NEXT_CHAT_PUSH_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(1);
+
+struct ChatPushSubscription {
+    workspace_path: PathBuf,
+    id: u64,
+}
+
+impl Drop for ChatPushSubscription {
+    fn drop(&mut self) {
+        let Some(subscribers) = CHAT_PUSH_SUBSCRIBERS.get() else {
+            return;
+        };
+        let Ok(mut subscribers) = subscribers.lock() else {
+            return;
+        };
+        if let Some(workspace_subscribers) = subscribers.get_mut(&self.workspace_path) {
+            workspace_subscribers.remove(&self.id);
+            if workspace_subscribers.is_empty() {
+                subscribers.remove(&self.workspace_path);
+            }
+        }
+    }
+}
+
+fn register_chat_push_subscriber(
+    workspace_path: Option<&Path>,
+    push_sink: ServerPushSink,
+) -> Option<ChatPushSubscription> {
+    let workspace_path = workspace_path?.to_path_buf();
+    let id = NEXT_CHAT_PUSH_SUBSCRIBER_ID.fetch_add(1, Ordering::SeqCst);
+    let subscribers = CHAT_PUSH_SUBSCRIBERS.get_or_init(|| Mutex::new(HashMap::new()));
+    subscribers
+        .lock()
+        .expect("Chat push subscriber map lock should not be poisoned")
+        .entry(workspace_path.clone())
+        .or_default()
+        .insert(id, push_sink);
+    Some(ChatPushSubscription { workspace_path, id })
+}
+
+fn broadcast_chat_list_changed(workspace_path: &Path, response: ChatListResponse) {
+    let Some(subscribers) = CHAT_PUSH_SUBSCRIBERS.get() else {
+        return;
+    };
+    let sinks = subscribers
+        .lock()
+        .expect("Chat push subscriber map lock should not be poisoned")
+        .get(workspace_path)
+        .map(|subscribers| subscribers.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for sink in sinks {
+        sink(ServerPushEnvelope {
+            event: ServerPushEvent::ChatListChanged(response.clone()),
+        });
+    }
+}
+
+fn register_host_chat_index_listener(
+    workspace_path: Option<&Path>,
+    push_sink: ServerPushSink,
+) -> Option<ChatIndexListenerRegistration> {
+    let workspace_path = workspace_path?.to_path_buf();
+    let callback_workspace = workspace_path.clone();
+    Some(register_chat_index_listener(
+        &workspace_path,
+        Arc::new(move || {
+            let workspace = callback_workspace.clone();
+            let push_sink = Arc::clone(&push_sink);
+            tokio::spawn(async move {
+                if let Ok(response) = ChatStore::new(workspace).list(false).await {
+                    push_sink(ServerPushEnvelope {
+                        event: ServerPushEvent::ChatListChanged(response),
+                    });
+                }
+            });
+        }),
+    ))
+}
 
 #[derive(Debug)]
 struct CadQueryResultCache {
@@ -111,6 +194,8 @@ pub struct HostRequestDispatcher {
     agent_model_state: AgentModelRuntimeState,
     selection_snapshot: SelectionUpdateRequest,
     push_sink: ServerPushSink,
+    chat_push_subscription: Option<ChatPushSubscription>,
+    chat_index_listener: Option<ChatIndexListenerRegistration>,
     session: HostSession,
 }
 
@@ -134,6 +219,11 @@ impl HostRequestDispatcher {
         denied_extensions: Vec<String>,
         push_sink: ServerPushSink,
     ) -> Self {
+        let agent_runs = agent_run_registry_for_workspace(workspace_path.as_deref());
+        let chat_push_subscription =
+            register_chat_push_subscriber(workspace_path.as_deref(), Arc::clone(&push_sink));
+        let chat_index_listener =
+            register_host_chat_index_listener(workspace_path.as_deref(), Arc::clone(&push_sink));
         Self {
             workspace_id: WorkspaceId::new("workspace"),
             workspace_path,
@@ -143,18 +233,25 @@ impl HostRequestDispatcher {
             cadquery_results: Arc::new(Mutex::new(CadQueryResultCache::new(
                 CADQUERY_RESULT_CACHE_LIMIT,
             ))),
-            agent_runs: Arc::new(Mutex::new(AgentRunRegistry::default())),
+            agent_runs,
             agent_model_state: AgentModelRuntimeState::default(),
             selection_snapshot: SelectionUpdateRequest {
                 selections: Vec::new(),
                 active_index: None,
             },
             push_sink,
+            chat_push_subscription,
+            chat_index_listener,
             session: HostSession::new(session_token, server_capabilities(None)),
         }
     }
 
     pub fn rebind_workspace(&mut self, workspace_path: PathBuf) {
+        self.agent_runs = agent_run_registry_for_workspace(Some(&workspace_path));
+        self.chat_push_subscription =
+            register_chat_push_subscriber(Some(&workspace_path), Arc::clone(&self.push_sink));
+        self.chat_index_listener =
+            register_host_chat_index_listener(Some(&workspace_path), Arc::clone(&self.push_sink));
         self.workspace_path = Some(workspace_path);
     }
 
@@ -335,10 +432,44 @@ impl HostRequestDispatcher {
             }
             ClientCommand::ChatCreate(request) => {
                 self.issue_handles(&request.related_files);
-                self.chat_store()?
-                    .create_owned(request.title, request.goal, request.related_files)
-                    .await
-                    .map(CommandSuccess::ChatCreated)
+                let store = self.chat_store()?;
+                let Some(initial_user_message) = request.initial_user_message else {
+                    return Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "chat.create requires initial_user_message",
+                    ));
+                };
+                if initial_user_message.trim().is_empty() {
+                    return Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "chat.create initial_user_message must not be empty",
+                    ));
+                }
+                let response = match request.client_request_id {
+                    Some(client_request_id) => {
+                        if client_request_id.trim().is_empty() {
+                            return Err(ProtocolError::new(
+                                ProtocolErrorCode::InvalidCommand,
+                                "chat.create client_request_id must not be empty",
+                            ));
+                        }
+                        store
+                            .create_with_client_request_id_and_initial_message(
+                                &client_request_id,
+                                &request.title,
+                                request.goal,
+                                request.related_files,
+                                Some(initial_user_message),
+                            )
+                            .await
+                    }
+                    None => Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "chat.create requires client_request_id",
+                    )),
+                }?;
+                self.broadcast_chat_list_snapshot().await?;
+                Ok(CommandSuccess::ChatCreated(response))
             }
             ClientCommand::ChatList(request) => self
                 .chat_store()?
@@ -354,20 +485,23 @@ impl HostRequestDispatcher {
                         request.content,
                         request.related_files,
                         None,
+                        request.client_request_id,
                     )
                     .await
                     .map(CommandSuccess::ChatAck)
             }
-            ClientCommand::ChatHistory(request) => self
-                .chat_store()?
-                .history_owned(request.session_id, request.limit)
-                .await
-                .map(CommandSuccess::ChatHistory),
-            ClientCommand::ChatArchive(request) => self
-                .chat_store()?
-                .archive_owned(request.session_id)
-                .await
-                .map(CommandSuccess::ChatArchived),
+            ClientCommand::ChatHistory(request) => {
+                let store = self.chat_store()?;
+                store.select(&request.session_id).await?;
+                let response = store.history(&request.session_id, request.limit).await?;
+                self.broadcast_chat_list_snapshot().await?;
+                Ok(CommandSuccess::ChatHistory(response))
+            }
+            ClientCommand::ChatArchive(request) => {
+                let response = self.chat_store()?.archive_owned(request.session_id).await?;
+                self.broadcast_chat_list_snapshot().await?;
+                Ok(CommandSuccess::ChatArchived(response))
+            }
             ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request),
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
             ClientCommand::AgentModelRegistry => {
@@ -533,6 +667,13 @@ impl HostRequestDispatcher {
         Ok(ChatStore::new(self.workspace_root()?.to_path_buf()))
     }
 
+    async fn broadcast_chat_list_snapshot(&self) -> Result<(), ProtocolError> {
+        let workspace_root = self.workspace_root()?.to_path_buf();
+        let response = ChatStore::new(workspace_root.clone()).list(false).await?;
+        broadcast_chat_list_changed(&workspace_root, response);
+        Ok(())
+    }
+
     fn issue_handles(&mut self, handles: &[PathHandle]) {
         for handle in handles {
             self.session.issue_handle(handle.clone());
@@ -626,7 +767,16 @@ impl HostRequestDispatcher {
             .agent_runs
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .try_start(request.session_id.clone())?;
+            .try_start(
+                request.session_id.clone(),
+                request.client_request_id.clone(),
+            )?;
+        if !run.started_now {
+            return Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+                session_id: run.session_id,
+                run_id: run.run_id,
+            }));
+        }
         let response = AgentStartedResponse {
             session_id: run.session_id.clone(),
             run_id: run.run_id.clone(),
@@ -694,13 +844,47 @@ impl HostRequestDispatcher {
 struct AgentRunRegistry {
     next_run_id: u64,
     running: Option<AgentRunHandle>,
+    started_by_request: HashMap<AgentRunRequestKey, AgentRunHandle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AgentRunRequestKey {
+    session_id: app_server_protocol::ChatSessionId,
+    request_id: String,
+}
+
+fn agent_run_registry_for_workspace(workspace_path: Option<&Path>) -> Arc<Mutex<AgentRunRegistry>> {
+    let Some(workspace_path) = workspace_path else {
+        return Arc::new(Mutex::new(AgentRunRegistry::default()));
+    };
+    let registries = AGENT_RUN_REGISTRIES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registries = registries
+        .lock()
+        .expect("Agent run registry map lock should not be poisoned");
+    Arc::clone(
+        registries
+            .entry(workspace_path.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(AgentRunRegistry::default()))),
+    )
 }
 
 impl AgentRunRegistry {
     fn try_start(
         &mut self,
         session_id: app_server_protocol::ChatSessionId,
+        client_request_id: Option<String>,
     ) -> Result<AgentRunHandle, ProtocolError> {
+        let request_key = client_request_id
+            .as_ref()
+            .map(|request_id| AgentRunRequestKey {
+                session_id: session_id.clone(),
+                request_id: request_id.clone(),
+            });
+        if let Some(request_key) = request_key.as_ref() {
+            if let Some(run) = self.started_by_request.get(request_key) {
+                return Ok(run.clone().as_existing());
+            }
+        }
         if self.running.is_some() {
             return Err(ProtocolError::new(
                 ProtocolErrorCode::AgentBusy,
@@ -712,8 +896,12 @@ impl AgentRunRegistry {
             session_id,
             run_id: format!("agent-{}", self.next_run_id),
             cancelled: Arc::new(AtomicBool::new(false)),
+            started_now: true,
         };
         self.running = Some(run.clone());
+        if let Some(request_key) = request_key {
+            self.started_by_request.insert(request_key, run.clone());
+        }
         Ok(run)
     }
 
@@ -735,7 +923,12 @@ impl AgentRunRegistry {
             .running
             .as_ref()
             .is_some_and(|run| run.run_id == run_id);
-        is_current.then(|| self.running.take()).flatten()
+        let finished = is_current.then(|| self.running.take()).flatten();
+        if finished.is_some() {
+            self.started_by_request
+                .retain(|_, run| run.run_id != run_id);
+        }
+        finished
     }
 }
 
@@ -744,6 +937,14 @@ struct AgentRunHandle {
     session_id: app_server_protocol::ChatSessionId,
     run_id: String,
     cancelled: Arc<AtomicBool>,
+    started_now: bool,
+}
+
+impl AgentRunHandle {
+    fn as_existing(mut self) -> Self {
+        self.started_now = false;
+        self
+    }
 }
 
 struct AgentWorker {
@@ -1735,6 +1936,7 @@ async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, conte
             Vec::new(),
             None,
             Some(run.run_id.clone()),
+            None,
         )
         .await;
 }
@@ -1760,6 +1962,7 @@ async fn append_agent_capability_meta(
             Vec::new(),
             None,
             Some(run.run_id.clone()),
+            None,
         )
         .await;
 }
@@ -2320,6 +2523,7 @@ mod tests {
     ) -> AgentInvokeRequest {
         AgentInvokeRequest {
             session_id: ChatSessionId("main".into()),
+            client_request_id: None,
             prompt: "inspect".into(),
             mode: AgentMode::Agent,
             plan_ref: None,

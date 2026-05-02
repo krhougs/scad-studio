@@ -132,6 +132,9 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();
+                if self.pending_chat_session.is_none() {
+                    self.current_chat_session = response.active_chat_id.clone();
+                }
             }
             CommandSuccess::ChatHistory(response) => {
                 if self.pending_chat_session.as_ref() == Some(&response.session_id) {
@@ -283,6 +286,11 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         match push.event {
             ServerPushEvent::WatchChanged(event) => self.handle_watch_changed(event),
             ServerPushEvent::WatchError(event) => self.handle_watch_error(event),
+            ServerPushEvent::ChatListChanged(response) => {
+                self.chat_sessions = response.sessions.clone();
+                self.current_chat_session = response.active_chat_id.clone();
+                self.events.push_back(ClientEvent::SnapshotChanged);
+            }
             event => self.handle_agent_event(event),
         }
     }

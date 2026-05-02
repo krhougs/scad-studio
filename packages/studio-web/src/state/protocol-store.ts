@@ -248,8 +248,20 @@ export function chatSessionsEqual(
       sa.session_id !== sb.session_id ||
       sa.title !== sb.title ||
       sa.archived !== sb.archived ||
-      sa.message_count !== sb.message_count
+      sa.message_count !== sb.message_count ||
+      sa.agent_id !== sb.agent_id ||
+      !pathHandlesEqual(sa.related_files, sb.related_files)
     ) return false;
+  }
+  return true;
+}
+
+function pathHandlesEqual(a: unknown[] | undefined, b: unknown[] | undefined): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (JSON.stringify(left[i]) !== JSON.stringify(right[i])) return false;
   }
   return true;
 }

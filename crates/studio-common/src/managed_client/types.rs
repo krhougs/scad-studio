@@ -51,6 +51,7 @@ pub enum ClientEvent {
     AgentEvent {
         payload: ServerPushEvent,
     },
+    SnapshotChanged,
     TransportOpen,
     TransportClosed {
         reason: TransportCloseReason,

@@ -1,10 +1,11 @@
-use std::fs;
+use std::{fs, sync::Arc};
 
-use app_server_core::ChatStore;
+use app_server_core::{ChatStore, ChatSummaryUpdate};
 use app_server_protocol::{
     ChatRole, ChatSessionId, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
     ProtocolErrorCode, WorkspaceId,
 };
+use serde_json::Value;
 
 #[tokio::test]
 async fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
@@ -21,7 +22,7 @@ async fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
         )
         .await
         .expect("create chat");
-    assert_eq!(created.session_id, ChatSessionId("main-chat".into()));
+    assert_ne!(created.session_id, ChatSessionId("main-chat".into()));
 
     let ack = store
         .append_message(
@@ -54,9 +55,21 @@ async fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
         .await
         .expect("archive chat");
     assert_eq!(archived.session_id, created.session_id);
-    assert!(store.list(false).await.expect("list active").sessions.is_empty());
+    assert!(
+        store
+            .list(false)
+            .await
+            .expect("list active")
+            .sessions
+            .is_empty()
+    );
     assert_eq!(
-        store.list(true).await.expect("list archived").sessions.len(),
+        store
+            .list(true)
+            .await
+            .expect("list archived")
+            .sessions
+            .len(),
         1
     );
 
@@ -64,7 +77,456 @@ async fn chat_store_creates_sends_reads_and_archives_jsonl_sessions() {
 }
 
 #[tokio::test]
-async fn chat_store_uses_unique_session_ids_for_repeated_titles() {
+async fn chat_store_creates_random_chat_id_and_chats_json_index() {
+    let root = temp_dir("chat-store-index-create");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let created = store
+        .create("Main Chat", Some("goal".into()), Vec::new())
+        .await
+        .unwrap();
+
+    assert_ne!(created.session_id, ChatSessionId("main-chat".into()));
+    assert!(root.join("chats.json").is_file());
+
+    let index = read_chats_json(&root);
+    let chats = index["chats"].as_array().expect("chats array");
+    assert_eq!(chats.len(), 1);
+    let entry = &chats[0];
+    assert_eq!(
+        entry["chat_id"].as_str(),
+        Some(created.session_id.0.as_str())
+    );
+    assert_eq!(entry["title"].as_str(), Some("Main Chat"));
+    assert!(
+        entry["agent_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(entry["goal"].as_str(), Some("goal"));
+    assert_eq!(
+        entry["messages_path"].as_str(),
+        Some(format!("chats/{}.jsonl", created.session_id.0).as_str())
+    );
+    assert_eq!(
+        entry["events_path"].as_str(),
+        Some(format!("agent-events/{}.jsonl", entry["agent_id"].as_str().unwrap()).as_str())
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_lists_sessions_in_chats_json_order_not_filesystem_order() {
+    let root = temp_dir("chat-store-index-order");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let first = store.create("Zulu", None, Vec::new()).await.unwrap();
+    let second = store.create("Alpha", None, Vec::new()).await.unwrap();
+
+    let sessions = store.list(false).await.unwrap().sessions;
+
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].session_id, first.session_id);
+    assert_eq!(sessions[1].session_id, second.session_id);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_reads_history_from_chats_json_messages_path() {
+    let root = temp_dir("chat-store-index-history-path");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store.create("Path Stable", None, Vec::new()).await.unwrap();
+
+    let moved_path = root.join("renamed-history-file.jsonl");
+    fs::rename(
+        root.join(format!("chats/{}.jsonl", created.session_id.0)),
+        &moved_path,
+    )
+    .unwrap();
+    let mut index = read_chats_json(&root);
+    index["chats"][0]["messages_path"] = Value::String("renamed-history-file.jsonl".into());
+    fs::write(
+        root.join("chats.json"),
+        serde_json::to_string_pretty(&index).unwrap(),
+    )
+    .unwrap();
+
+    let history = store.history(&created.session_id, None).await.unwrap();
+
+    assert_eq!(history.session_id, created.session_id);
+    assert_eq!(history.messages.len(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_deduplicates_create_by_client_request_id() {
+    let root = temp_dir("chat-store-create-idempotent");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let first = store
+        .create_with_client_request_id("request-1", "First", None, Vec::new())
+        .await
+        .unwrap();
+    let second = store
+        .create_with_client_request_id("request-1", "Retried", None, Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(first.session_id, second.session_id);
+    let sessions = store.list(false).await.unwrap().sessions;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].title, "First");
+    assert_eq!(
+        store.list(false).await.unwrap().active_chat_id,
+        Some(first.session_id.clone())
+    );
+    let history = store.history(&first.session_id, None).await.unwrap();
+    assert_eq!(history.messages.len(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_deduplicates_first_user_message_by_client_request_id() {
+    let root = temp_dir("chat-store-send-idempotent");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store
+        .create_with_client_request_id("request-create", "First", None, Vec::new())
+        .await
+        .unwrap();
+
+    let first = store
+        .append_message_with_run_id(
+            &created.session_id,
+            ChatRole::User,
+            "first prompt",
+            Vec::new(),
+            None,
+            None,
+            Some("request-create".into()),
+        )
+        .await
+        .unwrap();
+    let second = store
+        .append_message_with_run_id(
+            &created.session_id,
+            ChatRole::User,
+            "first prompt retried",
+            Vec::new(),
+            None,
+            None,
+            Some("request-create".into()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.message_id, second.message_id);
+    let history = store.history(&created.session_id, None).await.unwrap();
+    assert_eq!(history.messages.len(), 2);
+    assert_eq!(history.messages[1].content, "first prompt");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_creates_initial_user_message_atomically_with_index() {
+    let root = temp_dir("chat-store-create-initial-message");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let first = store
+        .create_with_client_request_id_and_initial_message(
+            "request-create",
+            "First",
+            None,
+            Vec::new(),
+            Some("first prompt".into()),
+        )
+        .await
+        .unwrap();
+    let second = store
+        .create_with_client_request_id_and_initial_message(
+            "request-create",
+            "Retried",
+            None,
+            Vec::new(),
+            Some("first prompt retried".into()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.session_id, second.session_id);
+    let history = store.history(&first.session_id, None).await.unwrap();
+    assert_eq!(history.messages.len(), 2);
+    assert_eq!(history.messages[1].role, ChatRole::User);
+    assert_eq!(history.messages[1].content, "first prompt");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_deduplicates_concurrent_first_user_message_by_client_request_id() {
+    let root = temp_dir("chat-store-send-idempotent-concurrent");
+    fs::create_dir_all(&root).unwrap();
+    let store = Arc::new(ChatStore::new(root.clone()));
+    let created = store
+        .create_with_client_request_id("request-create", "First", None, Vec::new())
+        .await
+        .unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(16));
+    let mut tasks = Vec::new();
+    for index in 0..16 {
+        let barrier = Arc::clone(&barrier);
+        let store = Arc::clone(&store);
+        let session_id = created.session_id.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store
+                .append_message_with_run_id(
+                    &session_id,
+                    ChatRole::User,
+                    &format!("first prompt {index}"),
+                    Vec::new(),
+                    None,
+                    None,
+                    Some("request-create".into()),
+                )
+                .await
+        }));
+    }
+
+    let mut message_ids = Vec::new();
+    for task in tasks {
+        message_ids.push(task.await.unwrap().unwrap().message_id);
+    }
+
+    assert!(message_ids.iter().all(|id| id == &message_ids[0]));
+    let history = store.history(&created.session_id, None).await.unwrap();
+    assert_eq!(history.messages.len(), 2);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_deduplicates_concurrent_create_by_client_request_id() {
+    let root = temp_dir("chat-store-create-idempotent-concurrent");
+    fs::create_dir_all(&root).unwrap();
+    let store = Arc::new(ChatStore::new(root.clone()));
+    let mut tasks = Vec::new();
+    for index in 0..12 {
+        let store = Arc::clone(&store);
+        tasks.push(tokio::spawn(async move {
+            store
+                .create_with_client_request_id(
+                    "request-concurrent",
+                    &format!("Draft {index}"),
+                    None,
+                    Vec::new(),
+                )
+                .await
+        }));
+    }
+
+    let mut ids = Vec::new();
+    for task in tasks {
+        ids.push(task.await.unwrap().unwrap().session_id);
+    }
+
+    assert!(ids.iter().all(|id| id == &ids[0]));
+    let listed = store.list(false).await.unwrap();
+    let sessions = listed.sessions;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(listed.active_chat_id, Some(ids[0].clone()));
+    assert_eq!(
+        store.history(&ids[0], None).await.unwrap().messages.len(),
+        1
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_updates_active_chat_id_on_select_and_archive() {
+    let root = temp_dir("chat-store-active-chat");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let first = store.create("First", None, Vec::new()).await.unwrap();
+    let second = store.create("Second", None, Vec::new()).await.unwrap();
+
+    store.select(&first.session_id).await.unwrap();
+    assert_eq!(
+        read_chats_json(&root)["active_chat_id"].as_str(),
+        Some(first.session_id.0.as_str())
+    );
+
+    store.archive(&first.session_id).await.unwrap();
+    assert_eq!(
+        read_chats_json(&root)["active_chat_id"].as_str(),
+        Some(second.session_id.0.as_str())
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_persists_summary_metadata_in_chats_json() {
+    let root = temp_dir("chat-store-summary-index");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let related = PathHandle::new(WorkspaceId::new("ws"), ["docs", "note.md"]).unwrap();
+    let created = store.create("Summary", None, Vec::new()).await.unwrap();
+
+    store
+        .update_summary(
+            &created.session_id,
+            ChatSummaryUpdate {
+                summary: "current summary".into(),
+                goal: "make progress".into(),
+                related_files: vec![related.clone()],
+                open_questions: vec!["Which material?".into()],
+            },
+        )
+        .await
+        .unwrap();
+
+    let index = read_chats_json(&root);
+    let entry = &index["chats"][0];
+    let agent_id = entry["agent_id"].as_str().expect("agent id").to_owned();
+    assert_eq!(entry["summary"].as_str(), Some("current summary"));
+    assert_eq!(entry["goal"].as_str(), Some("make progress"));
+    assert_eq!(entry["open_questions"][0].as_str(), Some("Which material?"));
+    assert_eq!(entry["agent_id"].as_str(), Some(agent_id.as_str()));
+    assert!(entry["created_at_ms"].as_u64().is_some());
+    assert!(entry["updated_at_ms"].as_u64().is_some());
+    assert!(entry["updated_at_ms"].as_u64() >= entry["created_at_ms"].as_u64());
+    assert!(entry["messages_path"].as_str().is_some());
+    assert!(entry["events_path"].as_str().is_some());
+    assert!(entry["bound_model"].is_null());
+    assert_eq!(
+        store.list(false).await.unwrap().sessions[0].related_files,
+        vec![related]
+    );
+    assert_eq!(
+        store
+            .history(&created.session_id, None)
+            .await
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_rejects_corrupt_chats_json_without_filename_fallback() {
+    let root = temp_dir("chat-store-corrupt-index");
+    fs::create_dir_all(root.join("chats")).unwrap();
+    fs::write(
+        root.join("chats/legacy.jsonl"),
+        "{\"message_id\":\"msg-1\",\"ts_ms\":100,\"role\":\"user\",\"content\":\"hello\",\"related_files\":[]}\n",
+    )
+    .unwrap();
+    fs::write(root.join("chats.json"), "{not valid json").unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let error = store
+        .list(false)
+        .await
+        .expect_err("corrupt index should fail");
+
+    assert_eq!(error.code, ProtocolErrorCode::Internal);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn chat_store_rejects_chats_json_symlink() {
+    let root = temp_dir("chat-store-index-symlink");
+    let outside = temp_dir("chat-store-index-outside");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("chats.json"),
+        "{\"version\":1,\"active_chat_id\":null,\"chats\":[]}",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.join("chats.json"), root.join("chats.json")).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let error = store
+        .list(false)
+        .await
+        .expect_err("chats.json symlink should be rejected");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+    let _ = fs::remove_file(root.join("chats.json"));
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn chat_store_rejects_chats_json_tmp_symlink() {
+    let root = temp_dir("chat-store-index-tmp-symlink");
+    let outside = temp_dir("chat-store-index-tmp-outside");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("target"), "outside").unwrap();
+    std::os::unix::fs::symlink(outside.join("target"), root.join("chats.json.tmp")).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let error = store
+        .create_with_client_request_id("request-1", "Main", None, Vec::new())
+        .await
+        .expect_err("chats.json.tmp symlink should be rejected");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+    assert_eq!(
+        fs::read_to_string(outside.join("target")).unwrap(),
+        "outside"
+    );
+    let _ = fs::remove_file(root.join("chats.json.tmp"));
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn chat_store_removes_create_files_when_event_log_creation_fails() {
+    let root = temp_dir("chat-store-create-cleanup");
+    let outside = temp_dir("chat-store-create-cleanup-outside");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("agent-events")).unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let error = store
+        .create_with_client_request_id("request-1", "Main", None, Vec::new())
+        .await
+        .expect_err("symlinked agent-events should fail create");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+    let chat_files = fs::read_dir(root.join("chats"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(chat_files, 0);
+    let _ = fs::remove_file(root.join("agent-events"));
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
+#[tokio::test]
+async fn chat_store_uses_random_session_ids_for_repeated_titles() {
     let root = temp_dir("chat-store-ids");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
@@ -72,8 +534,9 @@ async fn chat_store_uses_unique_session_ids_for_repeated_titles() {
     let first = store.create("main", None, Vec::new()).await.unwrap();
     let second = store.create("main", None, Vec::new()).await.unwrap();
 
-    assert_eq!(first.session_id, ChatSessionId("main".into()));
-    assert_eq!(second.session_id, ChatSessionId("main-2".into()));
+    assert_ne!(first.session_id, ChatSessionId("main".into()));
+    assert_ne!(second.session_id, ChatSessionId("main-2".into()));
+    assert_ne!(first.session_id, second.session_id);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -82,10 +545,7 @@ async fn chat_store_persists_tool_call_and_result_records_in_history() {
     let root = temp_dir("chat-store-tool-history");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
-    let created = store
-        .create("agent tools", None, Vec::new())
-        .await
-        .unwrap();
+    let created = store.create("agent tools", None, Vec::new()).await.unwrap();
 
     let call_ack = store
         .append_tool_call(
@@ -215,7 +675,11 @@ async fn chat_store_rejects_archived_dir_symlink_escape() {
     let outside = temp_dir("chat-store-archived-dir-outside");
     fs::create_dir_all(root.join("chats")).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    fs::write(root.join("chats/main.jsonl"), "{}\n").unwrap();
+    fs::write(
+        root.join("chats/main.jsonl"),
+        "{\"message_id\":\"msg-1\",\"ts_ms\":100,\"role\":\"user\",\"content\":\"hello\",\"related_files\":[]}\n",
+    )
+    .unwrap();
     std::os::unix::fs::symlink(&outside, root.join("chats/archived")).unwrap();
     let store = ChatStore::new(root.clone());
 
@@ -265,12 +729,74 @@ async fn old_jsonl_without_run_id_deserializes_with_none() {
     )
     .unwrap();
     let store = ChatStore::new(root.clone());
-    let history = store
-        .history(&ChatSessionId("old-session".into()), None)
+    let migrated = store
+        .list(false)
         .await
-        .expect("should read old JSONL without run_id");
+        .expect("migrate old JSONL")
+        .sessions
+        .into_iter()
+        .find(|session| session.title == "old-session")
+        .expect("migrated old session");
+    assert_ne!(migrated.session_id, ChatSessionId("old-session".into()));
+    let history = store.history(&migrated.session_id, None).await.unwrap();
     assert_eq!(history.messages.len(), 1);
     assert_eq!(history.messages[0].run_id, None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn legacy_jsonl_migration_serializes_concurrent_index_writes() {
+    let root = temp_dir("chat-store-concurrent-migration");
+    fs::create_dir_all(root.join("chats")).unwrap();
+    for index in 0..8 {
+        fs::write(
+            root.join(format!("chats/legacy-{index}.jsonl")),
+            "{\"message_id\":\"msg-1\",\"ts_ms\":100,\"role\":\"user\",\"content\":\"hello\",\"related_files\":[]}\n",
+        )
+        .unwrap();
+    }
+    let barrier = Arc::new(tokio::sync::Barrier::new(32));
+    let store = Arc::new(ChatStore::new(root.clone()));
+    let mut tasks = Vec::new();
+    for _ in 0..32 {
+        let barrier = Arc::clone(&barrier);
+        let store = Arc::clone(&store);
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store.list(false).await
+        }));
+    }
+
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+
+    assert!(results.iter().all(Result::is_ok));
+    let index = read_chats_json(&root);
+    assert_eq!(index["chats"].as_array().unwrap().len(), 8);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn legacy_jsonl_migration_does_not_activate_archived_only_chat() {
+    let root = temp_dir("chat-store-archived-only-migration");
+    fs::create_dir_all(root.join("chats/archived")).unwrap();
+    fs::write(
+        root.join("chats/archived/old.jsonl"),
+        "{\"message_id\":\"msg-1\",\"ts_ms\":100,\"role\":\"user\",\"content\":\"hello\",\"related_files\":[]}\n",
+    )
+    .unwrap();
+    let store = ChatStore::new(root.clone());
+
+    let active = store.list(false).await.unwrap();
+    let archived = store.list(true).await.unwrap();
+
+    assert!(active.sessions.is_empty());
+    assert_eq!(active.active_chat_id, None);
+    assert_eq!(archived.sessions.len(), 1);
+    assert_eq!(archived.active_chat_id, None);
+    assert_eq!(read_chats_json(&root)["active_chat_id"], Value::Null);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -279,10 +805,7 @@ async fn run_id_roundtrips_through_jsonl() {
     let root = temp_dir("chat-store-run-id");
     fs::create_dir_all(&root).unwrap();
     let store = ChatStore::new(root.clone());
-    let created = store
-        .create("run-id test", None, Vec::new())
-        .await
-        .unwrap();
+    let created = store.create("run-id test", None, Vec::new()).await.unwrap();
 
     store
         .append_message_with_run_id(
@@ -292,6 +815,7 @@ async fn run_id_roundtrips_through_jsonl() {
             Vec::new(),
             None,
             Some("agent-7".into()),
+            None,
         )
         .await
         .expect("append with run_id");
@@ -312,4 +836,9 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{label}-{}-{stamp}", std::process::id()))
+}
+
+fn read_chats_json(root: &std::path::Path) -> Value {
+    let content = fs::read_to_string(root.join("chats.json")).expect("read chats.json");
+    serde_json::from_str(&content).expect("parse chats.json")
 }

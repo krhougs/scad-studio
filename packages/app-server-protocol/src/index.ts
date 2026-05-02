@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 8;
+export const CURRENT_PROTOCOL_VERSION = 9;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -421,10 +421,13 @@ export interface ChatCreateRequest {
   title: string;
   goal: string | null;
   related_files: PathHandle[];
+  client_request_id?: string | null;
+  initial_user_message?: string | null;
 }
 
 export interface ChatCreatedResponse {
   session_id: ChatSessionId;
+  agent_id: string;
   title: string;
 }
 
@@ -434,6 +437,7 @@ export interface ChatListRequest {
 
 export interface ChatSessionSummary {
   session_id: ChatSessionId;
+  agent_id: string;
   title: string;
   archived: boolean;
   message_count: number;
@@ -442,12 +446,14 @@ export interface ChatSessionSummary {
 
 export interface ChatListResponse {
   sessions: ChatSessionSummary[];
+  active_chat_id?: ChatSessionId | null;
 }
 
 export interface ChatSendRequest {
   session_id: ChatSessionId;
   content: string;
   related_files: PathHandle[];
+  client_request_id?: string | null;
 }
 
 export interface ChatAckResponse {
@@ -508,6 +514,7 @@ export interface ChatArchivedResponse {
 
 export interface AgentInvokeRequest {
   session_id: ChatSessionId;
+  client_request_id?: string | null;
   prompt: string;
   mode: AgentMode;
   plan_ref: PathHandle | null;
@@ -739,7 +746,8 @@ export type ServerPushEvent =
   | { event: "agent.error"; payload: AgentErrorEvent }
   | { event: "agent.done"; payload: AgentDoneEvent }
   | { event: "agent.plan_proposed"; payload: AgentPlanProposedEvent }
-  | { event: "agent.plan_saved"; payload: AgentPlanSavedEvent };
+  | { event: "agent.plan_saved"; payload: AgentPlanSavedEvent }
+  | { event: "chat.list_changed"; payload: ChatListResponse };
 
 export interface ServerPushEnvelope {
   event: ServerPushEvent;

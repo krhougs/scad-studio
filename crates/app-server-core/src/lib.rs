@@ -40,7 +40,9 @@ pub use cadquery::{
     run_cadquery_runner_with_cancel, stage_cadquery_project, stage_cadquery_project_owned,
     validate_cadquery_mesh_payload,
 };
-pub use chat::ChatStore;
+pub use chat::{
+    ChatIndexListenerRegistration, ChatStore, ChatSummaryUpdate, register_chat_index_listener,
+};
 pub use config::{
     ConfigError, app_config_from_dto, app_config_to_dto, config_file_path, load_config,
     load_config_dto, load_config_json, save_config, save_config_dto, save_config_json,

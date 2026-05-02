@@ -17,7 +17,6 @@ import { ChatComposer } from "./chat-composer";
 import { useChatRuntime } from "./chat-runtime";
 import {
   cancelAgentRun,
-  createChatSession,
   reportError,
   runSavedPlan,
   selectChatSession,
@@ -56,9 +55,12 @@ export type AgentModelSelection = {
 
 export type ChatSessionSummary = {
   session_id: string;
+  agent_id?: string;
   title: string;
   archived: boolean;
   message_count: number;
+  related_files?: unknown[];
+  client_request_id?: string;
 };
 
 export type ChatMessageRecord = {
@@ -164,18 +166,21 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const [busy, setBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
-  const sessions = snapshot?.chat_sessions ?? [];
+  const [draftSession, setDraftSession] = useState<ChatSessionSummary | null>(null);
+  const backendSessions = snapshot?.chat_sessions ?? [];
+  const sessions = draftSession ? [draftSession, ...backendSessions] : backendSessions;
   const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
   const currentSessionId =
-    snapshotCurrentSessionId ?? sessions[0]?.session_id ?? null;
-  const messages = snapshot?.current_chat_history ?? [];
+    draftSession?.session_id ?? snapshotCurrentSessionId ?? backendSessions[0]?.session_id ?? null;
+  const backendCurrentSessionId = draftSession ? null : currentSessionId;
+  const messages = draftSession ? [] : snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
   const agentModelRegistry = snapshot?.agent_model_registry ?? null;
   const agentModelSelection = useMemo(
     () => activeAgentModelSelection(agentModelRegistry),
     [agentModelRegistry],
   );
-  const rawEvents = snapshot?.agent_events ?? [];
+  const rawEvents = draftSession ? [] : snapshot?.agent_events ?? [];
   const sessionEvents = useMemo(
     () =>
       rawEvents.filter((event) =>
@@ -204,7 +209,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   useInitialChatList(client, onStatus);
   useInitialChatHistory(
     client,
-    sessions,
+    backendSessions,
     snapshotCurrentSessionId,
     onStatus,
   );
@@ -214,7 +219,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const actions = useChatActions({
     client,
     sessions,
-    currentSessionId,
+    currentSessionId: backendCurrentSessionId,
     agentRun,
     busy,
     mode,
@@ -223,6 +228,17 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     onStatus,
     setBusy,
     setModelBusy,
+    draftClientRequestId: draftSession?.client_request_id ?? null,
+    onDraftCreate: () =>
+      setDraftSession({
+        session_id: `draft-${Date.now()}`,
+        client_request_id: newClientRequestId(),
+        title: "Untitled",
+        archived: false,
+        message_count: 0,
+      }),
+    onDraftCommit: () => setDraftSession(null),
+    onBackendSelect: () => setDraftSession(null),
   });
 
   return {
@@ -341,25 +357,30 @@ function useChatActions(input: {
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
   setModelBusy: (value: boolean) => void;
+  draftClientRequestId: string | null;
+  onDraftCreate: () => void;
+  onDraftCommit: () => void;
+  onBackendSelect: () => void;
 }) {
   return {
-    createSession: () =>
-      void createChatSession(
-        input.client,
-        input.sessions,
-        input.onStatus,
-        input.setBusy,
-      ),
-    selectSession: (id: string) =>
-      void selectChatSession(input.client, id, input.onStatus),
+    createSession: input.onDraftCreate,
+    selectSession: (id: string) => {
+      input.onBackendSelect();
+      void selectChatSession(input.client, id, input.onStatus);
+    },
     cancelAgent: () =>
       void cancelAgentRun(input.client, input.agentRun, input.onStatus),
-    send: (text: string) => void sendChatMessage(input, text),
+    send: (text: string) =>
+      void sendChatMessage(input, text).then((committed) => {
+        if (committed) input.onDraftCommit();
+      }),
     runPlan: (plan: { planId: string; planRef: unknown }) =>
       void runSavedPlan({
         ...input,
         planId: plan.planId,
         planRef: plan.planRef,
+      }).then((committed) => {
+        if (committed) input.onDraftCommit();
       }),
     selectAgentModel: (value: string) =>
       void selectAgentModel(input.client, value, input.onStatus, input.setModelBusy),
@@ -372,6 +393,13 @@ function useChatActions(input: {
         input.setModelBusy,
       ),
   };
+}
+
+function newClientRequestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `request-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function ChatHeader(props: {

@@ -452,6 +452,8 @@ fn chat_agent_and_selection_payloads_roundtrip() {
             title: "main".into(),
             goal: Some("lid iteration".into()),
             related_files: vec![related_file.clone()],
+            client_request_id: Some("request-1".into()),
+            initial_user_message: Some("preview this".into()),
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&create).unwrap()).unwrap();
@@ -461,6 +463,7 @@ fn chat_agent_and_selection_payloads_roundtrip() {
         request_id: RequestId(50),
         result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
             session_id: session_id.clone(),
+            agent_id: "agent-main".into(),
             title: "main".into(),
         })),
     });
@@ -518,6 +521,7 @@ fn chat_agent_and_selection_payloads_roundtrip() {
             session_id: session_id.clone(),
             content: "preview this".into(),
             related_files: vec![related_file],
+            client_request_id: Some("send-1".into()),
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&send).unwrap()).unwrap();
@@ -540,6 +544,7 @@ fn agent_push_events_and_busy_error_roundtrip() {
         request_id: RequestId(60),
         command: ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
+            client_request_id: Some("invoke-1".into()),
             prompt: "make a taller lid".into(),
             mode: AgentMode::Plan,
             plan_ref: None,
@@ -737,6 +742,7 @@ fn agent_push_events_and_busy_error_roundtrip() {
         request_id: RequestId(63),
         command: ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
+            client_request_id: None,
             prompt: "run plan".into(),
             mode: AgentMode::Agent,
             plan_ref: Some(plan_ref),
@@ -760,6 +766,22 @@ fn agent_push_events_and_busy_error_roundtrip() {
     });
     let decoded = decode_server_frame(&encode_server_frame(&agent_error).unwrap()).unwrap();
     assert_eq!(decoded, agent_error);
+
+    let chat_changed = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::ChatListChanged(ChatListResponse {
+            active_chat_id: Some(ChatSessionId("main".into())),
+            sessions: vec![ChatSessionSummary {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                title: "main".into(),
+                archived: false,
+                message_count: 2,
+                related_files: Vec::new(),
+            }],
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&chat_changed).unwrap()).unwrap();
+    assert_eq!(decoded, chat_changed);
 }
 
 fn workspace_path<const N: usize>(segments: [&str; N]) -> PathHandle {
@@ -799,8 +821,10 @@ fn selection_update_payload_roundtrips() {
     assert_eq!(decoded, response);
 
     let summary = ChatListResponse {
+        active_chat_id: Some(ChatSessionId("main".into())),
         sessions: vec![ChatSessionSummary {
             session_id: ChatSessionId("main".into()),
+            agent_id: "agent-main".into(),
             title: "main".into(),
             archived: false,
             message_count: 1,

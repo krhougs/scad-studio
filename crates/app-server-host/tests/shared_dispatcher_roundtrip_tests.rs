@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
-use app_server_core::ChatStore;
+use app_server_core::{ChatStore, ChatSummaryUpdate};
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
@@ -14,6 +14,7 @@ use app_server_protocol::{
     SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
     WorkspaceId, WorkspaceListRequest, web_file_read_capability,
 };
+use serde_json::Value;
 
 #[tokio::test]
 async fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
@@ -319,24 +320,78 @@ fn dispatcher_persists_chat_jsonl_and_selection_snapshot() {
     let related = path_handle(["parts", "top_lid.py"]);
     let created = create_chat(&mut dispatcher, "main chat", vec![related.clone()]);
 
-    assert_eq!(created.session_id, ChatSessionId("main-chat".into()));
+    assert_ne!(created.session_id, ChatSessionId("main-chat".into()));
     let ack = send_chat(&mut dispatcher, &created.session_id, vec![related.clone()]);
     assert_eq!(ack.session_id, created.session_id);
     let sessions = list_chats(&mut dispatcher, false);
     assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].message_count, 2);
+    assert_eq!(sessions[0].message_count, 3);
     assert_eq!(sessions[0].related_files, vec![related.clone()]);
     let history = read_chat_history(&mut dispatcher, &created.session_id);
-    assert_eq!(history.len(), 2);
+    assert_eq!(history.len(), 3);
     assert_eq!(history[0].role, ChatRole::Meta);
-    assert_eq!(history[1].content, "make the lid taller");
+    assert_eq!(history[1].content, "Start main chat");
+    assert_eq!(history[2].content, "make the lid taller");
     let updated = update_selection(&mut dispatcher);
     assert_eq!(updated.accepted_count, 1);
     archive_chat(&mut dispatcher, &created.session_id);
-    assert!(workspace.join("chats/archived/main-chat.jsonl").is_file());
+    let index = read_chats_json(&workspace);
+    assert_eq!(index["chats"][0]["archived"].as_bool(), Some(true));
     let active = list_chats(&mut dispatcher, false);
     assert!(active.is_empty());
-    assert!(pushes.lock().expect("push buffer lock").is_empty());
+    assert!(
+        pushes
+            .lock()
+            .expect("push buffer lock")
+            .iter()
+            .all(|push| matches!(push.event, ServerPushEvent::ChatListChanged(_)))
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_rejects_chat_create_without_initial_user_message() {
+    let workspace = temp_workspace("dispatcher-chat-create-requires-message");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatch(
+        &mut dispatcher,
+        21,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "empty chat".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-empty".into()),
+            initial_user_message: None,
+        }),
+    )
+    .result
+    .expect_err("chat.create without first user message should fail");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_rejects_chat_create_with_empty_client_request_id() {
+    let workspace = temp_workspace("dispatcher-chat-create-requires-request-id");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatch(
+        &mut dispatcher,
+        22,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "empty request".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("  ".into()),
+            initial_user_message: Some("start".into()),
+        }),
+    )
+    .result
+    .expect_err("chat.create with blank request id should fail");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
     cleanup_workspace(&workspace);
 }
 
@@ -364,6 +419,226 @@ async fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
     assert_eq!(restarted.session_id, session_id);
 
     wait_for_done_async(&pushes, &restarted.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_deduplicates_agent_invoke_by_client_request_id() {
+    let workspace = temp_workspace("dispatcher-agent-invoke-idempotent");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat_async(&mut dispatcher, "agent idempotent", Vec::new())
+        .await
+        .session_id;
+
+    let first = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        41,
+        &session_id,
+        "first prompt",
+        Some("first-request"),
+    )
+    .await
+    .expect("first invoke starts");
+    let second = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        42,
+        &session_id,
+        "first prompt retry",
+        Some("first-request"),
+    )
+    .await
+    .expect("retry returns original run");
+
+    assert_eq!(first.run_id, second.run_id);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_deduplicates_agent_invoke_by_client_request_id_across_dispatchers() {
+    let workspace = temp_workspace("dispatcher-agent-invoke-cross-dispatcher");
+    let _agent_env = unset_agent_environment();
+    let (mut first_dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat_async(&mut first_dispatcher, "agent cross retry", Vec::new())
+        .await
+        .session_id;
+    let first = invoke_agent_with_client_request_id(
+        &mut first_dispatcher,
+        41,
+        &session_id,
+        "first prompt",
+        Some("first-request"),
+    )
+    .await
+    .expect("first invoke starts");
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+
+    let second = invoke_agent_with_client_request_id(
+        &mut second_dispatcher,
+        42,
+        &session_id,
+        "first prompt retry",
+        Some("first-request"),
+    )
+    .await
+    .expect("retry returns original run across dispatcher");
+
+    assert_eq!(first.run_id, second.run_id);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(
+        second_pushes.lock().expect("push buffer lock").is_empty(),
+        "retry on a second dispatcher must not spawn a second worker"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_scopes_agent_invoke_request_id_to_chat_session() {
+    let workspace = temp_workspace("dispatcher-agent-invoke-session-scope");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let first_session = create_chat_async(&mut dispatcher, "first agent", Vec::new())
+        .await
+        .session_id;
+    let second_session = create_chat_async(&mut dispatcher, "second agent", Vec::new())
+        .await
+        .session_id;
+    let _ = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        41,
+        &first_session,
+        "first prompt",
+        Some("reused-request"),
+    )
+    .await
+    .expect("first invoke starts");
+
+    let error = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        42,
+        &second_session,
+        "second prompt",
+        Some("reused-request"),
+    )
+    .await
+    .expect_err("same request id on another chat must not return first run");
+
+    assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_clears_agent_invoke_request_id_after_run_finishes() {
+    let workspace = temp_workspace("dispatcher-agent-invoke-request-clear");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let session_id = create_chat_async(&mut dispatcher, "agent id clear", Vec::new())
+        .await
+        .session_id;
+    let first = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        41,
+        &session_id,
+        "first prompt",
+        Some("request-once"),
+    )
+    .await
+    .expect("first invoke starts");
+    wait_for_done_async(&pushes, &first.run_id).await;
+
+    let second = invoke_agent_with_client_request_id(
+        &mut dispatcher,
+        42,
+        &session_id,
+        "new prompt",
+        Some("request-once"),
+    )
+    .await
+    .expect("request id is reusable after terminal run cleanup");
+
+    assert_ne!(first.run_id, second.run_id);
+    wait_for_done_async(&pushes, &second.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_broadcasts_active_chat_changes_across_dispatchers() {
+    let workspace = temp_workspace("dispatcher-chat-active-broadcast");
+    let (mut first_dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let (second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let first = create_chat_async(&mut first_dispatcher, "first chat", Vec::new()).await;
+    let second = create_chat_async(&mut first_dispatcher, "second chat", Vec::new()).await;
+    second_pushes.lock().expect("push buffer lock").clear();
+
+    let _ = dispatch_async(
+        &mut first_dispatcher,
+        43,
+        ClientCommand::ChatHistory(ChatHistoryRequest {
+            session_id: first.session_id.clone(),
+            limit: Some(100),
+        }),
+    )
+    .await
+    .result
+    .expect("chat.history succeeds");
+
+    let active_chat_id = second_pushes
+        .lock()
+        .expect("push buffer lock")
+        .iter()
+        .rev()
+        .find_map(|push| match &push.event {
+            ServerPushEvent::ChatListChanged(response) => response.active_chat_id.clone(),
+            _ => None,
+        });
+    assert_eq!(active_chat_id, Some(first.session_id));
+    assert_ne!(active_chat_id, Some(second.session_id));
+    drop(second_dispatcher);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_broadcasts_chat_summary_updates_from_agent_tools() {
+    let workspace = temp_workspace("dispatcher-chat-summary-broadcast");
+    let (mut dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let (second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut dispatcher, "summary chat", Vec::new()).await;
+    second_pushes.lock().expect("push buffer lock").clear();
+
+    ChatStore::new(workspace.to_path_buf())
+        .update_summary(
+            &created.session_id,
+            ChatSummaryUpdate {
+                summary: "current summary".into(),
+                goal: "make progress".into(),
+                related_files: vec![path_handle(["docs", "note.md"])],
+                open_questions: Vec::new(),
+            },
+        )
+        .await
+        .expect("summary update succeeds");
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let pushed_events = second_pushes.lock().expect("push buffer lock");
+    let chat_list_changed_count = pushed_events
+        .iter()
+        .filter(|push| matches!(push.event, ServerPushEvent::ChatListChanged(_)))
+        .count();
+    let related_files = pushed_events
+        .iter()
+        .rev()
+        .find_map(|push| match &push.event {
+            ServerPushEvent::ChatListChanged(response) => response
+                .sessions
+                .iter()
+                .find(|session| session.session_id == created.session_id)
+                .map(|session| session.related_files.clone()),
+            _ => None,
+        })
+        .expect("chat list changed push");
+    assert_eq!(chat_list_changed_count, 1);
+    assert_eq!(related_files, vec![path_handle(["docs", "note.md"])]);
+    drop(second_dispatcher);
     cleanup_workspace(&workspace);
 }
 
@@ -410,6 +685,7 @@ async fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload()
         36,
         ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
+            client_request_id: None,
             prompt: "run plan".into(),
             mode: AgentMode::Agent,
             plan_ref: Some(path_handle(["plans", "2026050100-add-lid-vents"])),
@@ -552,6 +828,7 @@ fn dispatcher_plan_confirm_returns_deprecated_error_without_using_saved_plan() {
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
     append_saved_plan_result(&workspace, &session_id, "plan-run-1");
+    pushes.lock().expect("push buffer lock").clear();
     let target_path = path_handle(["parts", "top_lid.py"]);
     let confirmation = AgentCadQueryConfirmation {
         request: confirmed_cadquery_request(target_path.clone()),
@@ -586,6 +863,7 @@ fn dispatcher_plan_confirm_rejects_before_scope_validation() {
     let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let session_id = create_chat(&mut dispatcher, "agent plan", Vec::new()).session_id;
     append_saved_plan_result(&workspace, &session_id, "plan-run-1");
+    pushes.lock().expect("push buffer lock").clear();
     let target_path = path_handle(["parts", "top_lid.py"]);
     let confirmation = AgentCadQueryConfirmation {
         request: confirmed_cadquery_request(target_path.clone()),
@@ -767,6 +1045,8 @@ fn create_chat(
             title: title.into(),
             goal: Some("lid iteration".into()),
             related_files,
+            client_request_id: Some(format!("create-{title}")),
+            initial_user_message: Some(format!("Start {title}")),
         }),
     )
     .result
@@ -789,6 +1069,8 @@ async fn create_chat_async(
             title: title.into(),
             goal: Some("lid iteration".into()),
             related_files,
+            client_request_id: Some(format!("create-{title}")),
+            initial_user_message: Some(format!("Start {title}")),
         }),
     )
     .await
@@ -812,6 +1094,7 @@ fn send_chat(
             session_id: session_id.clone(),
             content: "make the lid taller".into(),
             related_files,
+            client_request_id: None,
         }),
     )
     .result
@@ -926,6 +1209,11 @@ fn archive_chat(dispatcher: &mut HostRequestDispatcher, session_id: &ChatSession
     }
 }
 
+fn read_chats_json(workspace: &std::path::Path) -> Value {
+    let content = std::fs::read_to_string(workspace.join("chats.json")).expect("read chats.json");
+    serde_json::from_str(&content).expect("parse chats.json")
+}
+
 fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessionId, run_id: &str) {
     let result_json = format!(
         concat!(
@@ -962,11 +1250,22 @@ async fn invoke_agent_async(
     session_id: &ChatSessionId,
     prompt: &str,
 ) -> Result<app_server_protocol::AgentStartedResponse, app_server_protocol::ProtocolError> {
+    invoke_agent_with_client_request_id(dispatcher, request_id, session_id, prompt, None).await
+}
+
+async fn invoke_agent_with_client_request_id(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    session_id: &ChatSessionId,
+    prompt: &str,
+    client_request_id: Option<&str>,
+) -> Result<app_server_protocol::AgentStartedResponse, app_server_protocol::ProtocolError> {
     match dispatch_async(
         dispatcher,
         request_id,
         ClientCommand::AgentInvoke(AgentInvokeRequest {
             session_id: session_id.clone(),
+            client_request_id: client_request_id.map(str::to_owned),
             prompt: prompt.into(),
             mode: AgentMode::Agent,
             plan_ref: None,
