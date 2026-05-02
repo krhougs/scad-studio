@@ -15,6 +15,8 @@ export function protocol_encode_agent_model_registry_request(request_id: bigint)
 
 export function protocol_encode_agent_model_select_request(request_id: bigint, request: any): Uint8Array;
 
+export function protocol_encode_agent_start_turn_request(request_id: bigint, request: any): Uint8Array;
+
 export function protocol_encode_cadquery_execute_request(request_id: bigint, request: any): Uint8Array;
 
 export function protocol_encode_cadquery_preview_request(request_id: bigint, request: any): Uint8Array;
@@ -88,6 +90,7 @@ export interface InitOutput {
     readonly protocol_encode_agent_model_params_update_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_agent_model_registry_request: (a: bigint) => [number, number, number, number];
     readonly protocol_encode_agent_model_select_request: (a: bigint, b: any) => [number, number, number, number];
+    readonly protocol_encode_agent_start_turn_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_execute_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_preview_request: (a: bigint, b: any) => [number, number, number, number];
     readonly protocol_encode_cadquery_result_get_request: (a: bigint, b: any) => [number, number, number, number];

@@ -1,10 +1,10 @@
 use std::{fs, path::Path};
 
 use app_server_protocol::{
-    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelRegistryModel,
-    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSource,
-    AgentProviderCapabilities, CURRENT_PROTOCOL_VERSION, PreviewRequestKind, ProtocolVersionRange,
-    ServerCapabilities,
+    AgentCancelRequest, AgentId, AgentModelDiscoveryState, AgentModelDiscoveryStatus,
+    AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
+    AgentModelSource, AgentProviderCapabilities, AgentProviderType, BoundAgentModel,
+    CURRENT_PROTOCOL_VERSION, PreviewRequestKind, ProtocolVersionRange, ServerCapabilities,
 };
 
 #[test]
@@ -27,10 +27,10 @@ fn protocol_wire_payload_does_not_expose_pathbuf_or_json_config_payload() {
 }
 
 #[test]
-fn protocol_v9_capabilities_expose_chat_identity_fields() {
-    assert_eq!(CURRENT_PROTOCOL_VERSION, 9);
+fn protocol_v10_capabilities_expose_chat_identity_fields() {
+    assert_eq!(CURRENT_PROTOCOL_VERSION, 10);
     let capabilities = ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(9, 9),
+        protocol_version: ProtocolVersionRange::new(10, 10),
         reconnect_window_ms: 30_000,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
@@ -62,6 +62,60 @@ fn protocol_v9_capabilities_expose_chat_identity_fields() {
     assert!(model.native_web_search_enabled);
     assert!(!model.native_web_search_applied);
     assert!(!model.web_search_supported);
+}
+
+#[test]
+fn protocol_agent_operations_target_agent_id_not_run_id() {
+    let request = AgentCancelRequest {
+        agent_id: AgentId("agent-abc".into()),
+    };
+    let bytes = borsh::to_vec(&request).expect("agent cancel encode");
+    let decoded: AgentCancelRequest = borsh::from_slice(&bytes).expect("agent cancel decode");
+    assert_eq!(decoded.agent_id.0, "agent-abc");
+
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol.rs"))
+        .expect("protocol source should be readable");
+    let cancel_start = source
+        .find("pub struct AgentCancelRequest")
+        .expect("cancel request exists");
+    let cancel_end = source[cancel_start..]
+        .find("pub struct AgentCancelledResponse")
+        .expect("cancel response follows request")
+        + cancel_start;
+    let cancel_source = &source[cancel_start..cancel_end];
+    assert!(
+        !cancel_source.contains("run_id"),
+        "agent.cancel request must target agent_id, not run_id"
+    );
+}
+
+#[test]
+fn bound_agent_model_does_not_include_base_url() {
+    let model = BoundAgentModel {
+        provider_id: "openai".into(),
+        provider_type: AgentProviderType::OpenAiResponses,
+        model_id: "gpt-5.2".into(),
+        reasoning_effort: Some("high".into()),
+        service_label: Some("flex".into()),
+    };
+    let bytes = borsh::to_vec(&model).expect("bound model encode");
+    let decoded: BoundAgentModel = borsh::from_slice(&bytes).expect("bound model decode");
+    assert_eq!(decoded, model);
+
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol.rs"))
+        .expect("protocol source should be readable");
+    let model_start = source
+        .find("pub struct BoundAgentModel")
+        .expect("bound model exists");
+    let model_end = source[model_start..]
+        .find("pub enum AgentRuntimeStatus")
+        .expect("runtime status follows bound model")
+        + model_start;
+    let model_source = &source[model_start..model_end];
+    assert!(
+        !model_source.contains("base_url"),
+        "bound model must not persist provider base_url"
+    );
 }
 
 fn sample_agent_model_registry() -> AgentModelRegistryResponse {

@@ -5,14 +5,15 @@ use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
     AgentModelParamsUpdateRequest, AgentModelSelectRequest, AgentPlanConfirmRequest,
-    CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind,
-    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
-    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
-    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
-    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
-    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
+    AgentProviderType, BoundAgentModel, CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest,
+    CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest,
+    ChatCreateInitialTurn, ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole,
+    ChatSendRequest, ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand,
+    ClientPlatform, ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest,
+    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind,
+    ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
+    SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId,
+    WorkspaceListRequest, web_file_read_capability,
 };
 use serde_json::Value;
 
@@ -396,6 +397,8 @@ fn dispatcher_rejects_chat_create_without_initial_user_message() {
             related_files: Vec::new(),
             client_request_id: Some("create-empty".into()),
             initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
         }),
     )
     .result
@@ -419,12 +422,276 @@ fn dispatcher_rejects_chat_create_with_empty_client_request_id() {
             related_files: Vec::new(),
             client_request_id: Some("  ".into()),
             initial_user_message: Some("start".into()),
+            requested_model: None,
+            initial_turn: None,
         }),
     )
     .result
     .expect_err("chat.create with blank request id should fail");
 
     assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    cleanup_workspace(&workspace);
+}
+
+#[test]
+fn dispatcher_rejects_chat_create_initial_turn_without_model() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-requires-model");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatch(
+        &mut dispatcher,
+        23,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "missing model".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-with-turn".into()),
+            initial_user_message: Some("start".into()),
+            requested_model: None,
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: Vec::new(),
+            }),
+        }),
+    )
+    .result
+    .expect_err("chat.create initial turn without model should fail");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_starts_agent_and_persists_bound_model() {
+    let workspace = temp_workspace("dispatcher-chat-create-starts-turn");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let model = bound_agent_model();
+
+    let response = dispatch_async(
+        &mut dispatcher,
+        24,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "initial turn".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-start".into()),
+            initial_user_message: Some("make a hinge".into()),
+            requested_model: Some(model.clone()),
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: vec!["@part[hinge]".into()],
+            }),
+        }),
+    )
+    .await;
+    let created = match response.result.expect("chat.create should succeed") {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    };
+    let started = created
+        .initial_turn
+        .as_ref()
+        .expect("initial turn response");
+
+    assert_eq!(started.session_id, created.session_id);
+    assert_eq!(started.agent_id, created.agent_id);
+    assert_eq!(started.turn_id.0, started.run_id);
+    wait_for_done_async(&pushes, &started.run_id).await;
+
+    let index = read_chats_json(&workspace);
+    assert_eq!(
+        index["chats"][0]["bound_model"]["provider_id"].as_str(),
+        Some(model.provider_id.as_str())
+    );
+    assert_eq!(
+        index["chats"][0]["bound_model"]["model_id"].as_str(),
+        Some(model.model_id.as_str())
+    );
+    assert_eq!(index["chats"][0]["bound_model"].get("base_url"), None);
+    let history = read_chat_history_async(&mut dispatcher, &created.session_id).await;
+    assert!(
+        history
+            .iter()
+            .any(|message| message.content == "make a hinge")
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_rejects_busy_without_creating_chat() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-busy");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let existing = create_chat_async(&mut dispatcher, "busy source", Vec::new()).await;
+    let running = invoke_agent_async(&mut dispatcher, 25, &existing.session_id, "start")
+        .await
+        .expect("agent starts");
+
+    let response = dispatch_async(
+        &mut dispatcher,
+        26,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "should not persist".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("busy-create".into()),
+            initial_user_message: Some("make a hinge".into()),
+            requested_model: Some(bound_agent_model()),
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: Vec::new(),
+            }),
+        }),
+    )
+    .await;
+
+    let error = response
+        .result
+        .expect_err("busy initial turn create should reject");
+    assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
+    assert_eq!(list_chats_async(&mut dispatcher, false).await.len(), 1);
+    wait_for_done_async(&pushes, &running.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_retry_does_not_start_second_turn() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-retry");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let request = ChatCreateRequest {
+        title: "initial turn retry".into(),
+        goal: None,
+        related_files: Vec::new(),
+        client_request_id: Some("create-start-retry".into()),
+        initial_user_message: Some("make a hinge".into()),
+        requested_model: Some(bound_agent_model()),
+        initial_turn: Some(ChatCreateInitialTurn {
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: Vec::new(),
+        }),
+    };
+    let created = match dispatch_async(
+        &mut dispatcher,
+        27,
+        ClientCommand::ChatCreate(request.clone()),
+    )
+    .await
+    .result
+    .expect("first create succeeds")
+    {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    };
+    let first_run_id = created
+        .initial_turn
+        .as_ref()
+        .expect("first initial turn")
+        .run_id
+        .clone();
+    wait_for_done_async(&pushes, &first_run_id).await;
+    pushes.lock().expect("push buffer lock").clear();
+
+    let retried = match dispatch_async(&mut dispatcher, 28, ClientCommand::ChatCreate(request))
+        .await
+        .result
+        .expect("retry succeeds")
+    {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    };
+
+    assert_eq!(retried.session_id, created.session_id);
+    assert_eq!(retried.agent_id, created.agent_id);
+    assert!(retried.initial_turn.is_none());
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(
+        pushes
+            .lock()
+            .expect("push buffer lock")
+            .iter()
+            .all(|push| !matches!(
+                push.event,
+                ServerPushEvent::AgentToken(_)
+                    | ServerPushEvent::AgentReasoning(_)
+                    | ServerPushEvent::AgentToolStart(_)
+                    | ServerPushEvent::AgentToolResult(_)
+                    | ServerPushEvent::AgentDone(_)
+                    | ServerPushEvent::AgentError(_)
+            )),
+        "retry must not spawn another worker"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_deduplicates_concurrent_create_request() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-concurrent");
+    let _agent_env = unset_agent_environment();
+    let (mut first_dispatcher, first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let request = ChatCreateRequest {
+        title: "initial turn concurrent".into(),
+        goal: None,
+        related_files: Vec::new(),
+        client_request_id: Some("create-start-concurrent".into()),
+        initial_user_message: Some("make a hinge".into()),
+        requested_model: Some(bound_agent_model()),
+        initial_turn: Some(ChatCreateInitialTurn {
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: Vec::new(),
+        }),
+    };
+
+    let (first_response, second_response) = tokio::join!(
+        dispatch_async(
+            &mut first_dispatcher,
+            29,
+            ClientCommand::ChatCreate(request.clone())
+        ),
+        dispatch_async(
+            &mut second_dispatcher,
+            30,
+            ClientCommand::ChatCreate(request)
+        ),
+    );
+    let first = chat_created_from_response(first_response);
+    let second = chat_created_from_response(second_response);
+
+    assert_eq!(first.session_id, second.session_id);
+    assert_eq!(first.agent_id, second.agent_id);
+    assert_eq!(
+        usize::from(first.initial_turn.is_some()) + usize::from(second.initial_turn.is_some()),
+        1
+    );
+    let session_id = first.session_id.clone();
+    let (started, pushes) = if let Some(started) = first.initial_turn {
+        (started, &first_pushes)
+    } else {
+        (
+            second.initial_turn.expect("one turn starts"),
+            &second_pushes,
+        )
+    };
+    wait_for_done_async(pushes, &started.run_id).await;
+    assert_eq!(
+        list_chats_async(&mut first_dispatcher, false).await.len(),
+        1
+    );
+    let history = read_chat_history_async(&mut first_dispatcher, &session_id).await;
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| message.role == ChatRole::User && message.content == "make a hinge")
+            .count(),
+        1
+    );
     cleanup_workspace(&workspace);
 }
 
@@ -1080,6 +1347,8 @@ fn create_chat(
             related_files,
             client_request_id: Some(format!("create-{title}")),
             initial_user_message: Some(format!("Start {title}")),
+            requested_model: None,
+            initial_turn: None,
         }),
     )
     .result
@@ -1104,12 +1373,23 @@ async fn create_chat_async(
             related_files,
             client_request_id: Some(format!("create-{title}")),
             initial_user_message: Some(format!("Start {title}")),
+            requested_model: None,
+            initial_turn: None,
         }),
     )
     .await
     .result
     .expect("chat.create succeeds")
     {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    }
+}
+
+fn chat_created_from_response(
+    response: app_server_protocol::ServerResponseEnvelope,
+) -> app_server_protocol::ChatCreatedResponse {
+    match response.result.expect("chat.create succeeds") {
         CommandSuccess::ChatCreated(response) => response,
         other => panic!("unexpected chat.create response: {other:?}"),
     }
@@ -1147,6 +1427,24 @@ fn list_chats(
         22,
         ClientCommand::ChatList(ChatListRequest { include_archived }),
     )
+    .result
+    .expect("chat.list succeeds")
+    {
+        CommandSuccess::ChatList(response) => response.sessions,
+        other => panic!("unexpected chat.list response: {other:?}"),
+    }
+}
+
+async fn list_chats_async(
+    dispatcher: &mut HostRequestDispatcher,
+    include_archived: bool,
+) -> Vec<app_server_protocol::ChatSessionSummary> {
+    match dispatch_async(
+        dispatcher,
+        22,
+        ClientCommand::ChatList(ChatListRequest { include_archived }),
+    )
+    .await
     .result
     .expect("chat.list succeeds")
     {
@@ -1245,6 +1543,16 @@ fn archive_chat(dispatcher: &mut HostRequestDispatcher, session_id: &ChatSession
 fn read_chats_json(workspace: &std::path::Path) -> Value {
     let content = std::fs::read_to_string(workspace.join("chats.json")).expect("read chats.json");
     serde_json::from_str(&content).expect("parse chats.json")
+}
+
+fn bound_agent_model() -> BoundAgentModel {
+    BoundAgentModel {
+        provider_id: "openai".into(),
+        provider_type: AgentProviderType::OpenAiResponses,
+        model_id: "gpt-5.2".into(),
+        reasoning_effort: Some("high".into()),
+        service_label: Some("flex".into()),
+    }
 }
 
 fn append_saved_plan_result(workspace: &std::path::Path, session_id: &ChatSessionId, run_id: &str) {

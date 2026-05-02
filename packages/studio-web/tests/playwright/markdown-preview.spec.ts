@@ -44,6 +44,10 @@ const HARNESS = createHarness({
   bindPort: 39191,
   vitePort: 5186,
   workspacePath: TEST_WORKSPACE,
+  hostEnv: {
+    BUDN_AGENT_OPENAI_API_KEY: "test-key",
+    BUDN_AGENT_TIMEOUT_SECS: "1",
+  },
 });
 
 test.beforeAll(async () => {
@@ -103,7 +107,7 @@ test("@markdown-preview uses secure uiw markdown rendering with Mermaid", async 
     .toBe(false);
 });
 
-test("@markdown-preview run plan emits agent.invoke with plan_ref", async ({
+test("@markdown-preview run plan emits chat.create initial_turn with plan_ref", async ({
   page,
 }) => {
   await page.goto(
@@ -126,21 +130,25 @@ test("@markdown-preview run plan emits agent.invoke with plan_ref", async ({
   await expect(page.getByTestId("markdown-plan-actions")).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByRole("button", { name: "Run Plan" })).toBeEnabled({
+    timeout: 10_000,
+  });
   await clearRecordedClientCommands(page);
   await page.getByRole("button", { name: "Run Plan" }).click();
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  const planRef = payload["plan_ref"] as Record<string, unknown>;
-  expect(payload["mode"]).toBe("agent");
-  expect(payload["prompt"]).toBe("Run plan 2026050100-add-lid-vents");
+  const turn = payload["initial_turn"] as Record<string, unknown>;
+  const planRef = turn["plan_ref"] as Record<string, unknown>;
+  expect(turn["mode"]).toBe("agent");
+  expect(payload["initial_user_message"]).toBe("Run plan 2026050100-add-lid-vents");
   expect(planRef["path_segments"]).toEqual([
     "plans",
     "2026050100-add-lid-vents",

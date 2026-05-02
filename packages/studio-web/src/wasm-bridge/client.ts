@@ -187,6 +187,10 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
   }
 
+  dispatchAgentStartTurn(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_start_turn(h, params));
+  }
+
   /** @deprecated Use dispatchAgentInvoke with mode "agent" and plan_ref. */
   dispatchAgentPlanConfirm(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_confirm(h, params));

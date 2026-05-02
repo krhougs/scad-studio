@@ -1,6 +1,6 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
-    AgentPlanConfirmRequest, AgentPlanRejectRequest, CadQueryExecuteRequest,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentStartTurnRequest, CadQueryExecuteRequest,
     CadQueryPreviewRequest, CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest,
     ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId, ClientCommand,
     ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
@@ -239,6 +239,17 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
     ) -> Result<RequestId, ClientError> {
         self.enqueue_command(
             ClientCommand::AgentCancel(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_start_turn(
+        &mut self,
+        params: AgentStartTurnRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentStartTurn(params),
             PendingKind::Agent,
             self.timeouts.agent,
         )

@@ -1,16 +1,19 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentInvokeRequest, AgentMode, AgentModelDiscoveryState, AgentModelDiscoveryStatus,
-    AgentModelParamsUpdateRequest, AgentModelRegistryModel, AgentModelRegistryProvider,
-    AgentModelRegistryResponse, AgentModelSelectRequest, AgentModelSource, AgentPlanPackageRef,
-    AgentPlanSavedEvent, AgentProviderCapabilities, AgentReasoningEvent, AgentSearchSource,
-    AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode,
+    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest,
+    AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
+    AgentModelSelectRequest, AgentModelSource, AgentPlanPackageRef, AgentPlanSavedEvent,
+    AgentProviderCapabilities, AgentProviderType, AgentReasoningEvent, AgentRuntimeStatus,
+    AgentSearchSource, AgentSnapshotRequest, AgentSnapshotResponse, AgentStartTurnRequest,
+    AgentStartedResponse, AgentSubscribeRequest, AgentSubscribeResponse, AgentTokenEvent,
+    AgentToolResultEvent, AgentToolStartEvent, AgentTurnId, BoundAgentModel,
     CURRENT_PROTOCOL_VERSION, CadQueryArtifactExport, CadQueryArtifactRelation,
     CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
     CadQueryResultReady, CancelRequest, CapabilityHandshakeRequest, CapabilityHandshakeResponse,
-    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateRequest,
-    ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse, ChatListRequest,
-    ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
+    ChatAckResponse, ChatArchiveRequest, ChatArchivedResponse, ChatCreateInitialTurn,
+    ChatCreateRequest, ChatCreatedResponse, ChatHistoryRequest, ChatHistoryResponse,
+    ChatListRequest, ChatListResponse, ChatMessageRecord, ChatRole, ChatSendRequest, ChatSessionId,
     ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, ClientCapabilities,
     ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
     EdgeGroup, FaceGroup, FileReadCapability, FileReadContents, FileReadResponse, PathHandle,
@@ -96,6 +99,118 @@ fn handshake_and_command_frame_roundtrip() {
     });
     let decoded = decode_client_frame(&encode_client_frame(&envelope).unwrap()).unwrap();
     assert_eq!(decoded, envelope);
+}
+
+#[test]
+fn agent_identity_commands_snapshot_and_events_roundtrip() {
+    let agent_id = AgentId("agent-abc".into());
+    let turn_id = AgentTurnId("turn-1".into());
+    let chat_id = ChatSessionId("chat-abc".into());
+    let model = BoundAgentModel {
+        provider_id: "openai".into(),
+        provider_type: AgentProviderType::OpenAiResponses,
+        model_id: "gpt-5.2".into(),
+        reasoning_effort: Some("high".into()),
+        service_label: Some("flex".into()),
+    };
+
+    let create_and_start = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(29),
+        command: ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "main".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-and-start-1".into()),
+            initial_user_message: Some("build a case".into()),
+            requested_model: Some(model.clone()),
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: vec!["@part[case]".into()],
+            }),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&create_and_start).unwrap()).unwrap();
+    assert_eq!(decoded, create_and_start);
+
+    let start = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(30),
+        command: ClientCommand::AgentStartTurn(AgentStartTurnRequest {
+            agent_id: agent_id.clone(),
+            client_request_id: Some("retry-1".into()),
+            prompt: "continue".into(),
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: vec!["@part[case]".into()],
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&start).unwrap()).unwrap();
+    assert_eq!(decoded, start);
+
+    let cancel = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(31),
+        command: ClientCommand::AgentCancel(AgentCancelRequest {
+            agent_id: agent_id.clone(),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&cancel).unwrap()).unwrap();
+    assert_eq!(decoded, cancel);
+
+    let snapshot_request = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(32),
+        command: ClientCommand::AgentSnapshot(AgentSnapshotRequest {
+            agent_id: agent_id.clone(),
+            since_event_id: Some(AgentEventId(7)),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&snapshot_request).unwrap()).unwrap();
+    assert_eq!(decoded, snapshot_request);
+
+    let subscribe = ClientEnvelope::Request(ClientRequestEnvelope {
+        request_id: RequestId(33),
+        command: ClientCommand::AgentSubscribe(AgentSubscribeRequest {
+            agent_id: agent_id.clone(),
+            since_event_id: Some(AgentEventId(7)),
+        }),
+    });
+    let decoded = decode_client_frame(&encode_client_frame(&subscribe).unwrap()).unwrap();
+    assert_eq!(decoded, subscribe);
+
+    let event = AgentEventRecord {
+        event_id: AgentEventId(8),
+        agent_id: agent_id.clone(),
+        turn_id: Some(turn_id.clone()),
+        ts_ms: 1234,
+        payload: AgentEventPayload::Token {
+            text: "hello".into(),
+        },
+    };
+    let snapshot = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(34),
+        result: Ok(CommandSuccess::AgentSnapshot(AgentSnapshotResponse {
+            agent_id: agent_id.clone(),
+            chat_id,
+            bound_model: Some(model),
+            state: AgentRuntimeStatus::Running,
+            active_turn_id: Some(turn_id),
+            since_event_id: Some(AgentEventId(7)),
+            events: vec![event],
+            current_text: "hello".into(),
+            current_reasoning: String::new(),
+            error: None,
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&snapshot).unwrap()).unwrap();
+    assert_eq!(decoded, snapshot);
+
+    let subscribed = ServerEnvelope::Response(ServerResponseEnvelope {
+        request_id: RequestId(35),
+        result: Ok(CommandSuccess::AgentSubscribed(AgentSubscribeResponse {
+            agent_id,
+        })),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&subscribed).unwrap()).unwrap();
+    assert_eq!(decoded, subscribed);
 }
 
 #[test]
@@ -454,6 +569,8 @@ fn chat_agent_and_selection_payloads_roundtrip() {
             related_files: vec![related_file.clone()],
             client_request_id: Some("request-1".into()),
             initial_user_message: Some("preview this".into()),
+            requested_model: None,
+            initial_turn: None,
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&create).unwrap()).unwrap();
@@ -465,6 +582,7 @@ fn chat_agent_and_selection_payloads_roundtrip() {
             session_id: session_id.clone(),
             agent_id: "agent-main".into(),
             title: "main".into(),
+            initial_turn: None,
         })),
     });
     let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
@@ -615,7 +733,9 @@ fn agent_push_events_and_busy_error_roundtrip() {
         request_id: RequestId(60),
         result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
             session_id: session_id.clone(),
+            agent_id: "agent-main".into(),
             run_id: "run-1".into(),
+            turn_id: "run-1".into(),
         })),
     });
     let decoded = decode_server_frame(&encode_server_frame(&response).unwrap()).unwrap();
@@ -682,7 +802,7 @@ fn agent_push_events_and_busy_error_roundtrip() {
     let cancel = ClientEnvelope::Request(ClientRequestEnvelope {
         request_id: RequestId(62),
         command: ClientCommand::AgentCancel(AgentCancelRequest {
-            run_id: Some("run-1".into()),
+            agent_id: "agent-main".into(),
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&cancel).unwrap()).unwrap();
@@ -691,7 +811,8 @@ fn agent_push_events_and_busy_error_roundtrip() {
     let cancelled = ServerEnvelope::Response(ServerResponseEnvelope {
         request_id: RequestId(62),
         result: Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
-            run_id: Some("run-1".into()),
+            agent_id: "agent-main".into(),
+            cancelled: true,
         })),
     });
     let decoded = decode_server_frame(&encode_server_frame(&cancelled).unwrap()).unwrap();
@@ -777,6 +898,7 @@ fn agent_push_events_and_busy_error_roundtrip() {
                 archived: false,
                 message_count: 2,
                 related_files: Vec::new(),
+                bound_model: None,
             }],
         }),
     });
@@ -829,6 +951,7 @@ fn selection_update_payload_roundtrips() {
             archived: false,
             message_count: 1,
             related_files: Vec::new(),
+            bound_model: None,
         }],
     };
     let bytes = borsh::to_vec(&summary).unwrap();

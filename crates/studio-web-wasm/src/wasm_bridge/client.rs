@@ -10,8 +10,8 @@ use std::io::Cursor;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
-    AgentPlanConfirmRequest, AgentPlanRejectRequest, CadQueryExecuteRequest, CadQueryMeshPayload,
-    CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentStartTurnRequest, CadQueryExecuteRequest,
+    CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
     CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
     ChatListRequest, ChatSendRequest, ChatSessionId, CommandSuccess, ConfigSaveRequest,
     ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
@@ -408,6 +408,20 @@ pub fn client_dispatch_agent_cancel(
     handle
         .borrow_mut()?
         .dispatch_agent_cancel(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_start_turn(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentStartTurnRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_start_turn params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_start_turn(parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

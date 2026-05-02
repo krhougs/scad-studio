@@ -9,10 +9,10 @@ use std::{
 };
 
 use app_server_protocol::{
-    AgentSearchSource, ChatAckResponse, ChatArchivedResponse, ChatCreatedResponse,
-    ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId,
-    ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolError,
-    ProtocolErrorCode,
+    AgentId, AgentSearchSource, BoundAgentModel, ChatAckResponse, ChatArchivedResponse,
+    ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
+    ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
+    ProtocolError, ProtocolErrorCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt};
@@ -112,7 +112,7 @@ struct ChatIndex {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatIndexEntry {
     chat_id: ChatSessionId,
-    agent_id: String,
+    agent_id: AgentId,
     create_request_id: Option<String>,
     title: String,
     goal: Option<String>,
@@ -124,7 +124,12 @@ struct ChatIndexEntry {
     related_files: Vec<PathHandle>,
     messages_path: String,
     events_path: String,
-    bound_model: Option<serde_json::Value>,
+    bound_model: Option<BoundAgentModel>,
+}
+
+struct ChatIndexCreateResult {
+    entry: ChatIndexEntry,
+    created_now: bool,
 }
 
 impl ChatStore {
@@ -139,12 +144,14 @@ impl ChatStore {
         related_files: Vec<PathHandle>,
     ) -> Result<ChatCreatedResponse, ProtocolError> {
         let created = self
-            .create_indexed(title.to_owned(), goal, related_files, None, None)
+            .create_indexed(title.to_owned(), goal, related_files, None, None, None)
             .await?;
+        let entry = created.entry;
         Ok(ChatCreatedResponse {
-            session_id: created.chat_id,
-            agent_id: created.agent_id,
-            title: created.title,
+            session_id: entry.chat_id,
+            agent_id: entry.agent_id,
+            title: entry.title,
+            initial_turn: None,
         })
     }
 
@@ -180,13 +187,70 @@ impl ChatStore {
                 related_files,
                 Some(client_request_id.to_owned()),
                 initial_user_message,
+                None,
             )
             .await?;
+        let entry = created.entry;
         Ok(ChatCreatedResponse {
-            session_id: created.chat_id,
-            agent_id: created.agent_id,
-            title: created.title,
+            session_id: entry.chat_id,
+            agent_id: entry.agent_id,
+            title: entry.title,
+            initial_turn: None,
         })
+    }
+
+    pub async fn create_with_client_request_id_initial_message_and_model(
+        &self,
+        client_request_id: &str,
+        title: &str,
+        goal: Option<String>,
+        related_files: Vec<PathHandle>,
+        initial_user_message: impl Into<String>,
+        bound_model: Option<BoundAgentModel>,
+    ) -> Result<ChatCreatedResponse, ProtocolError> {
+        let (response, _) = self
+            .create_with_client_request_id_initial_message_and_model_outcome(
+                client_request_id,
+                title,
+                goal,
+                related_files,
+                initial_user_message,
+                bound_model,
+            )
+            .await?;
+        Ok(response)
+    }
+
+    pub async fn create_with_client_request_id_initial_message_and_model_outcome(
+        &self,
+        client_request_id: &str,
+        title: &str,
+        goal: Option<String>,
+        related_files: Vec<PathHandle>,
+        initial_user_message: impl Into<String>,
+        bound_model: Option<BoundAgentModel>,
+    ) -> Result<(ChatCreatedResponse, bool), ProtocolError> {
+        let created = self
+            .create_indexed(
+                title.to_owned(),
+                goal,
+                related_files,
+                Some(client_request_id.to_owned()),
+                Some(initial_user_message.into()),
+                bound_model,
+            )
+            .await?;
+        let created_now = created.created_now;
+        let entry = created.entry;
+        Ok((
+            ChatCreatedResponse {
+                session_id: entry.chat_id,
+                agent_id: entry.agent_id,
+                title: entry.title,
+                initial_turn: None,
+            },
+            created_now,
+        ))
     }
 
     pub async fn create_owned(
@@ -543,16 +607,21 @@ impl ChatStore {
         related_files: Vec<PathHandle>,
         create_request_id: Option<String>,
         initial_user_message: Option<String>,
-    ) -> Result<ChatIndexEntry, ProtocolError> {
+        bound_model: Option<BoundAgentModel>,
+    ) -> Result<ChatIndexCreateResult, ProtocolError> {
         let write_lock = workspace_write_lock(&self.workspace_root)?;
         let _guard = write_lock.lock().await;
         let mut index = self.load_or_migrate_index_without_lock().await?;
         if let Some(request_id) = create_request_id.as_deref() {
             if let Some(entry) = find_create_request(&index, request_id) {
-                return Ok(entry.clone());
+                return Ok(ChatIndexCreateResult {
+                    entry: entry.clone(),
+                    created_now: false,
+                });
             }
         }
-        let entry = self.new_index_entry(title, goal, related_files, create_request_id)?;
+        let entry =
+            self.new_index_entry(title, goal, related_files, create_request_id, bound_model)?;
         let create_result = async {
             let path = self.relative_path(&entry.messages_path)?;
             let content = entry
@@ -587,7 +656,10 @@ impl ChatStore {
             self.cleanup_created_entry_files(&entry).await;
             return Err(error);
         }
-        Ok(entry)
+        Ok(ChatIndexCreateResult {
+            entry,
+            created_now: true,
+        })
     }
 
     fn new_index_entry(
@@ -596,13 +668,14 @@ impl ChatStore {
         goal: Option<String>,
         related_files: Vec<PathHandle>,
         create_request_id: Option<String>,
+        bound_model: Option<BoundAgentModel>,
     ) -> Result<ChatIndexEntry, ProtocolError> {
         let chat_id = random_identifier("chat")?;
         let agent_id = random_identifier("agent")?;
         let now = now_ms();
         Ok(ChatIndexEntry {
             chat_id: ChatSessionId(chat_id.clone()),
-            agent_id: agent_id.clone(),
+            agent_id: AgentId(agent_id.clone()),
             create_request_id,
             title,
             goal,
@@ -614,7 +687,7 @@ impl ChatStore {
             related_files,
             messages_path: format!("chats/{chat_id}.jsonl"),
             events_path: format!("agent-events/{agent_id}.jsonl"),
-            bound_model: None,
+            bound_model,
         })
     }
 
@@ -698,7 +771,7 @@ impl ChatStore {
         let agent_id = random_identifier("agent")?;
         Ok(ChatIndexEntry {
             chat_id: ChatSessionId(random_identifier("chat")?),
-            agent_id: agent_id.clone(),
+            agent_id: AgentId(agent_id.clone()),
             create_request_id: None,
             title,
             goal: None,
@@ -714,6 +787,66 @@ impl ChatStore {
         })
     }
 
+    pub async fn agent_id_for_session(
+        &self,
+        session_id: &ChatSessionId,
+    ) -> Result<AgentId, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        index
+            .chats
+            .iter()
+            .find(|entry| entry.chat_id == *session_id)
+            .map(|entry| entry.agent_id.clone())
+            .ok_or_else(|| not_found("Chat session 不存在"))
+    }
+
+    pub async fn bound_model_for_session(
+        &self,
+        session_id: &ChatSessionId,
+    ) -> Result<Option<BoundAgentModel>, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        index
+            .chats
+            .iter()
+            .find(|entry| entry.chat_id == *session_id)
+            .map(|entry| entry.bound_model.clone())
+            .ok_or_else(|| not_found("Chat session 不存在"))
+    }
+
+    pub async fn session_id_for_agent(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<ChatSessionId, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        index
+            .chats
+            .iter()
+            .find(|entry| entry.agent_id == *agent_id)
+            .map(|entry| entry.chat_id.clone())
+            .ok_or_else(|| not_found("Agent 不存在"))
+    }
+
+    pub async fn has_create_request_id(
+        &self,
+        client_request_id: &str,
+    ) -> Result<bool, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        Ok(find_create_request(&index, client_request_id).is_some())
+    }
+
+    pub async fn bound_model_for_agent(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<Option<BoundAgentModel>, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        index
+            .chats
+            .iter()
+            .find(|entry| entry.agent_id == *agent_id)
+            .map(|entry| entry.bound_model.clone())
+            .ok_or_else(|| not_found("Agent 不存在"))
+    }
+
     async fn summary_from_index_entry(
         &self,
         entry: &ChatIndexEntry,
@@ -727,6 +860,7 @@ impl ChatStore {
             message_count,
             agent_id: entry.agent_id.clone(),
             related_files: entry.related_files.clone(),
+            bound_model: entry.bound_model.clone(),
         })
     }
 

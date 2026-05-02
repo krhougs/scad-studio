@@ -250,6 +250,7 @@ export function chatSessionsEqual(
       sa.archived !== sb.archived ||
       sa.message_count !== sb.message_count ||
       sa.agent_id !== sb.agent_id ||
+      JSON.stringify(sa.bound_model ?? null) !== JSON.stringify(sb.bound_model ?? null) ||
       !pathHandlesEqual(sa.related_files, sb.related_files)
     ) return false;
   }
@@ -307,7 +308,12 @@ function searchSourcesEqual(
 export function agentRunEqual(a: AgentRun | null, b: AgentRun | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.session_id === b.session_id && a.run_id === b.run_id;
+  return (
+    a.session_id === b.session_id &&
+    a.agent_id === b.agent_id &&
+    a.run_id === b.run_id &&
+    a.turn_id === b.turn_id
+  );
 }
 
 export function agentEventsEqual(a: AgentEvent[], b: AgentEvent[]): boolean {

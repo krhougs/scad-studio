@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 9;
+export const CURRENT_PROTOCOL_VERSION = 10;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -50,7 +50,21 @@ export type CadQueryExportFormat = "step" | "stl" | "three_mf";
 export type CadQueryObjectKind = "part" | "component" | "assembly";
 export type ChatRole = "user" | "assistant" | "tool" | "meta";
 export type ChatSessionId = string;
+export type AgentId = string;
+export type AgentTurnId = string;
+export type AgentEventId = number;
 export type AgentMode = "agent" | "plan";
+export type AgentProviderType =
+  | "anthropic"
+  | "openai_responses"
+  | "openai_completions";
+export type AgentRuntimeStatus =
+  | "idle"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
 export type AgentErrorType =
   | "llm_error"
   | "llm_refused"
@@ -423,12 +437,21 @@ export interface ChatCreateRequest {
   related_files: PathHandle[];
   client_request_id?: string | null;
   initial_user_message?: string | null;
+  requested_model?: BoundAgentModel | null;
+  initial_turn?: ChatCreateInitialTurn | null;
+}
+
+export interface ChatCreateInitialTurn {
+  mode: AgentMode;
+  plan_ref: PathHandle | null;
+  context_refs?: string[];
 }
 
 export interface ChatCreatedResponse {
   session_id: ChatSessionId;
-  agent_id: string;
+  agent_id: AgentId;
   title: string;
+  initial_turn?: AgentStartedResponse | null;
 }
 
 export interface ChatListRequest {
@@ -437,11 +460,12 @@ export interface ChatListRequest {
 
 export interface ChatSessionSummary {
   session_id: ChatSessionId;
-  agent_id: string;
+  agent_id: AgentId;
   title: string;
   archived: boolean;
   message_count: number;
   related_files: PathHandle[];
+  bound_model?: BoundAgentModel | null;
 }
 
 export interface ChatListResponse {
@@ -525,6 +549,23 @@ export interface AgentInvokeRequest {
   service_label?: string | null;
 }
 
+export interface BoundAgentModel {
+  provider_id: string;
+  provider_type: AgentProviderType;
+  model_id: string;
+  reasoning_effort: string | null;
+  service_label: string | null;
+}
+
+export interface AgentStartTurnRequest {
+  agent_id: AgentId;
+  client_request_id?: string | null;
+  prompt: string;
+  mode: AgentMode;
+  plan_ref: PathHandle | null;
+  context_refs?: string[];
+}
+
 /** Deprecated: use AgentInvokeRequest { mode: "agent", plan_ref }. */
 export interface AgentCadQueryConfirmation {
   request: CadQueryExecuteRequest;
@@ -536,15 +577,18 @@ export interface AgentCadQueryConfirmation {
 
 export interface AgentStartedResponse {
   session_id: ChatSessionId;
+  agent_id: AgentId;
   run_id: string;
+  turn_id: AgentTurnId;
 }
 
 export interface AgentCancelRequest {
-  run_id: string | null;
+  agent_id: AgentId;
 }
 
 export interface AgentCancelledResponse {
-  run_id: string | null;
+  agent_id: AgentId;
+  cancelled: boolean;
 }
 
 export interface AgentTokenEvent {
@@ -592,6 +636,59 @@ export interface AgentDoneEvent {
   session_id: ChatSessionId;
   run_id: string;
   cancelled: boolean;
+}
+
+export type AgentEventPayload =
+  | { event: "state_changed"; payload: { state: AgentRuntimeStatus } }
+  | { event: "token"; payload: { text: string } }
+  | { event: "reasoning"; payload: { text: string } }
+  | {
+      event: "tool_start";
+      payload: { tool_call_id: string; tool_name: string; args_json: string };
+    }
+  | {
+      event: "tool_result";
+      payload: { tool_call_id: string; tool_name: string; result_json: string };
+    }
+  | {
+      event: "error";
+      payload: { error_type: AgentErrorType; message: string };
+    }
+  | { event: "done"; payload: { cancelled: boolean } };
+
+export interface AgentEventRecord {
+  event_id: AgentEventId;
+  agent_id: AgentId;
+  turn_id: AgentTurnId | null;
+  ts_ms: number;
+  payload: AgentEventPayload;
+}
+
+export interface AgentSnapshotRequest {
+  agent_id: AgentId;
+  since_event_id: AgentEventId | null;
+}
+
+export interface AgentSnapshotResponse {
+  agent_id: AgentId;
+  chat_id: ChatSessionId;
+  bound_model: BoundAgentModel | null;
+  state: AgentRuntimeStatus;
+  active_turn_id: AgentTurnId | null;
+  since_event_id: AgentEventId | null;
+  events: AgentEventRecord[];
+  current_text: string;
+  current_reasoning: string;
+  error: string | null;
+}
+
+export interface AgentSubscribeRequest {
+  agent_id: AgentId;
+  since_event_id: AgentEventId | null;
+}
+
+export interface AgentSubscribeResponse {
+  agent_id: AgentId;
 }
 
 export interface AgentPlanProposedEvent {
@@ -722,6 +819,8 @@ export type CommandSuccess =
   | { type: "agent_plan_confirmed"; payload: AgentStartedResponse }
   | { type: "agent_plan_rejected" }
   | { type: "agent_model_registry"; payload: AgentModelRegistryResponse }
+  | { type: "agent_snapshot"; payload: AgentSnapshotResponse }
+  | { type: "agent_subscribed"; payload: AgentSubscribeResponse }
   | { type: "selection_updated"; payload: SelectionUpdateResponse }
   | { type: "slicer_listed"; payload: SlicerListResponse }
   | { type: "export_run"; payload: ExportRunResponse }

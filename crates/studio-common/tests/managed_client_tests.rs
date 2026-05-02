@@ -800,6 +800,8 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             related_files: Vec::new(),
             client_request_id: None,
             initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
         })
         .expect("dispatch chat.create");
     let _ = drain_outbound(&mut client);
@@ -810,6 +812,7 @@ fn chat_agent_and_selection_successes_update_snapshot() {
                 session_id: ChatSessionId("main".into()),
                 agent_id: "agent-main".into(),
                 title: "main".into(),
+                initial_turn: None,
             })),
         }))
         .unwrap();
@@ -861,7 +864,9 @@ fn chat_agent_and_selection_successes_update_snapshot() {
             request_id: invoke_id,
             result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
                 session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
                 run_id: "agent-1".into(),
+                turn_id: "agent-1".into(),
             })),
         }))
         .unwrap();
@@ -903,14 +908,16 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
             request_id: invoke_id,
             result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
                 session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
                 run_id: "agent-1".into(),
+                turn_id: "agent-1".into(),
             })),
         }))
         .unwrap();
 
     let cancel_id = client
         .dispatch_agent_cancel(AgentCancelRequest {
-            run_id: Some("agent-1".into()),
+            agent_id: "agent-main".into(),
         })
         .expect("dispatch agent.cancel");
     let _ = drain_outbound(&mut client);
@@ -918,7 +925,8 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
         .receive_inbound(&encode_response(&ServerResponseEnvelope {
             request_id: cancel_id,
             result: Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
-                run_id: Some("agent-1".into()),
+                agent_id: "agent-main".into(),
+                cancelled: true,
             })),
         }))
         .unwrap();
@@ -1025,6 +1033,8 @@ fn chat_created_clears_previous_session_history() {
             related_files: Vec::new(),
             client_request_id: None,
             initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
         })
         .expect("dispatch chat.create");
     let _ = drain_outbound(&mut client);
@@ -1035,6 +1045,7 @@ fn chat_created_clears_previous_session_history() {
                 session_id: ChatSessionId("new-chat".into()),
                 agent_id: "agent-new-chat".into(),
                 title: "new chat".into(),
+                initial_turn: None,
             })),
         }))
         .unwrap();
@@ -1183,6 +1194,7 @@ fn chat_list_response() -> ChatListResponse {
             archived: false,
             message_count: 1,
             related_files: Vec::new(),
+            bound_model: None,
         }],
     }
 }

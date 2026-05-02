@@ -1,7 +1,10 @@
-import type { AgentMode } from "@budn/app-server-protocol";
+import type { AgentMode, AgentProviderType } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
 import type {
   AgentModelSelection,
+  AgentModelRegistry,
+  AgentModelRegistryModel,
+  AgentModelRegistryProvider,
   ContextPill,
   AgentRun,
   ChatSessionSummary,
@@ -13,8 +16,18 @@ export async function createChatSession(
   onStatus: ((message: string) => void) | undefined,
   clientRequestId?: string | null,
   initialUserMessage?: string | null,
-): Promise<string | null> {
+  agentModelSelection?: AgentModelSelection | null,
+  initialTurn?: {
+    mode: AgentMode;
+    plan_ref: unknown | null;
+    context_refs: string[];
+  } | null,
+): Promise<{ sessionId: string; agentRun: AgentRun | null } | null> {
   if (!client) return null;
+  if (initialTurn && !agentModelSelection) {
+    onStatus?.("当前没有可用的 Agent 模型，无法创建 chat");
+    return null;
+  }
   try {
     const backendSessionCount = sessions.filter(
       (session) => !session.client_request_id,
@@ -25,12 +38,19 @@ export async function createChatSession(
       related_files: [],
       client_request_id: clientRequestId ?? null,
       initial_user_message: initialUserMessage ?? null,
+      requested_model: boundAgentModel(agentModelSelection ?? null),
+      initial_turn: initialTurn ?? null,
     });
-    const created = unwrapPayload(response) as { session_id?: string };
+    const created = unwrapPayload(response) as {
+      session_id?: string;
+      initial_turn?: AgentRun | null;
+    };
     await client
       .dispatchChatList({ include_archived: false })
       .catch(reportError(onStatus));
-    return created.session_id ?? null;
+    return created.session_id
+      ? { sessionId: created.session_id, agentRun: created.initial_turn ?? null }
+      : null;
   } catch (err) {
     reportError(onStatus)(err);
     return null;
@@ -54,8 +74,10 @@ export async function cancelAgentRun(
   onStatus?: (message: string) => void,
 ): Promise<void> {
   if (!client || !agentRun) return;
+  const agentId = agentRun.agent_id;
+  if (!agentId) return;
   await client
-    .dispatchAgentCancel({ run_id: agentRun.run_id })
+    .dispatchAgentCancel({ agent_id: agentId })
     .catch(reportError(onStatus));
 }
 
@@ -143,9 +165,22 @@ async function sendChatMessageInner(
       params.onStatus,
       clientRequestId,
       displayContent,
-    ));
+      params.agentModelSelection ?? null,
+      {
+        mode,
+        plan_ref: null,
+        context_refs: params.contextPills.map((pill) => pill.ref_text),
+      },
+    ))?.sessionId;
   if (!sessionId) return false;
   const createdNewSession = !params.currentSessionId;
+  const agentId = createdNewSession
+    ? null
+    : agentIdForSession(params.sessions, sessionId);
+  if (!createdNewSession && !agentId) {
+    params.onStatus?.("当前 chat 缺少 agent_id，无法启动 Agent turn");
+    return false;
+  }
   if (params.currentSessionId) {
     await client.dispatchChatSend({
       session_id: sessionId,
@@ -155,21 +190,21 @@ async function sendChatMessageInner(
     });
   }
   const context_refs = params.contextPills.map((pill) => pill.ref_text);
+  if (createdNewSession) {
+    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+    return true;
+  }
   try {
-    await client.dispatchAgentInvoke({
-      session_id: sessionId,
+    await client.dispatchAgentStartTurn({
+      agent_id: agentId,
       client_request_id: clientRequestId,
       prompt: displayContent,
       mode,
       plan_ref: null,
       context_refs,
-      ...agentModelInvokeFields(params.agentModelSelection ?? null),
     });
   } catch (err) {
-    if (!createdNewSession) throw err;
-    reportError(params.onStatus)(err);
-    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 }).catch(() => undefined);
-    return true;
+    throw err;
   }
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
   return true;
@@ -201,25 +236,36 @@ async function runSavedPlanInner(params: {
       params.onStatus,
       clientRequestId,
       prompt,
-    ));
+      params.agentModelSelection ?? null,
+      {
+        mode: "agent",
+        plan_ref: params.planRef,
+        context_refs: params.contextPills.map((pill) => pill.ref_text),
+      },
+    ))?.sessionId;
   if (!sessionId) return false;
   const createdNewSession = !params.currentSessionId;
   params.onStatus?.(`Running plan ${params.planId} in Agent mode`);
+  if (createdNewSession) {
+    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+    return true;
+  }
+  const agentId = agentIdForSession(params.sessions, sessionId);
+  if (!agentId) {
+    params.onStatus?.("当前 chat 缺少 agent_id，无法启动 Agent turn");
+    return false;
+  }
   try {
-    await client.dispatchAgentInvoke({
-      session_id: sessionId,
+    await client.dispatchAgentStartTurn({
+      agent_id: agentId,
       client_request_id: clientRequestId,
       prompt,
       mode: "agent",
       plan_ref: params.planRef,
       context_refs: params.contextPills.map((pill) => pill.ref_text),
-      ...agentModelInvokeFields(params.agentModelSelection ?? null),
     });
   } catch (err) {
-    if (!createdNewSession) throw err;
-    reportError(params.onStatus)(err);
-    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 }).catch(() => undefined);
-    return true;
+    throw err;
   }
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
   return true;
@@ -256,6 +302,35 @@ function parseExplicitSlashCommand(input: string): SlashCommandResult | null {
   return null;
 }
 
+type ActiveAgentModel = {
+  provider: AgentModelRegistryProvider;
+  model: AgentModelRegistryModel;
+};
+
+export function activeAgentModelSelection(
+  registry: AgentModelRegistry | null,
+): AgentModelSelection | null {
+  const active = activeAgentModel(registry);
+  if (!active || !registry) return null;
+  return {
+    provider_id: registry.active_provider_id,
+    provider_type: active.provider.kind as AgentProviderType,
+    model_id: registry.active_model_id,
+    reasoning_effort: registry.active_reasoning_effort,
+    service_label: registry.active_service_label,
+  };
+}
+
+function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel | null {
+  if (!registry) return null;
+  for (const provider of registry.providers) {
+    if (provider.id !== registry.active_provider_id) continue;
+    const model = provider.models.find((item) => item.id === registry.active_model_id);
+    return model ? { provider, model } : null;
+  }
+  return null;
+}
+
 function newClientRequestId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -269,13 +344,19 @@ function unwrapPayload(response: unknown): unknown {
   return record["payload"] ?? response;
 }
 
-function agentModelInvokeFields(selection: AgentModelSelection | null) {
+function boundAgentModel(selection: AgentModelSelection | null) {
+  if (!selection) return null;
   return {
-    provider_id: selection?.provider_id ?? null,
-    model_id: selection?.model_id ?? null,
-    reasoning_effort: selection?.reasoning_effort ?? null,
-    service_label: selection?.service_label ?? null,
+    provider_id: selection.provider_id,
+    provider_type: selection.provider_type,
+    model_id: selection.model_id,
+    reasoning_effort: selection.reasoning_effort,
+    service_label: selection.service_label,
   };
+}
+
+function agentIdForSession(sessions: ChatSessionSummary[], sessionId: string): string | null {
+  return sessions.find((session) => session.session_id === sessionId)?.agent_id ?? null;
 }
 
 export function reportError(onStatus?: (message: string) => void) {

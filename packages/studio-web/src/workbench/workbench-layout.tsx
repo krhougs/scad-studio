@@ -33,7 +33,7 @@ import {
   useCurrentChatSession,
 } from "../state/protocol-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
-import { runSavedPlan } from "./chat-actions";
+import { activeAgentModelSelection, runSavedPlan } from "./chat-actions";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
 import {
@@ -100,6 +100,20 @@ function phaseToStatus(phase: Phase): TopbarStatus {
   }
 }
 
+function useWorkbenchAgentModelRegistry(
+  client: WasmClient | null,
+  onStatus: (message: string) => void,
+) {
+  useEffect(() => {
+    if (!client) return;
+    client
+      .dispatchAgentModelRegistry()
+      .catch((err: unknown) =>
+        onStatus(err instanceof Error ? err.message : String(err)),
+      );
+  }, [client, onStatus]);
+}
+
 function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
   const pathError =
     typeof entry.path_error === "string" ? entry.path_error : null;
@@ -136,6 +150,11 @@ export function WorkbenchLayout() {
   const currentChatSession = useCurrentChatSession();
   const currentSelection = useProtocolStore((s) => s.current_selection);
   const cadQueryResults = useProtocolStore((s) => s.cadquery_results);
+  const agentModelRegistry = useProtocolStore((s) => s.agent_model_registry);
+  const agentModelSelection = useMemo(
+    () => activeAgentModelSelection(agentModelRegistry),
+    [agentModelRegistry],
+  );
   const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
@@ -200,6 +219,7 @@ export function WorkbenchLayout() {
     onPreviewStatus: setMessage,
     enabled: activeTab?.kind === "scad" && client !== null,
   });
+  useWorkbenchAgentModelRegistry(client, setMessage);
 
   useEffect(() => {
     if (appConfig.kind !== "ready") return;
@@ -648,12 +668,14 @@ export function WorkbenchLayout() {
         agentRun,
         busy: markdownPlanBusy,
         contextPills: [],
+        agentModelSelection,
         onStatus: setMessage,
         setBusy: setMarkdownPlanBusy,
       });
     },
     [
       agentRun,
+      agentModelSelection,
       markdownPlanBusy,
       chatSessions,
       currentChatSession,
@@ -757,7 +779,9 @@ export function WorkbenchLayout() {
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
         scadWorkbenchState={scadWorkbenchState}
-        planRunDisabled={!client || markdownPlanBusy || Boolean(agentRun)}
+        planRunDisabled={
+          !client || markdownPlanBusy || Boolean(agentRun) || !agentModelSelection
+        }
         onRunPlan={handleRunMarkdownPlan}
       />
       <Inspector

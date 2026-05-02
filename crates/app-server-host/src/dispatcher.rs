@@ -12,12 +12,13 @@ use app_server_core::{
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
-    AgentErrorEvent, AgentErrorType, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
+    AgentErrorEvent, AgentErrorType, AgentId, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
     AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest,
     AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
     AgentModelSelectRequest, AgentModelSource, AgentPlanConfirmRequest, AgentPlanProposedEvent,
-    AgentPlanRejectRequest, AgentProviderCapabilities, AgentReasoningEvent, AgentStartedResponse,
-    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, CURRENT_PROTOCOL_VERSION,
+    AgentPlanRejectRequest, AgentProviderCapabilities, AgentProviderType, AgentReasoningEvent,
+    AgentStartTurnRequest, AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent,
+    AgentToolStartEvent, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
     CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatToolCallRecord,
     ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
@@ -38,6 +39,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::{Notify, futures::OwnedNotified};
 
 use crate::HostSession;
 
@@ -178,6 +180,7 @@ impl CadQueryResultCache {
 #[derive(Clone, Debug, Default)]
 struct AgentModelRuntimeState {
     provider_id: Option<String>,
+    provider_type: Option<AgentProviderType>,
     model_id: Option<String>,
     reasoning_effort: Option<String>,
     service_label: Option<String>,
@@ -433,6 +436,14 @@ impl HostRequestDispatcher {
             ClientCommand::ChatCreate(request) => {
                 self.issue_handles(&request.related_files);
                 let store = self.chat_store()?;
+                let initial_turn = request.initial_turn.clone();
+                let bound_model = request.requested_model.clone();
+                if initial_turn.is_some() && bound_model.is_none() {
+                    return Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "chat.create initial_turn requires requested_model",
+                    ));
+                }
                 let Some(initial_user_message) = request.initial_user_message else {
                     return Err(ProtocolError::new(
                         ProtocolErrorCode::InvalidCommand,
@@ -445,29 +456,76 @@ impl HostRequestDispatcher {
                         "chat.create initial_user_message must not be empty",
                     ));
                 }
-                let response = match request.client_request_id {
-                    Some(client_request_id) => {
-                        if client_request_id.trim().is_empty() {
-                            return Err(ProtocolError::new(
-                                ProtocolErrorCode::InvalidCommand,
-                                "chat.create client_request_id must not be empty",
-                            ));
-                        }
-                        store
-                            .create_with_client_request_id_and_initial_message(
-                                &client_request_id,
-                                &request.title,
-                                request.goal,
-                                request.related_files,
-                                Some(initial_user_message),
-                            )
-                            .await
-                    }
-                    None => Err(ProtocolError::new(
+                let Some(client_request_id_value) = request.client_request_id.clone() else {
+                    return Err(ProtocolError::new(
                         ProtocolErrorCode::InvalidCommand,
                         "chat.create requires client_request_id",
-                    )),
-                }?;
+                    ));
+                };
+                if client_request_id_value.trim().is_empty() {
+                    return Err(ProtocolError::new(
+                        ProtocolErrorCode::InvalidCommand,
+                        "chat.create client_request_id must not be empty",
+                    ));
+                }
+                let client_request_id = Some(client_request_id_value.clone());
+                let reserved_initial_turn = if initial_turn.is_some() {
+                    self.reserve_initial_turn_for_chat_create(&store, &client_request_id_value)
+                        .await?
+                } else {
+                    false
+                };
+                let response = match store
+                    .create_with_client_request_id_initial_message_and_model_outcome(
+                        &client_request_id_value,
+                        &request.title,
+                        request.goal,
+                        request.related_files,
+                        initial_user_message.clone(),
+                        request.requested_model,
+                    )
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        if reserved_initial_turn {
+                            self.release_initial_turn_reservation(&client_request_id_value)?;
+                        }
+                        return Err(error);
+                    }
+                };
+                let (mut response, created_now) = response;
+                if let Some(turn) = initial_turn
+                    && created_now
+                {
+                    let started = match self.start_agent_run_with_reserved_initial_turn(
+                        response.session_id.clone(),
+                        response.agent_id.clone(),
+                        client_request_id,
+                        initial_user_message,
+                        turn.mode,
+                        turn.plan_ref,
+                        turn.context_refs,
+                        agent_model_state_for_bound_or_current(
+                            bound_model.as_ref(),
+                            &self.agent_model_state,
+                        ),
+                    ) {
+                        Ok(started) => started,
+                        Err(error) => {
+                            if reserved_initial_turn {
+                                self.release_initial_turn_reservation(&client_request_id_value)?;
+                            }
+                            return Err(error);
+                        }
+                    };
+                    if let CommandSuccess::AgentStarted(started) = started {
+                        response.initial_turn = Some(started);
+                    }
+                }
+                if reserved_initial_turn && response.initial_turn.is_none() {
+                    self.release_initial_turn_reservation(&client_request_id_value)?;
+                }
                 self.broadcast_chat_list_snapshot().await?;
                 Ok(CommandSuccess::ChatCreated(response))
             }
@@ -502,8 +560,17 @@ impl HostRequestDispatcher {
                 self.broadcast_chat_list_snapshot().await?;
                 Ok(CommandSuccess::ChatArchived(response))
             }
-            ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request),
+            ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request).await,
+            ClientCommand::AgentStartTurn(request) => self.start_agent_turn(request).await,
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
+            ClientCommand::AgentSnapshot(_) => Err(ProtocolError::new(
+                ProtocolErrorCode::InvalidCommand,
+                "agent.snapshot requires workspace Agent runtime",
+            )),
+            ClientCommand::AgentSubscribe(_) => Err(ProtocolError::new(
+                ProtocolErrorCode::InvalidCommand,
+                "agent.subscribe requires workspace Agent runtime",
+            )),
             ClientCommand::AgentModelRegistry => {
                 let registry = self.agent_model_registry_snapshot().await?;
                 Ok(CommandSuccess::AgentModelRegistry(registry))
@@ -731,6 +798,7 @@ impl HostRequestDispatcher {
             });
         self.agent_model_state = AgentModelRuntimeState {
             provider_id: Some(request.provider_id),
+            provider_type: None,
             model_id: Some(request.model_id),
             reasoning_effort: selected_model.and_then(|model| model.reasoning_effort.clone()),
             service_label: selected_model.and_then(|model| model.service_label.clone()),
@@ -749,6 +817,7 @@ impl HostRequestDispatcher {
         ensure_agent_model_exists(&registry, &request.provider_id, &request.model_id)?;
         self.agent_model_state = AgentModelRuntimeState {
             provider_id: Some(request.provider_id),
+            provider_type: None,
             model_id: Some(request.model_id),
             reasoning_effort: request.reasoning_effort,
             service_label: request.service_label,
@@ -759,35 +828,122 @@ impl HostRequestDispatcher {
         ))
     }
 
-    fn start_agent_after_history(
+    async fn reserve_initial_turn_for_chat_create(
+        &self,
+        store: &ChatStore,
+        client_request_id: &str,
+    ) -> Result<bool, ProtocolError> {
+        loop {
+            if store.has_create_request_id(client_request_id).await? {
+                return Ok(false);
+            }
+            let outcome = self
+                .agent_runs
+                .lock()
+                .map_err(|_| internal_error("Agent registry lock poisoned"))?
+                .reserve_initial_turn(client_request_id)?;
+            match outcome {
+                InitialTurnReserveOutcome::Reserved => return Ok(true),
+                InitialTurnReserveOutcome::DuplicateCommitted => {
+                    tokio::task::yield_now().await;
+                }
+                InitialTurnReserveOutcome::DuplicateInProgress(notified) => {
+                    notified.await;
+                }
+            }
+        }
+    }
+
+    fn release_initial_turn_reservation(
+        &self,
+        client_request_id: &str,
+    ) -> Result<(), ProtocolError> {
+        self.agent_runs
+            .lock()
+            .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .release_initial_turn_reservation(client_request_id);
+        Ok(())
+    }
+
+    async fn start_agent_after_history(
         &mut self,
         request: AgentInvokeRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        let store = self.chat_store()?;
+        let agent_id = store.agent_id_for_session(&request.session_id).await?;
+        let bound_model = store.bound_model_for_session(&request.session_id).await?;
+        let model_state = agent_model_state_for_bound_or_request(
+            bound_model.as_ref(),
+            &self.agent_model_state,
+            &request,
+        );
+        self.start_agent_run(
+            request.session_id.clone(),
+            agent_id,
+            request.client_request_id.clone(),
+            request.prompt,
+            request.mode,
+            request.plan_ref,
+            request.context_refs,
+            model_state,
+        )
+    }
+
+    async fn start_agent_turn(
+        &mut self,
+        request: AgentStartTurnRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        let store = self.chat_store()?;
+        let session_id = store.session_id_for_agent(&request.agent_id).await?;
+        let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
+        self.start_agent_run(
+            session_id,
+            request.agent_id,
+            request.client_request_id,
+            request.prompt,
+            request.mode,
+            request.plan_ref,
+            request.context_refs,
+            agent_model_state_for_bound_or_current(bound_model.as_ref(), &self.agent_model_state),
+        )
+    }
+
+    fn start_agent_run(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+        prompt: String,
+        mode: AgentMode,
+        plan_ref: Option<PathHandle>,
+        context_refs: Vec<String>,
+        model_state: AgentModelRuntimeState,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
             .agent_runs
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .try_start(
-                request.session_id.clone(),
-                request.client_request_id.clone(),
-            )?;
+            .try_start(session_id, agent_id, client_request_id)?;
         if !run.started_now {
             return Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
                 session_id: run.session_id,
+                agent_id: run.agent_id,
                 run_id: run.run_id,
+                turn_id: run.turn_id,
             }));
         }
         let response = AgentStartedResponse {
             session_id: run.session_id.clone(),
+            agent_id: run.agent_id.clone(),
             run_id: run.run_id.clone(),
+            turn_id: run.turn_id.clone(),
         };
-        let model_state = agent_model_state_for_request(&self.agent_model_state, &request);
         let worker = AgentWorker {
             run,
-            prompt: request.prompt,
-            mode: request.mode,
-            plan_ref: request.plan_ref,
-            context_refs: request.context_refs,
+            prompt,
+            mode,
+            plan_ref,
+            context_refs,
             model_state,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
@@ -795,6 +951,46 @@ impl HostRequestDispatcher {
             cadquery_results: Arc::clone(&self.cadquery_results),
             agent_runs: Arc::clone(&self.agent_runs),
             push_sink: Arc::clone(&self.push_sink),
+        };
+        tokio::spawn(run_agent_worker(worker));
+        Ok(CommandSuccess::AgentStarted(response))
+    }
+
+    fn start_agent_run_with_reserved_initial_turn(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+        prompt: String,
+        mode: AgentMode,
+        plan_ref: Option<PathHandle>,
+        context_refs: Vec<String>,
+        model_state: AgentModelRuntimeState,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        let run = self
+            .agent_runs
+            .lock()
+            .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .try_start_reserved_initial_turn(session_id, agent_id, client_request_id)?;
+        let response = AgentStartedResponse {
+            session_id: run.session_id.clone(),
+            agent_id: run.agent_id.clone(),
+            run_id: run.run_id.clone(),
+            turn_id: run.turn_id.clone(),
+        };
+        let worker = AgentWorker {
+            run,
+            prompt,
+            mode,
+            plan_ref,
+            context_refs,
+            model_state,
+            selection_snapshot: self.selection_snapshot.clone(),
+            workspace_root: self.workspace_root()?.to_path_buf(),
+            push_sink: Arc::clone(&self.push_sink),
+            cadquery_results: Arc::clone(&self.cadquery_results),
+            agent_runs: Arc::clone(&self.agent_runs),
+            python: cadquery_python_path(),
         };
         tokio::spawn(run_agent_worker(worker));
         Ok(CommandSuccess::AgentStarted(response))
@@ -808,14 +1004,16 @@ impl HostRequestDispatcher {
             .agent_runs
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .cancel(request.run_id.as_deref());
+            .cancel(&request.agent_id);
         if let Some(run) = cancelled {
             Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
-                run_id: Some(run.run_id),
+                agent_id: run.agent_id,
+                cancelled: true,
             }))
         } else {
             Ok(CommandSuccess::AgentCancelled(AgentCancelledResponse {
-                run_id: None,
+                agent_id: request.agent_id,
+                cancelled: false,
             }))
         }
     }
@@ -844,7 +1042,21 @@ impl HostRequestDispatcher {
 struct AgentRunRegistry {
     next_run_id: u64,
     running: Option<AgentRunHandle>,
+    initial_turn_reserved: Option<InitialTurnReservation>,
+    running_initial_create_request_id: Option<String>,
     started_by_request: HashMap<AgentRunRequestKey, AgentRunHandle>,
+}
+
+#[derive(Clone)]
+struct InitialTurnReservation {
+    request_id: String,
+    notify: Arc<Notify>,
+}
+
+enum InitialTurnReserveOutcome {
+    Reserved,
+    DuplicateCommitted,
+    DuplicateInProgress(OwnedNotified),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -869,9 +1081,53 @@ fn agent_run_registry_for_workspace(workspace_path: Option<&Path>) -> Arc<Mutex<
 }
 
 impl AgentRunRegistry {
+    fn reserve_initial_turn(
+        &mut self,
+        client_request_id: &str,
+    ) -> Result<InitialTurnReserveOutcome, ProtocolError> {
+        if self.running.is_some() {
+            if self.running_initial_create_request_id.as_deref() == Some(client_request_id) {
+                return Ok(InitialTurnReserveOutcome::DuplicateCommitted);
+            }
+            return Err(ProtocolError::new(
+                ProtocolErrorCode::AgentBusy,
+                "已有 Agent session 正在运行",
+            ));
+        }
+        if let Some(reservation) = &self.initial_turn_reserved {
+            if reservation.request_id == client_request_id {
+                return Ok(InitialTurnReserveOutcome::DuplicateInProgress(
+                    Arc::clone(&reservation.notify).notified_owned(),
+                ));
+            }
+            return Err(ProtocolError::new(
+                ProtocolErrorCode::AgentBusy,
+                "已有 Agent session 正在运行",
+            ));
+        }
+        self.initial_turn_reserved = Some(InitialTurnReservation {
+            request_id: client_request_id.to_owned(),
+            notify: Arc::new(Notify::new()),
+        });
+        Ok(InitialTurnReserveOutcome::Reserved)
+    }
+
+    fn release_initial_turn_reservation(&mut self, client_request_id: &str) {
+        let Some(reservation) = &self.initial_turn_reserved else {
+            return;
+        };
+        if reservation.request_id != client_request_id {
+            return;
+        }
+        if let Some(reservation) = self.initial_turn_reserved.take() {
+            reservation.notify.notify_waiters();
+        }
+    }
+
     fn try_start(
         &mut self,
         session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
         client_request_id: Option<String>,
     ) -> Result<AgentRunHandle, ProtocolError> {
         let request_key = client_request_id
@@ -885,32 +1141,99 @@ impl AgentRunRegistry {
                 return Ok(run.clone().as_existing());
             }
         }
-        if self.running.is_some() {
+        if self.running.is_some() || self.initial_turn_reserved.is_some() {
             return Err(ProtocolError::new(
                 ProtocolErrorCode::AgentBusy,
                 "已有 Agent session 正在运行",
             ));
         }
         self.next_run_id = self.next_run_id.saturating_add(1);
+        let run_id = format!("agent-{}", self.next_run_id);
         let run = AgentRunHandle {
             session_id,
-            run_id: format!("agent-{}", self.next_run_id),
+            agent_id,
+            run_id: run_id.clone(),
+            turn_id: AgentTurnId(run_id),
             cancelled: Arc::new(AtomicBool::new(false)),
             started_now: true,
         };
         self.running = Some(run.clone());
+        self.running_initial_create_request_id = None;
         if let Some(request_key) = request_key {
             self.started_by_request.insert(request_key, run.clone());
         }
         Ok(run)
     }
 
-    fn cancel(&mut self, requested_run_id: Option<&str>) -> Option<AgentRunHandle> {
+    fn try_start_reserved_initial_turn(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+    ) -> Result<AgentRunHandle, ProtocolError> {
+        let notify = self.take_initial_turn_reservation(client_request_id.as_deref());
+        if notify.is_none() {
+            return self.try_start(session_id, agent_id, client_request_id);
+        }
+        let run = self.start_without_busy_check(session_id, agent_id, client_request_id);
+        if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
+        run
+    }
+
+    fn take_initial_turn_reservation(
+        &mut self,
+        client_request_id: Option<&str>,
+    ) -> Option<Arc<Notify>> {
+        let reservation = self.initial_turn_reserved.as_ref()?;
+        if client_request_id != Some(reservation.request_id.as_str()) {
+            return None;
+        }
+        self.initial_turn_reserved
+            .take()
+            .map(|reservation| reservation.notify)
+    }
+
+    fn start_without_busy_check(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+    ) -> Result<AgentRunHandle, ProtocolError> {
+        let initial_create_request_id = client_request_id.clone();
+        let request_key = client_request_id
+            .as_ref()
+            .map(|request_id| AgentRunRequestKey {
+                session_id: session_id.clone(),
+                request_id: request_id.clone(),
+            });
+        if let Some(request_key) = request_key.as_ref()
+            && let Some(run) = self.started_by_request.get(request_key)
+        {
+            return Ok(run.clone().as_existing());
+        }
+        self.next_run_id = self.next_run_id.saturating_add(1);
+        let run_id = format!("agent-{}", self.next_run_id);
+        let run = AgentRunHandle {
+            session_id,
+            agent_id,
+            run_id: run_id.clone(),
+            turn_id: AgentTurnId(run_id),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            started_now: true,
+        };
+        self.running = Some(run.clone());
+        self.running_initial_create_request_id = initial_create_request_id;
+        if let Some(request_key) = request_key {
+            self.started_by_request.insert(request_key, run.clone());
+        }
+        Ok(run)
+    }
+
+    fn cancel(&mut self, agent_id: &AgentId) -> Option<AgentRunHandle> {
         let run = self.running.as_ref()?;
-        let should_cancel = requested_run_id
-            .map(|requested| requested == run.run_id)
-            .unwrap_or(true);
-        if should_cancel {
+        if &run.agent_id == agent_id {
             run.cancelled.store(true, Ordering::SeqCst);
             Some(run.clone())
         } else {
@@ -925,6 +1248,7 @@ impl AgentRunRegistry {
             .is_some_and(|run| run.run_id == run_id);
         let finished = is_current.then(|| self.running.take()).flatten();
         if finished.is_some() {
+            self.running_initial_create_request_id = None;
             self.started_by_request
                 .retain(|_, run| run.run_id != run_id);
         }
@@ -935,7 +1259,9 @@ impl AgentRunRegistry {
 #[derive(Clone)]
 struct AgentRunHandle {
     session_id: app_server_protocol::ChatSessionId,
+    agent_id: AgentId,
     run_id: String,
+    turn_id: AgentTurnId,
     cancelled: Arc<AtomicBool>,
     started_now: bool,
 }
@@ -1422,9 +1748,39 @@ fn agent_model_state_for_request(
         .or_else(|| current.model_id.clone());
     AgentModelRuntimeState {
         provider_id,
+        provider_type: None,
         model_id,
         reasoning_effort: request.reasoning_effort.clone(),
         service_label: request.service_label.clone(),
+    }
+}
+
+fn agent_model_state_for_bound_or_request(
+    bound_model: Option<&BoundAgentModel>,
+    current: &AgentModelRuntimeState,
+    request: &AgentInvokeRequest,
+) -> AgentModelRuntimeState {
+    bound_model
+        .map(agent_model_state_for_bound_model)
+        .unwrap_or_else(|| agent_model_state_for_request(current, request))
+}
+
+fn agent_model_state_for_bound_or_current(
+    bound_model: Option<&BoundAgentModel>,
+    current: &AgentModelRuntimeState,
+) -> AgentModelRuntimeState {
+    bound_model
+        .map(agent_model_state_for_bound_model)
+        .unwrap_or_else(|| current.clone())
+}
+
+fn agent_model_state_for_bound_model(bound_model: &BoundAgentModel) -> AgentModelRuntimeState {
+    AgentModelRuntimeState {
+        provider_id: Some(bound_model.provider_id.clone()),
+        provider_type: Some(bound_model.provider_type),
+        model_id: Some(bound_model.model_id.clone()),
+        reasoning_effort: bound_model.reasoning_effort.clone(),
+        service_label: bound_model.service_label.clone(),
     }
 }
 
@@ -1649,6 +2005,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         };
         app_server_core::llm::rig_config_from_registry_selection(registry, &selection)
             .map_err(|error| internal_error(error.message))
+            .and_then(|config| ensure_bound_provider_type(config, worker.model_state.provider_type))
     }) {
         Ok(config) => config,
         Err(error) if error.message == "Rig Agent is not configured" => {
@@ -1805,6 +2162,53 @@ fn agent_error_type_for_rig_message(message: &str) -> AgentErrorType {
         AgentErrorType::Timeout
     } else {
         AgentErrorType::LlmError
+    }
+}
+
+fn ensure_bound_provider_type(
+    config: app_server_core::llm::RigAgentConfig,
+    bound_type: Option<AgentProviderType>,
+) -> Result<app_server_core::llm::RigAgentConfig, ProtocolError> {
+    let Some(bound_type) = bound_type else {
+        return Ok(config);
+    };
+    if provider_kind_matches_bound_type(config.provider_kind, bound_type) {
+        return Ok(config);
+    }
+    Err(ProtocolError::new(
+        ProtocolErrorCode::InvalidCommand,
+        format!(
+            "chat bound model provider type mismatch: expected {}, got {}",
+            agent_provider_type_label(bound_type),
+            config.provider_kind.as_str()
+        ),
+    ))
+}
+
+fn provider_kind_matches_bound_type(
+    kind: app_server_core::llm::AgentProviderKind,
+    bound_type: AgentProviderType,
+) -> bool {
+    matches!(
+        (kind, bound_type),
+        (
+            app_server_core::llm::AgentProviderKind::OpenAiResponses,
+            AgentProviderType::OpenAiResponses
+        ) | (
+            app_server_core::llm::AgentProviderKind::OpenAiCompletions,
+            AgentProviderType::OpenAiCompletions
+        ) | (
+            app_server_core::llm::AgentProviderKind::Anthropic,
+            AgentProviderType::Anthropic
+        )
+    )
+}
+
+fn agent_provider_type_label(provider_type: AgentProviderType) -> &'static str {
+    match provider_type {
+        AgentProviderType::Anthropic => "anthropic",
+        AgentProviderType::OpenAiResponses => "openai_responses",
+        AgentProviderType::OpenAiCompletions => "openai_completions",
     }
 }
 
@@ -2354,8 +2758,8 @@ mod tests {
     use super::*;
     use app_server_core::AgentToolObserver as _;
     use app_server_protocol::{
-        CadQueryFeatureFaces, CadQueryPartMesh, ChatSessionId, EdgeGroup, FaceGroup, PreviewUnit,
-        VertexPoint,
+        AgentProviderType, CadQueryFeatureFaces, CadQueryPartMesh, ChatSessionId, EdgeGroup,
+        FaceGroup, PreviewUnit, VertexPoint,
     };
 
     #[tokio::test]
@@ -2369,8 +2773,11 @@ mod tests {
             .expect("chat session should be created");
         let run = AgentRunHandle {
             session_id: created.session_id.clone(),
+            agent_id: created.agent_id.clone(),
             run_id: "agent-1".into(),
+            turn_id: AgentTurnId("agent-1".into()),
             cancelled: Arc::new(AtomicBool::new(false)),
+            started_now: true,
         };
         let cadquery_results = Arc::new(Mutex::new(CadQueryResultCache::new(
             CADQUERY_RESULT_CACHE_LIMIT,
@@ -2440,8 +2847,11 @@ mod tests {
             .expect("chat session should be created");
         let run = AgentRunHandle {
             session_id: created.session_id.clone(),
+            agent_id: created.agent_id.clone(),
             run_id: "agent-1".into(),
+            turn_id: AgentTurnId("agent-1".into()),
             cancelled: Arc::new(AtomicBool::new(false)),
+            started_now: true,
         };
 
         append_agent_capability_meta(&workspace_root, &run, "anthropic", true).await;
@@ -2490,6 +2900,7 @@ mod tests {
     fn agent_invoke_model_state_uses_request_param_snapshot() {
         let current = AgentModelRuntimeState {
             provider_id: Some("openai".into()),
+            provider_type: None,
             model_id: Some("gpt-5.2".into()),
             reasoning_effort: Some("high".into()),
             service_label: Some("flex".into()),
@@ -2512,6 +2923,124 @@ mod tests {
         assert_eq!(different_model.model_id.as_deref(), Some("claude-sonnet"));
         assert!(different_model.reasoning_effort.is_none());
         assert!(different_model.service_label.is_none());
+    }
+
+    #[test]
+    fn agent_invoke_model_state_prefers_bound_model_over_request_params() {
+        let current = AgentModelRuntimeState {
+            provider_id: Some("openai".into()),
+            provider_type: None,
+            model_id: Some("gpt-5.2".into()),
+            reasoning_effort: Some("high".into()),
+            service_label: Some("flex".into()),
+        };
+        let bound_model = BoundAgentModel {
+            provider_id: "openai_completions".into(),
+            provider_type: AgentProviderType::OpenAiCompletions,
+            model_id: "gpt-4o".into(),
+            reasoning_effort: Some("low".into()),
+            service_label: Some("default".into()),
+        };
+
+        let state = agent_model_state_for_bound_or_request(
+            Some(&bound_model),
+            &current,
+            &agent_invoke_request("anthropic", "claude-sonnet", None, None),
+        );
+
+        assert_eq!(state.provider_id.as_deref(), Some("openai_completions"));
+        assert_eq!(
+            state.provider_type,
+            Some(AgentProviderType::OpenAiCompletions)
+        );
+        assert_eq!(state.model_id.as_deref(), Some("gpt-4o"));
+        assert_eq!(state.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(state.service_label.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn bound_provider_type_mismatch_rejects_config() {
+        let config = app_server_core::llm::RigAgentConfig {
+            provider_id: "openai".into(),
+            provider_kind: app_server_core::llm::AgentProviderKind::OpenAiCompletions,
+            api_key: "test".into(),
+            model: "gpt-4o".into(),
+            timeout_secs: 1,
+            max_tokens: 1024,
+            temperature: 0.0,
+            reasoning_effort: None,
+            service_label: None,
+            native_web_search: false,
+            anthropic_version: None,
+            base_url: None,
+        };
+
+        let error =
+            match ensure_bound_provider_type(config, Some(AgentProviderType::OpenAiResponses)) {
+                Ok(_) => panic!("mismatch should reject"),
+                Err(error) => error,
+            };
+
+        assert_eq!(error.code, ProtocolErrorCode::InvalidCommand);
+        assert!(error.message.contains("provider type mismatch"));
+    }
+
+    #[tokio::test]
+    async fn initial_turn_reservation_duplicate_waiter_cannot_miss_release() {
+        let mut registry = AgentRunRegistry::default();
+        match registry
+            .reserve_initial_turn("request-1")
+            .expect("reservation succeeds")
+        {
+            InitialTurnReserveOutcome::Reserved => {}
+            _ => panic!("first reservation should reserve"),
+        }
+        let waiter = match registry
+            .reserve_initial_turn("request-1")
+            .expect("duplicate reservation should wait")
+        {
+            InitialTurnReserveOutcome::DuplicateInProgress(waiter) => waiter,
+            _ => panic!("duplicate reservation should return waiter"),
+        };
+
+        registry.release_initial_turn_reservation("request-1");
+
+        tokio::time::timeout(std::time::Duration::from_millis(20), waiter)
+            .await
+            .expect("waiter should observe release");
+    }
+
+    #[test]
+    fn initial_turn_reservation_same_request_running_is_committed_duplicate() {
+        let mut registry = AgentRunRegistry::default();
+        match registry
+            .reserve_initial_turn("request-1")
+            .expect("reservation succeeds")
+        {
+            InitialTurnReserveOutcome::Reserved => {}
+            _ => panic!("first reservation should reserve"),
+        }
+        let run = registry
+            .try_start_reserved_initial_turn(
+                ChatSessionId("chat-1".into()),
+                AgentId("agent-1".into()),
+                Some("request-1".into()),
+            )
+            .expect("reserved turn starts");
+        assert!(run.started_now);
+
+        match registry
+            .reserve_initial_turn("request-1")
+            .expect("same request should deduplicate")
+        {
+            InitialTurnReserveOutcome::DuplicateCommitted => {}
+            _ => panic!("same request while running should re-read committed chat"),
+        }
+        let error = match registry.reserve_initial_turn("request-2") {
+            Ok(_) => panic!("different request should stay busy"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
     }
 
     fn agent_invoke_request(

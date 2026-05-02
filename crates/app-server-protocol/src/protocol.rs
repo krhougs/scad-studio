@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 9;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 10;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -605,6 +605,102 @@ pub struct VertexPoint {
 pub struct ChatSessionId(pub String);
 
 #[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(transparent)]
+pub struct AgentId(pub String);
+
+impl From<String> for AgentId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for AgentId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(transparent)]
+pub struct AgentTurnId(pub String);
+
+impl From<String> for AgentTurnId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for AgentTurnId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+#[serde(transparent)]
+pub struct AgentEventId(pub u64);
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentProviderType {
+    #[serde(rename = "anthropic")]
+    Anthropic = 0,
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses = 1,
+    #[serde(rename = "openai_completions")]
+    OpenAiCompletions = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct BoundAgentModel {
+    pub provider_id: String,
+    pub provider_type: AgentProviderType,
+    pub model_id: String,
+    pub reasoning_effort: Option<String>,
+    pub service_label: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentRuntimeStatus {
+    Idle = 0,
+    Running = 1,
+    Done = 2,
+    Failed = 3,
+    Cancelled = 4,
+    Interrupted = 5,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ChatCreateInitialTurn {
+    pub mode: AgentMode,
+    pub plan_ref: Option<PathHandle>,
+    #[serde(default)]
+    pub context_refs: Vec<String>,
+}
+
+#[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 #[serde(rename_all = "snake_case")]
@@ -625,13 +721,19 @@ pub struct ChatCreateRequest {
     pub client_request_id: Option<String>,
     #[serde(default)]
     pub initial_user_message: Option<String>,
+    #[serde(default)]
+    pub requested_model: Option<BoundAgentModel>,
+    #[serde(default)]
+    pub initial_turn: Option<ChatCreateInitialTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ChatCreatedResponse {
     pub session_id: ChatSessionId,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub title: String,
+    #[serde(default)]
+    pub initial_turn: Option<AgentStartedResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -642,11 +744,13 @@ pub struct ChatListRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ChatSessionSummary {
     pub session_id: ChatSessionId,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub title: String,
     pub archived: bool,
     pub message_count: u32,
     pub related_files: Vec<PathHandle>,
+    #[serde(default)]
+    pub bound_model: Option<BoundAgentModel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -773,19 +877,34 @@ pub struct AgentInvokeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentStartTurnRequest {
+    pub agent_id: AgentId,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
+    pub prompt: String,
+    pub mode: AgentMode,
+    pub plan_ref: Option<PathHandle>,
+    #[serde(default)]
+    pub context_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentStartedResponse {
     pub session_id: ChatSessionId,
+    pub agent_id: AgentId,
     pub run_id: String,
+    pub turn_id: AgentTurnId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentCancelRequest {
-    pub run_id: Option<String>,
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentCancelledResponse {
-    pub run_id: Option<String>,
+    pub agent_id: AgentId,
+    pub cancelled: bool,
 }
 
 #[derive(
@@ -858,6 +977,79 @@ pub struct AgentDoneEvent {
     pub session_id: ChatSessionId,
     pub run_id: String,
     pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(tag = "event", content = "payload", rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum AgentEventPayload {
+    StateChanged {
+        state: AgentRuntimeStatus,
+    } = 0,
+    Token {
+        text: String,
+    } = 1,
+    Reasoning {
+        text: String,
+    } = 2,
+    ToolStart {
+        tool_call_id: String,
+        tool_name: String,
+        args_json: String,
+    } = 3,
+    ToolResult {
+        tool_call_id: String,
+        tool_name: String,
+        result_json: String,
+    } = 4,
+    Error {
+        error_type: AgentErrorType,
+        message: String,
+    } = 5,
+    Done {
+        cancelled: bool,
+    } = 6,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentEventRecord {
+    pub event_id: AgentEventId,
+    pub agent_id: AgentId,
+    pub turn_id: Option<AgentTurnId>,
+    pub ts_ms: u64,
+    pub payload: AgentEventPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentSnapshotRequest {
+    pub agent_id: AgentId,
+    pub since_event_id: Option<AgentEventId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentSnapshotResponse {
+    pub agent_id: AgentId,
+    pub chat_id: ChatSessionId,
+    pub bound_model: Option<BoundAgentModel>,
+    pub state: AgentRuntimeStatus,
+    pub active_turn_id: Option<AgentTurnId>,
+    pub since_event_id: Option<AgentEventId>,
+    pub events: Vec<AgentEventRecord>,
+    pub current_text: String,
+    pub current_reasoning: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentSubscribeRequest {
+    pub agent_id: AgentId,
+    pub since_event_id: Option<AgentEventId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentSubscribeResponse {
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -1061,6 +1253,12 @@ pub enum ClientCommand {
     AgentModelSelect(AgentModelSelectRequest) = 27,
     #[serde(rename = "agent.model.params.update")]
     AgentModelParamsUpdate(AgentModelParamsUpdateRequest) = 28,
+    #[serde(rename = "agent.start_turn")]
+    AgentStartTurn(AgentStartTurnRequest) = 29,
+    #[serde(rename = "agent.snapshot")]
+    AgentSnapshot(AgentSnapshotRequest) = 30,
+    #[serde(rename = "agent.subscribe")]
+    AgentSubscribe(AgentSubscribeRequest) = 31,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -1100,6 +1298,8 @@ pub enum CommandSuccess {
     AgentPlanConfirmed(AgentStartedResponse) = 23,
     AgentPlanRejected = 24,
     AgentModelRegistry(AgentModelRegistryResponse) = 25,
+    AgentSnapshot(AgentSnapshotResponse) = 26,
+    AgentSubscribed(AgentSubscribeResponse) = 27,
 }
 
 #[derive(

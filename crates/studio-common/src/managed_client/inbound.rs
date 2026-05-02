@@ -129,6 +129,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 self.current_chat_history.clear();
                 self.latest_chat_history_request = None;
                 self.pending_chat_session = None;
+                self.agent_run = response.initial_turn.clone();
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();

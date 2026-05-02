@@ -4,6 +4,7 @@
 
 - Phase 1「Chat identity 与 chats.json」已完成实现、验证、独立 review 和修正。
 - Phase 2「Provider type 与 base_url 产品配置」已完成实现、验证、独立 review 和修正。
+- Phase 3「Agent 身份与 Chat 绑定协议设计」已完成实现、验证、独立 review 和修正。
 - 本文件记录到 2026-05-02 的执行结果。
 
 ## Phase 1 完成情况
@@ -99,15 +100,69 @@
 - `rg -n "anthropic_messages|AnthropicMessages" README.md docs agents.example.toml crates packages -g '!packages/studio-web/dist/**'`：无结果。
 - `rg -n "base_url" crates/app-server-protocol packages/studio-web/src packages/studio-web/tests/unit crates/app-server-core/src/chat.rs crates/app-server-core/tests/chat_tests.rs -g '!packages/studio-web/dist/**'`：无结果。
 
+## Phase 3 完成情况
+
+### 实现摘要
+
+- Protocol version 升级到 10，新增 `AgentId`、`AgentTurnId`、`AgentEventId`、`BoundAgentModel`、`AgentRuntimeStatus`、Agent snapshot / subscribe / start turn 相关结构。
+- `ChatCreateRequest` 支持 `requested_model` 与 `initial_turn`，`ChatCreatedResponse` 返回稳定 `agent_id` 与可选 `initial_turn` 启动结果。
+- `agent.cancel` 改为以 `agent_id` 为目标；新增 `agent.start_turn`、`agent.snapshot`、`agent.subscribe` protocol 命令，其中 snapshot / subscribe 当前返回 workspace runtime 尚未接入的明确错误。
+- `ChatStore` 持久化每个 chat 的 `agent_id` 与 `bound_model`，并提供 session / agent 双向查询；`bound_model` 不包含 `base_url`。
+- `chat.create.initial_turn` 要求同时携带非空 `client_request_id`、非空首条用户消息和 `requested_model`；同一 `client_request_id` 的重试返回同一 chat / agent，不重复启动 initial turn。
+- `chat.create.initial_turn` 在创建 chat 前做 workspace 级 reservation，防止不同请求在 Agent busy 时先写入 orphan chat。
+- 同一 `client_request_id` 的并发首发通过 `OwnedNotified` 等待 reservation 完成，或在同请求已进入 running 状态后重新读取 `chats.json` 返回既有 chat / agent，避免误返回 `AgentBusy`。
+- 旧 `agent.invoke` 保留兼容入口，但会把 session 映射到 `agent_id`；若 chat 已绑定模型，后端忽略旧请求中的不同模型参数。
+- 后续 turn 通过 `agent.start_turn` 以 `agent_id` 定位 chat，并只使用 chat 的 bound model。
+- Agent worker 运行前检查 bound provider type 与当前 provider config kind 是否一致，避免同 provider id 配置类型切换后静默使用错误运行路径。
+- `studio-common`、`studio-web-wasm`、Web wasm bridge 和 TS protocol 已同步新增命令与响应类型。
+- Web 首个用户消息、slash command 和 Markdown preview 的 `Run Plan` 均通过 `chat.create.initial_turn` 启动首个 turn，不再先 create 后额外 `agent.invoke`。
+- Web 已有 chat 的后续消息通过 `dispatchAgentStartTurn`；缺少 `agent_id` 时拒绝发送并显示状态消息。
+- Markdown preview 所在的 WorkbenchLayout 会请求 agent model registry，只有存在活动模型时才启用 `Run Plan`。
+
+### 验收说明
+
+- Protocol roundtrip 覆盖新增 Agent identity、snapshot、subscribe、start turn、cancel by `agent_id`、chat metadata Agent 关联和 bound model。
+- Wire contract 覆盖 protocol version 10、cancel 不暴露 `run_id`、bound model 不包含 `base_url`。
+- ChatStore 测试覆盖 `chats.json.bound_model`、list summary、session / agent 查询和 `base_url` 不持久化。
+- Host 测试覆盖 `chat.create.initial_turn` 写入 bound model、启动 initial turn、缺少 model 拒绝、busy 时不创建 orphan chat、完成后同 request retry 不重复启动、同 request 并发首发幂等。
+- Host 单元测试覆盖旧 `agent.invoke` 对已绑定 chat 优先使用 bound model，以及 provider type mismatch 拒绝。
+- Web 单元与 Playwright 测试覆盖首发协议帧使用 `chat.create.initial_turn`、后续 turn 使用 `agent.start_turn`、Run Plan 携带 `plan_ref`。
+- `agent.snapshot` / `agent.subscribe` 的完整 workspace runtime 行为属于 Phase 4；Phase 3 已定义 protocol 结构并返回明确错误，未伪造 runtime 行为。
+
+### Review 记录
+
+- 第一轮独立 review 发现 `chat.create.initial_turn` 可缺模型、Web 首发仍拆成 create + invoke、Web 缺后续 `agent.start_turn` 路径；已修复。
+- 第二轮独立 review 发现 busy 时可能留下已创建 chat、同 request retry 可能重复启动、Playwright 仍断言旧 `agent.invoke`、provider type 未检查；已修复。
+- 第三轮独立 review 发现同 request 并发首发在 `chats.json` 写入前可能返回 `AgentBusy`；已改为按 request reservation 等待并补充并发测试。
+- 第四轮独立 review 发现同 request running 窗口仍可能返回 `AgentBusy`，并且 `Notify` 可能丢通知；已改为 `DuplicateCommitted` 重新读取 index，并在 registry 锁内创建 `OwnedNotified`。
+- 第五轮独立 review 未发现阻塞问题；剩余非阻塞风险为首发 reservation 对外部 task abort 尚未具备 RAII 清理，已记录到 `docs/known_issues.md`。
+
+### 验证结果
+
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests`：17 passed。
+- `cargo test -p app-server-protocol --test wire_payload_contract_tests`：4 passed。
+- `cargo test -p app-server-core --test chat_tests`：27 passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：28 passed。
+- `cargo test -p studio-common --test managed_client_tests`：26 passed。
+- `cargo test -p app-server-host bound_provider_type_mismatch_rejects_config`：passed。
+- `cargo test -p app-server-host initial_turn_reservation`：2 passed。
+- `cargo test -p app-server-protocol-wasm --tests`：0 failed。
+- `cargo test -p studio-web-wasm --tests`：4 passed。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit -- chat-actions.test.ts chat-zone.test.tsx protocol-store.test.ts protocol-package-import.test.ts wasm-client.test.ts`：92 passed；仍有两个既有 React `act(...)` 警告。
+- `bun run --cwd packages/studio-web test:e2e -- tests/playwright/agent-chat-interaction.spec.ts tests/playwright/markdown-preview.spec.ts`：12 passed。
+- `bun run protocol:build`：通过。
+- `bun scripts/build_studio_web.ts`：通过。
+- `git diff --check`：通过。
+
 ## 尚未执行
 
-- 尚未迁移 Agent 外部操作目标到 `agent_id`。
 - 尚未实现 workspace 级 Agent runtime、多 WebSocket observer、event log replay、snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
-- 尚未实现 chat 模型绑定和后端模型强制。
 - 未迁移根目录 `llm.toml`，且本计划不要求迁移。
 
 ## 后续执行入口
 
-- Phase 3 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 3 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 9。
-- Phase 3 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
+- Phase 4 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 4 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 10。
+- Phase 4 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
+- Phase 4 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。

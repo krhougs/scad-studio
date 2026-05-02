@@ -49,9 +49,10 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "make the lid taller");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
+        agent_id: "agent-main",
         mode: "agent",
         plan_ref: null,
         context_refs: [],
@@ -196,7 +197,7 @@ describe("ChatZone", () => {
     });
   });
 
-  it("sends the active provider model snapshot with agent invoke", async () => {
+  it("uses agent_id for later turns after a chat is already bound", async () => {
     const client = fakeClient();
     setSnapshot(chatSnapshot(null, agentModelRegistry()));
     render(
@@ -209,15 +210,14 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "make the lid taller");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider_id: "openai",
-        model_id: "gpt-5.2",
-        reasoning_effort: "high",
-        service_label: "flex",
+        agent_id: "agent-main",
+        prompt: "make the lid taller",
       }),
     );
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
   });
 
   it("keeps IME composition text when chat state updates during composition", async () => {
@@ -259,8 +259,8 @@ describe("ChatZone", () => {
     fireEvent.compositionEnd(input, { data: "中" });
     await userEvent.setup().click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "中",
       }),
@@ -284,8 +284,8 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "apply the latest plan");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "plan",
         prompt: "apply the latest plan",
@@ -309,8 +309,8 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "/agent explain CadQuery loft");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "agent",
         prompt: "explain CadQuery loft",
@@ -374,12 +374,13 @@ describe("ChatZone", () => {
     expect(client.dispatchChatCreate).not.toHaveBeenCalled();
     expect(client.dispatchChatSend).not.toHaveBeenCalled();
     expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
     expect(screen.getAllByText("Untitled").length).toBeGreaterThan(0);
   });
 
   it("sends a client request id when first message creates a draft chat", async () => {
     const client = fakeClient();
-    setSnapshot(chatSnapshot());
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
     render(<ChatZone client={client as unknown as WasmClient} />);
 
     const user = userEvent.setup();
@@ -400,7 +401,7 @@ describe("ChatZone", () => {
   it("generates a client request id when first message creates chat without a local draft", async () => {
     const client = fakeClient();
     setSnapshot({
-      ...chatSnapshot(),
+      ...chatSnapshot(null, agentModelRegistry()),
       chat_sessions: [],
       current_chat_session: null,
     });
@@ -413,8 +414,8 @@ describe("ChatZone", () => {
     await waitFor(() => expect(client.dispatchChatCreate).toHaveBeenCalled());
     const createRequest = vi.mocked(client.dispatchChatCreate).mock
       .calls[0][0] as { client_request_id: string };
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    const invokeRequest = vi.mocked(client.dispatchAgentInvoke).mock.calls[0][0];
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
 
     expect(createRequest).toEqual(
       expect.objectContaining({
@@ -422,11 +423,13 @@ describe("ChatZone", () => {
         initial_user_message: "design a sliding lid",
       }),
     );
-    expect(invokeRequest).toEqual(
+    expect(createRequest).toEqual(
       expect.objectContaining({
-        client_request_id: createRequest.client_request_id,
-        mode: "plan",
-        prompt: "design a sliding lid",
+        initial_turn: expect.objectContaining({
+          mode: "plan",
+          plan_ref: null,
+          context_refs: [],
+        }),
       }),
     );
     expect(client.dispatchChatSend).not.toHaveBeenCalled();
@@ -435,7 +438,7 @@ describe("ChatZone", () => {
   it("keeps a local draft visible when first send fails", async () => {
     const client = fakeClient();
     client.dispatchChatCreate = vi.fn().mockRejectedValue(new Error("create failed"));
-    setSnapshot(chatSnapshot());
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
     render(<ChatZone client={client as unknown as WasmClient} />);
 
     const user = userEvent.setup();
@@ -447,11 +450,10 @@ describe("ChatZone", () => {
     expect(screen.getAllByText("Untitled").length).toBeGreaterThan(0);
   });
 
-  it("commits the local draft when agent invoke fails after chat create succeeds", async () => {
+  it("does not dispatch a second Agent command when chat create starts the first turn", async () => {
     const client = fakeClient();
     const onStatus = vi.fn();
-    client.dispatchAgentInvoke = vi.fn().mockRejectedValue(new Error("invoke failed"));
-    setSnapshot(chatSnapshot());
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
     render(
       <ChatZone
         client={client as unknown as WasmClient}
@@ -464,16 +466,18 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "start from draft");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    await waitFor(() => expect(client.dispatchChatCreate).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("Untitled")).toBeNull());
-    expect(onStatus).toHaveBeenCalledWith("invoke failed");
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalledWith("invoke failed");
   });
 
   it("commits the local draft when chat list refresh fails after chat create succeeds", async () => {
     const client = fakeClient();
     const onStatus = vi.fn();
     client.dispatchChatList = vi.fn().mockRejectedValue(new Error("list failed"));
-    setSnapshot(chatSnapshot());
+    setSnapshot(chatSnapshot(null, agentModelRegistry()));
     render(
       <ChatZone
         client={client as unknown as WasmClient}
@@ -486,20 +490,22 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "start from draft");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    await waitFor(() => expect(client.dispatchChatCreate).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("Untitled")).toBeNull());
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
     expect(onStatus).toHaveBeenCalledWith("list failed");
   });
 
-  it("keeps send busy while first chat create continues into agent invoke", async () => {
+  it("keeps send busy while first chat create starts the initial turn", async () => {
     const client = fakeClient();
-    let finishInvoke: () => void = () => {
-      throw new Error("invoke not started");
+    let finishCreate: () => void = () => {
+      throw new Error("create not started");
     };
-    client.dispatchAgentInvoke = vi.fn(
+    client.dispatchChatCreate = vi.fn(
       () =>
         new Promise((resolve) => {
-          finishInvoke = () => resolve({});
+          finishCreate = () => resolve({ session_id: "main" });
         }),
     );
     const setBusy = vi.fn();
@@ -512,13 +518,14 @@ describe("ChatZone", () => {
       agentRun: null,
       busy: false,
       contextPills: [],
+      agentModelSelection: agentModelSelection(),
       setBusy,
     }, "start from draft");
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
+    await waitFor(() => expect(client.dispatchChatCreate).toHaveBeenCalled());
     expect(setBusy.mock.calls).toEqual([[true]]);
 
-    finishInvoke();
+    finishCreate();
     await expect(pending).resolves.toBe(true);
     expect(setBusy.mock.calls).toEqual([[true], [false]]);
   });
@@ -526,7 +533,7 @@ describe("ChatZone", () => {
   it("uses the first backend chat title when a local draft is the only session", async () => {
     const client = fakeClient();
     setSnapshot({
-      ...chatSnapshot(),
+      ...chatSnapshot(null, agentModelRegistry()),
       chat_sessions: [],
       current_chat_session: null,
     });
@@ -566,9 +573,10 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "open a slot on this face");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
+        agent_id: "agent-main",
         mode: "agent",
         plan_ref: null,
         context_refs: ["@face[top_lid:f_0]"],
@@ -589,8 +597,8 @@ describe("ChatZone", () => {
     await user.type(screen.getByTestId("chat-input"), "/plan design a sliding lid");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "plan",
         prompt: "design a sliding lid",
@@ -631,9 +639,10 @@ describe("ChatZone", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Run Plan" }));
-    await waitFor(() => expect(client.dispatchAgentInvoke).toHaveBeenCalled());
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
+    expect(client.dispatchAgentStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
+        agent_id: "agent-main",
         mode: "agent",
         plan_ref: {
           workspace_id: "ws",
@@ -663,6 +672,7 @@ describe("ChatZone", () => {
       agentRun: null,
       busy: false,
       contextPills: [],
+      agentModelSelection: agentModelSelection(),
       draftClientRequestId: "draft-request",
       setBusy: vi.fn(),
     });
@@ -675,13 +685,8 @@ describe("ChatZone", () => {
       }),
     );
     expect(client.dispatchChatSend).not.toHaveBeenCalled();
-    expect(client.dispatchAgentInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session_id: "main",
-        client_request_id: "draft-request",
-        prompt: "Run plan 2026050100-add-lid-vents",
-      }),
-    );
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
   });
 
   it("generates a client request id when a saved plan creates chat without a local draft", async () => {
@@ -699,32 +704,33 @@ describe("ChatZone", () => {
       agentRun: null,
       busy: false,
       contextPills: [],
+      agentModelSelection: agentModelSelection(),
       setBusy: vi.fn(),
     });
 
     expect(ok).toBe(true);
     const createRequest = vi.mocked(client.dispatchChatCreate).mock
       .calls[0][0] as { client_request_id: string };
-    const invokeRequest = vi.mocked(client.dispatchAgentInvoke).mock.calls[0][0];
     expect(createRequest).toEqual(
       expect.objectContaining({
         client_request_id: expect.any(String),
         initial_user_message: "Run plan 2026050100-add-lid-vents",
+        initial_turn: expect.objectContaining({
+          mode: "agent",
+          plan_ref: {
+            workspace_id: "ws",
+            path_segments: ["plans", "2026050100-add-lid-vents"],
+          },
+        }),
       }),
     );
-    expect(invokeRequest).toEqual(
-      expect.objectContaining({
-        client_request_id: createRequest.client_request_id,
-        prompt: "Run plan 2026050100-add-lid-vents",
-      }),
-    );
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
     expect(client.dispatchChatSend).not.toHaveBeenCalled();
   });
 
-  it("commits saved plan draft when agent invoke fails after chat create succeeds", async () => {
+  it("commits saved plan draft when chat create starts the first turn", async () => {
     const client = fakeClient();
     const onStatus = vi.fn();
-    client.dispatchAgentInvoke = vi.fn().mockRejectedValue(new Error("invoke failed"));
 
     const ok = await runSavedPlan({
       client: client as unknown as WasmClient,
@@ -738,12 +744,15 @@ describe("ChatZone", () => {
       agentRun: null,
       busy: false,
       contextPills: [],
+      agentModelSelection: agentModelSelection(),
       onStatus,
       setBusy: vi.fn(),
     });
 
     expect(ok).toBe(true);
-    expect(onStatus).toHaveBeenCalledWith("invoke failed");
+    expect(client.dispatchAgentInvoke).not.toHaveBeenCalled();
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalledWith("invoke failed");
   });
 
   it("does not render plan package actions when plan_path is outside the package plan", () => {
@@ -1193,6 +1202,7 @@ function chatSnapshot(
     chat_sessions: [
       {
         session_id: "main",
+        agent_id: "agent-main",
         title: "main",
         archived: false,
         message_count: 1,
@@ -1263,6 +1273,16 @@ function agentModelRegistry(): NonNullable<ChatSnapshot["agent_model_registry"]>
         ],
       },
     ],
+  };
+}
+
+function agentModelSelection() {
+  return {
+    provider_id: "openai",
+    provider_type: "openai_responses" as const,
+    model_id: "gpt-5.2",
+    reasoning_effort: "high",
+    service_label: "flex",
   };
 }
 
@@ -1356,6 +1376,7 @@ function fakeClient(): Pick<
   | "dispatchChatCreate"
   | "dispatchChatSend"
   | "dispatchAgentInvoke"
+  | "dispatchAgentStartTurn"
   | "dispatchChatHistory"
   | "dispatchAgentCancel"
   | "dispatchAgentModelRegistry"
@@ -1368,6 +1389,7 @@ function fakeClient(): Pick<
     dispatchChatCreate: vi.fn().mockResolvedValue({ session_id: "main" }),
     dispatchChatSend: vi.fn().mockResolvedValue({}),
     dispatchAgentInvoke: vi.fn().mockResolvedValue({}),
+    dispatchAgentStartTurn: vi.fn().mockResolvedValue({}),
     dispatchChatHistory: vi.fn().mockResolvedValue({}),
     dispatchAgentCancel: vi.fn().mockResolvedValue({}),
     dispatchAgentModelRegistry: vi.fn().mockResolvedValue({}),

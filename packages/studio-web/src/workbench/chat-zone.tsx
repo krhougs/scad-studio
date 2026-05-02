@@ -5,6 +5,8 @@ import type {
   AgentModelRegistryModel as ProtocolAgentModelRegistryModel,
   AgentModelRegistryProvider as ProtocolAgentModelRegistryProvider,
   AgentModelRegistryResponse,
+  AgentProviderType,
+  BoundAgentModel,
   SelectionRef,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
@@ -17,6 +19,7 @@ import { ChatComposer } from "./chat-composer";
 import { useChatRuntime } from "./chat-runtime";
 import {
   cancelAgentRun,
+  activeAgentModelSelection,
   reportError,
   runSavedPlan,
   selectChatSession,
@@ -48,6 +51,7 @@ export type AgentModelRegistryModel = ProtocolAgentModelRegistryModel;
 
 export type AgentModelSelection = {
   provider_id: string;
+  provider_type: AgentProviderType;
   model_id: string;
   reasoning_effort: string | null;
   service_label: string | null;
@@ -60,6 +64,7 @@ export type ChatSessionSummary = {
   archived: boolean;
   message_count: number;
   related_files?: unknown[];
+  bound_model?: BoundAgentModel | null;
   client_request_id?: string;
 };
 
@@ -98,7 +103,9 @@ export type AgentSearchSource = {
 
 export type AgentRun = {
   session_id: string;
+  agent_id?: string;
   run_id: string;
+  turn_id?: string;
 };
 
 export type AgentEvent = {
@@ -652,18 +659,6 @@ function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel
     return model ? { provider, model } : null;
   }
   return null;
-}
-
-function activeAgentModelSelection(
-  registry: AgentModelRegistry | null,
-): AgentModelSelection | null {
-  if (!activeAgentModel(registry) || !registry) return null;
-  return {
-    provider_id: registry.active_provider_id,
-    model_id: registry.active_model_id,
-    reasoning_effort: registry.active_reasoning_effort,
-    service_label: registry.active_service_label,
-  };
 }
 
 function modelOptionValue(providerId: string, modelId: string): string {

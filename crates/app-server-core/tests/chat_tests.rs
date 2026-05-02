@@ -2,8 +2,8 @@ use std::{fs, sync::Arc};
 
 use app_server_core::{ChatStore, ChatSummaryUpdate};
 use app_server_protocol::{
-    ChatRole, ChatSessionId, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
-    ProtocolErrorCode, WorkspaceId,
+    AgentProviderType, BoundAgentModel, ChatRole, ChatSessionId, ChatToolCallRecord,
+    ChatToolResultRecord, PathHandle, ProtocolErrorCode, WorkspaceId,
 };
 use serde_json::Value;
 
@@ -590,6 +590,70 @@ async fn chat_store_persists_tool_call_and_result_records_in_history() {
     let result = result_message.tool_result.as_ref().unwrap();
     assert_eq!(result.tool_name, "read_file");
     assert_eq!(result.result_json, "{\"status\":\"ok\"}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_persists_bound_model_in_chats_json_on_first_create() {
+    let root = temp_dir("chat-store-bound-model");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let model = BoundAgentModel {
+        provider_id: "openai".into(),
+        provider_type: AgentProviderType::OpenAiResponses,
+        model_id: "gpt-5.2".into(),
+        reasoning_effort: Some("high".into()),
+        service_label: Some("flex".into()),
+    };
+
+    let created = store
+        .create_with_client_request_id_initial_message_and_model(
+            "first-send-1",
+            "Bound Model",
+            None,
+            Vec::new(),
+            "make a bracket",
+            Some(model.clone()),
+        )
+        .await
+        .unwrap();
+
+    let index = read_chats_json(&root);
+    let entry = &index["chats"][0];
+    assert_eq!(
+        entry["chat_id"].as_str(),
+        Some(created.session_id.0.as_str())
+    );
+    assert_eq!(
+        entry["agent_id"].as_str(),
+        Some(created.agent_id.0.as_str())
+    );
+    assert_eq!(entry["bound_model"]["provider_id"].as_str(), Some("openai"));
+    assert_eq!(
+        entry["bound_model"]["provider_type"].as_str(),
+        Some("openai_responses")
+    );
+    assert_eq!(entry["bound_model"]["model_id"].as_str(), Some("gpt-5.2"));
+    assert_eq!(entry["bound_model"].get("base_url"), None);
+
+    let listed = store.list(false).await.unwrap();
+    assert_eq!(listed.sessions[0].bound_model.as_ref(), Some(&model));
+    assert_eq!(listed.sessions[0].agent_id, created.agent_id);
+    assert_eq!(
+        store
+            .bound_model_for_session(&created.session_id)
+            .await
+            .unwrap(),
+        Some(model.clone())
+    );
+    assert_eq!(
+        store
+            .bound_model_for_agent(&created.agent_id)
+            .await
+            .unwrap(),
+        Some(model)
+    );
+
     let _ = fs::remove_dir_all(root);
 }
 

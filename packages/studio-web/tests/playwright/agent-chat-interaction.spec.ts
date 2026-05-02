@@ -10,6 +10,10 @@ import {
 const HARNESS = createHarness({
   bindPort: 39220,
   vitePort: 5220,
+  hostEnv: {
+    BUDN_AGENT_OPENAI_API_KEY: "test-key",
+    BUDN_AGENT_TIMEOUT_SECS: "1",
+  },
 });
 
 test.beforeAll(async () => {
@@ -47,6 +51,16 @@ async function waitForChatReadyWithHandshake(page: import("@playwright/test").Pa
   await waitForHandshake(page);
   await expect(page.getByTestId("workbench-chat")).toBeVisible({
     timeout: 10_000,
+  });
+  await expect(page.getByLabel("agent model")).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+async function startDraftChat(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "new" }).click();
+  await expect(page.getByLabel("chat session")).toHaveValue(/^draft-/, {
+    timeout: 2_000,
   });
 }
 
@@ -137,107 +151,116 @@ test("@agent-chat mode selector only exposes Agent and Plan", async ({
 
 // --- Protocol frame tests (require completed handshake) ---
 
-test("@agent-chat sending a message emits agent.invoke with mode agent", async ({
+test("@agent-chat first message emits chat.create initial_turn with mode agent", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
+  await startDraftChat(page);
   await clearRecordedClientCommands(page);
 
   await fillAndSend(page, "make the lid taller");
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["mode"]).toBe("agent");
-  expect(payload["prompt"]).toBe("make the lid taller");
-  expect(payload["plan_ref"]).toBeFalsy();
+  const turn = payload["initial_turn"] as Record<string, unknown>;
+  expect(payload["initial_user_message"]).toBe("make the lid taller");
+  expect(turn["mode"]).toBe("agent");
+  expect(turn["plan_ref"]).toBeFalsy();
 });
 
-test("@agent-chat slash command /plan sends mode plan in protocol frame", async ({
+test("@agent-chat slash command /plan sends mode plan in chat.create initial_turn", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
+  await startDraftChat(page);
   await clearRecordedClientCommands(page);
 
   await fillAndSend(page, "/plan design a sliding lid mechanism");
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["mode"]).toBe("plan");
-  expect(payload["prompt"]).toBe("design a sliding lid mechanism");
+  const turn = payload["initial_turn"] as Record<string, unknown>;
+  expect(turn["mode"]).toBe("plan");
+  expect(payload["initial_user_message"]).toBe("design a sliding lid mechanism");
 });
 
 test("@agent-chat slash command /agent sends mode agent", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
+  await startDraftChat(page);
   await clearRecordedClientCommands(page);
 
   await fillAndSend(page, "/agent apply the changes");
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["mode"]).toBe("agent");
-  expect(payload["prompt"]).toBe("apply the changes");
+  const turn = payload["initial_turn"] as Record<string, unknown>;
+  expect(turn["mode"]).toBe("agent");
+  expect(payload["initial_user_message"]).toBe("apply the changes");
 });
 
 test("@agent-chat slash command /execute is sent as normal agent text", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
+  await startDraftChat(page);
   await clearRecordedClientCommands(page);
 
   await fillAndSend(page, "/execute apply the changes");
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "agent.invoke"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "agent.invoke");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["mode"]).toBe("agent");
-  expect(payload["prompt"]).toBe("/execute apply the changes");
+  const turn = payload["initial_turn"] as Record<string, unknown>;
+  expect(turn["mode"]).toBe("agent");
+  expect(payload["initial_user_message"]).toBe("/execute apply the changes");
 });
 
-test("@agent-chat chat.send frame carries the display content without slash prefix", async ({
+test("@agent-chat first create carries the display content without slash prefix", async ({
   page,
 }) => {
   await waitForChatReadyWithHandshake(page);
+  await startDraftChat(page);
   await clearRecordedClientCommands(page);
 
   await fillAndSend(page, "/plan design a box");
 
   await expect
     .poll(
-      () => latestRecordedClientCommand(page, "chat.send"),
+      () => latestRecordedClientCommand(page, "chat.create"),
       { timeout: 15_000 },
     )
     .toBeTruthy();
 
-  const cmd = await latestRecordedClientCommand(page, "chat.send");
+  const cmd = await latestRecordedClientCommand(page, "chat.create");
   const payload = cmd as Record<string, unknown>;
-  expect(payload["content"]).toBe("design a box");
+  expect(payload["initial_user_message"]).toBe("design a box");
 });

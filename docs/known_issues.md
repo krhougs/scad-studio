@@ -1,5 +1,21 @@
 # 已知问题记录
 
+## 2026-05-02 22:23:09: Agent 首发 reservation 尚未具备 task abort 安全性
+
+- 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 3 独立 review 时，复查 `chat.create.initial_turn` 并发幂等修复后的异常路径。
+- 原因：
+  - `HostRequestDispatcher` 当前使用 workspace 级 `AgentRunRegistry` 记录首发 `initial_turn_reserved`，避免不同 `client_request_id` 的首发请求在 Agent busy 时先创建 orphan chat。
+  - 正常错误路径会显式释放 reservation，成功启动后会转换为 running 状态，并在 worker terminal 后清理。
+  - 但 reservation 不是 RAII guard。如果 `dispatch_envelope()` 所在 task 被外部强制 abort，且 abort 发生在 reservation 成功之后、store 写入或显式释放之前，reservation 可能遗留。
+- 影响范围：
+  - 当前 WebSocket request dispatch 不会因为连接断开主动 abort 已开始的请求，因此不影响 Phase 3 正常用户路径。
+  - 后续 Phase 4/7 引入 workspace runtime、subscriber 生命周期、重启恢复或 shutdown 策略时，如果增加 task abort / timeout / cancellation 机制，必须保证 reservation 与 running state 具备 cancellation-safe 清理。
+- 可能的解法：
+  - 将首发 reservation 封装为 RAII guard，并在成功提交后显式转移所有权到 running state。
+  - 或把 create-chat-and-start-turn 的 reservation、`chats.json` 写入和 runtime start 收敛到单一 workspace runtime command 队列中，由队列串行维护状态。
+  - 为 task abort / timeout 场景补充专门测试，确认 reservation 不会遗留。
+- 当前处理方式：Phase 3 先修复正常并发幂等与 busy orphan 风险，并记录本问题；后续 workspace Agent runtime 阶段必须重新评估 cancellation-safe 状态所有权。
+
 ## 2026-05-02 00:00:00: `scad-scene` 系统字体探测仍使用同步外部命令
 
 - 来源：为 Agent 生命周期与 WebSocket 生命周期分离设计做 async/thread 现状检查时，检索生产代码中的线程与阻塞接口，确认 `crates/scad-scene/src/system_fonts.rs` 使用 `std::process::Command` 调用 `fc-match`。
