@@ -3,17 +3,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use app_server_core::{ChatStore, ChatSummaryUpdate};
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
-    AgentCadQueryConfirmation, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentModelParamsUpdateRequest, AgentModelSelectRequest, AgentPlanConfirmRequest,
-    AgentProviderType, BoundAgentModel, CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest,
-    CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest,
-    ChatCreateInitialTurn, ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole,
-    ChatSendRequest, ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand,
-    ClientPlatform, ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest,
-    HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind,
-    ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
-    SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId,
-    WorkspaceListRequest, web_file_read_capability,
+    AgentCadQueryConfirmation, AgentCancelRequest, AgentDoneEvent, AgentErrorEvent, AgentEventId,
+    AgentInvokeRequest, AgentMode, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
+    AgentPlanConfirmRequest, AgentProviderType, AgentRuntimeStatus, AgentSnapshotRequest,
+    AgentStartTurnRequest, AgentSubscribeRequest, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
+    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest,
+    ChatArchiveRequest, ChatCreateInitialTurn, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
+    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
+    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
+    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
+    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
 };
 use serde_json::Value;
 
@@ -692,6 +693,221 @@ async fn dispatcher_chat_create_initial_turn_deduplicates_concurrent_create_requ
             .count(),
         1
     );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_subscribe_receives_events_from_other_dispatcher() {
+    let workspace = temp_workspace("dispatcher-agent-subscribe-observer");
+    let _agent_env = unset_agent_environment();
+    let (mut first_dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut first_dispatcher, "runtime observer", Vec::new()).await;
+
+    subscribe_agent_async(&mut second_dispatcher, 31, &created.agent_id).await;
+    let started = start_agent_turn_async(
+        &mut first_dispatcher,
+        32,
+        &created.agent_id,
+        "summarize current model",
+    )
+    .await;
+
+    wait_for_done_async(&second_pushes, &started.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_snapshot_reads_active_agent_from_second_dispatcher() {
+    let workspace = temp_workspace("dispatcher-agent-snapshot-observer");
+    let _agent_env = unset_agent_environment();
+    let (mut first_dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, _second_pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut first_dispatcher, "runtime snapshot", Vec::new()).await;
+    let started = start_agent_turn_async(
+        &mut first_dispatcher,
+        33,
+        &created.agent_id,
+        "summarize current model",
+    )
+    .await;
+
+    let snapshot = agent_snapshot_async(&mut second_dispatcher, 34, &created.agent_id).await;
+
+    assert_eq!(snapshot.agent_id, created.agent_id);
+    assert_eq!(snapshot.chat_id, created.session_id);
+    assert_eq!(snapshot.active_turn_id, Some(started.turn_id.clone()));
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Running);
+    assert!(matches!(
+        snapshot.events.first().map(|event| &event.payload),
+        Some(app_server_protocol::AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Running
+        })
+    ));
+    wait_for_done_async(&pushes, &started.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_subscribe_replays_events_by_event_cursor() {
+    let workspace = temp_workspace("dispatcher-agent-subscribe-replay");
+    let _agent_env = unset_agent_environment();
+    let (mut first_dispatcher, first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut third_dispatcher, third_pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut first_dispatcher, "runtime replay", Vec::new()).await;
+    let started = start_agent_turn_async(
+        &mut first_dispatcher,
+        39,
+        &created.agent_id,
+        "summarize current model",
+    )
+    .await;
+    wait_for_done_async(&first_pushes, &started.run_id).await;
+
+    let snapshot = agent_snapshot_async(&mut first_dispatcher, 40, &created.agent_id).await;
+    assert!(
+        snapshot
+            .events
+            .windows(2)
+            .all(|events| { events[0].event_id.0 < events[1].event_id.0 })
+    );
+    let last_event_id = snapshot
+        .events
+        .last()
+        .expect("snapshot should include terminal event")
+        .event_id;
+
+    subscribe_agent_with_cursor_async(&mut second_dispatcher, 41, &created.agent_id, None).await;
+    wait_for_done_async(&second_pushes, &started.run_id).await;
+
+    third_pushes.lock().expect("push buffer lock").clear();
+    subscribe_agent_with_cursor_async(
+        &mut third_dispatcher,
+        42,
+        &created.agent_id,
+        Some(last_event_id),
+    )
+    .await;
+    assert!(
+        third_pushes.lock().expect("push buffer lock").is_empty(),
+        "subscribe after the latest event cursor must not replay old events"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_disconnect_does_not_cancel_active_agent_and_second_observer_can_cancel() {
+    let workspace = temp_workspace("dispatcher-agent-disconnect-cancel");
+    let (config_path, server_handle) = hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut first_dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut first_dispatcher, "runtime cancel", Vec::new()).await;
+    subscribe_agent_async(&mut second_dispatcher, 35, &created.agent_id).await;
+    let started = start_agent_turn_async(
+        &mut first_dispatcher,
+        36,
+        &created.agent_id,
+        "summarize current model",
+    )
+    .await;
+
+    first_dispatcher.disconnect();
+    let snapshot = agent_snapshot_async(&mut second_dispatcher, 37, &created.agent_id).await;
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Running);
+    let cancelled = cancel_agent_async(&mut second_dispatcher, 38, &created.agent_id).await;
+    assert!(cancelled.cancelled);
+
+    let done = wait_for_done_event_async(&second_pushes, &started.run_id).await;
+    assert!(done.cancelled);
+    server_handle.abort();
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_second_observer_start_turn_uses_bound_model() {
+    let workspace = temp_workspace("dispatcher-agent-bound-model-observer");
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        agent_model_registry_config_without_bound_model(),
+    )
+    .expect("write agent config");
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut first_dispatcher, _first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, second_pushes) = dispatcher_with_pushes(&workspace);
+    let created =
+        create_chat_with_model_async(&mut first_dispatcher, "bound model", bound_agent_model())
+            .await;
+
+    dispatch_agent_model_command(
+        &mut second_dispatcher,
+        43,
+        ClientCommand::AgentModelSelect(AgentModelSelectRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5-mini".into(),
+        }),
+    )
+    .await;
+    let started = start_agent_turn_async(
+        &mut second_dispatcher,
+        44,
+        &created.agent_id,
+        "use the bound model",
+    )
+    .await;
+
+    let error = wait_for_error_event_async(&second_pushes, &started.run_id).await;
+    assert!(
+        error.message.contains("active model is missing"),
+        "bound model should be used instead of second observer selected model: {}",
+        error.message
+    );
+    wait_for_done_async(&second_pushes, &started.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_workspace_runtime_rejects_second_active_turn_across_dispatchers() {
+    let workspace = temp_workspace("dispatcher-agent-cross-busy");
+    let (config_path, server_handle) = hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut first_dispatcher, first_pushes) = dispatcher_with_pushes(&workspace);
+    let (mut second_dispatcher, _second_pushes) = dispatcher_with_pushes(&workspace);
+    let first = create_chat_async(&mut first_dispatcher, "busy first", Vec::new()).await;
+    let second = create_chat_async(&mut second_dispatcher, "busy second", Vec::new()).await;
+    let started = start_agent_turn_async(
+        &mut first_dispatcher,
+        45,
+        &first.agent_id,
+        "keep the runtime busy",
+    )
+    .await;
+
+    let error = start_agent_turn_result_async(
+        &mut second_dispatcher,
+        46,
+        &second.agent_id,
+        "second active turn",
+    )
+    .await
+    .expect_err("second active turn should reject");
+
+    assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
+    let cancelled = cancel_agent_async(&mut first_dispatcher, 47, &first.agent_id).await;
+    assert!(cancelled.cancelled);
+    wait_for_done_async(&first_pushes, &started.run_id).await;
+    server_handle.abort();
     cleanup_workspace(&workspace);
 }
 
@@ -1386,6 +1602,33 @@ async fn create_chat_async(
     }
 }
 
+async fn create_chat_with_model_async(
+    dispatcher: &mut HostRequestDispatcher,
+    title: &str,
+    model: BoundAgentModel,
+) -> app_server_protocol::ChatCreatedResponse {
+    match dispatch_async(
+        dispatcher,
+        20,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: title.into(),
+            goal: Some("lid iteration".into()),
+            related_files: Vec::new(),
+            client_request_id: Some(format!("create-{title}")),
+            initial_user_message: Some(format!("Start {title}")),
+            requested_model: Some(model),
+            initial_turn: None,
+        }),
+    )
+    .await
+    .result
+    .expect("chat.create succeeds")
+    {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    }
+}
+
 fn chat_created_from_response(
     response: app_server_protocol::ServerResponseEnvelope,
 ) -> app_server_protocol::ChatCreatedResponse {
@@ -1625,6 +1868,119 @@ async fn invoke_agent_with_client_request_id(
     }
 }
 
+async fn start_agent_turn_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+    prompt: &str,
+) -> app_server_protocol::AgentStartedResponse {
+    start_agent_turn_result_async(dispatcher, request_id, agent_id, prompt)
+        .await
+        .expect("agent.start_turn succeeds")
+}
+
+async fn start_agent_turn_result_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+    prompt: &str,
+) -> Result<app_server_protocol::AgentStartedResponse, app_server_protocol::ProtocolError> {
+    Ok(
+        match dispatch_async(
+            dispatcher,
+            request_id,
+            ClientCommand::AgentStartTurn(AgentStartTurnRequest {
+                agent_id: agent_id.clone(),
+                client_request_id: Some(format!("start-{request_id}")),
+                prompt: prompt.into(),
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: Vec::new(),
+            }),
+        )
+        .await
+        .result?
+        {
+            CommandSuccess::AgentStarted(response) => response,
+            other => panic!("unexpected agent.start_turn response: {other:?}"),
+        },
+    )
+}
+
+async fn subscribe_agent_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+) -> app_server_protocol::AgentSubscribeResponse {
+    subscribe_agent_with_cursor_async(dispatcher, request_id, agent_id, None).await
+}
+
+async fn subscribe_agent_with_cursor_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+    since_event_id: Option<AgentEventId>,
+) -> app_server_protocol::AgentSubscribeResponse {
+    match dispatch_async(
+        dispatcher,
+        request_id,
+        ClientCommand::AgentSubscribe(AgentSubscribeRequest {
+            agent_id: agent_id.clone(),
+            since_event_id,
+        }),
+    )
+    .await
+    .result
+    .expect("agent.subscribe succeeds")
+    {
+        CommandSuccess::AgentSubscribed(response) => response,
+        other => panic!("unexpected agent.subscribe response: {other:?}"),
+    }
+}
+
+async fn agent_snapshot_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+) -> app_server_protocol::AgentSnapshotResponse {
+    match dispatch_async(
+        dispatcher,
+        request_id,
+        ClientCommand::AgentSnapshot(AgentSnapshotRequest {
+            agent_id: agent_id.clone(),
+            since_event_id: None,
+        }),
+    )
+    .await
+    .result
+    .expect("agent.snapshot succeeds")
+    {
+        CommandSuccess::AgentSnapshot(response) => response,
+        other => panic!("unexpected agent.snapshot response: {other:?}"),
+    }
+}
+
+async fn cancel_agent_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+) -> app_server_protocol::AgentCancelledResponse {
+    match dispatch_async(
+        dispatcher,
+        request_id,
+        ClientCommand::AgentCancel(AgentCancelRequest {
+            agent_id: agent_id.clone(),
+        }),
+    )
+    .await
+    .result
+    .expect("agent.cancel succeeds")
+    {
+        CommandSuccess::AgentCancelled(response) => response,
+        other => panic!("unexpected agent.cancel response: {other:?}"),
+    }
+}
+
 fn confirmed_cadquery_request(target_path: PathHandle) -> CadQueryExecuteRequest {
     CadQueryExecuteRequest {
         target_path,
@@ -1645,6 +2001,22 @@ fn find_done_event(
         .iter()
         .find_map(|push| match &push.event {
             ServerPushEvent::AgentDone(event) if event.run_id == run_id => Some(event.clone()),
+            _ => None,
+        })
+}
+
+fn find_error_event(
+    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
+    run_id: &str,
+) -> Option<AgentErrorEvent> {
+    pushes
+        .lock()
+        .expect("push buffer lock")
+        .iter()
+        .find_map(|push| match &push.event {
+            ServerPushEvent::AgentError(event) if event.run_id.as_deref() == Some(run_id) => {
+                Some(event.clone())
+            }
             _ => None,
         })
 }
@@ -1695,13 +2067,33 @@ fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {
 }
 
 async fn wait_for_done_async(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
+    let _ = wait_for_done_event_async(pushes, run_id).await;
+}
+
+async fn wait_for_done_event_async(
+    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
+    run_id: &str,
+) -> AgentDoneEvent {
     for _ in 0..250 {
-        if find_done_event(pushes, run_id).is_some() {
-            return;
+        if let Some(done) = find_done_event(pushes, run_id) {
+            return done;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("agent.done not observed for {run_id}");
+}
+
+async fn wait_for_error_event_async(
+    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
+    run_id: &str,
+) -> AgentErrorEvent {
+    for _ in 0..250 {
+        if let Some(error) = find_error_event(pushes, run_id) {
+            return error;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("agent.error not observed for {run_id}");
 }
 
 fn handshake_request() -> CapabilityHandshakeRequest {
@@ -1788,6 +2180,70 @@ service_label = "default"
 native_web_search = true
 web_search_supported = true
 "#
+}
+
+fn agent_model_registry_config_without_bound_model() -> &'static str {
+    r#"active_provider = "openai"
+active_model = "gpt-5-mini"
+
+[defaults]
+discover_models = false
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-5-mini"
+"#
+}
+
+async fn hanging_agent_config(
+    workspace: &std::path::Path,
+) -> (std::path::PathBuf, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hanging agent server");
+    let addr = listener.local_addr().expect("read hanging server addr");
+    let handle = tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _socket = socket;
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            });
+        }
+    });
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        hanging_agent_registry_config(&addr.to_string()),
+    )
+    .expect("write hanging agent config");
+    (config_path, handle)
+}
+
+fn hanging_agent_registry_config(addr: &str) -> String {
+    format!(
+        r#"active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+discover_models = false
+timeout_secs = 30
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "http://{addr}#"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-5.2"
+"#
+    )
 }
 
 fn fake_capturing_cadquery_runner(

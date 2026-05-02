@@ -155,14 +155,58 @@
 - `bun scripts/build_studio_web.ts`：通过。
 - `git diff --check`：通过。
 
+## Phase 4 完成情况
+
+### 实现摘要
+
+- Host 侧引入 workspace 级 `WorkspaceAgentRuntime`，按 canonical workspace path 复用同一 runtime；canonicalize 失败时回退原路径。
+- Agent active turn registry 已从 `HostRequestDispatcher` 移入 runtime，workspace 单 active turn 约束仍由后端统一强制。
+- `HostRequestDispatcher` 持有 runtime subscription；`disconnect()` 只移除 subscriber 和 watcher，不取消 active Agent。
+- `agent.snapshot` 与 `agent.subscribe` 已接入 runtime，不再返回占位错误。
+- Agent worker 的 push sink 改为 runtime sink：先记录 runtime event / legacy event，再广播给订阅该 `agent_id` 的 subscriber。
+- Runtime event log 记录 `StateChanged`、token、reasoning、tool start/result、error、done，并维护 `current_text`、`current_reasoning`、terminal state、active turn。
+- `AgentMeshReady`、`AgentPlanProposed`、`AgentPlanSaved` 这类旧 push 事件记录到 `legacy_events`，供 `agent.subscribe` 按 `since_event_id` 回放。
+- `agent.subscribe` 在回放期间将新 live event 放入 subscriber pending 队列；回放发送完成后按顺序清空 pending，pending 清空后才恢复 live 直推，避免新事件先于旧回放到达。
+- `agent.start_turn` 和旧 `agent.invoke` 仍通过 ChatStore 映射 `agent_id` / `session_id`，后续 turn 使用 chat bound model，不使用第二个 dispatcher 的本地模型选择覆盖绑定模型。
+- WebSocket 层仍只创建 dispatcher 和 push sink；Agent 生命周期不再由单个 WebSocket connection 拥有。
+
+### 验收说明
+
+- 两个 dispatcher 可以引用同一个 `agent_id`，第二个 dispatcher 订阅后能收到第一个 dispatcher 启动的 Agent 事件。
+- 第二个 dispatcher 可以读取 active Agent snapshot，snapshot 包含当前 `agent_id`、`chat_id`、active turn 和 runtime event。
+- 第一个 dispatcher disconnect 后 active Agent 仍保持 running，第二个 dispatcher 可以继续 snapshot 并 cancel。
+- 第二个 dispatcher 本地选择不同模型后，对已绑定 chat 发起后续 turn 时仍使用 `chats.json.bound_model`。
+- 同 workspace 两个 dispatcher 启动第二个 active turn 时返回 `AgentBusy`。
+- `agent.subscribe` 支持基于 snapshot event cursor 的回放；使用最新 event cursor 订阅不会重复回放旧事件。
+- Runtime subscriber 回放期间的 live event 进入 pending 队列，回放完成后再按顺序发送，避免恢复事件乱序。
+- Runtime 不使用 WebSocket connection id、push handle 或前端本地模型状态作为 Agent 身份来源；外部操作目标仍为 `agent_id`。
+
+### Review 记录
+
+- 第一轮独立 review 发现 legacy worker event 未写入 runtime 回放日志，以及测试缺少 bound model、workspace busy、snapshot events、`since_event_id` replay 覆盖；已修复。
+- 第二轮独立 review 发现 `subscribe_agent` 回放与 live push 之间存在顺序竞态；已通过 subscriber `replaying_agents` 和 `pending_events` 修复，并补 runtime 单元测试。
+- 第三轮独立 review 未发现 Phase 4 阻塞问题。剩余非阻塞风险：
+  - 长时间高频 token 流可能让 `subscribe_agent` drain pending 的 request handler 响应变慢；后续可为 drain 增加批次上限或把 replay completion 明确建模为 runtime 内部状态。
+  - 旧 live push 不携带 `AgentEventId`，客户端需要先通过 snapshot 获取 cursor；Phase 6 的结构化 event push / event log 设计需要处理该语义。
+  - Workspace path canonicalize 失败时仍回退原始路径；若未来支持未创建 workspace 的早期 dispatcher，需要在 workspace 绑定完成后重新绑定 canonical runtime。
+
+### 验证结果
+
+- `cargo test -p app-server-host dispatcher::tests::runtime_subscribe_queues_live_events_until_replay_finishes`：passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：34 passed。
+- `rustfmt --edition 2024 --check crates/app-server-host/src/dispatcher.rs crates/app-server-host/tests/shared_dispatcher_roundtrip_tests.rs`：通过。
+- `git diff --check`：通过。
+- `bun run protocol:check-generated`：通过。
+
 ## 尚未执行
 
-- 尚未实现 workspace 级 Agent runtime、多 WebSocket observer、event log replay、snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
+- 尚未实现持久化 event log、前端刷新后的 snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
 - 未迁移根目录 `llm.toml`，且本计划不要求迁移。
 
 ## 后续执行入口
 
-- Phase 4 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 4 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 10。
-- Phase 4 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
-- Phase 4 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
+- Phase 5 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 5 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 10。
+- Phase 5 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
+- Phase 5 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
+- Phase 5 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。

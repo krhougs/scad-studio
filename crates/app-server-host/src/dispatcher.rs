@@ -12,12 +12,14 @@ use app_server_core::{
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
-    AgentErrorEvent, AgentErrorType, AgentId, AgentInvokeRequest, AgentMeshReadyEvent, AgentMode,
-    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest,
-    AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
-    AgentModelSelectRequest, AgentModelSource, AgentPlanConfirmRequest, AgentPlanProposedEvent,
-    AgentPlanRejectRequest, AgentProviderCapabilities, AgentProviderType, AgentReasoningEvent,
-    AgentStartTurnRequest, AgentStartedResponse, AgentTokenEvent, AgentToolResultEvent,
+    AgentErrorEvent, AgentErrorType, AgentEventId, AgentEventPayload, AgentEventRecord, AgentId,
+    AgentInvokeRequest, AgentMeshReadyEvent, AgentMode, AgentModelDiscoveryState,
+    AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest, AgentModelRegistryModel,
+    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSelectRequest,
+    AgentModelSource, AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest,
+    AgentProviderCapabilities, AgentProviderType, AgentReasoningEvent, AgentRuntimeStatus,
+    AgentSnapshotRequest, AgentSnapshotResponse, AgentStartTurnRequest, AgentStartedResponse,
+    AgentSubscribeRequest, AgentSubscribeResponse, AgentTokenEvent, AgentToolResultEvent,
     AgentToolStartEvent, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
     CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatToolCallRecord,
@@ -31,13 +33,13 @@ use app_server_protocol::{
 };
 
 use crate::cadquery_python_path;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, futures::OwnedNotified};
 
@@ -47,7 +49,7 @@ pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 
 const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
 const CADQUERY_RUNNER_TIMEOUT: Duration = Duration::from_secs(180);
-static AGENT_RUN_REGISTRIES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<AgentRunRegistry>>>>> =
+static AGENT_RUNTIMES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<WorkspaceAgentRuntime>>>>> =
     OnceLock::new();
 static CHAT_PUSH_SUBSCRIBERS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, ServerPushSink>>>> =
     OnceLock::new();
@@ -193,7 +195,8 @@ pub struct HostRequestDispatcher {
     next_subscription_id: u64,
     watchers: HashMap<String, FileWatcher>,
     cadquery_results: Arc<Mutex<CadQueryResultCache>>,
-    agent_runs: Arc<Mutex<AgentRunRegistry>>,
+    agent_runtime: Arc<Mutex<WorkspaceAgentRuntime>>,
+    agent_runtime_subscription: Option<AgentRuntimeSubscription>,
     agent_model_state: AgentModelRuntimeState,
     selection_snapshot: SelectionUpdateRequest,
     push_sink: ServerPushSink,
@@ -222,7 +225,9 @@ impl HostRequestDispatcher {
         denied_extensions: Vec<String>,
         push_sink: ServerPushSink,
     ) -> Self {
-        let agent_runs = agent_run_registry_for_workspace(workspace_path.as_deref());
+        let agent_runtime = agent_runtime_for_workspace(workspace_path.as_deref());
+        let agent_runtime_subscription =
+            register_agent_runtime_subscriber(&agent_runtime, Arc::clone(&push_sink));
         let chat_push_subscription =
             register_chat_push_subscriber(workspace_path.as_deref(), Arc::clone(&push_sink));
         let chat_index_listener =
@@ -236,7 +241,8 @@ impl HostRequestDispatcher {
             cadquery_results: Arc::new(Mutex::new(CadQueryResultCache::new(
                 CADQUERY_RESULT_CACHE_LIMIT,
             ))),
-            agent_runs,
+            agent_runtime,
+            agent_runtime_subscription,
             agent_model_state: AgentModelRuntimeState::default(),
             selection_snapshot: SelectionUpdateRequest {
                 selections: Vec::new(),
@@ -250,7 +256,10 @@ impl HostRequestDispatcher {
     }
 
     pub fn rebind_workspace(&mut self, workspace_path: PathBuf) {
-        self.agent_runs = agent_run_registry_for_workspace(Some(&workspace_path));
+        self.agent_runtime_subscription = None;
+        self.agent_runtime = agent_runtime_for_workspace(Some(&workspace_path));
+        self.agent_runtime_subscription =
+            register_agent_runtime_subscriber(&self.agent_runtime, Arc::clone(&self.push_sink));
         self.chat_push_subscription =
             register_chat_push_subscriber(Some(&workspace_path), Arc::clone(&self.push_sink));
         self.chat_index_listener =
@@ -293,6 +302,7 @@ impl HostRequestDispatcher {
 
     pub fn disconnect(&mut self) {
         self.watchers.clear();
+        self.agent_runtime_subscription = None;
         self.session.disconnect(
             Instant::now(),
             Duration::from_millis(DEFAULT_SESSION_RECONNECT_WINDOW_MS),
@@ -506,6 +516,7 @@ impl HostRequestDispatcher {
                         turn.mode,
                         turn.plan_ref,
                         turn.context_refs,
+                        bound_model.clone(),
                         agent_model_state_for_bound_or_current(
                             bound_model.as_ref(),
                             &self.agent_model_state,
@@ -563,14 +574,8 @@ impl HostRequestDispatcher {
             ClientCommand::AgentInvoke(request) => self.start_agent_after_history(request).await,
             ClientCommand::AgentStartTurn(request) => self.start_agent_turn(request).await,
             ClientCommand::AgentCancel(request) => self.cancel_agent(request),
-            ClientCommand::AgentSnapshot(_) => Err(ProtocolError::new(
-                ProtocolErrorCode::InvalidCommand,
-                "agent.snapshot requires workspace Agent runtime",
-            )),
-            ClientCommand::AgentSubscribe(_) => Err(ProtocolError::new(
-                ProtocolErrorCode::InvalidCommand,
-                "agent.subscribe requires workspace Agent runtime",
-            )),
+            ClientCommand::AgentSnapshot(request) => self.snapshot_agent(request).await,
+            ClientCommand::AgentSubscribe(request) => self.subscribe_agent(request).await,
             ClientCommand::AgentModelRegistry => {
                 let registry = self.agent_model_registry_snapshot().await?;
                 Ok(CommandSuccess::AgentModelRegistry(registry))
@@ -838,9 +843,10 @@ impl HostRequestDispatcher {
                 return Ok(false);
             }
             let outcome = self
-                .agent_runs
+                .agent_runtime
                 .lock()
                 .map_err(|_| internal_error("Agent registry lock poisoned"))?
+                .registry
                 .reserve_initial_turn(client_request_id)?;
             match outcome {
                 InitialTurnReserveOutcome::Reserved => return Ok(true),
@@ -858,9 +864,10 @@ impl HostRequestDispatcher {
         &self,
         client_request_id: &str,
     ) -> Result<(), ProtocolError> {
-        self.agent_runs
+        self.agent_runtime
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .registry
             .release_initial_turn_reservation(client_request_id);
         Ok(())
     }
@@ -885,6 +892,7 @@ impl HostRequestDispatcher {
             request.mode,
             request.plan_ref,
             request.context_refs,
+            bound_model,
             model_state,
         )
     }
@@ -904,6 +912,7 @@ impl HostRequestDispatcher {
             request.mode,
             request.plan_ref,
             request.context_refs,
+            bound_model.clone(),
             agent_model_state_for_bound_or_current(bound_model.as_ref(), &self.agent_model_state),
         )
     }
@@ -917,13 +926,20 @@ impl HostRequestDispatcher {
         mode: AgentMode,
         plan_ref: Option<PathHandle>,
         context_refs: Vec<String>,
+        bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
-            .agent_runs
+            .agent_runtime
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .try_start(session_id, agent_id, client_request_id)?;
+            .start_run(
+                session_id,
+                agent_id,
+                client_request_id,
+                bound_model,
+                self.agent_subscriber_id(),
+            )?;
         if !run.started_now {
             return Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
                 session_id: run.session_id,
@@ -938,6 +954,7 @@ impl HostRequestDispatcher {
             run_id: run.run_id.clone(),
             turn_id: run.turn_id.clone(),
         };
+        let push_sink = agent_runtime_push_sink(&self.agent_runtime, &run);
         let worker = AgentWorker {
             run,
             prompt,
@@ -949,8 +966,8 @@ impl HostRequestDispatcher {
             workspace_root: self.workspace_root()?.to_path_buf(),
             python: cadquery_python_path(),
             cadquery_results: Arc::clone(&self.cadquery_results),
-            agent_runs: Arc::clone(&self.agent_runs),
-            push_sink: Arc::clone(&self.push_sink),
+            agent_runtime: Arc::clone(&self.agent_runtime),
+            push_sink,
         };
         tokio::spawn(run_agent_worker(worker));
         Ok(CommandSuccess::AgentStarted(response))
@@ -965,19 +982,27 @@ impl HostRequestDispatcher {
         mode: AgentMode,
         plan_ref: Option<PathHandle>,
         context_refs: Vec<String>,
+        bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
-            .agent_runs
+            .agent_runtime
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
-            .try_start_reserved_initial_turn(session_id, agent_id, client_request_id)?;
+            .start_reserved_initial_turn(
+                session_id,
+                agent_id,
+                client_request_id,
+                bound_model,
+                self.agent_subscriber_id(),
+            )?;
         let response = AgentStartedResponse {
             session_id: run.session_id.clone(),
             agent_id: run.agent_id.clone(),
             run_id: run.run_id.clone(),
             turn_id: run.turn_id.clone(),
         };
+        let push_sink = agent_runtime_push_sink(&self.agent_runtime, &run);
         let worker = AgentWorker {
             run,
             prompt,
@@ -987,9 +1012,9 @@ impl HostRequestDispatcher {
             model_state,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
-            push_sink: Arc::clone(&self.push_sink),
+            push_sink,
             cadquery_results: Arc::clone(&self.cadquery_results),
-            agent_runs: Arc::clone(&self.agent_runs),
+            agent_runtime: Arc::clone(&self.agent_runtime),
             python: cadquery_python_path(),
         };
         tokio::spawn(run_agent_worker(worker));
@@ -1001,7 +1026,7 @@ impl HostRequestDispatcher {
         request: AgentCancelRequest,
     ) -> Result<CommandSuccess, ProtocolError> {
         let cancelled = self
-            .agent_runs
+            .agent_runtime
             .lock()
             .map_err(|_| internal_error("Agent registry lock poisoned"))?
             .cancel(&request.agent_id);
@@ -1016,6 +1041,69 @@ impl HostRequestDispatcher {
                 cancelled: false,
             }))
         }
+    }
+
+    async fn snapshot_agent(
+        &mut self,
+        request: AgentSnapshotRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        let store = self.chat_store()?;
+        let chat_id = store.session_id_for_agent(&request.agent_id).await?;
+        let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
+        let snapshot = self
+            .agent_runtime
+            .lock()
+            .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .snapshot(
+                &request.agent_id,
+                chat_id,
+                bound_model,
+                request.since_event_id,
+            );
+        Ok(CommandSuccess::AgentSnapshot(snapshot))
+    }
+
+    async fn subscribe_agent(
+        &mut self,
+        request: AgentSubscribeRequest,
+    ) -> Result<CommandSuccess, ProtocolError> {
+        self.chat_store()?
+            .session_id_for_agent(&request.agent_id)
+            .await?;
+        let replays = self
+            .agent_runtime
+            .lock()
+            .map_err(|_| internal_error("Agent registry lock poisoned"))?
+            .subscribe_agent(
+                self.agent_subscriber_id(),
+                &request.agent_id,
+                request.since_event_id,
+            );
+        for envelope in replays {
+            (self.push_sink)(envelope);
+        }
+        loop {
+            let pending = self
+                .agent_runtime
+                .lock()
+                .map_err(|_| internal_error("Agent registry lock poisoned"))?
+                .drain_or_activate_subscribe(self.agent_subscriber_id(), &request.agent_id);
+            if pending.is_empty() {
+                break;
+            }
+            for envelope in pending {
+                (self.push_sink)(envelope);
+            }
+        }
+        Ok(CommandSuccess::AgentSubscribed(AgentSubscribeResponse {
+            agent_id: request.agent_id,
+        }))
+    }
+
+    fn agent_subscriber_id(&self) -> Option<u64> {
+        self.agent_runtime_subscription
+            .as_ref()
+            .map(|subscription| subscription.id)
     }
 
     // request.run_id identifies the plan-proposing run; confirm creates a new Execute run.
@@ -1036,6 +1124,465 @@ impl HostRequestDispatcher {
             "agent.plan.reject 已废弃；Plan package 不再需要确认或拒绝命令",
         ))
     }
+}
+
+#[derive(Default)]
+struct WorkspaceAgentRuntime {
+    registry: AgentRunRegistry,
+    next_subscriber_id: u64,
+    subscribers: HashMap<u64, AgentRuntimeSubscriber>,
+    logs: HashMap<AgentId, AgentRuntimeLog>,
+    next_event_id: u64,
+}
+
+struct AgentRuntimeSubscriber {
+    push_sink: ServerPushSink,
+    agents: HashSet<AgentId>,
+    replaying_agents: HashSet<AgentId>,
+    pending_events: HashMap<AgentId, VecDeque<ServerPushEnvelope>>,
+}
+
+struct AgentRuntimeSubscription {
+    runtime: Arc<Mutex<WorkspaceAgentRuntime>>,
+    id: u64,
+}
+
+impl Drop for AgentRuntimeSubscription {
+    fn drop(&mut self) {
+        let Ok(mut runtime) = self.runtime.lock() else {
+            return;
+        };
+        runtime.subscribers.remove(&self.id);
+    }
+}
+
+#[derive(Clone)]
+struct AgentRuntimeLog {
+    chat_id: app_server_protocol::ChatSessionId,
+    bound_model: Option<BoundAgentModel>,
+    state: AgentRuntimeStatus,
+    active_turn_id: Option<AgentTurnId>,
+    events: Vec<AgentEventRecord>,
+    legacy_events: Vec<(AgentEventId, ServerPushEvent)>,
+    current_text: String,
+    current_reasoning: String,
+    error: Option<String>,
+}
+
+fn agent_runtime_for_workspace(workspace_path: Option<&Path>) -> Arc<Mutex<WorkspaceAgentRuntime>> {
+    let Some(workspace_path) = workspace_path else {
+        return Arc::new(Mutex::new(WorkspaceAgentRuntime::default()));
+    };
+    let workspace_key =
+        std::fs::canonicalize(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf());
+    let runtimes = AGENT_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut runtimes = runtimes
+        .lock()
+        .expect("Agent runtime map lock should not be poisoned");
+    Arc::clone(
+        runtimes
+            .entry(workspace_key)
+            .or_insert_with(|| Arc::new(Mutex::new(WorkspaceAgentRuntime::default()))),
+    )
+}
+
+fn register_agent_runtime_subscriber(
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    push_sink: ServerPushSink,
+) -> Option<AgentRuntimeSubscription> {
+    let mut runtime_lock = runtime.lock().ok()?;
+    let id = runtime_lock.register_subscriber(push_sink);
+    Some(AgentRuntimeSubscription {
+        runtime: Arc::clone(runtime),
+        id,
+    })
+}
+
+fn agent_runtime_push_sink(
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    run: &AgentRunHandle,
+) -> ServerPushSink {
+    let runtime = Arc::clone(runtime);
+    let run = run.clone();
+    Arc::new(move |envelope| {
+        let sinks = runtime
+            .lock()
+            .map(|mut runtime| runtime.record_push_and_collect_sinks(&run, &envelope.event))
+            .unwrap_or_default();
+        for sink in sinks {
+            (sink)(envelope.clone());
+        }
+    })
+}
+
+impl WorkspaceAgentRuntime {
+    fn register_subscriber(&mut self, push_sink: ServerPushSink) -> u64 {
+        self.next_subscriber_id = self.next_subscriber_id.saturating_add(1);
+        let id = self.next_subscriber_id;
+        self.subscribers.insert(
+            id,
+            AgentRuntimeSubscriber {
+                push_sink,
+                agents: HashSet::new(),
+                replaying_agents: HashSet::new(),
+                pending_events: HashMap::new(),
+            },
+        );
+        id
+    }
+
+    fn subscribe_agent(
+        &mut self,
+        subscriber_id: Option<u64>,
+        agent_id: &AgentId,
+        since_event_id: Option<AgentEventId>,
+    ) -> Vec<ServerPushEnvelope> {
+        let Some(subscriber_id) = subscriber_id else {
+            return Vec::new();
+        };
+        if let Some(subscriber) = self.subscribers.get_mut(&subscriber_id) {
+            subscriber.agents.insert(agent_id.clone());
+            subscriber.replaying_agents.insert(agent_id.clone());
+        }
+        self.replay_legacy_events(agent_id, since_event_id)
+    }
+
+    fn drain_or_activate_subscribe(
+        &mut self,
+        subscriber_id: Option<u64>,
+        agent_id: &AgentId,
+    ) -> Vec<ServerPushEnvelope> {
+        let Some(subscriber_id) = subscriber_id else {
+            return Vec::new();
+        };
+        let Some(subscriber) = self.subscribers.get_mut(&subscriber_id) else {
+            return Vec::new();
+        };
+        let pending = subscriber
+            .pending_events
+            .remove(agent_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            subscriber.replaying_agents.remove(agent_id);
+        }
+        pending
+    }
+
+    fn start_run(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+        bound_model: Option<BoundAgentModel>,
+        subscriber_id: Option<u64>,
+    ) -> Result<AgentRunHandle, ProtocolError> {
+        let run = self
+            .registry
+            .try_start(session_id, agent_id, client_request_id)?;
+        self.record_run_started(&run, bound_model, subscriber_id);
+        Ok(run)
+    }
+
+    fn start_reserved_initial_turn(
+        &mut self,
+        session_id: app_server_protocol::ChatSessionId,
+        agent_id: AgentId,
+        client_request_id: Option<String>,
+        bound_model: Option<BoundAgentModel>,
+        subscriber_id: Option<u64>,
+    ) -> Result<AgentRunHandle, ProtocolError> {
+        let run = self.registry.try_start_reserved_initial_turn(
+            session_id,
+            agent_id,
+            client_request_id,
+        )?;
+        self.record_run_started(&run, bound_model, subscriber_id);
+        Ok(run)
+    }
+
+    fn cancel(&mut self, agent_id: &AgentId) -> Option<AgentRunHandle> {
+        self.registry.cancel(agent_id)
+    }
+
+    fn finish_if_current(&mut self, run_id: &str) -> Option<AgentRunHandle> {
+        self.registry.finish_if_current(run_id)
+    }
+
+    fn snapshot(
+        &self,
+        agent_id: &AgentId,
+        chat_id: app_server_protocol::ChatSessionId,
+        bound_model: Option<BoundAgentModel>,
+        since_event_id: Option<AgentEventId>,
+    ) -> AgentSnapshotResponse {
+        let Some(log) = self.logs.get(agent_id) else {
+            return idle_agent_snapshot(agent_id.clone(), chat_id, bound_model, since_event_id);
+        };
+        let events = filter_agent_events(&log.events, since_event_id);
+        AgentSnapshotResponse {
+            agent_id: agent_id.clone(),
+            chat_id: log.chat_id.clone(),
+            bound_model: log.bound_model.clone().or(bound_model),
+            state: log.state,
+            active_turn_id: log.active_turn_id.clone(),
+            since_event_id,
+            events,
+            current_text: log.current_text.clone(),
+            current_reasoning: log.current_reasoning.clone(),
+            error: log.error.clone(),
+        }
+    }
+
+    fn record_run_started(
+        &mut self,
+        run: &AgentRunHandle,
+        bound_model: Option<BoundAgentModel>,
+        subscriber_id: Option<u64>,
+    ) {
+        if !run.started_now {
+            return;
+        }
+        if let Some(subscriber_id) = subscriber_id
+            && let Some(subscriber) = self.subscribers.get_mut(&subscriber_id)
+        {
+            subscriber.agents.insert(run.agent_id.clone());
+        }
+        self.ensure_log(run, bound_model);
+        self.record_payload(
+            run,
+            AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::Running,
+            },
+            None,
+        );
+    }
+
+    fn record_push_and_collect_sinks(
+        &mut self,
+        run: &AgentRunHandle,
+        event: &ServerPushEvent,
+    ) -> Vec<ServerPushSink> {
+        if let Some(payload) = agent_payload_from_push(event) {
+            self.record_payload(run, payload, Some(event.clone()));
+        } else if is_agent_runtime_legacy_push(event) {
+            self.record_legacy_push(run, event.clone());
+        }
+        let envelope = ServerPushEnvelope {
+            event: event.clone(),
+        };
+        let mut sinks = Vec::new();
+        for subscriber in self.subscribers.values_mut() {
+            if !subscriber.agents.contains(&run.agent_id) {
+                continue;
+            }
+            if subscriber.replaying_agents.contains(&run.agent_id) {
+                subscriber
+                    .pending_events
+                    .entry(run.agent_id.clone())
+                    .or_default()
+                    .push_back(envelope.clone());
+            } else {
+                sinks.push(Arc::clone(&subscriber.push_sink));
+            }
+        }
+        sinks
+    }
+
+    fn record_legacy_push(&mut self, run: &AgentRunHandle, event: ServerPushEvent) {
+        let event_id = self.next_agent_event_id();
+        let log = self.ensure_log(run, None);
+        log.legacy_events.push((event_id, event));
+    }
+
+    fn record_payload(
+        &mut self,
+        run: &AgentRunHandle,
+        payload: AgentEventPayload,
+        legacy_event: Option<ServerPushEvent>,
+    ) {
+        let event_id = self.next_agent_event_id();
+        let record = AgentEventRecord {
+            event_id,
+            agent_id: run.agent_id.clone(),
+            turn_id: Some(run.turn_id.clone()),
+            ts_ms: unix_now_ms(),
+            payload,
+        };
+        let log = self.ensure_log(run, None);
+        update_runtime_log(log, &record.payload);
+        if matches!(
+            record.payload,
+            AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::Running
+            }
+        ) {
+            log.active_turn_id = Some(run.turn_id.clone());
+        }
+        log.events.push(record);
+        if let Some(legacy_event) = legacy_event {
+            log.legacy_events.push((event_id, legacy_event));
+        }
+    }
+
+    fn ensure_log(
+        &mut self,
+        run: &AgentRunHandle,
+        bound_model: Option<BoundAgentModel>,
+    ) -> &mut AgentRuntimeLog {
+        let log = self
+            .logs
+            .entry(run.agent_id.clone())
+            .or_insert_with(|| AgentRuntimeLog {
+                chat_id: run.session_id.clone(),
+                bound_model: bound_model.clone(),
+                state: AgentRuntimeStatus::Idle,
+                active_turn_id: None,
+                events: Vec::new(),
+                legacy_events: Vec::new(),
+                current_text: String::new(),
+                current_reasoning: String::new(),
+                error: None,
+            });
+        log.chat_id = run.session_id.clone();
+        if bound_model.is_some() {
+            log.bound_model = bound_model;
+        }
+        log
+    }
+
+    fn next_agent_event_id(&mut self) -> AgentEventId {
+        self.next_event_id = self.next_event_id.saturating_add(1);
+        AgentEventId(self.next_event_id)
+    }
+
+    fn replay_legacy_events(
+        &self,
+        agent_id: &AgentId,
+        since_event_id: Option<AgentEventId>,
+    ) -> Vec<ServerPushEnvelope> {
+        self.logs
+            .get(agent_id)
+            .map(|log| {
+                log.legacy_events
+                    .iter()
+                    .filter(|(event_id, _)| event_is_after(*event_id, since_event_id))
+                    .map(|(_, event)| ServerPushEnvelope {
+                        event: event.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn idle_agent_snapshot(
+    agent_id: AgentId,
+    chat_id: app_server_protocol::ChatSessionId,
+    bound_model: Option<BoundAgentModel>,
+    since_event_id: Option<AgentEventId>,
+) -> AgentSnapshotResponse {
+    AgentSnapshotResponse {
+        agent_id,
+        chat_id,
+        bound_model,
+        state: AgentRuntimeStatus::Idle,
+        active_turn_id: None,
+        since_event_id,
+        events: Vec::new(),
+        current_text: String::new(),
+        current_reasoning: String::new(),
+        error: None,
+    }
+}
+
+fn filter_agent_events(
+    events: &[AgentEventRecord],
+    since_event_id: Option<AgentEventId>,
+) -> Vec<AgentEventRecord> {
+    events
+        .iter()
+        .filter(|event| event_is_after(event.event_id, since_event_id))
+        .cloned()
+        .collect()
+}
+
+fn event_is_after(event_id: AgentEventId, since_event_id: Option<AgentEventId>) -> bool {
+    since_event_id.is_none_or(|since| event_id.0 > since.0)
+}
+
+fn update_runtime_log(log: &mut AgentRuntimeLog, payload: &AgentEventPayload) {
+    match payload {
+        AgentEventPayload::StateChanged { state } => {
+            log.state = *state;
+            if *state == AgentRuntimeStatus::Running {
+                log.current_text.clear();
+                log.current_reasoning.clear();
+                log.error = None;
+            }
+        }
+        AgentEventPayload::Token { text } => log.current_text.push_str(text),
+        AgentEventPayload::Reasoning { text } => log.current_reasoning.push_str(text),
+        AgentEventPayload::Error { message, .. } => {
+            log.state = AgentRuntimeStatus::Failed;
+            log.error = Some(message.clone());
+        }
+        AgentEventPayload::Done { cancelled } => {
+            if *cancelled {
+                log.state = AgentRuntimeStatus::Cancelled;
+            } else if log.state != AgentRuntimeStatus::Failed {
+                log.state = AgentRuntimeStatus::Done;
+            }
+            log.active_turn_id = None;
+        }
+        AgentEventPayload::ToolStart { .. } | AgentEventPayload::ToolResult { .. } => {}
+    }
+}
+
+fn agent_payload_from_push(event: &ServerPushEvent) -> Option<AgentEventPayload> {
+    match event {
+        ServerPushEvent::AgentToken(event) => Some(AgentEventPayload::Token {
+            text: event.text.clone(),
+        }),
+        ServerPushEvent::AgentReasoning(event) => Some(AgentEventPayload::Reasoning {
+            text: event.text.clone(),
+        }),
+        ServerPushEvent::AgentToolStart(event) => Some(AgentEventPayload::ToolStart {
+            tool_call_id: event.tool_call_id.clone(),
+            tool_name: event.tool_name.clone(),
+            args_json: event.args_json.clone(),
+        }),
+        ServerPushEvent::AgentToolResult(event) => Some(AgentEventPayload::ToolResult {
+            tool_call_id: event.tool_call_id.clone(),
+            tool_name: event.tool_name.clone(),
+            result_json: event.result_json.clone(),
+        }),
+        ServerPushEvent::AgentError(event) => Some(AgentEventPayload::Error {
+            error_type: event.error_type,
+            message: event.message.clone(),
+        }),
+        ServerPushEvent::AgentDone(event) => Some(AgentEventPayload::Done {
+            cancelled: event.cancelled,
+        }),
+        _ => None,
+    }
+}
+
+fn is_agent_runtime_legacy_push(event: &ServerPushEvent) -> bool {
+    matches!(
+        event,
+        ServerPushEvent::AgentMeshReady(_)
+            | ServerPushEvent::AgentPlanProposed(_)
+            | ServerPushEvent::AgentPlanSaved(_)
+    )
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 #[derive(Default)]
@@ -1063,21 +1610,6 @@ enum InitialTurnReserveOutcome {
 struct AgentRunRequestKey {
     session_id: app_server_protocol::ChatSessionId,
     request_id: String,
-}
-
-fn agent_run_registry_for_workspace(workspace_path: Option<&Path>) -> Arc<Mutex<AgentRunRegistry>> {
-    let Some(workspace_path) = workspace_path else {
-        return Arc::new(Mutex::new(AgentRunRegistry::default()));
-    };
-    let registries = AGENT_RUN_REGISTRIES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut registries = registries
-        .lock()
-        .expect("Agent run registry map lock should not be poisoned");
-    Arc::clone(
-        registries
-            .entry(workspace_path.to_path_buf())
-            .or_insert_with(|| Arc::new(Mutex::new(AgentRunRegistry::default()))),
-    )
 }
 
 impl AgentRunRegistry {
@@ -1284,7 +1816,7 @@ struct AgentWorker {
     workspace_root: PathBuf,
     python: PathBuf,
     cadquery_results: Arc<Mutex<CadQueryResultCache>>,
-    agent_runs: Arc<Mutex<AgentRunRegistry>>,
+    agent_runtime: Arc<Mutex<WorkspaceAgentRuntime>>,
     push_sink: ServerPushSink,
 }
 
@@ -2320,10 +2852,10 @@ fn contains_path(paths: &[PathHandle], target: &PathHandle) -> bool {
 
 fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
     let finished = worker
-        .agent_runs
+        .agent_runtime
         .lock()
         .ok()
-        .and_then(|mut registry| registry.finish_if_current(&worker.run.run_id));
+        .and_then(|mut runtime| runtime.finish_if_current(&worker.run.run_id));
     if let Some(run) = finished {
         push_agent_done(&worker.push_sink, &run, cancelled);
     }
@@ -2985,6 +3517,68 @@ mod tests {
         assert!(error.message.contains("provider type mismatch"));
     }
 
+    #[test]
+    fn runtime_subscribe_queues_live_events_until_replay_finishes() {
+        let mut runtime = WorkspaceAgentRuntime::default();
+        let delivered = Arc::new(Mutex::new(Vec::<ServerPushEnvelope>::new()));
+        let sink: ServerPushSink = {
+            let delivered = Arc::clone(&delivered);
+            Arc::new(move |envelope| delivered.lock().expect("push lock").push(envelope))
+        };
+        let subscriber_id = runtime.register_subscriber(sink);
+        let run = runtime
+            .start_run(
+                ChatSessionId("chat-1".into()),
+                AgentId("agent-1".into()),
+                None,
+                None,
+                None,
+            )
+            .expect("run starts");
+
+        assert!(
+            runtime
+                .record_push_and_collect_sinks(&run, &agent_token_push(&run, "one"))
+                .is_empty()
+        );
+        let replay = runtime.subscribe_agent(Some(subscriber_id), &run.agent_id, None);
+        assert_eq!(agent_token_texts(&replay), vec!["one"]);
+
+        assert!(
+            runtime
+                .record_push_and_collect_sinks(&run, &agent_token_push(&run, "two"))
+                .is_empty()
+        );
+        assert!(delivered.lock().expect("push lock").is_empty());
+        let pending = runtime.drain_or_activate_subscribe(Some(subscriber_id), &run.agent_id);
+        assert_eq!(agent_token_texts(&pending), vec!["two"]);
+
+        assert!(
+            runtime
+                .record_push_and_collect_sinks(&run, &agent_token_push(&run, "three"))
+                .is_empty()
+        );
+        let pending = runtime.drain_or_activate_subscribe(Some(subscriber_id), &run.agent_id);
+        assert_eq!(agent_token_texts(&pending), vec!["three"]);
+
+        assert!(
+            runtime
+                .drain_or_activate_subscribe(Some(subscriber_id), &run.agent_id)
+                .is_empty()
+        );
+        let sinks = runtime.record_push_and_collect_sinks(&run, &agent_token_push(&run, "four"));
+        assert_eq!(sinks.len(), 1);
+        for sink in sinks {
+            sink(ServerPushEnvelope {
+                event: agent_token_push(&run, "four"),
+            });
+        }
+        assert_eq!(
+            agent_token_texts(&delivered.lock().expect("push lock")),
+            vec!["four"]
+        );
+    }
+
     #[tokio::test]
     async fn initial_turn_reservation_duplicate_waiter_cannot_miss_release() {
         let mut registry = AgentRunRegistry::default();
@@ -3101,5 +3695,23 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    fn agent_token_push(run: &AgentRunHandle, text: &str) -> ServerPushEvent {
+        ServerPushEvent::AgentToken(AgentTokenEvent {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+            text: text.into(),
+        })
+    }
+
+    fn agent_token_texts(envelopes: &[ServerPushEnvelope]) -> Vec<&str> {
+        envelopes
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                ServerPushEvent::AgentToken(event) => Some(event.text.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 }
