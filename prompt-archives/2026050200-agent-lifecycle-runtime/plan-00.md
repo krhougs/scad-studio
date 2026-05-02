@@ -13,6 +13,7 @@
 - Chat id 必须由后端随机生成，不能从 title、文件名或路径派生。
 - Workspace 根目录 `chats.json` 是 chat 列表、显示顺序、当前 chat 和 metadata 的权威状态。
 - 前端点击 New Chat 只创建本地空草稿，不写后端状态；首次发送消息时才创建后端 chat。
+- 首次创建 chat 的请求必须携带一次性 `client_request_id`，用于双击发送、网络重试和并发首发的幂等处理；重复请求必须返回同一个 `chat_id` 和 `agent_id`。
 - 一个 chat 对应一个稳定 Agent；产品语义中 chat 等同于 agent，chat metadata 持有稳定 `agent_id`。
 - Chat 首次发送消息时创建 chat、Agent 和模型绑定；模型参数必须放在创建 chat 的请求参数中。之后该 chat 的后续 Agent turn 必须使用已绑定模型，后端忽略前端传入的不同模型参数。
 - 多个 WebSocket connection 可以同时订阅同一个 Agent。
@@ -40,7 +41,7 @@
 - 保护 `studio-web` 只处理浏览器壳层、展示和连接接线，不绕过 protocol 读取后端状态。
 - 保护 `chats.json` 作为 chat identity、显示顺序、workspace 当前 chat 和 metadata 的权威来源；JSONL 文件名不能作为 id 来源。
 - 保护 Agent event log 与 Chat JSONL 的职责分离：event log 服务 runtime replay，Chat JSONL 保存最终对话事实。
-- 保护进程意外退出恢复语义：不重复执行 tool call，不把半截 assistant 内容写入最终 Chat JSONL。
+- 保护进程意外退出恢复语义：不重复执行 tool call，不把半截 assistant 内容写入最终 Chat JSONL，并能识别多文件写入中断后的可恢复状态或明确损坏状态。
 - 保护 Chat history、Agent event、CadQuery staging、workspace tool policy、preview、watch 和 Web 工作台既有行为。
 - 保护 provider/model registry、provider type、`base_url` 解析和模型参数快照语义。
 - 保护 `agents.toml` 私有配置边界和 API key 不进入仓库。
@@ -98,15 +99,16 @@
 
 ### 操作步骤
 
-1. 定义 `chats.json` 的产品语义：记录 chat 显示顺序、workspace 当前 chat、title、goal、summary、open questions、archived、created / updated 时间、related files、messages path、events path、`agent_id` 和绑定模型。
+1. 定义 `chats.json` 的产品语义：记录 chat 显示顺序、workspace 当前 chat、title、goal、summary、open questions、archived、created / updated 时间、related files、messages path、events path、`agent_id`、首次创建 `client_request_id` 和绑定模型。
 2. 定义后端随机生成 `chat_id` 的语义，禁止从 title、文件名或路径派生 chat id。
 3. 定义前端 New Chat 的草稿语义：点击 New Chat 不创建后端 chat，首次发送消息时才创建后端 chat。
 4. 定义 chat 等同于 agent 的身份关系：创建 chat 时同时创建稳定 `agent_id`，后续 Agent 命令使用该 `agent_id`。
 5. 定义 Chat list / create / switch / archive / history 的状态来源：list 和 workspace 当前 chat 来自 `chats.json`，history 通过 `messages_path` 读取 JSONL。
 6. 定义 workspace 当前 chat 的多连接语义：切换 chat 会更新 `chats.json.active_chat_id`，所有已连接观察者通过 protocol event 或 snapshot 得到最新状态。
 7. 定义旧 filename-derived chat 的迁移语义：读取旧工作区时创建 `chats.json` 条目，并把旧文件名仅作为初始 title 或兼容路径使用。
-8. 定义 `chats.json` 的原子写入、幂等迁移和损坏恢复语义。
-9. 记录文件状态方案取舍：SQLite / redb 可作为未来替代，但本计划使用显式 `chats.json`、Chat JSONL 和 Agent event JSONL。
+8. 定义 `CreateChatAndStartTurn` 的首次创建幂等语义：同一 `client_request_id` 的重复请求返回同一个 `chat_id` 和 `agent_id`。
+9. 定义 `chats.json` 的原子写入、幂等迁移和损坏恢复语义。
+10. 记录文件状态方案取舍：SQLite / redb 可作为未来替代，但本计划使用显式 `chats.json`、Chat JSONL 和 Agent event JSONL。
 
 ### 验收标准
 
@@ -117,6 +119,7 @@
 - Chat history 测试证明通过 `chats.json.messages_path` 读取 JSONL，JSONL 文件名改变不影响 `chat_id`。
 - Archive / rename / reorder 测试证明不会改变 `chat_id` 或 `agent_id`。
 - Metadata 测试覆盖 `title`、`goal`、`summary`、`open_questions`、`related_files`、`archived`、时间、`messages_path`、`events_path`、`agent_id`、`bound_model` 都由 `chats.json` 承载，不再从 Chat JSONL meta message 推断。
+- 幂等测试覆盖同一 `client_request_id` 的双击发送、网络重试和并发首发只创建一个 chat / agent，只写入一次首条 user message 和模型绑定。
 - 旧工作区迁移测试证明没有 `chats.json` 时可以生成索引，并且不会继续把文件名作为长期身份来源。
 - `chats.json` 写入测试覆盖临时文件加 rename 或等价原子策略；重复迁移不会重复创建 chat；索引损坏时返回明确错误，不扫描文件名恢复为权威身份来源。
 - 文档说明 `agents.toml`、`chats.json`、Chat JSONL、Agent event JSONL 的职责边界，并说明当前不引入 SQLite / redb。
@@ -175,7 +178,7 @@
 ### 操作步骤
 
 1. 定义稳定 `AgentId`、`AgentTurnId`、chat metadata 中的 Agent 关联、Agent snapshot、Agent event log 的 protocol 结构。
-2. 定义首次发送的 create-chat-and-start-turn 命令语义：请求必须包含首条用户消息和当前模型参数快照，后端在同一个流程中创建 chat、`agent_id`、`bound_model`、JSONL 和初始 Agent turn。
+2. 定义首次发送的 create-chat-and-start-turn 命令语义：请求必须包含 `client_request_id`、首条用户消息和当前模型参数快照，后端按 `client_request_id` 保证创建幂等，并在同一个流程中创建 chat、`agent_id`、`bound_model`、JSONL 和初始 Agent turn。
 3. 定义 `agent_id` 作为 cancel / snapshot / subscribe / start turn 的唯一外部目标。
 4. 定义 chat 模型绑定持久化语义：首次 turn 前写入 `chats.json`，后续 turn 只读。
 5. 定义旧 `run_id` 字段迁移策略：事件中保留内部 turn id，外部命令不再用 run id 定位 Agent。
@@ -186,7 +189,7 @@
 - wire contract 覆盖新增字段和版本升级。
 - protocol 和 ChatStore 测试覆盖每个 chat metadata 中存在稳定 `agent_id`，且 chat 与 agent 为一一对应关系。
 - 首次发送测试覆盖创建 chat 的请求携带模型参数快照，并在同一个后端流程中写入 `chats.json.bound_model`、首条 user message 和初始 Agent turn。
-- 并发首次发送测试覆盖同一草稿只能创建一个后端 chat，模型绑定只写入一次。
+- 并发首次发送测试覆盖同一 `client_request_id` 只能创建一个后端 chat，模型绑定只写入一次，并且重复请求返回同一个 `chat_id` 和 `agent_id`。
 - protocol 外部命令不接受 `run_id` 作为 Agent 操作目标；`run_id` 或 `turn_id` 只允许作为事件排序、去重和调试字段。
 - 兼容旧 `agent.invoke` 时，不允许旧字段让前端静默使用错误模型；已绑定 chat 的不同模型请求必须被后端忽略并有测试覆盖。
 - protocol 类型保持 transport-neutral，不引入 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
@@ -281,7 +284,7 @@
 
 1. 设计并实现 runtime event log，事件按 `agent_id`、`turn_id` 和 `event_id` 记录。
 2. 定义 event log 文件职责：`agent-events/<agent_id>.jsonl` 或等价 workspace 文件保存 runtime event，不写入 Chat JSONL。
-3. 定义 Agent event envelope：所有 event 包含 per-agent 单调递增 `event_id`、`agent_id`、`turn_id`、`ts_ms` 和 payload。
+3. 定义 Agent event envelope：所有 event 包含 per-agent 单调递增 `event_id`、`agent_id`、`ts_ms` 和 payload；turn 级事件必须包含 `turn_id`，workspace / agent 级状态事件允许 `turn_id` 为空。
 4. Agent snapshot 返回当前状态、当前文本、reasoning、active tool call、错误、done 状态和事件游标。
 5. 新 WebSocket 连接后通过 snapshot 恢复 UI，再订阅后续事件。
 6. studio-common managed client 以 `agent_id` 聚合 Agent 状态。
@@ -291,7 +294,7 @@
 ### 验收标准
 
 - 测试覆盖断线期间产生的 token / tool / done 事件可以通过 `since_event_id` 从 event log replay，且不会重复展示。
-- 测试覆盖 event log 中所有事件都有 `event_id`、`agent_id`、`turn_id`、`ts_ms`，同一 agent 的 `event_id` 单调递增。
+- 测试覆盖 event log 中所有事件都有 `event_id`、`agent_id`、`ts_ms`，同一 agent 的 `event_id` 单调递增；turn 级事件必须有 `turn_id`，workspace / agent 级状态事件允许没有 `turn_id`。
 - 测试覆盖 event log 写入 `agent-events/<agent_id>.jsonl` 或等价 workspace 文件，Chat JSONL 不保存 token / reasoning delta 等 runtime replay 事件。
 - 测试覆盖两个 WebSocket observer 同时收到同一个 Agent 的事件。
 - 测试覆盖第二个 WebSocket observer 对同一 `agent_id` 执行 snapshot / cancel 后，所有 observer 看到一致状态。
@@ -327,7 +330,8 @@
 5. 定义 event log 保留策略：active turn 的 event log 必须保留；terminal turn 在最终 Chat JSONL 写入成功后可以压缩为 terminal checkpoint 或按产品保留策略保留原始事件。
 6. 定义进程重启恢复流程：读取 `chats.json` 和 event log，未 terminal 的 turn append interrupted event。
 7. 定义 interrupted 恢复规则：不创建 LLM client，不重新执行 tool call，不写正常完成的 assistant message。
-8. 定义 interrupted 后的用户操作：snapshot 显示 interrupted 状态，用户可以发起新的 turn。
+8. 定义多文件写入恢复矩阵：partial create、缺失 messages / events 文件、terminal event 与最终 Chat JSONL 不一致、final history 已写但 terminal event 未写等场景必须有明确修复或错误状态。
+9. 定义 interrupted 后的用户操作：snapshot 显示 interrupted 状态，用户可以发起新的 turn。
 
 ### 验收标准
 
@@ -340,6 +344,10 @@
 - 测试覆盖重启恢复不会创建 LLM client、provider stream、tool executor 或 cancel token。
 - 测试覆盖重启恢复不会重复执行未完成 tool call，不会把半截 assistant token 写入最终 Chat JSONL。
 - 测试覆盖 interrupted turn 之后可以正常启动新的 turn。
+- 测试覆盖创建 chat 过程中崩溃后，孤儿 Chat JSONL / Agent event JSONL 不会被文件名恢复为正式 chat。
+- 测试覆盖 `chats.json` 指向缺失 `messages_path` 或 `events_path` 时返回明确损坏错误。
+- 测试覆盖 Chat JSONL 已写最终事实但 event log 未写 terminal event 时，启动期补写 recovered terminal event，不重新调用 LLM 或 tool。
+- 测试覆盖 event log 已写 terminal event 但 Chat JSONL 缺最终事实时进入 `FailedNeedsRecovery`，不把 token delta 拼成最终 assistant message。
 
 ## Phase 8 — Async / 阻塞路径复核与最终验证
 
@@ -364,6 +372,7 @@
 2. 确认 Agent / WebSocket 主链路没有新增手写线程或同步阻塞外部命令。
 3. 对已知的 `scad-scene` 字体探测同步命令保持已知问题记录，不在本计划中顺手修改。
 4. 运行 Rust、protocol、Web typecheck、Web 单元测试和 smoke。
+5. 运行或补充现有功能专项回归检查，确认 Agent runtime / protocol / Web 状态改造没有破坏 Chat history、Agent event、CadQuery staging、workspace tool policy、preview、watch 和 Web 工作台。
 
 ### 验收标准
 
@@ -378,6 +387,12 @@
 - 搜索确认产品文档和示例配置不要求迁移或读取根目录 `llm.toml`。
 - 测试确认 chat id 不由 title、文件名或路径派生，Chat list 和当前 chat 来自 `chats.json`。
 - 测试确认进程意外退出后重启，未 terminal turn 恢复为 interrupted，且不会重复 tool call 或写入半截 assistant message。
+- 回归测试确认现有 Chat history JSONL 读取能力保持可用。
+- 回归测试确认 Agent event 既有事件展示和最终历史写入能力保持可用。
+- 回归测试确认 CadQuery staging 成功后才回写真实 workspace，失败、超时或取消不会污染真实文件。
+- 回归测试确认 workspace tool policy 仍拒绝越权路径和不允许的直接写入。
+- 回归测试确认 preview / watch 仍通过 app server protocol 更新，前端不直接读取后端状态文件。
+- 回归测试确认 Web 工作台刷新后目录、当前 chat、preview 和 Agent 状态可以恢复。
 - 搜索确认 `app-server-protocol` 不依赖 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
 - 搜索确认 `studio-common` 不依赖 `app-server-transport`、浏览器 API 或平台事件循环。
 - 确认 `plan-00-result.md` 已记录每个 Phase 的执行结果、review 结论、修正摘要和遗留风险。

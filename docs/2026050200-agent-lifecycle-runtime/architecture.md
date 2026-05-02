@@ -65,6 +65,7 @@
 
 ```rust
 pub struct AgentId(pub String);
+pub struct ClientRequestId(pub String);
 
 pub struct ChatIndex {
     pub version: u32,
@@ -75,6 +76,7 @@ pub struct ChatIndex {
 pub struct ChatIndexEntry {
     pub chat_id: ChatSessionId,
     pub agent_id: AgentId,
+    pub create_request_id: ClientRequestId,
     pub title: String,
     pub goal: Option<String>,
     pub summary: Option<String>,
@@ -121,7 +123,8 @@ Workspace 根目录的 `chats.json` 是 chat 状态权威来源：
 
 - `chats.json` 记录所有 chat 的显示顺序。
 - 前端点击 New Chat 只创建本地草稿；草稿未发送消息前不写后端状态，刷新后无需恢复。
-- 首次发送时，后端生成随机 `chat_id` 和对应 `agent_id`，把首条用户消息、当前模型参数快照和 chat metadata 作为创建参数写入 `chats.json`，再创建消息 JSONL 和 Agent event log。
+- 首次发送时，前端必须为本地草稿生成一次性 `client_request_id`。后端用该 id 做创建幂等判断，再生成随机 `chat_id` 和对应 `agent_id`，先准备包含首条用户消息的 Chat JSONL 和初始 Agent event log，再把当前模型参数快照和 chat metadata 原子提交到 `chats.json`。
+- `client_request_id` 只用于首次创建幂等，不作为长期 chat 身份。若重试请求携带相同 `client_request_id`，后端必须返回已经创建的同一个 `chat_id` 和 `agent_id`，不得创建第二个 chat。
 - 切换 chat 时，后端更新 `chats.json.active_chat_id`；这是 workspace 级共享状态，所有已连接观察者都应收到当前 chat 变化事件或在 snapshot 中看到最新值。
 - Chat 列表从 `chats.json` 读取，不能通过扫描 JSONL 文件名反推出 id 或 title。
 - 消息 JSONL 路径只是内部存储路径，由 `chats.json` 的 `messages_path` 指向。
@@ -182,6 +185,7 @@ pub struct WorkspaceAgentRuntime {
 ```rust
 pub enum AgentCommand {
     CreateChatAndStartTurn {
+        client_request_id: ClientRequestId,
         title: String,
         prompt: String,
         requested_model: Option<BoundAgentModel>,
@@ -213,7 +217,7 @@ pub enum AgentCommand {
 
 所有外部命令都以 `agent_id` 为目标。`turn_id` 只存在于事件中，用于前端排序、去重和调试。
 
-首次发送使用 `CreateChatAndStartTurn`，该命令是唯一会创建后端 chat 的入口。后端在同一个流程里生成 `chat_id` 和 `agent_id`、写入 `chats.json`、写入首条 user message、创建初始 event log，并启动第一个 Agent turn。已存在 chat 的后续发送使用 `StartTurn`，并且只读取 `chats.json.bound_model`。
+首次发送使用 `CreateChatAndStartTurn`，该命令是唯一会创建后端 chat 的入口。后端先按 `client_request_id` 做幂等查询；若已存在匹配 chat，则返回同一个 `chat_id` / `agent_id` 和当前 turn 状态；若不存在，则在同一个流程里生成 `chat_id` 和 `agent_id`、准备包含首条 user message 的 Chat JSONL、准备初始 event log、原子提交 `chats.json`，然后启动第一个 Agent turn。已存在 chat 的后续发送使用 `StartTurn`，并且只读取 `chats.json.bound_model`。
 
 ## Chat 与模型绑定
 
@@ -232,7 +236,7 @@ pub enum AgentCommand {
 - `chats/<chat_id>.jsonl`：最终对话事实，包括 user message、最终 assistant message、tool call / tool result、search sources、mesh result 等。
 - `agent-events/<agent_id>.jsonl`：runtime event log，用于 active turn 的 snapshot / replay / 多 WebSocket 观察。
 
-Agent event log 使用统一事件 envelope，所有事件必须包含 `event_id`、`agent_id`、`turn_id`、`ts_ms` 和 payload。`event_id` 在单个 `agent_id` 范围内单调递增，`Snapshot.since_event_id` 使用该游标恢复断线期间事件。
+Agent event log 使用统一事件 envelope，所有事件必须包含 `event_id`、`agent_id`、`ts_ms` 和 payload。`turn_id` 在 envelope 中为可选字段：turn 级事件必须包含 `Some(turn_id)`，workspace / agent 级状态事件允许为 `None`。`event_id` 在单个 `agent_id` 范围内单调递增，`Snapshot.since_event_id` 使用该游标恢复断线期间事件。
 
 Event log 只服务 runtime replay 和状态展示；Chat JSONL 只保存最终对话事实。每个 turn 的最终 assistant / tool 记录只能写入 Chat JSONL 一次，并用 `agent_id + turn_id` 关联。Turn terminal 后，只有在 Chat JSONL 对应最终记录写入成功后，event log 才能进入可压缩状态；active turn 的 event log 不得提前删除。
 
@@ -409,6 +413,14 @@ Interrupted
 
 进程意外退出后，不尝试恢复正在进行的 LLM stream 或 tool call。Provider stream、tool executor、cancel token 和进程内 task 已经丢失，强行恢复会引入重复 tool call、重复写文件或半截 assistant 内容进入上下文的风险。
 
+多文件写入顺序必须服务恢复判断：
+
+1. 首次创建先写入 Chat JSONL 临时文件和 Agent event JSONL 临时文件。
+2. 两个文件准备完成后，原子更新 `chats.json`，把 `create_request_id`、`messages_path`、`events_path`、`agent_id` 和 `bound_model` 作为 chat 创建的 commit marker。
+3. `chats.json` 提交成功后，后端才启动首个 Agent turn。
+4. Turn 完成时先把最终 assistant / tool 事实写入 Chat JSONL，并带上 `agent_id + turn_id`。
+5. Chat JSONL 最终事实写入成功后，才允许写入 `Done` / `Cancelled` / terminal error 等 terminal event。
+
 重启恢复流程：
 
 1. 启动 `WorkspaceAgentRuntime`。
@@ -418,6 +430,15 @@ Interrupted
 5. 不创建 LLM client，不重新执行 tool call，不写正常完成的 assistant message。
 6. Snapshot 返回 interrupted 状态，前端显示上一轮因后端重启中断。
 7. 用户可以基于保留的 Chat JSONL 和 workspace 文件状态发起新的 turn。
+
+启动期修复矩阵：
+
+- 存在 Chat JSONL / Agent event JSONL，但 `chats.json` 没有对应 entry：视为创建前崩溃产生的孤儿文件，移入恢复隔离区或返回可诊断清理结果，不得通过文件名恢复为正式 chat。
+- `chats.json` entry 已存在，但 `messages_path` 或 `events_path` 缺失：标记该 chat 为不可用的索引损坏状态，返回明确错误；不得扫描文件名重建身份。
+- `chats.json` entry 已存在，Chat JSONL 有首条 user message，event log 缺失初始事件：根据 `chats.json` 和 Chat JSONL 重建最小初始 event log，并保持原 `agent_id`。
+- turn 没有 terminal event，且 Chat JSONL 没有同一 `agent_id + turn_id` 的最终 assistant / tool 事实：append interrupted event。
+- Chat JSONL 已经存在同一 `agent_id + turn_id` 的最终事实，但 event log 没有 terminal event：append recovered terminal event，不重新调用 LLM，不重复执行 tool。
+- event log 已有 terminal event，但 Chat JSONL 缺少同一 `agent_id + turn_id` 的最终事实：进入 `FailedNeedsRecovery`，保留 event log，返回明确恢复错误；不得把 token delta 拼成最终 assistant message。
 
 Chat JSONL 恢复规则：
 

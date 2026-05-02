@@ -6,7 +6,7 @@
 - 当前仅完成需求整理、设计文档、计划存档和已知问题记录。
 - 按用户要求，本轮不修改产品代码。
 - 已按用户最新约束修正范围：provider `base_url` 属于本次产品整改范围，根目录 `llm.toml` 迁移不属于本次范围。
-- 已根据独立 review 修正 plan，但按用户要求忽略 provider `base_url` 运行路径验证增强项。
+- 已根据独立 review 修正 plan；provider `base_url` 模型发现与 Agent turn 执行同源解析已纳入 Phase 2 验收。
 - 已根据用户补充约束修正 plan：chat id 由后端随机生成，`chats.json` 管理显示顺序和 metadata，chat 在产品语义上等同于 agent。
 - 已根据最新 review 修正 plan：前端 New Chat 仅为本地草稿，首次发送创建 chat；event log 增加持久文件职责和 `event_id`；`chats.json` 承接完整 chat metadata；Chat JSONL 与 event log 职责分离。
 - 已补充文件状态方案取舍、完整状态机，以及进程意外退出后的 interrupted 恢复语义。
@@ -24,6 +24,11 @@
 - 补充 SQLite / redb / 显式文件状态方案对比，锁定本计划使用 `chats.json`、Chat JSONL 和 Agent event JSONL。
 - 补充 ChatRecord、AgentRuntime、Turn 三组状态机。
 - 补充重启恢复验收：未完成 turn append interrupted event，不恢复 LLM stream，不重复 tool call，不写半截 assistant message。
+- 根据独立 review 补充首次创建 `client_request_id` 幂等语义。
+- 根据独立 review 补充多文件写入顺序、启动期恢复矩阵和 terminal/history 不一致处理。
+- 根据独立 review 补充 Chat history、Agent event、CadQuery staging、workspace tool policy、preview、watch 和 Web 工作台专项回归验收。
+- 根据独立 review 明确 Agent event envelope 中 `turn_id` 为 turn 级事件必填、workspace / agent 级状态事件可为空。
+- 根据复审结果统一首次创建写入顺序：先准备 Chat JSONL 和 Agent event JSONL，再以 `chats.json` 原子提交作为创建 commit marker。
 
 ## 尚未执行
 
