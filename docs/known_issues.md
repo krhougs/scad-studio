@@ -1,5 +1,17 @@
 # 已知问题记录
 
+## 2026-05-02 00:00:00: `scad-scene` 系统字体探测仍使用同步外部命令
+
+- 来源：为 Agent 生命周期与 WebSocket 生命周期分离设计做 async/thread 现状检查时，检索生产代码中的线程与阻塞接口，确认 `crates/scad-scene/src/system_fonts.rs` 使用 `std::process::Command` 调用 `fc-match`。
+- 原因：该路径属于渲染字体 fallback 探测逻辑，历史实现直接同步调用系统工具；它不在当前 Agent / WebSocket 主链路上，也不是本轮 Agent 生命周期设计的实现范围。
+- 影响范围：
+  - 当前 Agent / WebSocket 主链路未发现手写系统线程、`spawn_blocking` 或同步外部命令。
+  - 若未来把系统字体探测放到 app server async 请求路径或高频 UI 状态刷新路径，可能阻塞当前执行线程，影响响应延迟。
+- 可能的解法：
+  - 将字体探测改为启动时一次性缓存，并避免在请求路径重复执行。
+  - 若必须在 async 路径执行，改用 async 外部命令或把结果预计算到可复用状态中。
+- 当前处理方式：本轮只记录问题；Agent 生命周期设计不依赖该字体探测路径。
+
 ## 2026-05-01 16:30:00: Anthropic web search citations 尚未映射到 protocol sources
 
 - 来源：执行 `prompt-archives/2026050101-agent-provider-model-config/plan-00.md` Phase 6 文档与最终验证时，复核 Anthropic Messages provider 接入方式。当前 Anthropic web search 通过 `additional_params.tools` 注入 `web_search_20250305` server tool，但 app server 尚未把 Anthropic response citation 结构映射到 budn' protocol 的 `search_sources` 字段。
