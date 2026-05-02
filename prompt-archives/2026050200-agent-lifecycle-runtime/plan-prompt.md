@@ -22,10 +22,13 @@
 8. Active Agent 在用户 WebSocket 断开、切换 chat 或刷新页面后仍应继续工作；用户重新连接后应能看到当前状态和后续实时输出。
 9. 需要检查当前实现是否完全 async 化，以及是否存在多余的线程创建。
 10. Reasoning 参数使用一层 `Option<String>` 即可完整表达业务语义：`None` 表示不发送，`Some(String)` 表示字符串原样发送给 LLM；不得引入嵌套 Option，也不得生成默认 reasoning 字符串。
-11. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
-12. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
-13. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
-14. 当前任务只写设计文档和 plan，不做实现。
+11. Chat id 必须由后端随机生成，不得从 title 或文件名派生。
+12. Workspace 根目录新增 `chats.json`，由它规定 chat 的显示顺序、当前 chat 和 metadata。
+13. 产品语义中 chat 等同于 agent：每个 chat 拥有同一个稳定 `agent_id`。
+14. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
+15. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
+16. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
+17. 当前任务只写设计文档和 plan，不做实现。
 
 ## 已核对的现状
 
@@ -35,6 +38,7 @@
 - 当前 WebSocket 断开不会主动取消 worker，但 worker 的实时事件会发送到旧 connection 的 channel，新 connection 无法接管。
 - 当前前端模型选择是 dispatcher 级运行时状态，不是 chat 级持久绑定。
 - 当前 Chat history 未持久化 chat 与模型绑定。
+- 当前 Chat session id 从 title 派生，并通过 JSONL 文件名反推出 id 和 title；该模型需要改为 `chats.json` 权威索引。
 - 当前外部 Agent 操作和事件主要使用 `run_id`。
 - 当前 Agent / WebSocket 主链路未发现手写系统线程、`spawn_blocking` 或 `block_in_place`。
 - 已确认 `crates/scad-scene/src/system_fonts.rs` 中存在非 Agent / WebSocket 主链路的同步 `std::process::Command` 调用；该问题已记录到 `docs/known_issues.md`。
@@ -44,6 +48,7 @@
 ## 本计划范围
 
 - 设计 workspace 级 `WorkspaceAgentRuntime`。
+- 设计 `chats.json` 驱动的 chat identity、显示顺序、当前 chat 和 metadata。
 - 设计 provider type 和 `base_url` 产品配置规则。
 - 设计稳定 `agent_id` 外部操作模型。
 - 设计 chat 与 Agent / 模型绑定。

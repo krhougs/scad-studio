@@ -10,7 +10,9 @@
 
 - 外部消费者只能通过 `agent_id` 查询、订阅、取消和发送 Agent 命令。
 - `run_id` 或 `turn_id` 只作为内部 turn 追踪字段和事件排序字段，不作为外部操作目标。
-- 一个 chat 对应一个稳定 Agent。
+- Chat id 必须由后端随机生成，不能从 title、文件名或路径派生。
+- Workspace 根目录 `chats.json` 是 chat 列表、显示顺序、当前 chat 和 metadata 的权威状态。
+- 一个 chat 对应一个稳定 Agent；产品语义中 chat 等同于 agent，chat metadata 持有稳定 `agent_id`。
 - Chat 首次发送消息时创建模型绑定；之后该 chat 的后续 Agent turn 必须使用已绑定模型，后端忽略前端传入的不同模型参数。
 - 多个 WebSocket connection 可以同时订阅同一个 Agent。
 - 多个 WebSocket connection 可以同时观察并操作同一个 Agent；所有交互命令都以 `agent_id` 为目标，并由 runtime 统一处理。
@@ -34,6 +36,7 @@
 - 保护 WebSocket 只消费 app server protocol，不直接读取后端状态文件。
 - 保护 `studio-common` 只承接跨端共享状态与行为，不依赖 transport、浏览器 API 或平台事件循环。
 - 保护 `studio-web` 只处理浏览器壳层、展示和连接接线，不绕过 protocol 读取后端状态。
+- 保护 `chats.json` 作为 chat identity、显示顺序、当前 chat 和 metadata 的权威来源；JSONL 文件名不能作为 id 来源。
 - 保护 Chat history、Agent event、CadQuery staging、workspace tool policy、preview、watch 和 Web 工作台既有行为。
 - 保护 provider/model registry、provider type、`base_url` 解析和模型参数快照语义。
 - 保护 `agents.toml` 私有配置边界和 API key 不进入仓库。
@@ -56,9 +59,9 @@
 - `README.md`
 - `docs/getting-started.md`
 - `crates/app-server-protocol/src/protocol.rs`
+- `crates/app-server-core/src/chat.rs`
 - `crates/app-server-host/src/dispatcher.rs`
 - `crates/app-server-host/src/websocket.rs`
-- `crates/app-server-core/src/chat.rs`
 - `crates/app-server-core/src/llm/config.rs`
 - `crates/app-server-core/src/agent.rs`
 - `crates/studio-common/src/managed_client/*`
@@ -70,7 +73,43 @@
 - `crates/app-server-host/tests/*`
 - `crates/studio-common/tests/*`
 
-## Phase 1 — Provider type 与 base_url 产品配置
+## Phase 1 — Chat identity 与 chats.json
+
+### 输入
+
+- `docs/2026050200-agent-lifecycle-runtime/architecture.md`
+- `crates/app-server-protocol/src/protocol.rs`
+- `crates/app-server-core/src/chat.rs`
+- `crates/app-server-core/tests/chat_tests.rs`
+- `crates/app-server-host/tests/*`
+- `crates/studio-common/tests/*`
+- `packages/studio-web/src/state/protocol-store.ts`
+- `packages/studio-web/src/workbench/chat-zone.tsx`
+
+### 前序目标保护
+
+- 本 Phase 为首个 Phase，没有前序 Phase。
+- 保护现有 Chat history JSONL 的消息读取能力，但 JSONL 文件名不再作为 chat id 来源。
+- 保护 app server 是唯一管理 `chats.json` 的能力层；前端不得直接写入 `chats.json`。
+
+### 操作步骤
+
+1. 定义 `chats.json` 的产品语义：记录 chat 显示顺序、当前 chat、title、archived、created / updated 时间、related files、messages path、`agent_id` 和绑定模型。
+2. 定义后端随机生成 `chat_id` 的语义，禁止从 title、文件名或路径派生 chat id。
+3. 定义 chat 等同于 agent 的身份关系：创建 chat 时同时创建稳定 `agent_id`，后续 Agent 命令使用该 `agent_id`。
+4. 定义 Chat list / create / switch / archive / history 的状态来源：list 和当前 chat 来自 `chats.json`，history 通过 `messages_path` 读取 JSONL。
+5. 定义旧 filename-derived chat 的迁移语义：读取旧工作区时创建 `chats.json` 条目，并把旧文件名仅作为初始 title 或兼容路径使用。
+
+### 验收标准
+
+- 新建 chat 测试证明 `chat_id` 为后端随机 id，不等于 title，也不由 JSONL 文件名反推。
+- Chat list 测试证明列表顺序来自 `chats.json`，不是文件系统扫描排序。
+- 切换 chat 测试证明 `chats.json.active_chat_id` 更新，重新连接后恢复同一个当前 chat。
+- Chat history 测试证明通过 `chats.json.messages_path` 读取 JSONL，JSONL 文件名改变不影响 `chat_id`。
+- Archive / rename / reorder 测试证明不会改变 `chat_id` 或 `agent_id`。
+- 旧工作区迁移测试证明没有 `chats.json` 时可以生成索引，并且不会继续把文件名作为长期身份来源。
+
+## Phase 2 — Provider type 与 base_url 产品配置
 
 ### 输入
 
@@ -83,7 +122,7 @@
 
 ### 前序目标保护
 
-- 本 Phase 为首个 Phase，没有前序 Phase。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
 - 保护 `agents.toml` 私有配置边界和 API key 不进入仓库。
 - 保护根目录 `llm.toml` 不进入产品配置迁移范围。
 
@@ -103,7 +142,7 @@
 - 模型发现和 Agent turn 执行使用同一份解析后的 provider 配置。
 - 产品文档和示例配置不要求迁移或读取根目录 `llm.toml`。
 
-## Phase 2 — Agent 身份与 Chat 绑定协议设计
+## Phase 3 — Agent 身份与 Chat 绑定协议设计
 
 ### 输入
 
@@ -115,40 +154,43 @@
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
-- 保护现有 Chat session id 和 Chat history JSONL 读取能力。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
+- 保护现有 Chat history JSONL 读取能力，但不得把 JSONL 文件名作为 chat id 来源。
 - 保护现有 `agent.invoke` 兼容性规划，迁移过程中不得让旧 Web 客户端静默使用错误模型。
 
 ### 操作步骤
 
-1. 定义稳定 `AgentId`、`AgentTurnId`、chat-agent binding、Agent snapshot、Agent event log 的 protocol 结构。
+1. 定义稳定 `AgentId`、`AgentTurnId`、chat metadata 中的 Agent 关联、Agent snapshot、Agent event log 的 protocol 结构。
 2. 定义从 chat session 获取或创建 Agent 的命令语义。
 3. 定义 `agent_id` 作为 cancel / snapshot / subscribe / start turn 的唯一外部目标。
-4. 定义 chat 模型绑定持久化语义：首次 turn 前创建，后续 turn 只读。
+4. 定义 chat 模型绑定持久化语义：首次 turn 前写入 `chats.json`，后续 turn 只读。
 5. 定义旧 `run_id` 字段迁移策略：事件中保留内部 turn id，外部命令不再用 run id 定位 Agent。
 
 ### 验收标准
 
-- protocol roundtrip 覆盖 `AgentId`、`AgentTurnId`、Agent snapshot、chat-agent binding 和 subscribe/cancel/start turn 命令。
+- protocol roundtrip 覆盖 `AgentId`、`AgentTurnId`、Agent snapshot、chat metadata 中的 Agent 关联和 subscribe/cancel/start turn 命令。
 - wire contract 覆盖新增字段和版本升级。
+- protocol 和 ChatStore 测试覆盖每个 chat metadata 中存在稳定 `agent_id`，且 chat 与 agent 为一一对应关系。
 - protocol 外部命令不接受 `run_id` 作为 Agent 操作目标；`run_id` 或 `turn_id` 只允许作为事件排序、去重和调试字段。
 - 兼容旧 `agent.invoke` 时，不允许旧字段让前端静默使用错误模型；已绑定 chat 的不同模型请求必须被后端忽略并有测试覆盖。
 - protocol 类型保持 transport-neutral，不引入 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
 
-## Phase 3 — WorkspaceAgentRuntime 后端边界
+## Phase 4 — WorkspaceAgentRuntime 后端边界
 
 ### 输入
 
-- Phase 2 protocol 结构。
+- Phase 3 protocol 结构。
 - `crates/app-server-host/src/dispatcher.rs`
 - `crates/app-server-host/src/websocket.rs`
 - `crates/app-server-core/src/chat.rs`
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
-- 保护 Phase 2 的 `agent_id` 外部目标约束。
-- 保护 Chat 模型绑定持久化语义。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
+- 保护 Phase 3 的 `agent_id` 外部目标约束。
+- 保护 `chats.json` 中的 Chat 模型绑定持久化语义。
 - 保护 WebSocket 不直接拥有 Agent 生命周期。
 
 ### 操作步骤
@@ -169,43 +211,45 @@
 - 后端测试证明同一 workspace 同时启动第二个 active turn 会返回后端错误。
 - 后端 runtime 不把 WebSocket connection id、WebSocket push handle 或前端本地模型状态作为 Agent 身份来源。
 
-## Phase 4 — Chat 模型绑定与后端模型强制
+## Phase 5 — Chat 模型绑定与后端模型强制
 
 ### 输入
 
-- Phase 3 runtime。
+- Phase 4 runtime。
 - `crates/app-server-host/src/dispatcher.rs`
 - `crates/app-server-core/src/chat.rs`
 - `crates/app-server-core/src/llm/config.rs`
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
-- 保护 Phase 2/3 的稳定 `agent_id` 和 runtime 生命周期边界。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
+- 保护 Phase 3/4 的稳定 `agent_id` 和 runtime 生命周期边界。
 - 保护 provider/model registry、provider type、`base_url` 和 `Option<String>` 参数快照语义。
 
 ### 操作步骤
 
-1. 首次 Agent turn 前根据当前请求模型快照创建 `ChatAgentBinding`。
-2. 将 binding 写入持久状态，保证刷新页面或 host 重启后可恢复。
+1. 首次 Agent turn 前根据当前请求模型快照创建绑定模型状态。
+2. 将绑定模型写入 `chats.json` 对应 chat metadata，保证刷新页面或 host 重启后可恢复。
 3. 后续同 chat 的 Agent turn 从 binding 读取模型，不使用前端传入的不同模型。
 4. 保持 reasoning 参数的一层 `Option<String>` 语义：`None` 不发送，`Some(String)` 原样发送。
 5. Agent snapshot 返回绑定模型和模型控件只读原因。
 
 ### 验收标准
 
-- 测试覆盖空 chat 首次 turn 使用请求模型并创建 binding。
+- 测试覆盖空 chat 首次 turn 使用请求模型并写入 `chats.json.bound_model`。
 - 测试覆盖已绑定 chat 后续 turn 忽略不同请求模型。
 - 测试覆盖刷新或新 dispatcher 读取同一 chat 时恢复绑定模型。
+- 测试覆盖绑定模型状态写入 `chats.json`，不依赖 Chat JSONL message 推断。
 - 测试覆盖前端收到 binding 状态后把模型控件设为只读。
 - 测试覆盖 reasoning `None` 不写入 provider request，`Some(String)` 原样写入 provider request。
 - 测试覆盖后端不会生成默认 reasoning 字符串，也不会引入嵌套 Option 结构。
 
-## Phase 5 — Event log、Snapshot 与重连恢复
+## Phase 6 — Event log、Snapshot 与重连恢复
 
 ### 输入
 
-- Phase 3 runtime。
+- Phase 4 runtime。
 - `crates/studio-common/src/managed_client/*`
 - `crates/studio-web-wasm/src/wasm_bridge/*`
 - `packages/studio-web/src/state/protocol-store.ts`
@@ -213,9 +257,10 @@
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
-- 保护 Phase 3 的多 subscriber 观察语义。
-- 保护 Phase 4 的 chat 模型绑定语义。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
+- 保护 Phase 4 的多 subscriber 观察语义。
+- 保护 Phase 5 的 chat 模型绑定语义。
 
 ### 操作步骤
 
@@ -231,20 +276,22 @@
 - 测试覆盖两个 WebSocket observer 同时收到同一个 Agent 的事件。
 - 测试覆盖第二个 WebSocket observer 对同一 `agent_id` 执行 snapshot / cancel 后，所有 observer 看到一致状态。
 - 测试覆盖前端刷新后仍显示 active Agent 正在工作。
+- 测试覆盖前端刷新后从 `chats.json.active_chat_id` 恢复当前 chat，并订阅该 chat 对应的 `agent_id`。
 - 测试覆盖 done 后刷新页面能看到最终 Chat history 和 Agent 状态摘要。
 - `studio-common` 不引入 `app-server-transport`、浏览器 API 或平台事件循环依赖。
 - Web 侧只根据 protocol snapshot / event 更新展示状态，不直接读取后端状态文件。
 
-## Phase 6 — Idle 资源释放
+## Phase 7 — Idle 资源释放
 
 ### 输入
 
-- Phase 3 runtime。
-- Phase 5 event log 与 snapshot。
+- Phase 4 runtime。
+- Phase 6 event log 与 snapshot。
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
 - 保护 active Agent 断线继续运行。
 - 保护多 subscriber 观察同一个 Agent。
 
@@ -258,11 +305,11 @@
 ### 验收标准
 
 - 测试覆盖 active turn 完成后 runtime 不再持有 active turn handle。
-- 测试覆盖 idle 且无 subscriber 时 runtime 不再持有 Agent 运行对象，只能从 chat binding、event log 和 chat history 恢复 snapshot。
+- 测试覆盖 idle 且无 subscriber 时 runtime 不再持有 Agent 运行对象，只能从 `chats.json`、event log 和 chat history 恢复 snapshot。
 - 测试覆盖 active 且无 subscriber 时 turn 继续运行。
 - 测试覆盖新 subscriber 读取 idle Agent snapshot 不创建 LLM client。
 
-## Phase 7 — Async / 阻塞路径复核与最终验证
+## Phase 8 — Async / 阻塞路径复核与最终验证
 
 ### 输入
 
@@ -274,8 +321,9 @@
 
 ### 前序目标保护
 
-- 保护 Phase 1 的 provider type 与 `base_url` 产品配置语义。
-- 保护 Phase 2-6 的 Agent 生命周期与 WebSocket 生命周期分离。
+- 保护 Phase 1 的后端随机 `chat_id`、`chats.json` 权威状态和 chat=agent 身份关系。
+- 保护 Phase 2 的 provider type 与 `base_url` 产品配置语义。
+- 保护 Phase 3-7 的 Agent 生命周期与 WebSocket 生命周期分离。
 - 保护当前外部工具只能通过 app server 管理的边界。
 
 ### 操作步骤
@@ -296,6 +344,7 @@
 - `git diff --check` 与 `git diff --cached --check` 通过。
 - 搜索确认 Agent / WebSocket 主链路未新增手写线程或同步阻塞外部命令。
 - 搜索确认产品文档和示例配置不要求迁移或读取根目录 `llm.toml`。
+- 测试确认 chat id 不由 title、文件名或路径派生，Chat list 和当前 chat 来自 `chats.json`。
 - 搜索确认 `app-server-protocol` 不依赖 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
 - 搜索确认 `studio-common` 不依赖 `app-server-transport`、浏览器 API 或平台事件循环。
 - 确认 `plan-00-result.md` 已记录每个 Phase 的执行结果、review 结论、修正摘要和遗留风险。

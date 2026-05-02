@@ -9,6 +9,7 @@
 ## 当前行为核对
 
 - 新建 chat 尚无消息时，前端可以通过后端返回的 `agent_model_registry` 选择模型。
+- 当前 Chat session id 由 title 派生，并通过 `chats/<session_id>.jsonl` 文件名反推出 id 和 title；该身份模型不满足产品语义。
 - 当前模型选择是 WebSocket dispatcher 级运行时状态，不是 chat 级绑定状态。
 - 发送消息时，前端会把当前模型快照随 `agent.invoke` 发送给后端；后端直接使用请求中的 provider/model/reasoning/service 参数。
 - Chat history 当前没有持久化 chat 与模型的绑定关系。
@@ -21,6 +22,9 @@
 - Agent 生命周期完全独立于 WebSocket 连接生命周期。
 - WebSocket、用户、未来其他消费者只通过消息与 Agent runtime 共享状态。
 - 多个 WebSocket connection 可以同时观察并操作同一个 Agent。
+- Chat id 由后端随机生成，不能来自 title 或文件名。
+- 产品语义中 chat 等同于 agent：每个 chat 拥有同一个稳定 `agent_id`，外部 Agent 操作以该 `agent_id` 为目标。
+- Workspace 根目录 `chats.json` 是 chat 列表、显示顺序、当前 chat 和 chat metadata 的权威状态。
 - 外部操作目标始终是稳定的 `agent_id`，不是 `run_id`。
 - 一个 chat 首次发消息时绑定模型；绑定后同 chat 的后续消息必须使用同一模型，前端传入的模型变化不影响该 chat。
 - 前端刷新或切换 chat 不影响 active Agent 的工作；重新连接后可以恢复当前 Agent 状态、历史事件和后续实时事件。
@@ -39,6 +43,24 @@
 
 ```rust
 pub struct AgentId(pub String);
+
+pub struct ChatIndex {
+    pub version: u32,
+    pub active_chat_id: Option<ChatSessionId>,
+    pub chats: Vec<ChatIndexEntry>,
+}
+
+pub struct ChatIndexEntry {
+    pub chat_id: ChatSessionId,
+    pub agent_id: AgentId,
+    pub title: String,
+    pub messages_path: PathHandle,
+    pub archived: bool,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub related_files: Vec<PathHandle>,
+    pub bound_model: Option<BoundAgentModel>,
+}
 
 pub struct AgentRuntimeInstance {
     pub agent_id: AgentId,
@@ -64,7 +86,21 @@ pub struct BoundAgentModel {
 }
 ```
 
-`AgentRuntimeInstance` 是后端 workspace 级运行对象，只在 Agent active 或仍有 subscriber 需要观察运行态时存在。`ActiveAgentTurn` 只在 LLM 正在输出、tool call 正在执行、或取消正在传播时存在。Agent idle 且没有 subscriber 后，runtime 必须 drop `AgentRuntimeInstance`，只通过 chat binding、event log 和 chat history 保留可恢复状态。
+`AgentRuntimeInstance` 是后端 workspace 级运行对象，只在 Agent active 或仍有 subscriber 需要观察运行态时存在。`ActiveAgentTurn` 只在 LLM 正在输出、tool call 正在执行、或取消正在传播时存在。Agent idle 且没有 subscriber 后，runtime 必须 drop `AgentRuntimeInstance`，只通过 `chats.json`、event log 和 chat history 保留可恢复状态。
+
+## Chat identity 与 chats.json
+
+Chat id 必须由后端随机生成，作为 opaque id 使用。Title、显示顺序、当前 chat、归档状态、关联文件、更新时间和绑定模型都属于 metadata，不得参与 id 生成。
+
+Workspace 根目录的 `chats.json` 是 chat 状态权威来源：
+
+- `chats.json` 记录所有 chat 的显示顺序。
+- 新建 chat 时，后端生成随机 `chat_id` 和对应 `agent_id`，写入 `chats.json`，再创建消息 JSONL。
+- 切换 chat 时，后端更新 `chats.json.active_chat_id`。
+- Chat 列表从 `chats.json` 读取，不能通过扫描 JSONL 文件名反推出 id 或 title。
+- 消息 JSONL 路径只是内部存储路径，由 `chats.json` 的 `messages_path` 指向。
+- Chat 与 Agent 是同一产品实体的两面：Chat 承载对话和 metadata，Agent 承载运行时与事件；二者通过 `chat_id` 和 `agent_id` 在 `chats.json` 中稳定关联。
+- Chat 归档、重命名、排序调整不得改变 `chat_id` 或 `agent_id`。
 
 ## Reasoning 参数语义
 
@@ -102,7 +138,7 @@ Provider type 固定支持三类产品语义：
 ```rust
 pub struct WorkspaceAgentRuntime {
     active_agents: HashMap<AgentId, AgentRuntimeInstance>,
-    chat_bindings: ChatAgentBindingStore,
+    chat_index: ChatIndexStore,
     subscribers: AgentSubscriberRegistry,
     event_log: AgentEventLog,
 }
@@ -144,14 +180,14 @@ pub enum AgentCommand {
 ## Chat 与模型绑定
 
 - Chat 首次发送消息前没有绑定模型，前端可以修改当前候选模型。
-- 首次 `StartTurn` 前，后端用候选模型创建 `ChatAgentBinding`。
-- `ChatAgentBinding` 必须持久化，保证刷新页面或重启 host 后仍可恢复。
+- 首次 `StartTurn` 前，后端把候选模型写入 `chats.json` 对应 chat metadata 的 `bound_model`。
+- `bound_model` 必须持久化，保证刷新页面或重启 host 后仍可恢复。
 - 已绑定 chat 的后续请求忽略前端传入的 provider/model/reasoning/service 参数，统一使用绑定模型。
 - 前端切换到已绑定 chat 后，模型控件显示绑定模型并进入只读状态。
 
 ## 多 WebSocket 观察
 
-每个 WebSocket connection 注册为 runtime subscriber。Agent 产生事件后先写入 runtime event log，再广播给当前所有 subscriber。多个 WebSocket connection 可以对同一个 `agent_id` 发起 snapshot、cancel 和 start turn 等命令；runtime 必须以 `agent_id` 和 chat binding 为准处理命令，不能让不同 connection 的本地模型状态覆盖 Agent 状态。
+每个 WebSocket connection 注册为 runtime subscriber。Agent 产生事件后先写入 runtime event log，再广播给当前所有 subscriber。多个 WebSocket connection 可以对同一个 `agent_id` 发起 snapshot、cancel 和 start turn 等命令；runtime 必须以 `agent_id` 和 `chats.json` 中的 chat metadata 为准处理命令，不能让不同 connection 的本地模型状态覆盖 Agent 状态。
 
 ```rust
 pub enum AgentEvent {
@@ -201,7 +237,7 @@ pub enum AgentEvent {
 
 - Active turn 期间持有 LLM client、provider stream、tool executor、cancel token、task handle。
 - WebSocket 断开不取消 active turn。
-- Agent idle 且 subscriber 数为 0 时，drop Agent 运行对象，释放所有运行资源，仅保留 chat binding、event log、chat history 等持久状态。
+- Agent idle 且 subscriber 数为 0 时，drop Agent 运行对象，释放所有运行资源，仅保留 `chats.json`、event log、chat history 等持久状态。
 - Agent done / failed / cancelled 后立即释放 active turn。
 - 后续连接从持久状态恢复 UI，不重新创建 LLM stream。
 
