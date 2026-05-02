@@ -195,6 +195,7 @@ fn rig_agent_config_debug_hides_api_key() {
         service_label: Some("default".into()),
         native_web_search: true,
         anthropic_version: None,
+        base_url: None,
     };
     let debug = format!("{:?}", config);
     assert!(!debug.contains("sk-secret-key-12345"));
@@ -210,9 +211,10 @@ fn agent_provider_kind_as_str_matches_config_values() {
         "openai_responses"
     );
     assert_eq!(
-        AgentProviderKind::AnthropicMessages.as_str(),
-        "anthropic_messages"
+        AgentProviderKind::OpenAiCompletions.as_str(),
+        "openai_completions"
     );
+    assert_eq!(AgentProviderKind::Anthropic.as_str(), "anthropic");
 }
 
 #[test]
@@ -253,9 +255,19 @@ fn rig_agent_additional_params_include_supported_openai_service_label() {
 }
 
 #[test]
+fn rig_agent_additional_params_omit_response_only_params_for_openai_completions() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::OpenAiCompletions;
+    config.reasoning_effort = Some("high".into());
+    config.service_label = Some("flex".into());
+
+    assert!(rig_agent_additional_params(&config).is_none());
+}
+
+#[test]
 fn rig_agent_additional_params_include_anthropic_thinking_and_web_search() {
     let mut config = test_config(true);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.service_label = Some("fast".into());
 
     let params = rig_agent_additional_params(&config).expect("anthropic params");
@@ -269,7 +281,7 @@ fn rig_agent_additional_params_include_anthropic_thinking_and_web_search() {
 #[test]
 fn rig_agent_additional_params_clamps_anthropic_thinking_below_max_tokens() {
     let mut config = test_config(true);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.reasoning_effort = Some("xhigh".into());
     config.max_tokens = 8192;
 
@@ -281,7 +293,7 @@ fn rig_agent_additional_params_clamps_anthropic_thinking_below_max_tokens() {
 #[test]
 fn rig_agent_additional_params_omits_anthropic_thinking_when_budget_too_small() {
     let mut config = test_config(true);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.reasoning_effort = Some("low".into());
     config.max_tokens = 1024;
 
@@ -294,7 +306,7 @@ fn rig_agent_additional_params_omits_anthropic_thinking_when_budget_too_small() 
 #[test]
 fn rig_agent_temperature_param_omits_anthropic_temperature_when_thinking_enabled() {
     let mut config = test_config(false);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.reasoning_effort = Some("high".into());
 
     assert_eq!(rig_agent_temperature_param(&config), None);
@@ -303,7 +315,7 @@ fn rig_agent_temperature_param_omits_anthropic_temperature_when_thinking_enabled
 #[test]
 fn rig_agent_temperature_param_keeps_anthropic_temperature_without_thinking() {
     let mut config = test_config(false);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.reasoning_effort = Some("low".into());
     config.max_tokens = 1024;
 
@@ -313,7 +325,7 @@ fn rig_agent_temperature_param_keeps_anthropic_temperature_without_thinking() {
 #[test]
 fn rig_agent_temperature_param_keeps_anthropic_temperature_for_unknown_effort() {
     let mut config = test_config(false);
-    config.provider_kind = AgentProviderKind::AnthropicMessages;
+    config.provider_kind = AgentProviderKind::Anthropic;
     config.reasoning_effort = Some("experimental".into());
 
     assert!(rig_agent_additional_params(&config).is_none());
@@ -402,7 +414,7 @@ service_label = "fast"
 
 [[providers]]
 id = "anthropic"
-kind = "anthropic_messages"
+kind = "anthropic"
 api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
 "#,
     )
@@ -433,7 +445,7 @@ api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
     assert_eq!(openai.kind, AgentProviderKind::OpenAiResponses);
     assert_eq!(openai.api_key.as_deref(), Some("sk-openai"));
     assert!(openai.discover_models);
-    assert_eq!(anthropic.kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(anthropic.kind, AgentProviderKind::Anthropic);
     assert_eq!(anthropic.anthropic_version.as_deref(), Some("2023-06-01"));
     assert_eq!(active.reasoning_effort.as_deref(), Some("high"));
     assert_eq!(active.service_label.as_deref(), Some("fast"));
@@ -453,7 +465,7 @@ active_model = "claude-sonnet"
 
 [[providers]]
 id = "anthropic"
-kind = "anthropic_messages"
+kind = "anthropic"
 api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
 
 [[providers.models]]
@@ -476,7 +488,7 @@ reasoning_effort = "high"
         .expect("config should load")
         .expect("config should be present");
 
-    assert_eq!(config.provider_kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(config.provider_kind, AgentProviderKind::Anthropic);
     assert_eq!(config.anthropic_version.as_deref(), Some("2023-06-01"));
     assert_eq!(config.model, "claude-sonnet");
     assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
@@ -530,7 +542,7 @@ active_model = "claude-sonnet"
 
 [[providers]]
 id = "anthropic"
-kind = "anthropic_messages"
+kind = "anthropic"
 api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
 discover_models = false
 
@@ -553,8 +565,243 @@ id = "claude-sonnet"
         .expect("config should load")
         .expect("config should be present");
 
-    assert_eq!(config.provider_kind, AgentProviderKind::AnthropicMessages);
+    assert_eq!(config.provider_kind, AgentProviderKind::Anthropic);
     assert_eq!(config.model, "claude-sonnet");
+}
+
+#[tokio::test]
+async fn rig_agent_config_supports_three_provider_types() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai_responses"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai_responses"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers]]
+id = "openai_completions"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-4o"
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+
+[[providers.models]]
+id = "claude-sonnet"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+
+    assert_eq!(
+        registry.provider("openai_responses").unwrap().kind,
+        AgentProviderKind::OpenAiResponses
+    );
+    assert_eq!(
+        registry.provider("openai_completions").unwrap().kind,
+        AgentProviderKind::OpenAiCompletions
+    );
+    assert_eq!(
+        registry.provider("anthropic").unwrap().kind,
+        AgentProviderKind::Anthropic
+    );
+}
+
+#[tokio::test]
+async fn rig_agent_config_resolves_provider_base_urls() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai_default"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai_default"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers]]
+id = "openai_no_slash"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "https://openai-compatible.example/api"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers]]
+id = "openai_slash"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "https://openai-compatible.example/api/"
+
+[[providers.models]]
+id = "gpt-4o"
+
+[[providers]]
+id = "openai_raw"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "https://openai-compatible.example/raw#"
+
+[[providers.models]]
+id = "gpt-5.2"
+
+[[providers]]
+id = "anthropic_default"
+kind = "anthropic"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+
+[[providers.models]]
+id = "claude-sonnet"
+
+[[providers]]
+id = "anthropic_custom"
+kind = "anthropic"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+base_url = "https://anthropic-proxy.example/api"
+
+[[providers.models]]
+id = "claude-sonnet"
+
+[[providers]]
+id = "anthropic_raw"
+kind = "anthropic"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+base_url = "https://anthropic-proxy.example/raw#"
+
+[[providers.models]]
+id = "claude-sonnet"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+
+    assert_eq!(registry.provider("openai_default").unwrap().base_url, None);
+    assert_eq!(
+        registry
+            .provider("openai_no_slash")
+            .unwrap()
+            .base_url
+            .as_deref(),
+        Some("https://openai-compatible.example/api/v1")
+    );
+    assert_eq!(
+        registry
+            .provider("openai_slash")
+            .unwrap()
+            .base_url
+            .as_deref(),
+        Some("https://openai-compatible.example/api/")
+    );
+    assert_eq!(
+        registry.provider("openai_raw").unwrap().base_url.as_deref(),
+        Some("https://openai-compatible.example/raw")
+    );
+    assert_eq!(
+        registry.provider("anthropic_default").unwrap().base_url,
+        None
+    );
+    assert_eq!(
+        registry
+            .provider("anthropic_custom")
+            .unwrap()
+            .base_url
+            .as_deref(),
+        Some("https://anthropic-proxy.example/api")
+    );
+    assert_eq!(
+        registry
+            .provider("anthropic_raw")
+            .unwrap()
+            .base_url
+            .as_deref(),
+        Some("https://anthropic-proxy.example/raw")
+    );
+}
+
+#[tokio::test]
+async fn rig_agent_config_selection_uses_resolved_base_url() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "https://openai-compatible.example/api"
+
+[[providers.models]]
+id = "gpt-5.2"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+
+    let config = rig_config_from_registry_selection(
+        registry,
+        &RigAgentConfigSelection {
+            provider_id: Some("openai".into()),
+            model_id: Some("gpt-5.2".into()),
+            reasoning_effort: None,
+            service_label: None,
+        },
+    )
+    .expect("selected model config should build");
+
+    assert_eq!(
+        config.base_url.as_deref(),
+        Some("https://openai-compatible.example/api/v1")
+    );
+}
+
+#[tokio::test]
+async fn rig_agent_config_does_not_apply_native_web_search_for_openai_completions() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "gpt-4o"
+
+[[providers]]
+id = "openai"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "gpt-4o"
+native_web_search = true
+web_search_supported = true
+"#,
+    )
+    .await
+    .expect("config should load");
+    let config = rig_config_from_registry_selection(
+        registry,
+        &RigAgentConfigSelection {
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
+        },
+    )
+    .expect("active config should build");
+
+    assert!(!config.native_web_search);
 }
 
 #[tokio::test]
@@ -635,7 +882,7 @@ active_model = "claude-sonnet"
 
 [[providers]]
 id = "anthropic"
-kind = "anthropic_messages"
+kind = "anthropic"
 api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
 anthropic_version = ""
 
@@ -724,7 +971,7 @@ id = "gpt-5.2"
 
 [[providers]]
 id = "anthropic"
-kind = "anthropic_messages"
+kind = "anthropic"
 api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
 
 [[providers.models]]
@@ -1039,6 +1286,7 @@ fn test_config(native_web_search: bool) -> RigAgentConfig {
         service_label: Some("default".into()),
         native_web_search,
         anthropic_version: None,
+        base_url: None,
     }
 }
 

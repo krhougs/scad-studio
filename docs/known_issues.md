@@ -247,7 +247,7 @@
 - 可能的解法：
   - 为 Rig streaming、tool call、cancel 和 provider error mapping 建立更细的 provider mock / test support。
   - 将 provider 的认证失败、限流和 hosted tool 不可用错误映射为更具体的协议错误与 Chat 事件。
-- 当前处理方式：生产 Agent 入口走 Rig provider 路径，当前支持 OpenAI Responses 与 Anthropic Messages。推荐配置入口为本机私有 `agents.toml`，由 `BUDN_AGENT_CONFIG` 指向；缺少 provider 配置时返回清晰错误并保持 workspace 不变。模型原生联网搜索通过 provider hosted / server tool 接入，Web 只展示 app server protocol 暴露的 capability 与来源字段。
+- 当前处理方式：生产 Agent 入口走 Rig provider 路径，当前支持 `openai_responses`、`openai_completions` 和 `anthropic` 三类 provider。推荐配置入口为本机私有 `agents.toml`，由 `BUDN_AGENT_CONFIG` 指向；缺少 provider 配置时返回清晰错误并保持 workspace 不变。模型原生联网搜索通过支持该能力的 provider hosted / server tool 接入，Web 只展示 app server protocol 暴露的 capability 与来源字段。
 
 ## 2026-04-28 03:18:00: CadQuery output 回写仍有本地并发 TOCTOU 残余风险
 

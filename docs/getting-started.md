@@ -134,9 +134,12 @@ cp agents.example.toml agents.toml
 printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
 ```
 
-`agents.toml` 支持多个 provider 和多个模型。`discover_models` 默认开启，provider 发现到的模型会与手动配置模型合并；同 id 手动模型只覆盖显式字段。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
+`agents.toml` 支持 `openai_responses`、`openai_completions` 和 `anthropic` 三类 provider，也支持多个模型。`discover_models` 默认开启，provider 发现到的模型会与手动配置模型合并；同 id 手动模型只覆盖显式字段。OpenAI family 的 `base_url` 未以 `/` 结尾时会补全 `/v1`，以 `/` 结尾时保留原路径，以 `#` 结尾时去掉 `#` 后原样使用；Anthropic 的 `base_url` 不自动追加 `/v1`。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
 
 `reasoning_effort` 和 `service_label` 既可以在 `agents.toml` 中作为模型默认值配置，也可以在 Web Chat header 中运行时切换。运行时切换只影响当前 host 进程，不会写回 `agents.toml`。
+`openai_completions` 面向 Chat Completions 兼容 endpoint，不注入 OpenAI Responses hosted web search、Responses reasoning 或 service tier 参数。
+
+根目录 `llm.toml` 仅保留为本地开发历史配置，不作为 budn' 产品配置入口；新增 provider 配置应使用 `agents.toml`。
 
 手动试验不同工作目录：
 

@@ -16,6 +16,7 @@ pub struct RigAgentConfig {
     pub service_label: Option<String>,
     pub native_web_search: bool,
     pub anthropic_version: Option<String>,
+    pub base_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -30,15 +31,18 @@ pub struct RigAgentConfigSelection {
 pub enum AgentProviderKind {
     #[serde(rename = "openai_responses")]
     OpenAiResponses,
-    #[serde(rename = "anthropic_messages")]
-    AnthropicMessages,
+    #[serde(rename = "openai_completions")]
+    OpenAiCompletions,
+    #[serde(rename = "anthropic")]
+    Anthropic,
 }
 
 impl AgentProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAiResponses => "openai_responses",
-            Self::AnthropicMessages => "anthropic_messages",
+            Self::OpenAiCompletions => "openai_completions",
+            Self::Anthropic => "anthropic",
         }
     }
 }
@@ -99,6 +103,7 @@ pub struct ResolvedAgentProvider {
     pub api_key: Option<String>,
     pub api_key_env: String,
     pub anthropic_version: Option<String>,
+    pub base_url: Option<String>,
     pub discover_models: bool,
     pub model_discovery_status: ModelDiscoveryStatus,
     defaults: AgentConfigDefaults,
@@ -193,6 +198,7 @@ impl LegacyRigAgentConfigFile {
             service_label: None,
             native_web_search: self.native_web_search.unwrap_or(true),
             anthropic_version: None,
+            base_url: None,
         })
     }
 }
@@ -219,6 +225,7 @@ struct AgentProviderFile {
     id: String,
     kind: AgentProviderKind,
     api_key_env: String,
+    base_url: Option<String>,
     anthropic_version: Option<String>,
     discover_models: Option<bool>,
     #[serde(default)]
@@ -289,12 +296,14 @@ fn resolve_provider(
     let api_key_env = require_non_empty("api_key_env", provider.api_key_env)?;
     let api_key = read_api_key_env(&api_key_env);
     let models = resolve_models(provider.models, &provider.kind, defaults)?;
+    let base_url = resolve_provider_base_url(&provider.kind, provider.base_url)?;
     Ok(ResolvedAgentProvider {
         id,
         kind: provider.kind.clone(),
         api_key,
         api_key_env,
         anthropic_version: resolve_anthropic_version(&provider.kind, provider.anthropic_version),
+        base_url,
         discover_models: provider.discover_models.unwrap_or(defaults.discover_models),
         model_discovery_status: if provider.discover_models.unwrap_or(defaults.discover_models) {
             ModelDiscoveryStatus::NotStarted
@@ -328,9 +337,10 @@ fn resolve_model(
     if !seen.insert(id.clone()) {
         return config_error(format!("duplicate model id `{id}`"));
     }
-    let web_search_supported = model
-        .web_search_supported
-        .unwrap_or_else(|| provider_default_web_search_supported(kind));
+    let web_search_supported = provider_default_web_search_supported(kind)
+        && model
+            .web_search_supported
+            .unwrap_or_else(|| provider_default_web_search_supported(kind));
     let explicit = ModelExplicitFields {
         max_tokens: model.max_tokens.is_some(),
         temperature: model.temperature.is_some(),
@@ -508,6 +518,7 @@ fn load_from_env() -> Option<RigAgentConfig> {
             .map(|_| native_web_search)
             .unwrap_or(true),
         anthropic_version: None,
+        base_url: None,
     })
 }
 
@@ -578,24 +589,45 @@ pub async fn discover_provider_models(
     let discovery = async {
         match provider.kind {
             AgentProviderKind::OpenAiResponses => {
-                let client = rig::providers::openai::Client::new(api_key)
-                    .map_err(|error| error.to_string())?;
+                let mut builder = rig::providers::openai::Client::builder().api_key(api_key);
+                if let Some(base_url) = provider.base_url.as_deref() {
+                    builder = builder.base_url(base_url);
+                }
+                let client = builder.build().map_err(|error| error.to_string())?;
                 let models = client
                     .list_models()
                     .await
                     .map_err(|error| error.to_string())?;
                 Ok(models_to_discovered(models.data))
             }
-            AgentProviderKind::AnthropicMessages => {
+            AgentProviderKind::OpenAiCompletions => {
+                let mut builder =
+                    rig::providers::openai::CompletionsClient::builder().api_key(api_key);
+                if let Some(base_url) = provider.base_url.as_deref() {
+                    builder = builder.base_url(base_url);
+                }
+                let client = builder
+                    .build()
+                    .map_err(|error| error.to_string())?
+                    .responses_api();
+                let models = client
+                    .list_models()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(models_to_discovered(models.data))
+            }
+            AgentProviderKind::Anthropic => {
                 let version = provider
                     .anthropic_version
                     .as_deref()
                     .unwrap_or("2023-06-01");
-                let client = rig::providers::anthropic::Client::builder()
+                let mut builder = rig::providers::anthropic::Client::builder()
                     .api_key(api_key.to_owned())
-                    .anthropic_version(version)
-                    .build()
-                    .map_err(|error| error.to_string())?;
+                    .anthropic_version(version);
+                if let Some(base_url) = provider.base_url.as_deref() {
+                    builder = builder.base_url(base_url);
+                }
+                let client = builder.build().map_err(|error| error.to_string())?;
                 let models = client
                     .list_models()
                     .await
@@ -656,6 +688,7 @@ fn registry_from_openai_model(api_key: String, model: ResolvedAgentModel) -> Age
             api_key: Some(api_key),
             api_key_env: "BUDN_AGENT_OPENAI_API_KEY".into(),
             anthropic_version: None,
+            base_url: None,
             discover_models: true,
             model_discovery_status: ModelDiscoveryStatus::NotStarted,
             defaults,
@@ -749,6 +782,7 @@ pub fn rig_config_from_registry_selection(
         },
         native_web_search: model.native_web_search && model.web_search_supported,
         anthropic_version: provider.anthropic_version.clone(),
+        base_url: provider.base_url.clone(),
     })
 }
 
@@ -819,18 +853,38 @@ fn validate_anthropic_version(
     if version.trim().is_empty() {
         return config_error("anthropic_version cannot be empty");
     }
-    if kind != &AgentProviderKind::AnthropicMessages {
-        return config_error("anthropic_version can only be used by anthropic_messages providers");
+    if kind != &AgentProviderKind::Anthropic {
+        return config_error("anthropic_version can only be used by anthropic providers");
     }
     Ok(())
 }
 
 fn resolve_anthropic_version(kind: &AgentProviderKind, version: Option<String>) -> Option<String> {
     match kind {
-        AgentProviderKind::AnthropicMessages => {
-            non_empty(version).or_else(|| Some("2023-06-01".into()))
+        AgentProviderKind::Anthropic => non_empty(version).or_else(|| Some("2023-06-01".into())),
+        AgentProviderKind::OpenAiResponses | AgentProviderKind::OpenAiCompletions => None,
+    }
+}
+
+fn resolve_provider_base_url(
+    kind: &AgentProviderKind,
+    base_url: Option<String>,
+) -> Result<Option<String>, RigAgentConfigError> {
+    let Some(base_url) = non_empty(base_url) else {
+        return Ok(None);
+    };
+    if let Some(raw) = base_url.strip_suffix('#') {
+        return require_non_empty("base_url", raw.to_owned()).map(Some);
+    }
+    match kind {
+        AgentProviderKind::OpenAiResponses | AgentProviderKind::OpenAiCompletions => {
+            if base_url.ends_with('/') {
+                Ok(Some(base_url))
+            } else {
+                Ok(Some(format!("{base_url}/v1")))
+            }
         }
-        AgentProviderKind::OpenAiResponses => None,
+        AgentProviderKind::Anthropic => Ok(Some(base_url)),
     }
 }
 
@@ -840,7 +894,8 @@ fn read_api_key_env(key: &str) -> Option<String> {
 
 fn provider_default_web_search_supported(kind: &AgentProviderKind) -> bool {
     match kind {
-        AgentProviderKind::OpenAiResponses | AgentProviderKind::AnthropicMessages => true,
+        AgentProviderKind::OpenAiResponses | AgentProviderKind::Anthropic => true,
+        AgentProviderKind::OpenAiCompletions => false,
     }
 }
 

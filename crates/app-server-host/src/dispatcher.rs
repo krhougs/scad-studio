@@ -1600,11 +1600,10 @@ fn active_reasoning_effort_applied(
     };
     match provider_kind {
         Some(app_server_core::llm::AgentProviderKind::OpenAiResponses) => true,
-        Some(app_server_core::llm::AgentProviderKind::AnthropicMessages) => {
-            model.is_some_and(|model| {
-                anthropic_thinking_budget_tokens(effort, model.max_tokens).is_some()
-            })
-        }
+        Some(app_server_core::llm::AgentProviderKind::Anthropic) => model.is_some_and(|model| {
+            anthropic_thinking_budget_tokens(effort, model.max_tokens).is_some()
+        }),
+        Some(app_server_core::llm::AgentProviderKind::OpenAiCompletions) => false,
         None => false,
     }
 }
@@ -2445,7 +2444,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
         };
 
-        append_agent_capability_meta(&workspace_root, &run, "anthropic_messages", true).await;
+        append_agent_capability_meta(&workspace_root, &run, "anthropic", true).await;
 
         let history = store
             .history(&created.session_id, None)
@@ -2462,7 +2461,7 @@ mod tests {
             .next()
             .expect("capability meta should be present");
         assert_eq!(value["type"], "agent_run_capabilities");
-        assert_eq!(value["provider"], "anthropic_messages");
+        assert_eq!(value["provider"], "anthropic");
         assert_eq!(value["native_web_search_enabled"], true);
         assert_eq!(meta.run_id.as_deref(), Some("agent-1"));
     }

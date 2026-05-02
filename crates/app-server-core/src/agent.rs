@@ -107,7 +107,7 @@ pub async fn run_rig_agent_turn_with_config(
 ) -> Result<RigAgentTurnResult, RigAgentError> {
     match config.provider_kind {
         AgentProviderKind::OpenAiResponses => {
-            run_openai_rig_agent_turn_with_config(
+            run_openai_responses_rig_agent_turn_with_config(
                 input,
                 config,
                 tool_executor,
@@ -117,7 +117,18 @@ pub async fn run_rig_agent_turn_with_config(
             )
             .await
         }
-        AgentProviderKind::AnthropicMessages => {
+        AgentProviderKind::OpenAiCompletions => {
+            run_openai_completions_rig_agent_turn_with_config(
+                input,
+                config,
+                tool_executor,
+                tool_context,
+                tool_observer,
+                callbacks,
+            )
+            .await
+        }
+        AgentProviderKind::Anthropic => {
             run_anthropic_rig_agent_turn_with_config(
                 input,
                 config,
@@ -131,7 +142,7 @@ pub async fn run_rig_agent_turn_with_config(
     }
 }
 
-async fn run_openai_rig_agent_turn_with_config(
+async fn run_openai_responses_rig_agent_turn_with_config(
     input: AgentTurnInput,
     config: RigAgentConfig,
     tool_executor: Arc<dyn ToolExecutor>,
@@ -139,10 +150,64 @@ async fn run_openai_rig_agent_turn_with_config(
     tool_observer: &dyn AgentToolObserver,
     callbacks: RigAgentCallbacks,
 ) -> Result<RigAgentTurnResult, RigAgentError> {
-    let client =
-        rig::providers::openai::Client::new(&config.api_key).map_err(|error| RigAgentError {
-            message: format!("Cannot create Rig OpenAI Responses client: {error}"),
-        })?;
+    let mut builder = rig::providers::openai::Client::builder().api_key(&config.api_key);
+    if let Some(base_url) = config.base_url.as_deref() {
+        builder = builder.base_url(base_url);
+    }
+    let client = builder.build().map_err(|error| RigAgentError {
+        message: format!("Cannot create Rig OpenAI Responses client: {error}"),
+    })?;
+    run_streaming_rig_agent_turn(
+        input,
+        config,
+        client,
+        tool_executor,
+        tool_context,
+        tool_observer,
+        callbacks,
+    )
+    .await
+}
+
+async fn run_openai_completions_rig_agent_turn_with_config(
+    input: AgentTurnInput,
+    config: RigAgentConfig,
+    tool_executor: Arc<dyn ToolExecutor>,
+    tool_context: AgentToolRunContext,
+    tool_observer: &dyn AgentToolObserver,
+    callbacks: RigAgentCallbacks,
+) -> Result<RigAgentTurnResult, RigAgentError> {
+    let mut builder = rig::providers::openai::CompletionsClient::builder().api_key(&config.api_key);
+    if let Some(base_url) = config.base_url.as_deref() {
+        builder = builder.base_url(base_url);
+    }
+    let client = builder.build().map_err(|error| RigAgentError {
+        message: format!("Cannot create Rig OpenAI Chat Completions client: {error}"),
+    })?;
+    run_streaming_rig_agent_turn(
+        input,
+        config,
+        client,
+        tool_executor,
+        tool_context,
+        tool_observer,
+        callbacks,
+    )
+    .await
+}
+
+async fn run_streaming_rig_agent_turn<C>(
+    input: AgentTurnInput,
+    config: RigAgentConfig,
+    client: C,
+    tool_executor: Arc<dyn ToolExecutor>,
+    tool_context: AgentToolRunContext,
+    tool_observer: &dyn AgentToolObserver,
+    callbacks: RigAgentCallbacks,
+) -> Result<RigAgentTurnResult, RigAgentError>
+where
+    C: rig::client::completion::CompletionClient + Clone + Send + Sync + 'static,
+{
     let pending_calls = Arc::new(Mutex::new(VecDeque::new()));
     let tools = rig_tools_for_context(
         tool_context.clone(),
@@ -228,13 +293,15 @@ fn anthropic_client(
     config: &RigAgentConfig,
 ) -> Result<rig::providers::anthropic::Client, RigAgentError> {
     let version = config.anthropic_version.as_deref().unwrap_or("2023-06-01");
-    rig::providers::anthropic::Client::builder()
+    let mut builder = rig::providers::anthropic::Client::builder()
         .api_key(config.api_key.clone())
-        .anthropic_version(version)
-        .build()
-        .map_err(|error| RigAgentError {
-            message: format!("Cannot create Rig Anthropic Messages client: {error}"),
-        })
+        .anthropic_version(version);
+    if let Some(base_url) = config.base_url.as_deref() {
+        builder = builder.base_url(base_url);
+    }
+    builder.build().map_err(|error| RigAgentError {
+        message: format!("Cannot create Rig Anthropic Messages client: {error}"),
+    })
 }
 
 async fn run_rig_stream_future<R, E, S, F>(
@@ -285,15 +352,18 @@ where
 
 pub fn rig_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
     match config.provider_kind {
-        AgentProviderKind::OpenAiResponses => openai_agent_additional_params(config),
-        AgentProviderKind::AnthropicMessages => anthropic_agent_additional_params(config),
+        AgentProviderKind::OpenAiResponses => openai_responses_agent_additional_params(config),
+        AgentProviderKind::OpenAiCompletions => None,
+        AgentProviderKind::Anthropic => anthropic_agent_additional_params(config),
     }
 }
 
 pub fn rig_agent_temperature_param(config: &RigAgentConfig) -> Option<f64> {
     match config.provider_kind {
-        AgentProviderKind::OpenAiResponses => Some(config.temperature),
-        AgentProviderKind::AnthropicMessages => {
+        AgentProviderKind::OpenAiResponses | AgentProviderKind::OpenAiCompletions => {
+            Some(config.temperature)
+        }
+        AgentProviderKind::Anthropic => {
             let thinking_enabled = config
                 .reasoning_effort
                 .as_deref()
@@ -304,7 +374,7 @@ pub fn rig_agent_temperature_param(config: &RigAgentConfig) -> Option<f64> {
     }
 }
 
-fn openai_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
+fn openai_responses_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
     let mut params = serde_json::Map::new();
     if let Some(effort) = config.reasoning_effort.as_deref() {
         params.insert("reasoning".into(), json!({ "effort": effort }));

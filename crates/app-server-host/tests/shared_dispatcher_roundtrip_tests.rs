@@ -227,6 +227,39 @@ async fn dispatcher_agent_model_commands_update_active_snapshot() {
     );
     assert_eq!(reasoning_only.active_service_label, None);
 
+    let completions = dispatch_agent_model_command(
+        &mut dispatcher,
+        15,
+        ClientCommand::AgentModelSelect(AgentModelSelectRequest {
+            provider_id: "openai_completions".into(),
+            model_id: "gpt-4o".into(),
+        }),
+    )
+    .await;
+    assert_eq!(completions.active_provider_id, "openai_completions");
+    assert!(!completions.active_reasoning_effort_applied);
+    assert!(!completions.active_service_label_applied);
+    assert!(completions.service_label_options.is_empty());
+    let completions_model = completions.providers[1]
+        .models
+        .iter()
+        .find(|model| model.id == "gpt-4o")
+        .expect("configured completions model");
+    assert!(completions_model.native_web_search_enabled);
+    assert!(!completions_model.native_web_search_applied);
+
+    dispatch_agent_model_command(
+        &mut dispatcher,
+        16,
+        ClientCommand::AgentModelParamsUpdate(AgentModelParamsUpdateRequest {
+            provider_id: "openai".into(),
+            model_id: "gpt-5-mini".into(),
+            reasoning_effort: Some("medium".into()),
+            service_label: None,
+        }),
+    )
+    .await;
+
     let disabled_search = reasoning_only.providers[0]
         .models
         .iter()
@@ -1433,6 +1466,19 @@ service_label = "default"
 id = "gpt-5-mini"
 native_web_search = true
 web_search_supported = false
+
+[[providers]]
+id = "openai_completions"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-4o"
+reasoning_effort = "high"
+service_label = "default"
+native_web_search = true
+web_search_supported = true
 "#
 }
 

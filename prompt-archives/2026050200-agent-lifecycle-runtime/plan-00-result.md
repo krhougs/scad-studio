@@ -3,7 +3,7 @@
 ## 当前状态
 
 - Phase 1「Chat identity 与 chats.json」已完成实现、验证、独立 review 和修正。
-- Phase 2 尚未开始。
+- Phase 2「Provider type 与 base_url 产品配置」已完成实现、验证、独立 review 和修正。
 - 本文件记录到 2026-05-02 的执行结果。
 
 ## Phase 1 完成情况
@@ -55,11 +55,52 @@
 - `bun run --cwd packages/studio-web typecheck`：通过。
 - `bun run protocol:build`：通过。
 - `git diff --check`：通过。
-- `bun run protocol:check-generated`：提交前按预期失败，因为 generated WASM 已更新但尚未写入 git index；Phase 1 commit 后需要重新运行。
+- `bun run protocol:check-generated`：Phase 1 commit 后已重新运行，通过。
+
+## Phase 2 完成情况
+
+### 实现摘要
+
+- Provider type 产品语义统一为 `openai_responses`、`openai_completions` 和 `anthropic`。
+- `agents.toml` provider 支持 `base_url`，解析后的值进入 `ResolvedAgentProvider`，并在构造 `RigAgentConfig` 时传给 Agent turn 执行路径。
+- `base_url` 解析规则已实现：未配置时使用 Rig 默认；以 `#` 结尾时去掉末尾 `#` 后原样使用；OpenAI family 无尾斜杠时补 `/v1`，有尾斜杠时保留原路径；Anthropic 不补 `/v1`。
+- 模型发现路径按 provider type 分流：OpenAI Responses 使用 `Client`，OpenAI Chat Completions 使用 `CompletionsClient` 并复用同一 `base_url` 访问 `/models`，Anthropic 使用 Anthropic builder。
+- Agent turn 执行路径按 provider type 分流：OpenAI Responses 使用 Responses client，OpenAI Chat Completions 使用 Completions client，Anthropic 使用 Anthropic client，三者均读取解析后的 `RigAgentConfig.base_url`。
+- `openai_completions` 不注入 OpenAI Responses hosted web search、Responses reasoning 或 service tier 参数；该 provider type 当前不标记 provider-native web search 为已应用。
+- `AgentModelRegistryProvider`、Web registry fixture、ChatStore 和 protocol payload 不暴露 `base_url`。
+- `agents.example.toml`、`README.md`、`docs/getting-started.md` 和 `docs/cadquery-mvp/decisions.md` 已更新为当前 provider type 语义，并说明根目录 `llm.toml` 不作为产品配置入口。
+- `docs/known_issues.md` 中旧 provider 描述已更新为当前三类 provider，避免历史记录误导后续开发。
+
+### 验收说明
+
+- 配置测试覆盖三类 provider type。
+- 配置测试覆盖 OpenAI family 未配置 `base_url`、无尾斜杠、有尾斜杠、`#` 强制原样四类路径。
+- 配置测试覆盖 Anthropic `base_url` 不追加 `/v1`，以及 `#` 强制原样。
+- 模型发现和 Agent turn 执行均使用解析后的 provider 配置；源码与测试均未发现默认 endpoint 覆盖解析后 `base_url` 的路径。
+- Chat bound model 当前仍不持久化 `base_url`；搜索确认 `base_url` 未进入 protocol registry、Web 状态、ChatStore 或 chat tests。
+- 产品文档和示例配置不要求迁移或读取根目录 `llm.toml`。
+
+### Review 记录
+
+- 第一轮独立 review 发现 `openai_completions` 复用 OpenAI Responses additional params 的高风险问题；已修复为不注入 Responses-only 参数，并补充测试与示例说明。
+- 第二轮独立 review 未发现阻塞项或高风险问题；剩余低风险为尚未使用 provider mock 做 HTTP URI 级断言。当前已通过 Rig 源码核对确认 builder 保留 `base_url`。
+
+### 验证结果
+
+- `cargo test -p app-server-core --test llm_tests`：45 passed。
+- `cargo test -p app-server-core --test chat_tests`：26 passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：23 passed。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests`：16 passed。
+- `cargo test -p app-server-protocol --test wire_payload_contract_tests`：2 passed。
+- `bun run --cwd packages/studio-web test:unit -- chat-zone.test.tsx`：40 passed；仍有两个既有 React `act(...)` 警告。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run protocol:check-generated`：通过。
+- `git diff --check`：通过。
+- `rg -n "anthropic_messages|AnthropicMessages" README.md docs agents.example.toml crates packages -g '!packages/studio-web/dist/**'`：无结果。
+- `rg -n "base_url" crates/app-server-protocol packages/studio-web/src packages/studio-web/tests/unit crates/app-server-core/src/chat.rs crates/app-server-core/tests/chat_tests.rs -g '!packages/studio-web/dist/**'`：无结果。
 
 ## 尚未执行
 
-- Phase 2 Provider type 与 `base_url` 产品配置尚未执行。
 - 尚未迁移 Agent 外部操作目标到 `agent_id`。
 - 尚未实现 workspace 级 Agent runtime、多 WebSocket observer、event log replay、snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
 - 尚未实现 chat 模型绑定和后端模型强制。
@@ -67,5 +108,6 @@
 
 ## 后续执行入口
 
-- Phase 2 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 2 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 9。
+- Phase 3 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 3 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 9。
+- Phase 3 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。

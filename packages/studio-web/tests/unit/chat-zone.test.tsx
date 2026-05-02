@@ -1240,7 +1240,7 @@ function agentModelRegistry(): NonNullable<ChatSnapshot["agent_model_registry"]>
       },
       {
         id: "anthropic",
-        kind: "anthropic_messages",
+        kind: "anthropic",
         label: "Anthropic",
         discovery: {
           enabled: true,
