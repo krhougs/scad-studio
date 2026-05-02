@@ -25,10 +25,13 @@
 11. Chat id 必须由后端随机生成，不得从 title 或文件名派生。
 12. Workspace 根目录新增 `chats.json`，由它规定 chat 的显示顺序、当前 chat 和 metadata。
 13. 产品语义中 chat 等同于 agent：每个 chat 拥有同一个稳定 `agent_id`。
-14. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
-15. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
-16. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
-17. 当前任务只写设计文档和 plan，不做实现。
+14. 前端点击 New Chat 只创建本地空草稿，不写后端状态；首次发送消息时才创建后端 chat。
+15. 首次发送时的模型参数必须放在创建 chat 的请求参数中。
+16. 需要考虑进程意外退出后的 LLM chat 状态恢复；重启后不能卡在 running，也不能重复执行 tool call。
+17. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
+18. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
+19. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
+20. 当前任务只写设计文档和 plan，不做实现。
 
 ## 已核对的现状
 
@@ -44,6 +47,7 @@
 - 已确认 `crates/scad-scene/src/system_fonts.rs` 中存在非 Agent / WebSocket 主链路的同步 `std::process::Command` 调用；该问题已记录到 `docs/known_issues.md`。
 - 已核对 Rig 的 `Provider::build_uri` 行为：只负责斜杠拼接，不会替 OpenAI-compatible provider 自动追加 `/v1`。
 - Rig OpenAI 默认 `base_url` 已包含 `/v1`；Anthropic 默认地址不由本计划改变。
+- 已搜索文件型状态方案：SQLite / redb 能提供成熟事务能力，但当前产品约束要求保留 `chats.json`，因此计划采用 app server 单写入者、原子 JSON 快照和 append-only Agent event JSONL。
 
 ## 本计划范围
 
@@ -54,6 +58,7 @@
 - 设计 chat 与 Agent / 模型绑定。
 - 设计多 WebSocket 观察和事件重放。
 - 设计 idle 资源释放策略。
+- 设计进程意外退出后的 interrupted 恢复语义。
 - 设计迁移路径和验收测试。
 
 ## 非范围
