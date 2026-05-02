@@ -590,16 +590,35 @@ impl ChatStore {
             .iter_mut()
             .find(|entry| entry.chat_id == *session_id)
             .ok_or_else(|| not_found("Chat session 不存在"))?;
+        let path = self.relative_path(&entry.messages_path)?;
+        let content = serde_json::json!({
+            "type": "chat_summary",
+            "summary": update.summary,
+            "goal": update.goal,
+            "open_questions": update.open_questions,
+        })
+        .to_string();
+        let related_files = update.related_files;
+        let message_count = read_messages(&self.workspace_root, &path).await?.len();
+        let message_id = format!("msg-{}", message_count.saturating_add(1));
+        let meta = JsonlMessage::new(
+            &message_id,
+            ChatRole::Meta,
+            content,
+            related_files.clone(),
+            None,
+        );
         entry.summary = Some(update.summary);
         entry.goal = Some(update.goal);
-        entry.related_files = update.related_files;
+        entry.related_files = related_files;
         entry.open_questions = update.open_questions;
         entry.updated_at_ms = now_ms();
         self.write_index(&index).await?;
+        append_jsonl(&self.workspace_root, &path, &meta).await?;
         notify_chat_index_changed(&self.workspace_root);
         Ok(ChatAckResponse {
             session_id: session_id.clone(),
-            message_id: "metadata".into(),
+            message_id,
         })
     }
 

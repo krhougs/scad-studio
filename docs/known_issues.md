@@ -1,5 +1,22 @@
 # 已知问题记录
 
+## 2026-05-03 05:58:00 CST: Chat summary 更新缺少跨 `chats.json` 与 Chat JSONL 的事务边界
+
+- 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 8 独立 review 时，复查 `ChatStore::update_summary` 对 `chats.json` metadata 与 Chat JSONL `chat_summary` meta 事实的双写路径。
+- 原因：
+  - `update_summary` 需要同时更新 `chats.json` 中的 summary / goal / related files / open questions，并追加一条 Chat JSONL meta 事实，供 Agent history 构建读取最新 summary。
+  - 这两个文件没有共享事务；当前实现仍按文件系统双写完成。
+  - 若进程崩溃、磁盘错误或权限错误发生在其中一个文件写入之后，另一个文件可能没有同步更新。
+- 影响范围：
+  - 正常路径已由 `chat_store_persists_summary_metadata_in_chats_json` 和 `workspace_tool_executor_update_chat_summary_appends_chatstore_meta` 覆盖。
+  - 异常路径可能出现 `chats.json` metadata 与 Chat JSONL summary meta 不一致，进而影响 Chat list 展示和后续 Agent history 使用的 summary 是否一致。
+  - 后续如果为 Chat metadata 增加更多双写字段，必须统一考虑恢复策略，不能把其中一个文件当作天然同步成功的状态来源。
+- 可能的解法：
+  - 为 summary update 引入可恢复的 operation record，重启时根据 operation record 补齐缺失的一侧。
+  - 将 summary metadata 的权威状态收敛为单一文件，再让另一侧通过可重建投影生成。
+  - 若继续保留双写，补充 failure-path 测试和显式恢复流程，明确写入失败后 UI、Agent history 与重试行为。
+- 当前处理方式：Phase 8 只恢复正常路径的 Chat JSONL meta 写入，并记录该异常路径风险；不在本计划中引入新的事务层或恢复投影机制。
+
 ## 2026-05-03 05:11:42 CST: Agent 失败最终事实仍依赖消息前缀识别
 
 - 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 7 最终独立 review 时，复查失败 turn 的 Chat JSONL 最终事实恢复语义。

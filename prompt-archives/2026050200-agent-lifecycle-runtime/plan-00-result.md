@@ -9,6 +9,8 @@
 - Phase 5「Chat 模型绑定与后端模型强制」已完成实现、验证、独立 review 和修正。
 - Phase 6「Event log、Snapshot 与重连恢复」已完成实现、验证、独立 review 和修正。
 - Phase 7「Idle 资源释放与重启恢复」已完成实现、验证、独立 review 和修正。
+- Phase 8「Async / 阻塞路径复核与最终验证」已完成边界复核、验证、独立 review 和修正。
+- Plan 级独立 review 已完成，无阻塞项。
 - 本文件记录到 2026-05-03 的执行结果。
 
 ## Phase 1 完成情况
@@ -349,12 +351,45 @@
 - `rustfmt --edition 2024 --check`：已覆盖本 Phase 变更的 Rust 文件，通过。
 - `git diff --check`：通过。
 
+## Phase 8 完成情况
+
+### 实现摘要
+
+- 完成 Agent / WebSocket 主链路的阻塞路径复核；生产路径未新增 `std::thread`、`thread::spawn`、`spawn_blocking`、`block_in_place` 或同步 `std::process::Command`。
+- 确认 CadQuery runner、OpenSCAD preview/export 和 slicer 启动路径继续使用 `tokio::process::Command`。
+- 确认 `scad-scene` Linux 字体探测仍存在同步 `fc-match` 调用，且已在 `docs/known_issues.md` 记录；本计划未修改该非主链路问题。
+- 确认 README、getting started 和架构文档只说明根目录 `llm.toml` 是本地开发历史配置，不作为 budn' 产品配置入口。
+- 确认 `app-server-protocol` 未依赖 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
+- 确认 `studio-common` 未依赖 `app-server-transport`、浏览器 API 或平台事件循环。
+- 全量 Rust、protocol、Web typecheck、Web unit、Web smoke 和 PWA build smoke 已通过。
+- Phase 8 验证时发现 `ChatStore::update_summary` 只更新 `chats.json`，未把 `chat_summary` meta 事实写入 Chat JSONL；已修复为同步追加 Chat JSONL meta，并更新 ChatStore 测试覆盖 `chats.json` metadata 与 Chat JSONL meta 均存在。
+
+### 验收说明
+
+- `cargo test --workspace` 已覆盖 Chat identity、Chat history、Agent event、重启恢复矩阵、CadQuery staging、workspace tool policy、preview、watch、WebSocket smoke、protocol roundtrip 和 `studio-common` managed client。
+- `web:smoke` 已覆盖 wasm bridge、浏览器 handshake / preview / markdown / image / SCAD preview、watch refresh 和 PWA build smoke。
+- `git diff --check` 已通过；smoke 生成的测试工作区状态文件已清理。
+- Phase 8 新增代码只修复 `update_summary` 的 Chat JSONL meta 写入与对应测试，不改变 Phase 1-7 的 Agent lifecycle / WebSocket lifecycle 分离边界。
+
+### Review 记录
+
+- Phase 8 独立 review 未发现阻塞项。
+- Phase 8 独立 review 发现非阻塞高风险：`update_summary` 缺少跨 `chats.json` 与 Chat JSONL 的事务边界，异常路径可能导致两侧状态不一致；已记录到 `docs/known_issues.md`。
+- Plan 级独立 review 未发现阻塞项，确认 Phase 1-8 已满足原计划验收标准，且 Phase 8 修复未破坏 `chats.json` 权威状态、provider / model binding、Agent 生命周期与 WebSocket 生命周期分离、idle drop、Interrupted / `FailedNeedsRecovery` 恢复语义。
+- Plan 级独立 review 复核的非阻塞风险均已记录到 `docs/known_issues.md`：Chat summary 双写异常路径、Agent event log 异步持久化失败、首发 reservation task abort 安全性、`scad-scene` Linux 字体探测同步 `fc-match`。
+
+### 验证结果
+
+- `cargo test --workspace`：通过。
+- `bun run protocol:build`：通过。
+- `bun run protocol:check-generated`：通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit`：302 passed；仍有两个既有 React `act(...)` 警告。
+- `bun run web:smoke`：通过，包含 wasm bridge、browser smoke、watch smoke 和 PWA build smoke；Vite 仍输出既有 chunk size warning。
+- `rustfmt --edition 2024 --check crates/app-server-core/src/chat.rs crates/app-server-core/tests/chat_tests.rs`：通过。
+- `git diff --check`：通过。
+
 ## 尚未执行
 
-- 尚未执行 Async / 阻塞路径复核与最终验证；这属于 Phase 8 范围。
+- 本计划范围内无尚未执行的 Phase。
 - 未迁移根目录 `llm.toml`，且本计划不要求迁移。
-
-## 后续执行入口
-
-- Phase 8 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 8 执行时必须保护 Phase 1-7 已达成的全部边界，重点是：`chats.json` 权威身份、provider / model binding、Agent 生命周期与 WebSocket 生命周期分离、idle drop、interrupted / FailedNeedsRecovery 恢复语义，以及外部工具只能通过 app server 管理。

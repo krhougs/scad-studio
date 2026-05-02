@@ -439,15 +439,12 @@ async fn chat_store_persists_summary_metadata_in_chats_json() {
         store.list(false).await.unwrap().sessions[0].related_files,
         vec![related]
     );
-    assert_eq!(
-        store
-            .history(&created.session_id, None)
-            .await
-            .unwrap()
-            .messages
-            .len(),
-        1
-    );
+    let history = store.history(&created.session_id, None).await.unwrap();
+    assert_eq!(history.messages.len(), 2);
+    let latest = history.messages.last().unwrap();
+    assert_eq!(latest.role, ChatRole::Meta);
+    assert!(latest.content.contains("\"type\":\"chat_summary\""));
+    assert!(latest.content.contains("current summary"));
 
     let _ = fs::remove_dir_all(root);
 }
