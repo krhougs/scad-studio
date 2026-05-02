@@ -21,10 +21,11 @@
 7. LLM idle 且用户 WebSocket 未连接时，应释放 Agent 运行对象，节省资源。
 8. Active Agent 在用户 WebSocket 断开、切换 chat 或刷新页面后仍应继续工作；用户重新连接后应能看到当前状态和后续实时输出。
 9. 需要检查当前实现是否完全 async 化，以及是否存在多余的线程创建。
-10. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
-11. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
-12. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
-13. 当前任务只写设计文档和 plan，不做实现。
+10. Reasoning 参数使用一层 `Option<String>` 即可完整表达业务语义：`None` 表示不发送，`Some(String)` 表示字符串原样发送给 LLM；不得引入嵌套 Option，也不得生成默认 reasoning 字符串。
+11. Provider type 同时支持 `anthropic`、`openai_responses`、`openai_completions`。
+12. Provider 产品配置使用 `base_url`，并按已确认规则补全或强制使用输入地址。
+13. 根目录 `llm.toml` 属于本地开发环境相关配置，不迁移到产品文档或产品配置整改范围。
+14. 当前任务只写设计文档和 plan，不做实现。
 
 ## 已核对的现状
 

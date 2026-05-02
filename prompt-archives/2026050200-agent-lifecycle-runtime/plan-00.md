@@ -13,10 +13,12 @@
 - 一个 chat 对应一个稳定 Agent。
 - Chat 首次发送消息时创建模型绑定；之后该 chat 的后续 Agent turn 必须使用已绑定模型，后端忽略前端传入的不同模型参数。
 - 多个 WebSocket connection 可以同时订阅同一个 Agent。
+- 多个 WebSocket connection 可以同时观察并操作同一个 Agent；所有交互命令都以 `agent_id` 为目标，并由 runtime 统一处理。
 - WebSocket 断开只移除 subscriber，不取消 active Agent。
 - Active Agent 在无 WebSocket 连接时继续运行，并写入后端状态和事件日志。
-- Agent idle 且无 subscriber 时，释放 LLM client、provider stream、tool executor、push handle 等运行对象，仅保留可恢复状态。
+- Agent idle 且无 subscriber 时，drop Agent 运行对象，释放 LLM client、provider stream、tool executor、push handle 等运行资源，仅保留可恢复的持久状态。
 - 本计划保持 workspace 内同一时间只有一个 active Agent turn 的产品约束；该约束必须由后端 runtime 强制。
+- Reasoning 参数保持一层 `Option<String>`：`None` 表示不发送 reasoning 字段，`Some(String)` 表示把字符串原样发送给 LLM；不得引入嵌套 Option，也不得生成默认 reasoning 字符串。
 - Provider type 产品语义固定支持 `anthropic`、`openai_responses`、`openai_completions`。
 - Provider 产品配置使用 `base_url`，不使用 endpoint 作为新的产品配置字段。
 - OpenAI family provider 的 `base_url` 补全由 budn' 配置层负责；Rig 只负责斜杠拼接，不负责补全 `/v1`。
@@ -28,12 +30,24 @@
 ## 保护边界
 
 - 保护 app server 是唯一能力层的边界。
+- 保护 protocol 与 transport 分离，protocol 不绑定 WebSocket、`tokio::mpsc` 或浏览器类型。
 - 保护 WebSocket 只消费 app server protocol，不直接读取后端状态文件。
+- 保护 `studio-common` 只承接跨端共享状态与行为，不依赖 transport、浏览器 API 或平台事件循环。
+- 保护 `studio-web` 只处理浏览器壳层、展示和连接接线，不绕过 protocol 读取后端状态。
 - 保护 Chat history、Agent event、CadQuery staging、workspace tool policy、preview、watch 和 Web 工作台既有行为。
 - 保护 provider/model registry、provider type、`base_url` 解析和模型参数快照语义。
 - 保护 `agents.toml` 私有配置边界和 API key 不进入仓库。
 - 保护根目录 `llm.toml` 不被迁移进产品配置或示例文档。
 - 保护现有 async 主链路，不新增手写系统线程或阻塞式请求路径。
+
+## 执行规则
+
+- 每个 Phase 必须按“实现、独立 subagent review、根据 review 结果修正、再次 review 直到无阻塞项、记录结果、提交”的顺序执行。
+- Phase review 的 subagent 必须获得当前 Phase 目标与验收标准、完整 `plan-00.md`、前序 Phase 已达成目标、涉及文件清单或 diff。
+- Phase review 只输出问题、风险和证据，不得修改文件，不得替主 agent 执行修复。
+- 每个 Phase 通过验收后，必须更新 `plan-00-result.md`，记录完成情况、变更摘要和遗留风险。
+- 所有 Phase 完成后，必须启动 plan 级独立 subagent review，覆盖每个 Phase 是否满足计划、Phase 之间是否冲突、前序目标是否被后续改动破坏、整体验证是否完整、结果文档是否准确。
+- 若 Phase review 或 plan 级 review 发现阻塞项，必须修正并重新 review，通过后才能继续。
 
 ## 主要输入
 
@@ -117,8 +131,9 @@
 
 - protocol roundtrip 覆盖 `AgentId`、`AgentTurnId`、Agent snapshot、chat-agent binding 和 subscribe/cancel/start turn 命令。
 - wire contract 覆盖新增字段和版本升级。
-- 计划明确说明：外部命令不接受 `run_id` 作为 Agent 操作目标。
-- 计划明确说明：已绑定 chat 忽略前端后续模型变化。
+- protocol 外部命令不接受 `run_id` 作为 Agent 操作目标；`run_id` 或 `turn_id` 只允许作为事件排序、去重和调试字段。
+- 兼容旧 `agent.invoke` 时，不允许旧字段让前端静默使用错误模型；已绑定 chat 的不同模型请求必须被后端忽略并有测试覆盖。
+- protocol 类型保持 transport-neutral，不引入 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
 
 ## Phase 3 — WorkspaceAgentRuntime 后端边界
 
@@ -149,7 +164,10 @@
 - 后端测试证明两个 dispatcher / WebSocket observer 可以引用同一个 `agent_id`。
 - 后端测试证明 WebSocket disconnect 不 cancel active Agent。
 - 后端测试证明第二个 observer 可以读取 active Agent snapshot。
+- 后端测试证明 connection A 启动 active turn 后，connection B 可以用同一个 `agent_id` snapshot 和 cancel 该 Agent。
+- 后端测试证明 connection B 对已绑定 chat 携带不同模型发起 start turn 时，runtime 仍使用 chat 绑定模型。
 - 后端测试证明同一 workspace 同时启动第二个 active turn 会返回后端错误。
+- 后端 runtime 不把 WebSocket connection id、WebSocket push handle 或前端本地模型状态作为 Agent 身份来源。
 
 ## Phase 4 — Chat 模型绑定与后端模型强制
 
@@ -171,7 +189,8 @@
 1. 首次 Agent turn 前根据当前请求模型快照创建 `ChatAgentBinding`。
 2. 将 binding 写入持久状态，保证刷新页面或 host 重启后可恢复。
 3. 后续同 chat 的 Agent turn 从 binding 读取模型，不使用前端传入的不同模型。
-4. Agent snapshot 返回绑定模型和模型控件只读原因。
+4. 保持 reasoning 参数的一层 `Option<String>` 语义：`None` 不发送，`Some(String)` 原样发送。
+5. Agent snapshot 返回绑定模型和模型控件只读原因。
 
 ### 验收标准
 
@@ -179,6 +198,8 @@
 - 测试覆盖已绑定 chat 后续 turn 忽略不同请求模型。
 - 测试覆盖刷新或新 dispatcher 读取同一 chat 时恢复绑定模型。
 - 测试覆盖前端收到 binding 状态后把模型控件设为只读。
+- 测试覆盖 reasoning `None` 不写入 provider request，`Some(String)` 原样写入 provider request。
+- 测试覆盖后端不会生成默认 reasoning 字符串，也不会引入嵌套 Option 结构。
 
 ## Phase 5 — Event log、Snapshot 与重连恢复
 
@@ -208,8 +229,11 @@
 
 - 测试覆盖断线期间产生的 token / tool / done 事件可以在新连接中通过 snapshot 或 replay 看到。
 - 测试覆盖两个 WebSocket observer 同时收到同一个 Agent 的事件。
+- 测试覆盖第二个 WebSocket observer 对同一 `agent_id` 执行 snapshot / cancel 后，所有 observer 看到一致状态。
 - 测试覆盖前端刷新后仍显示 active Agent 正在工作。
 - 测试覆盖 done 后刷新页面能看到最终 Chat history 和 Agent 状态摘要。
+- `studio-common` 不引入 `app-server-transport`、浏览器 API 或平台事件循环依赖。
+- Web 侧只根据 protocol snapshot / event 更新展示状态，不直接读取后端状态文件。
 
 ## Phase 6 — Idle 资源释放
 
@@ -228,13 +252,13 @@
 
 1. 定义 active / idle / done / failed / cancelled 的状态转移。
 2. active turn 完成后释放 LLM client、provider stream、tool executor、cancel token 和 task handle。
-3. subscriber 数为 0 且 Agent idle 时，仅保留持久状态和 event log。
+3. subscriber 数为 0 且 Agent idle 时，drop Agent 运行对象，仅保留持久状态和 event log。
 4. 新 subscriber 连接时不重建 LLM stream，只读取可恢复状态。
 
 ### 验收标准
 
 - 测试覆盖 active turn 完成后 runtime 不再持有 active turn handle。
-- 测试覆盖 idle 且无 subscriber 时删除 subscriber 相关资源。
+- 测试覆盖 idle 且无 subscriber 时 runtime 不再持有 Agent 运行对象，只能从 chat binding、event log 和 chat history 恢复 snapshot。
 - 测试覆盖 active 且无 subscriber 时 turn 继续运行。
 - 测试覆盖新 subscriber 读取 idle Agent snapshot 不创建 LLM client。
 
@@ -272,6 +296,10 @@
 - `git diff --check` 与 `git diff --cached --check` 通过。
 - 搜索确认 Agent / WebSocket 主链路未新增手写线程或同步阻塞外部命令。
 - 搜索确认产品文档和示例配置不要求迁移或读取根目录 `llm.toml`。
+- 搜索确认 `app-server-protocol` 不依赖 WebSocket、HTTP、`tokio::mpsc` 或浏览器平台类型。
+- 搜索确认 `studio-common` 不依赖 `app-server-transport`、浏览器 API 或平台事件循环。
+- 确认 `plan-00-result.md` 已记录每个 Phase 的执行结果、review 结论、修正摘要和遗留风险。
+- 确认 plan 级独立 review 通过，且没有阻塞项或高风险问题。
 
 ## 执行前检查
 
