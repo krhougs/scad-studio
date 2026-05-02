@@ -1,20 +1,21 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentInvokeRequest, AgentMode,
-    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelRegistryModel,
-    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSource,
-    AgentProviderCapabilities, AgentStartedResponse, AgentTokenEvent, CadQueryArtifactExport,
-    CadQueryArtifactRelation, CadQueryResultReady, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
-    ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
-    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
-    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
-    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
-    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
-    decode_client_frame, encode_server_frame, web_file_read_capability,
+    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentEventId, AgentEventPayload,
+    AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode, AgentModelDiscoveryState,
+    AgentModelDiscoveryStatus, AgentModelRegistryModel, AgentModelRegistryProvider,
+    AgentModelRegistryResponse, AgentModelSource, AgentProviderCapabilities, AgentRuntimeStatus,
+    AgentSnapshotRequest, AgentSnapshotResponse, AgentStartedResponse, AgentTokenEvent,
+    AgentTurnId, CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryResultReady,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatCreatedResponse,
+    ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId,
+    ChatSessionSummary, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
+    ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequest, PreviewRequestKind,
+    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
+    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerEnvelope,
+    ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId,
+    WatchChangedEvent, WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse,
+    WorkspaceId, decode_client_frame, encode_server_frame, web_file_read_capability,
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
@@ -884,6 +885,51 @@ fn chat_agent_and_selection_successes_update_snapshot() {
 }
 
 #[test]
+fn agent_snapshot_response_updates_structured_agent_events() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let request_id = client
+        .dispatch_agent_snapshot(AgentSnapshotRequest {
+            agent_id: AgentId("agent-1".into()),
+            since_event_id: None,
+        })
+        .expect("dispatch agent.snapshot");
+    drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::AgentSnapshot(AgentSnapshotResponse {
+                agent_id: AgentId("agent-1".into()),
+                chat_id: ChatSessionId("chat-1".into()),
+                bound_model: None,
+                model_lock_reason: None,
+                state: AgentRuntimeStatus::Done,
+                active_turn_id: None,
+                since_event_id: None,
+                events: vec![AgentEventRecord {
+                    event_id: AgentEventId(1),
+                    agent_id: AgentId("agent-1".into()),
+                    turn_id: Some(AgentTurnId("turn-1".into())),
+                    ts_ms: 1000,
+                    payload: AgentEventPayload::Token { text: "hi".into() },
+                }],
+                current_text: "hi".into(),
+                current_reasoning: String::new(),
+                error: None,
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.agent_event_records.len(), 1);
+    assert_eq!(
+        snapshot.agent_event_records[0].agent_id,
+        AgentId("agent-1".into())
+    );
+}
+
+#[test]
 fn agent_cancel_ack_keeps_run_until_done_event() {
     let mut client = ManagedClient::new(FakeTransport::default());
     open_client_with_handshake(&mut client);
@@ -1251,6 +1297,8 @@ fn chat_message(id: &str, role: ChatRole, content: &str) -> ChatMessageRecord {
         mesh_result: None,
         search_sources: Vec::new(),
         run_id: None,
+        agent_id: None,
+        turn_id: None,
     }
 }
 

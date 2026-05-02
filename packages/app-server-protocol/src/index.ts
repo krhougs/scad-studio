@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 11;
+export const CURRENT_PROTOCOL_VERSION = 12;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -502,6 +502,8 @@ export interface ChatMessageRecord {
   mesh_result: CadQueryResultReady | null;
   search_sources: AgentSearchSource[];
   run_id: string | null;
+  agent_id: string | null;
+  turn_id: string | null;
 }
 
 export interface AgentSearchSource {

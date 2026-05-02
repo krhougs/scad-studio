@@ -10,12 +10,13 @@ use std::io::Cursor;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
-    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentStartTurnRequest, CadQueryExecuteRequest,
-    CadQueryMeshPayload, CadQueryPreviewRequest, CadQueryResultGetRequest, CadQueryResultReady,
-    CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatSendRequest, ChatSessionId, CommandSuccess, ConfigSaveRequest,
-    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PathHandle, PreviewArtifact,
-    PreviewRequest, RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentSnapshotRequest, AgentStartTurnRequest,
+    AgentSubscribeRequest, CadQueryExecuteRequest, CadQueryMeshPayload, CadQueryPreviewRequest,
+    CadQueryResultGetRequest, CadQueryResultReady, CapabilityHandshakeRequest, ChatArchiveRequest,
+    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId,
+    CommandSuccess, ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest,
+    PathHandle, PreviewArtifact, PreviewRequest, RequestId, SelectionUpdateRequest,
+    SlicerListRequest, WorkspaceListRequest,
 };
 use scad_scene::{MeshData, mesh::load_stl_from_reader, three_mf::load_3mf_from_reader};
 use studio_common::{
@@ -422,6 +423,34 @@ pub fn client_dispatch_agent_start_turn(
     handle
         .borrow_mut()?
         .dispatch_agent_start_turn(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_snapshot(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentSnapshotRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_snapshot params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_snapshot(parsed)
+        .map(|id| id.0)
+        .map_err(client_error_to_js)
+}
+
+#[wasm_bindgen]
+pub fn client_dispatch_agent_subscribe(
+    handle: &mut ClientHandle,
+    params: JsValue,
+) -> Result<u64, JsValue> {
+    let parsed: AgentSubscribeRequest = serde_wasm_bindgen::from_value(params)
+        .map_err(|err| JsValue::from_str(&format!("invalid agent_subscribe params: {err}")))?;
+    handle
+        .borrow_mut()?
+        .dispatch_agent_subscribe(parsed)
         .map(|id| id.0)
         .map_err(client_error_to_js)
 }

@@ -1,5 +1,37 @@
 # 已知问题记录
 
+## 2026-05-03 01:16:24 CST: Agent event log 异步持久化失败只记录日志
+
+- 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 6 第二轮独立 review 时，复查 runtime event log 的异步写入路径。
+- 原因：
+  - `WorkspaceAgentRuntime` 当前通过 `mpsc::UnboundedSender<AgentEventRecord>` 将 runtime event 排队给后台任务，再由 `ChatStore::append_agent_event` 追加写入 `agent-events/<agent_id>.jsonl`。
+  - 写入失败时当前只记录 `log::error!`，不把错误暴露给 runtime 状态或客户端 snapshot / event stream。
+  - 在线 runtime 仍保留内存事件，因此当前连接和未重启进程中的 snapshot 可以继续显示完整运行状态。
+- 影响范围：
+  - 进程重启后只能从已成功写入磁盘的 event log 恢复，未持久化的 token / tool / terminal event 可能丢失。
+  - Phase 7 实现 idle 资源释放、terminal event 清理或重启恢复矩阵时，必须把 event log 写入失败纳入恢复策略，避免把内存完整状态误判为可持久恢复状态。
+- 可能的解法：
+  - 将 event log 持久化错误写入 runtime 状态，并通过 snapshot 暴露为可恢复错误。
+  - 对 terminal event 写入采用同步确认或有界重试，确保最终状态写入失败时不会清理内存状态。
+  - Phase 7 补充 event log 写入失败、terminal event 缺失和 Chat JSONL / event log 不一致的恢复测试。
+- 当前处理方式：Phase 6 保持异步持久化以避免阻塞 token 主链路，并记录日志；Phase 7 需要在重启恢复矩阵中进一步处理持久化失败语义。
+
+## 2026-05-03 01:16:24 CST: `studio-common` Agent event records 可能长期累积
+
+- 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 6 第二轮独立 review 时，复查 `studio-common` snapshot 的结构化 Agent event 聚合方式。
+- 原因：
+  - `ManagedClient` 当前在收到 `AgentSnapshot` 后把 `response.events` 按 `agent_id + event_id` 合并到 `agent_event_records`。
+  - 该集合不会在切换当前 chat / agent 时主动清理旧 Agent 的历史记录。
+  - Web UI 当前按当前 chat 的 `agent_id` 过滤事件，因此展示不会混入其他 Agent 的事件。
+- 影响范围：
+  - 长时间会话中，多 chat / Agent 的结构化事件会在客户端 snapshot 中累积，增加内存占用和 snapshot diff 成本。
+  - 若后续新增不按 `agent_id` 过滤的 Agent event UI，可能误用累积事件。
+- 可能的解法：
+  - 按 `agent_id` 分组保存结构化 event records，并给每个 Agent 设置保留上限。
+  - 在切换 current chat 时只保留当前 Agent 的 render window，历史恢复继续通过 `agent.snapshot` 获取。
+  - 在 Phase 7 idle / terminal 保留策略确定后，同步定义前端 event retention 规则。
+- 当前处理方式：Phase 6 保持现有增量合并并依赖 Web UI `agent_id` 过滤保证展示正确；后续资源释放和长会话优化阶段需要重新评估保留策略。
+
 ## 2026-05-02 22:23:09: Agent 首发 reservation 尚未具备 task abort 安全性
 
 - 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 3 独立 review 时，复查 `chat.create.initial_turn` 并发幂等修复后的异常路径。

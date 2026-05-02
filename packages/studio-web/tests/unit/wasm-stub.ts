@@ -109,6 +109,12 @@ export function client_dispatch_agent_cancel(): bigint {
 export function client_dispatch_agent_start_turn(): bigint {
   return 0n;
 }
+export function client_dispatch_agent_snapshot(): bigint {
+  return 0n;
+}
+export function client_dispatch_agent_subscribe(): bigint {
+  return 0n;
+}
 export function client_dispatch_agent_model_registry(): bigint {
   return 0n;
 }

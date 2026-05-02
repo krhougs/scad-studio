@@ -5,6 +5,9 @@
 - Phase 1「Chat identity 与 chats.json」已完成实现、验证、独立 review 和修正。
 - Phase 2「Provider type 与 base_url 产品配置」已完成实现、验证、独立 review 和修正。
 - Phase 3「Agent 身份与 Chat 绑定协议设计」已完成实现、验证、独立 review 和修正。
+- Phase 4「WorkspaceAgentRuntime 后端边界」已完成实现、验证、独立 review 和修正。
+- Phase 5「Chat 模型绑定与后端模型强制」已完成实现、验证、独立 review 和修正。
+- Phase 6「Event log、Snapshot 与重连恢复」已完成实现、验证、独立 review 和修正。
 - 本文件记录到 2026-05-02 的执行结果。
 
 ## Phase 1 完成情况
@@ -240,16 +243,71 @@
 - `rustfmt --edition 2024 --check crates/app-server-protocol/src/protocol.rs crates/app-server-host/src/dispatcher.rs crates/app-server-host/tests/shared_dispatcher_roundtrip_tests.rs crates/app-server-core/tests/llm_tests.rs crates/app-server-protocol/tests/borsh_payload_roundtrip_tests.rs crates/app-server-protocol/tests/wire_payload_contract_tests.rs`：通过。
 - `git diff --check`：通过。
 
+## Phase 6 完成情况
+
+### 实现摘要
+
+- Protocol version 升级到 12，`ChatMessageRecord` 新增 `agent_id` 与 `turn_id`，用于最终 assistant / tool 历史记录和 Agent turn 建立稳定关联。
+- `ChatStore` 新增 Agent event JSONL 读写能力，事件写入 `agent-events/<agent_id>.jsonl`，Chat JSONL 继续只保存最终对话事实。
+- Workspace runtime 记录并异步持久化结构化 Agent event，事件包含 `event_id`、`agent_id`、`turn_id`、`ts_ms` 和 payload。
+- `agent.snapshot` 读取持久化 event log，并与内存 runtime event 合并；内存 runtime 不存在时可从持久化事件恢复 terminal 状态、当前文本、reasoning 和错误。
+- 启动后续 turn 前读取该 Agent 已持久化的最大 `event_id`，保证同一 Agent 在 runtime 重建后继续单调递增。
+- 仅从持久化 event log 恢复时，未 terminal 的 Running 状态对外报告为 Interrupted，并清空 `active_turn_id`，避免伪造仍存在的 worker。
+- Agent 最终 assistant、tool call 和 tool result 写入 Chat JSONL 时携带 `agent_id + turn_id`。
+- `studio-common` snapshot 保存结构化 `agent_event_records`，并在 `AgentSnapshot` 响应中合并结构化事件；运行中 snapshot 会恢复 `agent_run`。
+- `studio-web-wasm` 与 Web wasm bridge 新增 `agent.snapshot` 和 `agent.subscribe` dispatch API。
+- Web protocol store 将结构化 snapshot event 转换为既有 UI event 形态，并保留 live event；Chat UI 按当前 chat 的 `agent_id` 过滤事件。
+- Web 当前 chat `agent_id` 变化后先请求 snapshot，再用 snapshot 最后一个 `event_id` 订阅后续事件，避免刷新后丢失运行中事件。
+
+### 验收说明
+
+- 后端测试覆盖 event log 写入 `agent-events/<agent_id>.jsonl`，且 Chat JSONL 不保存 token / reasoning delta 或 `event_id`。
+- 后端测试覆盖 event log 中所有事件携带 `agent_id`、`ts_ms`，同一 Agent 的 `event_id` 单调递增，turn 级事件携带 `turn_id`。
+- 后端测试覆盖 `since_event_id` replay 不重复回放旧事件。
+- 后端测试覆盖两个 observer 同时观察同一个 Agent、第二个 observer snapshot / cancel 后状态一致。
+- 后端测试覆盖已有持久化 event log 后，新 turn 的 `event_id` 从最大值之后继续递增。
+- 后端测试覆盖仅从持久化 Running event 恢复 snapshot 时报告 Interrupted。
+- Core 测试覆盖最终 assistant / tool 记录通过 `agent_id + turn_id` 写入并读取。
+- Web 单元测试覆盖结构化 snapshot event 转换、snapshot + live event 共存、按当前 `agent_id` 过滤事件、snapshot 后 subscribe。
+- `studio-common` 未引入 `app-server-transport`、浏览器 API 或平台事件循环依赖。
+- Web 侧只通过 protocol snapshot / event 更新状态，未直接读取 `chats.json`、Chat JSONL 或 Agent event JSONL。
+
+### Review 记录
+
+- 第一轮独立 review 发现持久化 event log 未被 snapshot/replay 读取、Web UI 未按 `agent_id` 过滤结构化 snapshot event、最终 assistant/tool Chat JSONL 记录未包含 `agent_id + turn_id`；已修复。
+- 第二轮独立 review 发现 runtime 重建后 `event_id` 会从 1 重新开始，以及仅从持久化 Running event 恢复时会错误报告 Running；已修复并补充回归测试。
+- 第三轮独立 review 未发现阻塞问题。剩余非阻塞风险：
+  - Event log 持久化是异步队列，写入失败时当前只记录日志，不向 runtime 或客户端暴露；在线 snapshot 可依赖内存状态，进程重启后只能恢复已成功写入磁盘的事件。
+  - `studio-common` 的 `agent_event_records` 只增量 merge，不按当前 chat / agent 清理旧记录；当前 Web UI 已按 `agent_id` 过滤，不影响展示正确性，但长会话可能累积多 Agent 历史事件。
+
+### 验证结果
+
+- `cargo test -p app-server-host --lib`：11 passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：36 passed。
+- `cargo test -p app-server-core --test chat_tests`：28 passed。
+- `cargo test -p studio-common --test managed_client_tests`：27 passed。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests`：17 passed。
+- `cargo test -p app-server-protocol --test wire_payload_contract_tests`：4 passed。
+- `cargo test -p app-server-core --test llm_tests`：46 passed。
+- `cargo test -p app-server-host --test plan_extraction_tests`：25 passed。
+- `cargo test -p studio-web-wasm --tests`：4 passed，另有 0-test smoke targets 通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit -- protocol-store.test.ts chat-zone.test.tsx wasm-client.test.ts`：89 passed；仍有两个既有 React `act(...)` 警告。
+- `bun scripts/smoke/wasm_package_smoke.ts`：generated tree byte-identical。
+- `rustfmt --edition 2024 --check`：已覆盖本 Phase 变更的 Rust 文件，通过。
+- `git diff --check`：通过。
+
 ## 尚未执行
 
-- 尚未实现持久化 event log、前端刷新后的 snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
+- 尚未实现 idle 资源释放和完整进程重启恢复矩阵；这属于 Phase 7 范围。
 - 未迁移根目录 `llm.toml`，且本计划不要求迁移。
 
 ## 后续执行入口
 
-- Phase 6 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 6 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 11。
-- Phase 6 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
-- Phase 6 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
-- Phase 6 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。
-- Phase 6 执行时必须保护 Phase 5 已达成的边界：chat bound model 是后续 turn 的唯一模型来源，snapshot 返回 bound model 和 `model_lock_reason`，Web 绑定 chat 模型控件保持只读且展示绑定参数。
+- Phase 7 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 7 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义。
+- Phase 7 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
+- Phase 7 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
+- Phase 7 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。
+- Phase 7 执行时必须保护 Phase 5 已达成的边界：chat bound model 是后续 turn 的唯一模型来源，snapshot 返回 bound model 和 `model_lock_reason`，Web 绑定 chat 模型控件保持只读且展示绑定参数。
+- Phase 7 执行时必须保护 Phase 6 已达成的边界：runtime event 写入 Agent event JSONL，Chat JSONL 只保存最终对话事实，snapshot / subscribe 通过持久化 event log 恢复，Web 以 `agent_id` 过滤事件，最终 assistant / tool 历史记录携带 `agent_id + turn_id`。

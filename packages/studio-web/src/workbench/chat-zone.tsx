@@ -80,6 +80,8 @@ export type ChatMessageRecord = {
   mesh_result?: unknown | null;
   search_sources?: AgentSearchSource[];
   run_id?: string | null;
+  agent_id?: string | null;
+  turn_id?: string | null;
 };
 
 export type AgentProviderCapabilities = {
@@ -195,9 +197,9 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const sessionEvents = useMemo(
     () =>
       rawEvents.filter((event) =>
-        eventBelongsToCurrentSession(event, currentSessionId),
+        eventBelongsToCurrentSession(event, currentSessionId, currentSession?.agent_id ?? null),
       ),
-    [rawEvents, currentSessionId],
+    [rawEvents, currentSessionId, currentSession?.agent_id],
   );
   const agentEvents = useMemo(
     () => recentAgentEvents(sessionEvents, agentRun),
@@ -224,6 +226,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     snapshotCurrentSessionId,
     onStatus,
   );
+  useAgentSnapshotSubscription(client, currentSession?.agent_id ?? null, onStatus);
   useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
   useInitialAgentModelRegistry(client, onStatus);
 
@@ -279,7 +282,12 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
 function eventBelongsToCurrentSession(
   event: AgentEvent,
   currentSessionId: string | null,
+  currentAgentId: string | null,
 ): boolean {
+  const agentId = event.payload?.["agent_id"];
+  if (typeof agentId === "string" && currentAgentId) {
+    return agentId === currentAgentId;
+  }
   if (!currentSessionId) return true;
   const sessionId = event.payload?.["session_id"];
   if (typeof sessionId !== "string") return true;
@@ -346,6 +354,53 @@ function useAgentDoneHistoryRefresh(
       .dispatchChatHistory({ session_id: currentSessionId, limit: 100 })
       .catch(reportError(onStatus));
   }, [client, currentSessionId, doneKey, onStatus]);
+}
+
+function useAgentSnapshotSubscription(
+  client: WasmClient | null,
+  agentId: string | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  const subscribedAgentRef = useRef<string | null>(null);
+  const clientRef = useRef<WasmClient | null>(null);
+  if (clientRef.current !== client) {
+    clientRef.current = client;
+    subscribedAgentRef.current = null;
+  }
+  useEffect(() => {
+    if (!client || !agentId || subscribedAgentRef.current === agentId) return;
+    subscribedAgentRef.current = agentId;
+    let cancelled = false;
+    client
+      .dispatchAgentSnapshot({ agent_id: agentId, since_event_id: null })
+      .then((response) => {
+        if (cancelled) return null;
+        return client.dispatchAgentSubscribe({
+          agent_id: agentId,
+          since_event_id: latestSnapshotEventId(response),
+        });
+      })
+      .catch((error) => {
+        subscribedAgentRef.current = null;
+        reportError(onStatus)(error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, agentId, onStatus]);
+}
+
+function latestSnapshotEventId(response: unknown): unknown | null {
+  const payload = unwrapCommandPayload(response) as Record<string, unknown>;
+  const events = Array.isArray(payload["events"]) ? payload["events"] : [];
+  const last = events[events.length - 1] as Record<string, unknown> | undefined;
+  return last?.["event_id"] ?? null;
+}
+
+function unwrapCommandPayload(response: unknown): unknown {
+  if (!response || typeof response !== "object") return response;
+  const record = response as Record<string, unknown>;
+  return record["payload"] ?? response;
 }
 
 function useInitialAgentModelRegistry(

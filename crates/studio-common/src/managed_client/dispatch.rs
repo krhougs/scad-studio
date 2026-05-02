@@ -1,10 +1,11 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentInvokeRequest, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
-    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentStartTurnRequest, CadQueryExecuteRequest,
-    CadQueryPreviewRequest, CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest,
-    ChatHistoryRequest, ChatListRequest, ChatSendRequest, ChatSessionId, ClientCommand,
-    ConfigSaveRequest, ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest,
-    RequestId, SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
+    AgentPlanConfirmRequest, AgentPlanRejectRequest, AgentSnapshotRequest, AgentStartTurnRequest,
+    AgentSubscribeRequest, CadQueryExecuteRequest, CadQueryPreviewRequest,
+    CadQueryResultGetRequest, ChatArchiveRequest, ChatCreateRequest, ChatHistoryRequest,
+    ChatListRequest, ChatSendRequest, ChatSessionId, ClientCommand, ConfigSaveRequest,
+    ExportRunRequest, FileReadRequest, FileWriteTextRequest, PreviewRequest, RequestId,
+    SelectionUpdateRequest, SlicerListRequest, WorkspaceListRequest,
 };
 
 use crate::AppServerTransportPort;
@@ -250,6 +251,28 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
     ) -> Result<RequestId, ClientError> {
         self.enqueue_command(
             ClientCommand::AgentStartTurn(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_snapshot(
+        &mut self,
+        params: AgentSnapshotRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentSnapshot(params),
+            PendingKind::Agent,
+            self.timeouts.agent,
+        )
+    }
+
+    pub fn dispatch_agent_subscribe(
+        &mut self,
+        params: AgentSubscribeRequest,
+    ) -> Result<RequestId, ClientError> {
+        self.enqueue_command(
+            ClientCommand::AgentSubscribe(params),
             PendingKind::Agent,
             self.timeouts.agent,
         )

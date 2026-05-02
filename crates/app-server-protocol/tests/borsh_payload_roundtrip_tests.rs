@@ -625,6 +625,8 @@ fn chat_agent_and_selection_payloads_roundtrip() {
                 end_index: Some(12),
             }],
             run_id: Some("agent-1".into()),
+            agent_id: Some(AgentId("agent-main".into())),
+            turn_id: Some(AgentTurnId("agent-1".into())),
         }],
     };
     let response = ServerEnvelope::Response(ServerResponseEnvelope {
@@ -996,6 +998,8 @@ fn chat_message_record_run_id_none_borsh_roundtrip() {
         mesh_result: None,
         search_sources: Vec::new(),
         run_id: None,
+        agent_id: None,
+        turn_id: None,
     };
     let bytes = borsh::to_vec(&record).unwrap();
     let decoded: ChatMessageRecord = borsh::from_slice(&bytes).unwrap();

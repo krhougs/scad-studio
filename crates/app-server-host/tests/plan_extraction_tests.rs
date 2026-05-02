@@ -482,6 +482,8 @@ fn tool_result_message(tool_call_id: &str, result_json: &str) -> ChatMessageReco
         mesh_result: None,
         search_sources: Vec::new(),
         run_id: None,
+        agent_id: None,
+        turn_id: None,
     }
 }
 

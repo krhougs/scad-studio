@@ -2,8 +2,8 @@ use std::{fs, sync::Arc};
 
 use app_server_core::{ChatStore, ChatSummaryUpdate};
 use app_server_protocol::{
-    AgentProviderType, BoundAgentModel, ChatRole, ChatSessionId, ChatToolCallRecord,
-    ChatToolResultRecord, PathHandle, ProtocolErrorCode, WorkspaceId,
+    AgentId, AgentProviderType, AgentTurnId, BoundAgentModel, ChatRole, ChatSessionId,
+    ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolErrorCode, WorkspaceId,
 };
 use serde_json::Value;
 
@@ -891,6 +891,73 @@ async fn run_id_roundtrips_through_jsonl() {
     assert_eq!(history.messages.len(), 2);
     assert_eq!(history.messages[0].run_id, None); // Meta message
     assert_eq!(history.messages[1].run_id, Some("agent-7".into()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn agent_turn_refs_roundtrip_through_final_chat_jsonl_records() {
+    let root = temp_dir("chat-store-agent-turn-ref");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store
+        .create("agent turn refs", None, Vec::new())
+        .await
+        .unwrap();
+    let agent_id = AgentId("agent-main".into());
+    let turn_id = AgentTurnId("agent-7".into());
+
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &agent_id,
+            &turn_id,
+            Some("agent-7".into()),
+        )
+        .await
+        .expect("append assistant with agent turn refs");
+    store
+        .append_tool_call_with_agent_turn(
+            &created.session_id,
+            "agent tool started",
+            ChatToolCallRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "read_file".into(),
+                args_json: "{}".into(),
+            },
+            &agent_id,
+            &turn_id,
+            Some("agent-7".into()),
+        )
+        .await
+        .expect("append tool call with agent turn refs");
+    store
+        .append_tool_result_with_agent_turn(
+            &created.session_id,
+            "agent tool completed",
+            ChatToolResultRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "read_file".into(),
+                result_json: "{\"ok\":true}".into(),
+            },
+            None,
+            &agent_id,
+            &turn_id,
+            Some("agent-7".into()),
+        )
+        .await
+        .expect("append tool result with agent turn refs");
+
+    let history = store
+        .history(&created.session_id, Some(10))
+        .await
+        .expect("read history");
+    for message in history.messages.iter().skip(1) {
+        assert_eq!(message.agent_id, Some(agent_id.clone()));
+        assert_eq!(message.turn_id, Some(turn_id.clone()));
+        assert_eq!(message.run_id.as_deref(), Some("agent-7"));
+    }
     let _ = fs::remove_dir_all(root);
 }
 

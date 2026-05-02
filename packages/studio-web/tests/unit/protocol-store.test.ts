@@ -37,6 +37,7 @@ describe("applySnapshot", () => {
       current_chat_history: [],
       agent_run: null,
       agent_events: [],
+      agent_event_records: [],
       current_selection: null,
       cadquery_results: [],
       llm_configured: true,
@@ -120,6 +121,78 @@ describe("applySnapshot", () => {
     const { applySnapshot } = useProtocolStore.getState();
     applySnapshot({ agent_events: [makeEvent("agent.token", { text: "hi" })] });
     expect(useProtocolStore.getState().agent_events).toHaveLength(1);
+  });
+
+  it("converts agent event records from snapshot into renderable agent events", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({
+      agent_event_records: [
+        {
+          event_id: 1,
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          ts_ms: 1000,
+          payload: { event: "token", payload: { text: "hi" } },
+        },
+        {
+          event_id: 2,
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          ts_ms: 1001,
+          payload: { event: "done", payload: { cancelled: false } },
+        },
+      ],
+    });
+
+    expect(useProtocolStore.getState().agent_events).toEqual([
+      {
+        event: "agent.token",
+        payload: {
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          run_id: "turn-1",
+          text: "hi",
+        },
+      },
+      {
+        event: "agent.done",
+        payload: {
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          run_id: "turn-1",
+          cancelled: false,
+        },
+      },
+    ]);
+  });
+
+  it("keeps snapshot event records when later live agent events exist", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({
+      agent_event_records: [
+        {
+          event_id: 1,
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          ts_ms: 1000,
+          payload: { event: "token", payload: { text: "from snapshot" } },
+        },
+      ],
+      agent_events: [makeEvent("agent.token", { run_id: "turn-1", text: " live" })],
+    });
+
+    expect(useProtocolStore.getState().agent_events).toEqual([
+      {
+        event: "agent.token",
+        payload: {
+          agent_id: "agent-1",
+          turn_id: "turn-1",
+          run_id: "turn-1",
+          text: "from snapshot",
+        },
+      },
+      makeEvent("agent.token", { run_id: "turn-1", text: " live" }),
+    ]);
   });
 
   it("does not update agent_events when length is same", () => {

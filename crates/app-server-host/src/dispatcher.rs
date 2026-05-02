@@ -41,7 +41,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Notify, futures::OwnedNotified};
+use tokio::sync::{Notify, futures::OwnedNotified, mpsc};
 
 use crate::HostSession;
 
@@ -522,6 +522,7 @@ impl HostRequestDispatcher {
                             bound_model.as_ref(),
                             &self.agent_model_state,
                         ),
+                        None,
                     ) {
                         Ok(started) => started,
                         Err(error) => {
@@ -880,6 +881,8 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let agent_id = store.agent_id_for_session(&request.session_id).await?;
         let bound_model = store.bound_model_for_session(&request.session_id).await?;
+        let persisted_event_id =
+            max_agent_event_id(&store.read_agent_events(&agent_id, None).await?);
         let model_state = agent_model_state_for_bound_or_request(
             bound_model.as_ref(),
             &self.agent_model_state,
@@ -895,6 +898,7 @@ impl HostRequestDispatcher {
             request.context_refs,
             bound_model,
             model_state,
+            persisted_event_id,
         )
     }
 
@@ -905,6 +909,8 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let session_id = store.session_id_for_agent(&request.agent_id).await?;
         let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
+        let persisted_event_id =
+            max_agent_event_id(&store.read_agent_events(&request.agent_id, None).await?);
         self.start_agent_run(
             session_id,
             request.agent_id,
@@ -915,6 +921,7 @@ impl HostRequestDispatcher {
             request.context_refs,
             bound_model.clone(),
             agent_model_state_for_bound_or_current(bound_model.as_ref(), &self.agent_model_state),
+            persisted_event_id,
         )
     }
 
@@ -929,6 +936,7 @@ impl HostRequestDispatcher {
         context_refs: Vec<String>,
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
+        persisted_event_id: Option<AgentEventId>,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
             .agent_runtime
@@ -940,6 +948,7 @@ impl HostRequestDispatcher {
                 client_request_id,
                 bound_model,
                 self.agent_subscriber_id(),
+                persisted_event_id,
             )?;
         if !run.started_now {
             return Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
@@ -985,6 +994,7 @@ impl HostRequestDispatcher {
         context_refs: Vec<String>,
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
+        persisted_event_id: Option<AgentEventId>,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
             .agent_runtime
@@ -996,6 +1006,7 @@ impl HostRequestDispatcher {
                 client_request_id,
                 bound_model,
                 self.agent_subscriber_id(),
+                persisted_event_id,
             )?;
         let response = AgentStartedResponse {
             session_id: run.session_id.clone(),
@@ -1051,6 +1062,7 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let chat_id = store.session_id_for_agent(&request.agent_id).await?;
         let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
+        let persisted_events = store.read_agent_events(&request.agent_id, None).await?;
         let snapshot = self
             .agent_runtime
             .lock()
@@ -1059,6 +1071,7 @@ impl HostRequestDispatcher {
                 &request.agent_id,
                 chat_id,
                 bound_model,
+                persisted_events,
                 request.since_event_id,
             );
         Ok(CommandSuccess::AgentSnapshot(snapshot))
@@ -1129,11 +1142,13 @@ impl HostRequestDispatcher {
 
 #[derive(Default)]
 struct WorkspaceAgentRuntime {
+    workspace_root: Option<PathBuf>,
     registry: AgentRunRegistry,
     next_subscriber_id: u64,
     subscribers: HashMap<u64, AgentRuntimeSubscriber>,
     logs: HashMap<AgentId, AgentRuntimeLog>,
     next_event_id: u64,
+    event_persist_sender: Option<mpsc::UnboundedSender<AgentEventRecord>>,
 }
 
 struct AgentRuntimeSubscriber {
@@ -1180,11 +1195,12 @@ fn agent_runtime_for_workspace(workspace_path: Option<&Path>) -> Arc<Mutex<Works
     let mut runtimes = runtimes
         .lock()
         .expect("Agent runtime map lock should not be poisoned");
-    Arc::clone(
-        runtimes
-            .entry(workspace_key)
-            .or_insert_with(|| Arc::new(Mutex::new(WorkspaceAgentRuntime::default()))),
-    )
+    Arc::clone(runtimes.entry(workspace_key).or_insert_with(|| {
+        Arc::new(Mutex::new(WorkspaceAgentRuntime {
+            workspace_root: Some(workspace_path.to_path_buf()),
+            ..WorkspaceAgentRuntime::default()
+        }))
+    }))
 }
 
 fn register_agent_runtime_subscriber(
@@ -1278,10 +1294,14 @@ impl WorkspaceAgentRuntime {
         client_request_id: Option<String>,
         bound_model: Option<BoundAgentModel>,
         subscriber_id: Option<u64>,
+        persisted_event_id: Option<AgentEventId>,
     ) -> Result<AgentRunHandle, ProtocolError> {
         let run = self
             .registry
             .try_start(session_id, agent_id, client_request_id)?;
+        if run.started_now {
+            self.advance_event_cursor(persisted_event_id);
+        }
         self.record_run_started(&run, bound_model, subscriber_id);
         Ok(run)
     }
@@ -1293,12 +1313,16 @@ impl WorkspaceAgentRuntime {
         client_request_id: Option<String>,
         bound_model: Option<BoundAgentModel>,
         subscriber_id: Option<u64>,
+        persisted_event_id: Option<AgentEventId>,
     ) -> Result<AgentRunHandle, ProtocolError> {
         let run = self.registry.try_start_reserved_initial_turn(
             session_id,
             agent_id,
             client_request_id,
         )?;
+        if run.started_now {
+            self.advance_event_cursor(persisted_event_id);
+        }
         self.record_run_started(&run, bound_model, subscriber_id);
         Ok(run)
     }
@@ -1316,25 +1340,48 @@ impl WorkspaceAgentRuntime {
         agent_id: &AgentId,
         chat_id: app_server_protocol::ChatSessionId,
         bound_model: Option<BoundAgentModel>,
+        persisted_events: Vec<AgentEventRecord>,
         since_event_id: Option<AgentEventId>,
     ) -> AgentSnapshotResponse {
-        let Some(log) = self.logs.get(agent_id) else {
-            return idle_agent_snapshot(agent_id.clone(), chat_id, bound_model, since_event_id);
-        };
-        let events = filter_agent_events(&log.events, since_event_id);
-        let bound_model = log.bound_model.clone().or(bound_model);
-        AgentSnapshotResponse {
-            agent_id: agent_id.clone(),
-            chat_id: log.chat_id.clone(),
-            model_lock_reason: model_lock_reason_for(bound_model.as_ref()),
-            bound_model,
-            state: log.state,
-            active_turn_id: log.active_turn_id.clone(),
-            since_event_id,
-            events,
-            current_text: log.current_text.clone(),
-            current_reasoning: log.current_reasoning.clone(),
-            error: log.error.clone(),
+        if let Some(log) = self.logs.get(agent_id) {
+            let bound_model = log.bound_model.clone().or(bound_model);
+            return AgentSnapshotResponse {
+                agent_id: agent_id.clone(),
+                chat_id: log.chat_id.clone(),
+                model_lock_reason: model_lock_reason_for(bound_model.as_ref()),
+                bound_model,
+                state: log.state,
+                active_turn_id: log.active_turn_id.clone(),
+                since_event_id,
+                events: merge_agent_events(&persisted_events, &log.events, since_event_id),
+                current_text: log.current_text.clone(),
+                current_reasoning: log.current_reasoning.clone(),
+                error: log.error.clone(),
+            };
+        }
+        if !persisted_events.is_empty() {
+            let mut log = runtime_log_from_events(chat_id, bound_model.clone(), persisted_events);
+            interrupt_restored_running_log(&mut log);
+            return AgentSnapshotResponse {
+                agent_id: agent_id.clone(),
+                chat_id: log.chat_id,
+                model_lock_reason: model_lock_reason_for(bound_model.as_ref()),
+                bound_model,
+                state: log.state,
+                active_turn_id: log.active_turn_id,
+                since_event_id,
+                events: filter_agent_events(&log.events, since_event_id),
+                current_text: log.current_text,
+                current_reasoning: log.current_reasoning,
+                error: log.error,
+            };
+        }
+        idle_agent_snapshot(agent_id.clone(), chat_id, bound_model, since_event_id)
+    }
+
+    fn advance_event_cursor(&mut self, persisted_event_id: Option<AgentEventId>) {
+        if let Some(event_id) = persisted_event_id {
+            self.next_event_id = self.next_event_id.max(event_id.0);
         }
     }
 
@@ -1413,6 +1460,7 @@ impl WorkspaceAgentRuntime {
             ts_ms: unix_now_ms(),
             payload,
         };
+        let record_to_persist = record.clone();
         let log = self.ensure_log(run, None);
         update_runtime_log(log, &record.payload);
         if matches!(
@@ -1426,6 +1474,35 @@ impl WorkspaceAgentRuntime {
         log.events.push(record);
         if let Some(legacy_event) = legacy_event {
             log.legacy_events.push((event_id, legacy_event));
+        }
+        self.queue_event_record_persist(record_to_persist);
+    }
+
+    fn queue_event_record_persist(&mut self, record: AgentEventRecord) {
+        let Some(workspace_root) = self.workspace_root.clone() else {
+            return;
+        };
+        if self.event_persist_sender.is_none() {
+            let Ok(handle) = tokio::runtime::Handle::try_current() else {
+                return;
+            };
+            let (sender, mut receiver) = mpsc::unbounded_channel::<AgentEventRecord>();
+            handle.spawn(async move {
+                let store = ChatStore::new(workspace_root);
+                while let Some(record) = receiver.recv().await {
+                    if let Err(error) = store.append_agent_event(&record.agent_id, &record).await {
+                        log::error!(
+                            "[agent event persist agent={}] failed: {:?}",
+                            record.agent_id.0,
+                            error
+                        );
+                    }
+                }
+            });
+            self.event_persist_sender = Some(sender);
+        }
+        if let Some(sender) = &self.event_persist_sender {
+            let _ = sender.send(record);
         }
     }
 
@@ -1514,6 +1591,68 @@ fn filter_agent_events(
         .filter(|event| event_is_after(event.event_id, since_event_id))
         .cloned()
         .collect()
+}
+
+fn merge_agent_events(
+    persisted: &[AgentEventRecord],
+    memory: &[AgentEventRecord],
+    since_event_id: Option<AgentEventId>,
+) -> Vec<AgentEventRecord> {
+    let mut by_id = HashMap::new();
+    for event in persisted.iter().chain(memory.iter()) {
+        if event_is_after(event.event_id, since_event_id) {
+            by_id.insert(event.event_id, event.clone());
+        }
+    }
+    let mut events = by_id.into_values().collect::<Vec<_>>();
+    events.sort_by_key(|event| event.event_id.0);
+    events
+}
+
+fn runtime_log_from_events(
+    chat_id: app_server_protocol::ChatSessionId,
+    bound_model: Option<BoundAgentModel>,
+    events: Vec<AgentEventRecord>,
+) -> AgentRuntimeLog {
+    let mut log = AgentRuntimeLog {
+        chat_id,
+        bound_model,
+        state: AgentRuntimeStatus::Idle,
+        active_turn_id: None,
+        events: Vec::new(),
+        legacy_events: Vec::new(),
+        current_text: String::new(),
+        current_reasoning: String::new(),
+        error: None,
+    };
+    for event in events {
+        update_runtime_log(&mut log, &event.payload);
+        if matches!(
+            event.payload,
+            AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::Running
+            }
+        ) {
+            log.active_turn_id = event.turn_id.clone();
+        }
+        log.events.push(event);
+    }
+    log
+}
+
+fn interrupt_restored_running_log(log: &mut AgentRuntimeLog) {
+    if log.state == AgentRuntimeStatus::Running {
+        log.state = AgentRuntimeStatus::Interrupted;
+        log.active_turn_id = None;
+    }
+}
+
+fn max_agent_event_id(events: &[AgentEventRecord]) -> Option<AgentEventId> {
+    events
+        .iter()
+        .map(|event| event.event_id.0)
+        .max()
+        .map(AgentEventId)
 }
 
 fn event_is_after(event_id: AgentEventId, since_event_id: Option<AgentEventId>) -> bool {
@@ -1887,21 +2026,25 @@ impl AgentToolEventRecorder {
             match write {
                 AgentToolHistoryWrite::ToolCall(tool_call) => {
                     let _ = store
-                        .append_tool_call_with_run_id(
+                        .append_tool_call_with_agent_turn(
                             &self.run.session_id,
                             "agent tool started",
                             tool_call,
+                            &self.run.agent_id,
+                            &self.run.turn_id,
                             Some(self.run.run_id.clone()),
                         )
                         .await;
                 }
                 AgentToolHistoryWrite::ToolResult(tool_result, mesh_result) => {
                     let _ = store
-                        .append_tool_result_with_run_id(
+                        .append_tool_result_with_agent_turn(
                             &self.run.session_id,
                             "agent tool completed",
                             tool_result,
                             mesh_result,
+                            &self.run.agent_id,
+                            &self.run.turn_id,
                             Some(self.run.run_id.clone()),
                         )
                         .await;
@@ -2872,14 +3015,13 @@ fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
 async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
     let store = ChatStore::new(workspace_root.to_path_buf());
     let _ = store
-        .append_message_with_run_id(
+        .append_message_with_agent_turn(
             &run.session_id,
             ChatRole::Assistant,
             content,
-            Vec::new(),
-            None,
+            &run.agent_id,
+            &run.turn_id,
             Some(run.run_id.clone()),
-            None,
         )
         .await;
 }
@@ -3541,6 +3683,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("run starts");
 
@@ -3585,6 +3728,78 @@ mod tests {
             agent_token_texts(&delivered.lock().expect("push lock")),
             vec!["four"]
         );
+    }
+
+    #[test]
+    fn runtime_snapshot_rebuilds_idle_state_from_persisted_events() {
+        let runtime = WorkspaceAgentRuntime::default();
+        let agent_id = AgentId("agent-1".into());
+        let turn_id = AgentTurnId("turn-1".into());
+        let snapshot = runtime.snapshot(
+            &agent_id,
+            ChatSessionId("chat-1".into()),
+            None,
+            vec![
+                AgentEventRecord {
+                    event_id: AgentEventId(1),
+                    agent_id: agent_id.clone(),
+                    turn_id: Some(turn_id.clone()),
+                    ts_ms: 100,
+                    payload: AgentEventPayload::StateChanged {
+                        state: AgentRuntimeStatus::Running,
+                    },
+                },
+                AgentEventRecord {
+                    event_id: AgentEventId(2),
+                    agent_id: agent_id.clone(),
+                    turn_id: Some(turn_id.clone()),
+                    ts_ms: 101,
+                    payload: AgentEventPayload::Token {
+                        text: "hello".into(),
+                    },
+                },
+                AgentEventRecord {
+                    event_id: AgentEventId(3),
+                    agent_id: agent_id.clone(),
+                    turn_id: Some(turn_id),
+                    ts_ms: 102,
+                    payload: AgentEventPayload::Done { cancelled: false },
+                },
+            ],
+            Some(AgentEventId(1)),
+        );
+
+        assert_eq!(snapshot.agent_id, agent_id);
+        assert_eq!(snapshot.state, AgentRuntimeStatus::Done);
+        assert_eq!(snapshot.current_text, "hello");
+        assert_eq!(snapshot.events.len(), 2);
+        assert_eq!(snapshot.events[0].event_id, AgentEventId(2));
+    }
+
+    #[test]
+    fn runtime_snapshot_marks_persisted_running_event_as_interrupted_without_worker() {
+        let runtime = WorkspaceAgentRuntime::default();
+        let agent_id = AgentId("agent-1".into());
+        let turn_id = AgentTurnId("turn-1".into());
+        let snapshot = runtime.snapshot(
+            &agent_id,
+            ChatSessionId("chat-1".into()),
+            None,
+            vec![AgentEventRecord {
+                event_id: AgentEventId(1),
+                agent_id: agent_id.clone(),
+                turn_id: Some(turn_id),
+                ts_ms: 100,
+                payload: AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            }],
+            None,
+        );
+
+        assert_eq!(snapshot.agent_id, agent_id);
+        assert_eq!(snapshot.state, AgentRuntimeStatus::Interrupted);
+        assert_eq!(snapshot.active_turn_id, None);
     }
 
     #[tokio::test]

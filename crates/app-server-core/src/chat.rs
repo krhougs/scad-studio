@@ -9,10 +9,10 @@ use std::{
 };
 
 use app_server_protocol::{
-    AgentId, AgentSearchSource, BoundAgentModel, ChatAckResponse, ChatArchivedResponse,
-    ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
-    ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
-    ProtocolError, ProtocolErrorCode,
+    AgentEventId, AgentEventRecord, AgentId, AgentSearchSource, AgentTurnId, BoundAgentModel,
+    ChatAckResponse, ChatArchivedResponse, ChatCreatedResponse, ChatHistoryResponse,
+    ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary,
+    ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolError, ProtocolErrorCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt};
@@ -100,6 +100,10 @@ struct JsonlMessage {
     search_sources: Vec<AgentSearchSource>,
     #[serde(default)]
     run_id: Option<String>,
+    #[serde(default)]
+    agent_id: Option<AgentId>,
+    #[serde(default)]
+    turn_id: Option<AgentTurnId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,6 +368,29 @@ impl ChatStore {
         .await
     }
 
+    pub async fn append_message_with_agent_turn(
+        &self,
+        session_id: &ChatSessionId,
+        role: ChatRole,
+        content: &str,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        validate_session_id(session_id)?;
+        let path = self.session_path(session_id).await?;
+        let message_count = read_messages(&self.workspace_root, &path).await?.len();
+        let message_id = format!("msg-{}", message_count.saturating_add(1));
+        let message = JsonlMessage::new(&message_id, role, content.to_owned(), Vec::new(), None)
+            .with_run_id(run_id)
+            .with_agent_turn(agent_id.clone(), turn_id.clone());
+        append_jsonl(&self.workspace_root, &path, &message).await?;
+        Ok(ChatAckResponse {
+            session_id: session_id.clone(),
+            message_id,
+        })
+    }
+
     async fn append_message_with_run_id_without_lock(
         &self,
         session_id: &ChatSessionId,
@@ -435,6 +462,30 @@ impl ChatStore {
         self.append_record(session_id, message).await
     }
 
+    pub async fn append_tool_call_with_agent_turn(
+        &self,
+        session_id: &ChatSessionId,
+        content: &str,
+        tool_call: ChatToolCallRecord,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        let mut message = self
+            .next_message_with_agent_turn(
+                session_id,
+                ChatRole::Assistant,
+                content,
+                agent_id,
+                turn_id,
+                run_id,
+            )
+            .await?;
+        message.tool_call_id = Some(tool_call.tool_call_id.clone());
+        message.tool_calls.push(tool_call);
+        self.append_record(session_id, message).await
+    }
+
     pub async fn append_tool_result(
         &self,
         session_id: &ChatSessionId,
@@ -456,6 +507,32 @@ impl ChatStore {
     ) -> Result<ChatAckResponse, ProtocolError> {
         let mut message = self
             .next_message_with_run_id(session_id, ChatRole::Tool, content, run_id)
+            .await?;
+        message.tool_call_id = Some(tool_result.tool_call_id.clone());
+        message.tool_result = Some(tool_result);
+        message.mesh_result = mesh_result;
+        self.append_record(session_id, message).await
+    }
+
+    pub async fn append_tool_result_with_agent_turn(
+        &self,
+        session_id: &ChatSessionId,
+        content: &str,
+        tool_result: ChatToolResultRecord,
+        mesh_result: Option<app_server_protocol::CadQueryResultReady>,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+        run_id: Option<String>,
+    ) -> Result<ChatAckResponse, ProtocolError> {
+        let mut message = self
+            .next_message_with_agent_turn(
+                session_id,
+                ChatRole::Tool,
+                content,
+                agent_id,
+                turn_id,
+                run_id,
+            )
             .await?;
         message.tool_call_id = Some(tool_result.tool_call_id.clone());
         message.tool_result = Some(tool_result);
@@ -596,6 +673,21 @@ impl ChatStore {
             .find(|entry| entry.chat_id == *session_id)
             .ok_or_else(|| not_found("Chat session 不存在"))?;
         let path = self.relative_path(&entry.messages_path)?;
+        ensure_existing_jsonl_file(&self.workspace_root, &path).await?;
+        Ok(path)
+    }
+
+    async fn event_path_for_agent_from_index(
+        &self,
+        agent_id: &AgentId,
+        index: &ChatIndex,
+    ) -> Result<PathBuf, ProtocolError> {
+        let entry = index
+            .chats
+            .iter()
+            .find(|entry| entry.agent_id == *agent_id)
+            .ok_or_else(|| not_found("Agent 不存在"))?;
+        let path = self.relative_path(&entry.events_path)?;
         ensure_existing_jsonl_file(&self.workspace_root, &path).await?;
         Ok(path)
     }
@@ -847,6 +939,39 @@ impl ChatStore {
             .ok_or_else(|| not_found("Agent 不存在"))
     }
 
+    pub async fn append_agent_event(
+        &self,
+        agent_id: &AgentId,
+        event: &AgentEventRecord,
+    ) -> Result<(), ProtocolError> {
+        if event.agent_id != *agent_id {
+            return Err(internal_error("Agent event 与目标 agent_id 不一致"));
+        }
+        let write_lock = workspace_write_lock(&self.workspace_root)?;
+        let _guard = write_lock.lock().await;
+        let index = self.load_or_migrate_index_without_lock().await?;
+        let path = self
+            .event_path_for_agent_from_index(agent_id, &index)
+            .await?;
+        append_agent_event_jsonl(&self.workspace_root, &path, event).await
+    }
+
+    pub async fn read_agent_events(
+        &self,
+        agent_id: &AgentId,
+        since_event_id: Option<AgentEventId>,
+    ) -> Result<Vec<AgentEventRecord>, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        let path = self
+            .event_path_for_agent_from_index(agent_id, &index)
+            .await?;
+        let events = read_agent_event_records(&self.workspace_root, &path).await?;
+        Ok(events
+            .into_iter()
+            .filter(|event| since_event_id.is_none_or(|since| event.event_id.0 > since.0))
+            .collect())
+    }
+
     async fn summary_from_index_entry(
         &self,
         entry: &ChatIndexEntry,
@@ -960,6 +1085,21 @@ impl ChatStore {
         .with_run_id(run_id))
     }
 
+    async fn next_message_with_agent_turn(
+        &self,
+        session_id: &ChatSessionId,
+        role: ChatRole,
+        content: &str,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+        run_id: Option<String>,
+    ) -> Result<JsonlMessage, ProtocolError> {
+        Ok(self
+            .next_message_with_run_id(session_id, role, content, run_id)
+            .await?
+            .with_agent_turn(agent_id.clone(), turn_id.clone()))
+    }
+
     async fn append_record(
         &self,
         session_id: &ChatSessionId,
@@ -996,11 +1136,19 @@ impl JsonlMessage {
             mesh_result: None,
             search_sources: Vec::new(),
             run_id: None,
+            agent_id: None,
+            turn_id: None,
         }
     }
 
     fn with_run_id(mut self, run_id: Option<String>) -> Self {
         self.run_id = run_id;
+        self
+    }
+
+    fn with_agent_turn(mut self, agent_id: AgentId, turn_id: AgentTurnId) -> Self {
+        self.agent_id = Some(agent_id);
+        self.turn_id = Some(turn_id);
         self
     }
 
@@ -1024,6 +1172,8 @@ impl From<JsonlMessage> for ChatMessageRecord {
             mesh_result: value.mesh_result,
             search_sources: value.search_sources,
             run_id: value.run_id,
+            agent_id: value.agent_id,
+            turn_id: value.turn_id,
         }
     }
 }
@@ -1247,6 +1397,25 @@ async fn append_jsonl(
         .map_err(|error| internal_error(format!("写入 Chat JSONL 失败: {error}")))
 }
 
+async fn append_agent_event_jsonl(
+    workspace_root: &Path,
+    path: &Path,
+    event: &AgentEventRecord,
+) -> Result<(), ProtocolError> {
+    ensure_jsonl_file_writable(workspace_root, path).await?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .map_err(|error| internal_error(format!("打开 Agent event JSONL 失败: {error}")))?;
+    let line = serde_json::to_string(event)
+        .map_err(|error| internal_error(format!("序列化 Agent event JSONL 失败: {error}")))?;
+    file.write_all(format!("{line}\n").as_bytes())
+        .await
+        .map_err(|error| internal_error(format!("写入 Agent event JSONL 失败: {error}")))
+}
+
 async fn read_messages(
     workspace_root: &Path,
     path: &Path,
@@ -1264,6 +1433,25 @@ async fn read_messages(
         }
     }
     Ok(messages)
+}
+
+async fn read_agent_event_records(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<Vec<AgentEventRecord>, ProtocolError> {
+    ensure_existing_jsonl_file(workspace_root, path).await?;
+    let contents = fs::read_to_string(path)
+        .await
+        .map_err(|error| internal_error(format!("读取 Agent event JSONL 失败: {error}")))?;
+    let mut events = Vec::new();
+    for line in contents.lines() {
+        if !line.trim().is_empty() {
+            events.push(serde_json::from_str(line).map_err(|error| {
+                internal_error(format!("解析 Agent event JSONL 失败: {error}"))
+            })?);
+        }
+    }
+    Ok(events)
 }
 
 fn trim_to_limit(messages: &mut Vec<JsonlMessage>, limit: usize) {

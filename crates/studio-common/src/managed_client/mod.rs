@@ -8,7 +8,7 @@ mod watch;
 use std::collections::{HashMap, VecDeque};
 
 use app_server_protocol::{
-    AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
     CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord, ChatSessionId,
     ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest, ServerPushEvent,
 };
@@ -49,6 +49,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) pending_chat_session: Option<ChatSessionId>,
     pub(super) agent_run: Option<AgentStartedResponse>,
     pub(super) agent_events: Vec<ServerPushEvent>,
+    pub(super) agent_event_records: Vec<AgentEventRecord>,
     pub(super) current_selection: SelectionUpdateRequest,
     pub(super) cadquery_results: Vec<CadQueryResultReady>,
     pub(super) preview_tasks: HashMap<RequestId, PreviewTaskState>,
@@ -88,6 +89,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             pending_chat_session: None,
             agent_run: None,
             agent_events: Vec::new(),
+            agent_event_records: Vec::new(),
             current_selection: SelectionUpdateRequest {
                 selections: Vec::new(),
                 active_index: None,
@@ -185,6 +187,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             current_chat_history: self.current_chat_history.clone(),
             agent_run: self.agent_run.clone(),
             agent_events: self.agent_events.clone(),
+            agent_event_records: self.agent_event_records.clone(),
             current_selection: self.current_selection.clone(),
             cadquery_results: self.cadquery_results.clone(),
             preview_tasks,

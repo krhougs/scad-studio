@@ -962,6 +962,32 @@ describe("ChatZone", () => {
     expect(screen.queryByText("other text")).toBeNull();
   });
 
+  it("streams only tokens from the current chat agent", async () => {
+    const client = fakeClient();
+    setSnapshot({
+      ...chatSnapshot(),
+      agent_run: { session_id: "main", agent_id: "agent-main", run_id: "run-main" },
+      agent_events: [
+        {
+          event: "agent.token",
+          payload: { agent_id: "agent-other", run_id: "run-other", text: "other agent text" },
+        },
+        {
+          event: "agent.token",
+          payload: { agent_id: "agent-main", run_id: "run-main", text: "main agent text" },
+        },
+      ],
+    });
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("main agent text")).toBeTruthy());
+    expect(screen.queryByText("other agent text")).toBeNull();
+  });
+
   it("renders live agent tokens and tool events in arrival order", async () => {
     const client = fakeClient();
     setSnapshot({
@@ -1505,6 +1531,8 @@ function fakeClient(): Pick<
   | "dispatchChatSend"
   | "dispatchAgentInvoke"
   | "dispatchAgentStartTurn"
+  | "dispatchAgentSnapshot"
+  | "dispatchAgentSubscribe"
   | "dispatchChatHistory"
   | "dispatchAgentCancel"
   | "dispatchAgentModelRegistry"
@@ -1518,6 +1546,8 @@ function fakeClient(): Pick<
     dispatchChatSend: vi.fn().mockResolvedValue({}),
     dispatchAgentInvoke: vi.fn().mockResolvedValue({}),
     dispatchAgentStartTurn: vi.fn().mockResolvedValue({}),
+    dispatchAgentSnapshot: vi.fn().mockResolvedValue({ events: [] }),
+    dispatchAgentSubscribe: vi.fn().mockResolvedValue({}),
     dispatchChatHistory: vi.fn().mockResolvedValue({}),
     dispatchAgentCancel: vi.fn().mockResolvedValue({}),
     dispatchAgentModelRegistry: vi.fn().mockResolvedValue({}),

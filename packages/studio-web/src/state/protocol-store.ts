@@ -26,6 +26,7 @@ export type ChatSlice = {
   current_chat_history: ChatMessageRecord[];
   agent_run: AgentRun | null;
   agent_events: AgentEvent[];
+  agent_event_records: AgentEventRecord[];
   current_selection: SelectionUpdateRequest | null;
   cadquery_results: CadQueryResultReady[];
   llm_configured: boolean;
@@ -53,6 +54,7 @@ const INITIAL_CHAT: ChatSlice = {
   current_chat_history: [],
   agent_run: null,
   agent_events: [],
+  agent_event_records: [],
   current_selection: null,
   cadquery_results: [],
   llm_configured: true,
@@ -182,8 +184,14 @@ function applyChatFields(
   }
 
   const events = (snap["agent_events"] as AgentEvent[] | undefined) ?? [];
-  if (!agentEventsEqual(state.agent_events, events)) {
-    patch.agent_events = events;
+  const eventRecords =
+    (snap["agent_event_records"] as AgentEventRecord[] | undefined) ?? [];
+  const renderedEvents = [...agentEventsFromRecords(eventRecords), ...events];
+  if (!agentEventsEqual(state.agent_events, renderedEvents)) {
+    patch.agent_events = renderedEvents;
+  }
+  if (!agentEventRecordsEqual(state.agent_event_records, eventRecords)) {
+    patch.agent_event_records = eventRecords;
   }
 
   const selection = (snap["current_selection"] as SelectionUpdateRequest | undefined) ?? null;
@@ -321,6 +329,76 @@ export function agentEventsEqual(a: AgentEvent[], b: AgentEvent[]): boolean {
   if (a.length !== b.length) return false;
   if (a.length === 0) return true;
   return a[a.length - 1]!.event === b[b.length - 1]!.event;
+}
+
+type AgentEventRecord = {
+  event_id: number | { 0?: number } | Record<string, unknown>;
+  agent_id: string | { 0?: string } | Record<string, unknown>;
+  turn_id?: string | { 0?: string } | null | Record<string, unknown>;
+  ts_ms: number;
+  payload: {
+    event?: string;
+    payload?: Record<string, unknown>;
+  };
+};
+
+function agentEventsFromRecords(records: AgentEventRecord[]): AgentEvent[] {
+  return records
+    .map(agentEventFromRecord)
+    .filter((event): event is AgentEvent => event !== null);
+}
+
+function agentEventFromRecord(record: AgentEventRecord): AgentEvent | null {
+  const payload = record.payload?.payload ?? {};
+  const event = record.payload?.event;
+  const turnId = idString(record.turn_id ?? null);
+  const metadata = {
+    agent_id: idString(record.agent_id),
+    turn_id: turnId,
+    run_id: turnId,
+  };
+  if (event === "token") {
+    return { event: "agent.token", payload: { ...metadata, ...payload } };
+  }
+  if (event === "reasoning") {
+    return { event: "agent.reasoning", payload: { ...metadata, ...payload } };
+  }
+  if (event === "tool_start") {
+    return { event: "agent.tool_start", payload: { ...metadata, ...payload } };
+  }
+  if (event === "tool_result") {
+    return { event: "agent.tool_result", payload: { ...metadata, ...payload } };
+  }
+  if (event === "error") {
+    return { event: "agent.error", payload: { ...metadata, ...payload } };
+  }
+  if (event === "done") {
+    return { event: "agent.done", payload: { ...metadata, ...payload } };
+  }
+  return null;
+}
+
+function idString(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const inner = record["0"];
+  return typeof inner === "string" ? inner : null;
+}
+
+function agentEventRecordsEqual(
+  a: AgentEventRecord[],
+  b: AgentEventRecord[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  const left = a[a.length - 1]!;
+  const right = b[b.length - 1]!;
+  return (
+    JSON.stringify(left.event_id) === JSON.stringify(right.event_id) &&
+    JSON.stringify(left.agent_id) === JSON.stringify(right.agent_id)
+  );
 }
 
 export function agentProviderEqual(

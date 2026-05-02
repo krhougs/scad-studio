@@ -1378,6 +1378,8 @@ fn chat_msg(role: &str, content: &str) -> ChatMessageRecord {
         mesh_result: None,
         search_sources: Vec::new(),
         run_id: None,
+        agent_id: None,
+        turn_id: None,
     }
 }
 
@@ -1398,6 +1400,8 @@ fn tool_msg(content: &str) -> ChatMessageRecord {
         mesh_result: None,
         search_sources: Vec::new(),
         run_id: None,
+        agent_id: None,
+        turn_id: None,
     }
 }
 

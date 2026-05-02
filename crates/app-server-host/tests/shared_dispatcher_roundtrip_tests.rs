@@ -720,7 +720,11 @@ async fn dispatcher_agent_subscribe_receives_events_from_other_dispatcher() {
 #[tokio::test]
 async fn dispatcher_agent_snapshot_reads_active_agent_from_second_dispatcher() {
     let workspace = temp_workspace("dispatcher-agent-snapshot-observer");
-    let _agent_env = unset_agent_environment();
+    let (config_path, server_handle) = hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
     let (mut first_dispatcher, pushes) = dispatcher_with_pushes(&workspace);
     let (mut second_dispatcher, _second_pushes) = dispatcher_with_pushes(&workspace);
     let created = create_chat_async(&mut first_dispatcher, "runtime snapshot", Vec::new()).await;
@@ -744,7 +748,10 @@ async fn dispatcher_agent_snapshot_reads_active_agent_from_second_dispatcher() {
             state: AgentRuntimeStatus::Running
         })
     ));
+    let cancelled = cancel_agent_async(&mut first_dispatcher, 35, &created.agent_id).await;
+    assert!(cancelled.cancelled);
     wait_for_done_async(&pushes, &started.run_id).await;
+    server_handle.abort();
     cleanup_workspace(&workspace);
 }
 
@@ -793,6 +800,109 @@ async fn dispatcher_agent_subscribe_replays_events_by_event_cursor() {
         third_pushes.lock().expect("push buffer lock").is_empty(),
         "subscribe after the latest event cursor must not replay old events"
     );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_event_log_persists_runtime_events_outside_chat_jsonl() {
+    let workspace = temp_workspace("dispatcher-agent-event-log-file");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut dispatcher, "runtime event log", Vec::new()).await;
+    let started = start_agent_turn_async(
+        &mut dispatcher,
+        46,
+        &created.agent_id,
+        "summarize current model",
+    )
+    .await;
+    wait_for_done_async(&pushes, &started.run_id).await;
+
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", created.agent_id.0));
+    let records = wait_for_agent_event_records_async(&event_log_path, 3).await;
+    assert!(
+        records.len() >= 3,
+        "running, token and done events should be persisted"
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record.agent_id == created.agent_id)
+    );
+    assert!(records.iter().all(|record| record.ts_ms > 0));
+    assert!(
+        records
+            .windows(2)
+            .all(|pair| pair[0].event_id.0 < pair[1].event_id.0),
+        "event ids must be monotonic per agent"
+    );
+    assert!(
+        records.iter().all(|record| match record.payload {
+            app_server_protocol::AgentEventPayload::StateChanged { .. } => {
+                record.turn_id.is_some()
+            }
+            _ => record.turn_id.is_some(),
+        }),
+        "turn runtime events must include turn_id"
+    );
+
+    let chat_history = std::fs::read_to_string(
+        workspace
+            .join("chats")
+            .join(format!("{}.jsonl", created.session_id.0)),
+    )
+    .expect("chat jsonl should exist");
+    assert!(
+        !chat_history.contains("\"agent.token\"")
+            && !chat_history.contains("\"agent.reasoning\"")
+            && !chat_history.contains("\"event_id\""),
+        "Chat JSONL must not store runtime replay events"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_agent_event_id_continues_after_persisted_log() {
+    let workspace = temp_workspace("dispatcher-agent-event-id-resume");
+    let (config_path, server_handle) = hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("event id resume", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &app_server_protocol::AgentEventRecord {
+                event_id: AgentEventId(9),
+                agent_id: created.agent_id.clone(),
+                turn_id: Some(app_server_protocol::AgentTurnId("old-turn".into())),
+                ts_ms: 100,
+                payload: app_server_protocol::AgentEventPayload::Done { cancelled: false },
+            },
+        )
+        .await
+        .expect("seed persisted agent event");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+
+    let started =
+        start_agent_turn_async(&mut dispatcher, 34, &created.agent_id, "resume ids").await;
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", created.agent_id.0));
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
+
+    assert_eq!(records[1].event_id, AgentEventId(10));
+    let cancelled = cancel_agent_async(&mut dispatcher, 35, &created.agent_id).await;
+    assert!(cancelled.cancelled);
+    wait_for_done_async(&pushes, &started.run_id).await;
+    server_handle.abort();
     cleanup_workspace(&workspace);
 }
 
@@ -2087,6 +2197,26 @@ async fn wait_for_done_event_async(
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("agent.done not observed for {run_id}");
+}
+
+async fn wait_for_agent_event_records_async(
+    path: &std::path::Path,
+    min_records: usize,
+) -> Vec<app_server_protocol::AgentEventRecord> {
+    for _ in 0..200 {
+        if let Ok(event_log) = std::fs::read_to_string(path) {
+            let records = event_log
+                .lines()
+                .map(|line| serde_json::from_str::<app_server_protocol::AgentEventRecord>(line))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("event log lines should decode as AgentEventRecord");
+            if records.len() >= min_records {
+                return records;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for Agent event log records");
 }
 
 async fn wait_for_error_event_async(

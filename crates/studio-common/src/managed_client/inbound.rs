@@ -169,6 +169,26 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             CommandSuccess::AgentStarted(response) => {
                 self.agent_run = Some(response.clone());
             }
+            CommandSuccess::AgentSnapshot(response) => {
+                self.agent_events.clear();
+                self.merge_agent_event_records(response.events.clone());
+                if response.state == app_server_protocol::AgentRuntimeStatus::Running {
+                    if let Some(turn_id) = response.active_turn_id.clone() {
+                        self.agent_run = Some(app_server_protocol::AgentStartedResponse {
+                            session_id: response.chat_id.clone(),
+                            agent_id: response.agent_id.clone(),
+                            run_id: turn_id.0.clone(),
+                            turn_id,
+                        });
+                    }
+                } else if self
+                    .agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.agent_id == response.agent_id)
+                {
+                    self.agent_run = None;
+                }
+            }
             CommandSuccess::AgentModelRegistry(response) => {
                 self.agent_model_registry = Some(response.clone());
                 self.agent_provider = agent_provider_capability(response);
@@ -312,6 +332,17 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         self.agent_events.push(event.clone());
         self.events
             .push_back(ClientEvent::AgentEvent { payload: event });
+    }
+
+    fn merge_agent_event_records(&mut self, records: Vec<app_server_protocol::AgentEventRecord>) {
+        for record in records {
+            self.agent_event_records.retain(|existing| {
+                existing.agent_id != record.agent_id || existing.event_id != record.event_id
+            });
+            self.agent_event_records.push(record);
+        }
+        self.agent_event_records
+            .sort_by_key(|record| (record.agent_id.0.clone(), record.event_id.0));
     }
 
     fn upsert_cadquery_result(&mut self, ready: app_server_protocol::CadQueryResultReady) {

@@ -1,5 +1,5 @@
 use app_server_protocol::{
-    AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
     CadQueryResultReady, ChatMessageRecord, ChatSessionId, ChatSessionSummary, CommandSuccess,
     PathHandle, RequestId, SelectionUpdateRequest, ServerCapabilities, ServerPushEvent,
     SessionToken, SubscriptionId, WatchSubscribeRequest, WorkspaceCurrentResponse, WorkspaceEntry,
@@ -175,6 +175,7 @@ pub struct ClientSnapshot {
     pub current_chat_history: Vec<ChatMessageRecord>,
     pub agent_run: Option<AgentStartedResponse>,
     pub agent_events: Vec<ServerPushEvent>,
+    pub agent_event_records: Vec<AgentEventRecord>,
     pub current_selection: SelectionUpdateRequest,
     pub cadquery_results: Vec<CadQueryResultReady>,
     pub preview_tasks: Vec<PreviewTaskState>,
