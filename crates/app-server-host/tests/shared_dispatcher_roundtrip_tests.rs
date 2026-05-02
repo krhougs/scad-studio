@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
-use app_server_core::{ChatStore, ChatSummaryUpdate};
+use app_server_core::{AGENT_ERROR_FACT_PREFIX, ChatStore, ChatSummaryUpdate};
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentDoneEvent, AgentErrorEvent, AgentEventId,
-    AgentInvokeRequest, AgentMode, AgentModelParamsUpdateRequest, AgentModelSelectRequest,
-    AgentPlanConfirmRequest, AgentProviderType, AgentRuntimeStatus, AgentSnapshotRequest,
-    AgentStartTurnRequest, AgentSubscribeRequest, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
+    AgentEventPayload, AgentEventRecord, AgentInvokeRequest, AgentMode,
+    AgentModelParamsUpdateRequest, AgentModelSelectRequest, AgentPlanConfirmRequest,
+    AgentProviderType, AgentRuntimeStatus, AgentSnapshotRequest, AgentStartTurnRequest,
+    AgentSubscribeRequest, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
     CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest,
     ChatArchiveRequest, ChatCreateInitialTurn, ChatCreateRequest, ChatHistoryRequest,
     ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
@@ -16,6 +17,7 @@ use app_server_protocol::{
     SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
     WorkspaceId, WorkspaceListRequest, web_file_read_capability,
 };
+use futures_util::future::join_all;
 use serde_json::Value;
 
 #[tokio::test]
@@ -500,7 +502,7 @@ async fn dispatcher_chat_create_initial_turn_starts_agent_and_persists_bound_mod
     assert_eq!(started.session_id, created.session_id);
     assert_eq!(started.agent_id, created.agent_id);
     assert_eq!(started.turn_id.0, started.run_id);
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
 
     let index = read_chats_json(&workspace);
     assert_eq!(
@@ -518,6 +520,102 @@ async fn dispatcher_chat_create_initial_turn_starts_agent_and_persists_bound_mod
             .iter()
             .any(|message| message.content == "make a hinge")
     );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_advances_workspace_run_id_cursor() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-run-id-cursor");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let existing = store
+        .create("existing run cursor", None, Vec::new())
+        .await
+        .expect("existing chat session should be created");
+    store
+        .append_agent_event(
+            &existing.agent_id,
+            &agent_event_record(
+                1,
+                &existing.agent_id,
+                &AgentTurnId("agent-100".into()),
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed high workspace run id");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+
+    let created = match dispatch_async(
+        &mut dispatcher,
+        25,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "initial turn cursor".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-start-cursor".into()),
+            initial_user_message: Some("make a hinge".into()),
+            requested_model: Some(bound_agent_model()),
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: Vec::new(),
+            }),
+        }),
+    )
+    .await
+    .result
+    .expect("chat.create should succeed")
+    {
+        CommandSuccess::ChatCreated(response) => response,
+        other => panic!("unexpected chat.create response: {other:?}"),
+    };
+    let started = created.initial_turn.expect("initial turn response");
+
+    assert_eq!(started.turn_id, AgentTurnId("agent-101".into()));
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_chat_create_initial_turn_rejects_missing_workspace_event_log() {
+    let workspace = temp_workspace("dispatcher-chat-create-turn-missing-log");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let broken = store
+        .create("missing initial turn cursor", None, Vec::new())
+        .await
+        .expect("broken chat session should be created");
+    std::fs::remove_file(
+        workspace
+            .join("agent-events")
+            .join(format!("{}.jsonl", broken.agent_id.0)),
+    )
+    .expect("remove workspace event log");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatch_async(
+        &mut dispatcher,
+        26,
+        ClientCommand::ChatCreate(ChatCreateRequest {
+            title: "blocked initial turn".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: Some("create-start-missing-log".into()),
+            initial_user_message: Some("make a hinge".into()),
+            requested_model: Some(bound_agent_model()),
+            initial_turn: Some(ChatCreateInitialTurn {
+                mode: AgentMode::Agent,
+                plan_ref: None,
+                context_refs: Vec::new(),
+            }),
+        }),
+    )
+    .await
+    .result
+    .expect_err("missing workspace event log should reject initial turn");
+
+    assert_eq!(error.code, ProtocolErrorCode::NotFound);
     cleanup_workspace(&workspace);
 }
 
@@ -555,7 +653,7 @@ async fn dispatcher_chat_create_initial_turn_rejects_busy_without_creating_chat(
         .expect_err("busy initial turn create should reject");
     assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
     assert_eq!(list_chats_async(&mut dispatcher, false).await.len(), 1);
-    wait_for_done_async(&pushes, &running.run_id).await;
+    wait_for_terminal_event_async(&pushes, &running.run_id).await;
     cleanup_workspace(&workspace);
 }
 
@@ -595,7 +693,7 @@ async fn dispatcher_chat_create_initial_turn_retry_does_not_start_second_turn() 
         .expect("first initial turn")
         .run_id
         .clone();
-    wait_for_done_async(&pushes, &first_run_id).await;
+    wait_for_terminal_event_async(&pushes, &first_run_id).await;
     pushes.lock().expect("push buffer lock").clear();
 
     let retried = match dispatch_async(&mut dispatcher, 28, ClientCommand::ChatCreate(request))
@@ -680,7 +778,7 @@ async fn dispatcher_chat_create_initial_turn_deduplicates_concurrent_create_requ
             &second_pushes,
         )
     };
-    wait_for_done_async(pushes, &started.run_id).await;
+    wait_for_terminal_event_async(pushes, &started.run_id).await;
     assert_eq!(
         list_chats_async(&mut first_dispatcher, false).await.len(),
         1
@@ -713,7 +811,7 @@ async fn dispatcher_agent_subscribe_receives_events_from_other_dispatcher() {
     )
     .await;
 
-    wait_for_done_async(&second_pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&second_pushes, &started.run_id).await;
     cleanup_workspace(&workspace);
 }
 
@@ -735,6 +833,10 @@ async fn dispatcher_agent_snapshot_reads_active_agent_from_second_dispatcher() {
         "summarize current model",
     )
     .await;
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", created.agent_id.0));
+    wait_for_agent_event_records_async(&event_log_path, 1).await;
 
     let snapshot = agent_snapshot_async(&mut second_dispatcher, 34, &created.agent_id).await;
 
@@ -748,9 +850,22 @@ async fn dispatcher_agent_snapshot_reads_active_agent_from_second_dispatcher() {
             state: AgentRuntimeStatus::Running
         })
     ));
+    let persisted_events = ChatStore::new(workspace.clone())
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read active event log");
+    assert!(
+        persisted_events.iter().all(|event| !matches!(
+            event.payload,
+            AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::Interrupted
+            }
+        )),
+        "snapshot of a live runtime must not append interrupted"
+    );
     let cancelled = cancel_agent_async(&mut first_dispatcher, 35, &created.agent_id).await;
     assert!(cancelled.cancelled);
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
     server_handle.abort();
     cleanup_workspace(&workspace);
 }
@@ -770,7 +885,7 @@ async fn dispatcher_agent_subscribe_replays_events_by_event_cursor() {
         "summarize current model",
     )
     .await;
-    wait_for_done_async(&first_pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&first_pushes, &started.run_id).await;
 
     let snapshot = agent_snapshot_async(&mut first_dispatcher, 40, &created.agent_id).await;
     assert!(
@@ -786,7 +901,7 @@ async fn dispatcher_agent_subscribe_replays_events_by_event_cursor() {
         .event_id;
 
     subscribe_agent_with_cursor_async(&mut second_dispatcher, 41, &created.agent_id, None).await;
-    wait_for_done_async(&second_pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&second_pushes, &started.run_id).await;
 
     third_pushes.lock().expect("push buffer lock").clear();
     subscribe_agent_with_cursor_async(
@@ -816,15 +931,15 @@ async fn dispatcher_agent_event_log_persists_runtime_events_outside_chat_jsonl()
         "summarize current model",
     )
     .await;
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
 
     let event_log_path = workspace
         .join("agent-events")
         .join(format!("{}.jsonl", created.agent_id.0));
-    let records = wait_for_agent_event_records_async(&event_log_path, 3).await;
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
     assert!(
-        records.len() >= 3,
-        "running, token and done events should be persisted"
+        records.len() >= 2,
+        "running and terminal events should be persisted"
     );
     assert!(
         records
@@ -901,8 +1016,861 @@ async fn dispatcher_agent_event_id_continues_after_persisted_log() {
     assert_eq!(records[1].event_id, AgentEventId(10));
     let cancelled = cancel_agent_async(&mut dispatcher, 35, &created.agent_id).await;
     assert!(cancelled.cancelled);
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
     server_handle.abort();
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_appends_interrupted_event_for_unfinished_persisted_turn() {
+    let workspace = temp_workspace("dispatcher-agent-recover-interrupted");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover interrupted", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 36, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Interrupted);
+    assert_eq!(snapshot.active_turn_id, None);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Interrupted
+        })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_recovery_is_idempotent_across_concurrent_observers() {
+    let workspace = temp_workspace("dispatcher-agent-recover-concurrent");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover concurrent", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    let mut tasks = Vec::new();
+    for request_id in 40..50 {
+        let workspace = workspace.clone();
+        let agent_id = created.agent_id.clone();
+        tasks.push(tokio::spawn(async move {
+            let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+            agent_snapshot_async(&mut dispatcher, request_id, &agent_id).await
+        }));
+    }
+
+    let snapshots = join_all(tasks).await;
+
+    assert!(snapshots.into_iter().all(|snapshot| {
+        snapshot.expect("snapshot task joins").state == AgentRuntimeStatus::Interrupted
+    }));
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    let interrupted = records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.payload,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Interrupted
+                }
+            )
+        })
+        .count();
+    assert_eq!(interrupted, 1);
+    assert!(
+        records
+            .windows(2)
+            .all(|pair| pair[0].event_id.0 < pair[1].event_id.0),
+        "recovery must preserve per-agent event id monotonicity"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_appends_recovered_done_when_final_fact_exists() {
+    let workspace = temp_workspace("dispatcher-agent-recover-done");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover done", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed final assistant fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 37, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Done);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: false })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_recovers_done_when_event_log_empty_and_final_fact_exists() {
+    let workspace = temp_workspace("dispatcher-agent-recover-empty-log-final");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover empty event log final", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("agent-1".into());
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed final assistant fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 45, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Done);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: false })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_recovers_newer_chat_final_fact_when_event_log_is_stale() {
+    let workspace = temp_workspace("dispatcher-agent-recover-stale-log-final");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover stale event log final", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let old_turn_id = AgentTurnId("agent-1".into());
+    let new_turn_id = AgentTurnId("agent-2".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &old_turn_id,
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed stale event log");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &new_turn_id,
+            Some(new_turn_id.0.clone()),
+        )
+        .await
+        .expect("seed newer final assistant fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 46, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Done);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| (&record.turn_id, &record.payload)),
+        Some((Some(turn_id), AgentEventPayload::Done { cancelled: false }))
+            if turn_id == &new_turn_id
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_marks_failed_when_error_fact_lacks_terminal_event() {
+    let workspace = temp_workspace("dispatcher-agent-recover-error-fact");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover error fact", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            &format!("{AGENT_ERROR_FACT_PREFIX} (LlmError): Rig Agent is not configured"),
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed failed assistant fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 43, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Failed);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Failed
+        })
+    ));
+    assert!(
+        !matches!(
+            records.last().map(|record| &record.payload),
+            Some(AgentEventPayload::Done { cancelled: false })
+        ),
+        "failed assistant fact must not recover as successful done"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_preserves_cancelled_without_final_fact() {
+    let workspace = temp_workspace("dispatcher-agent-recover-cancelled");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover cancelled", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                2,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::Done { cancelled: true },
+            ),
+        )
+        .await
+        .expect("seed cancelled terminal event");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 44, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Cancelled);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: true })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_marks_failed_needs_recovery_when_failed_terminal_has_success_fact() {
+    let workspace = temp_workspace("dispatcher-agent-recover-failed-success");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover failed success", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                2,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::Error {
+                    error_type: app_server_protocol::AgentErrorType::LlmError,
+                    message: "model failed".into(),
+                },
+            ),
+        )
+        .await
+        .expect("seed failed terminal event");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed conflicting success fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 45, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::FailedNeedsRecovery);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_marks_failed_needs_recovery_when_cancelled_has_final_fact() {
+    let workspace = temp_workspace("dispatcher-agent-recover-cancelled-success");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover cancelled success", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                2,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::Done { cancelled: true },
+            ),
+        )
+        .await
+        .expect("seed cancelled terminal event");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed conflicting final fact");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 46, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::FailedNeedsRecovery);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_startup_recovers_done_when_final_fact_exists() {
+    let workspace = temp_workspace("dispatcher-agent-startup-recover-done");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("startup recover done", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed final assistant fact");
+    let (_dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", created.agent_id.0));
+
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
+
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: false })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_startup_recovers_other_chats_when_one_event_log_is_missing() {
+    let workspace = temp_workspace("dispatcher-agent-startup-recover-skips-corrupt");
+    let store = ChatStore::new(workspace.clone());
+    let broken = store
+        .create("broken event log", None, Vec::new())
+        .await
+        .expect("broken chat session should be created");
+    let recoverable = store
+        .create("recoverable event log", None, Vec::new())
+        .await
+        .expect("recoverable chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    std::fs::remove_file(
+        workspace
+            .join("agent-events")
+            .join(format!("{}.jsonl", broken.agent_id.0)),
+    )
+    .expect("remove broken event log");
+    store
+        .append_agent_event(
+            &recoverable.agent_id,
+            &agent_event_record(
+                1,
+                &recoverable.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed recoverable running event");
+    store
+        .append_message_with_agent_turn(
+            &recoverable.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &recoverable.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed recoverable final assistant fact");
+    let (_dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", recoverable.agent_id.0));
+
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
+
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: false })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_startup_recovers_other_chats_when_one_messages_file_is_missing() {
+    let workspace = temp_workspace("dispatcher-agent-startup-recover-skips-missing-messages");
+    let store = ChatStore::new(workspace.clone());
+    let broken = store
+        .create("broken messages", None, Vec::new())
+        .await
+        .expect("broken chat session should be created");
+    let recoverable = store
+        .create("recoverable messages", None, Vec::new())
+        .await
+        .expect("recoverable chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    std::fs::remove_file(
+        workspace
+            .join("chats")
+            .join(format!("{}.jsonl", broken.session_id.0)),
+    )
+    .expect("remove broken messages file");
+    store
+        .append_agent_event(
+            &recoverable.agent_id,
+            &agent_event_record(
+                1,
+                &recoverable.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed recoverable running event");
+    store
+        .append_message_with_agent_turn(
+            &recoverable.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &recoverable.agent_id,
+            &turn_id,
+            Some(turn_id.0.clone()),
+        )
+        .await
+        .expect("seed recoverable final assistant fact");
+    let (_dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", recoverable.agent_id.0));
+
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
+
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::Done { cancelled: false })
+    ));
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_start_turn_advances_turn_id_after_recovered_interrupted() {
+    let workspace = temp_workspace("dispatcher-agent-recover-turn-id-cursor");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover turn cursor", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let old_turn_id = AgentTurnId("agent-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &old_turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed old running event");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 39, &created.agent_id).await;
+    let restarted = start_agent_turn_async(
+        &mut dispatcher,
+        40,
+        &created.agent_id,
+        "restart after recovery",
+    )
+    .await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::Interrupted);
+    assert_ne!(restarted.turn_id, old_turn_id);
+    wait_for_terminal_event_async(&pushes, &restarted.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_start_turn_advances_workspace_run_id_cursor() {
+    let workspace = temp_workspace("dispatcher-agent-workspace-run-id-cursor");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let first = store
+        .create("first run cursor", None, Vec::new())
+        .await
+        .expect("first chat session should be created");
+    let second = store
+        .create("second run cursor", None, Vec::new())
+        .await
+        .expect("second chat session should be created");
+    store
+        .append_agent_event(
+            &first.agent_id,
+            &agent_event_record(
+                1,
+                &first.agent_id,
+                &AgentTurnId("agent-100".into()),
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed high workspace run id");
+    store
+        .append_agent_event(
+            &second.agent_id,
+            &agent_event_record(
+                1,
+                &second.agent_id,
+                &AgentTurnId("agent-1".into()),
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed low target run id");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+
+    let restarted = start_agent_turn_async(
+        &mut dispatcher,
+        41,
+        &second.agent_id,
+        "restart after cursor",
+    )
+    .await;
+
+    assert_eq!(restarted.turn_id, AgentTurnId("agent-101".into()));
+    wait_for_terminal_event_async(&pushes, &restarted.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_start_turn_advances_workspace_run_id_cursor_from_chat_final_fact() {
+    let workspace = temp_workspace("dispatcher-agent-workspace-run-id-chat-fact");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let high = store
+        .create("high chat fact cursor", None, Vec::new())
+        .await
+        .expect("high chat session should be created");
+    let target = store
+        .create("target cursor", None, Vec::new())
+        .await
+        .expect("target chat session should be created");
+    let high_turn_id = AgentTurnId("agent-100".into());
+    store
+        .append_message_with_agent_turn(
+            &high.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &high.agent_id,
+            &high_turn_id,
+            Some(high_turn_id.0.clone()),
+        )
+        .await
+        .expect("seed high chat final fact");
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+
+    let restarted = start_agent_turn_async(
+        &mut dispatcher,
+        47,
+        &target.agent_id,
+        "restart after chat cursor",
+    )
+    .await;
+
+    assert_eq!(restarted.turn_id, AgentTurnId("agent-101".into()));
+    wait_for_terminal_event_async(&pushes, &restarted.run_id).await;
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_start_turn_rejects_when_workspace_event_log_is_missing() {
+    let workspace = temp_workspace("dispatcher-agent-workspace-run-id-missing-log");
+    let _agent_env = unset_agent_environment();
+    let store = ChatStore::new(workspace.clone());
+    let broken = store
+        .create("missing run cursor", None, Vec::new())
+        .await
+        .expect("broken chat session should be created");
+    let target = store
+        .create("target run cursor", None, Vec::new())
+        .await
+        .expect("target chat session should be created");
+    std::fs::remove_file(
+        workspace
+            .join("agent-events")
+            .join(format!("{}.jsonl", broken.agent_id.0)),
+    )
+    .expect("remove workspace event log");
+    store
+        .append_agent_event(
+            &target.agent_id,
+            &agent_event_record(
+                1,
+                &target.agent_id,
+                &AgentTurnId("agent-1".into()),
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed target event log");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = start_agent_turn_result_async(&mut dispatcher, 42, &target.agent_id, "blocked")
+        .await
+        .expect_err("workspace cursor scan must reject missing event log");
+
+    assert_eq!(error.code, ProtocolErrorCode::NotFound);
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_marks_failed_needs_recovery_when_terminal_lacks_final_fact() {
+    let workspace = temp_workspace("dispatcher-agent-recover-needs-final");
+    let store = ChatStore::new(workspace.clone());
+    let created = store
+        .create("recover missing final", None, Vec::new())
+        .await
+        .expect("chat session should be created");
+    let turn_id = AgentTurnId("turn-1".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                1,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            ),
+        )
+        .await
+        .expect("seed running event");
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &agent_event_record(
+                2,
+                &created.agent_id,
+                &turn_id,
+                AgentEventPayload::Done { cancelled: false },
+            ),
+        )
+        .await
+        .expect("seed terminal event");
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let snapshot = agent_snapshot_async(&mut dispatcher, 38, &created.agent_id).await;
+
+    assert_eq!(snapshot.state, AgentRuntimeStatus::FailedNeedsRecovery);
+    let records = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect("read recovered events");
+    assert!(matches!(
+        records.last().map(|record| &record.payload),
+        Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::FailedNeedsRecovery
+        })
+    ));
     cleanup_workspace(&workspace);
 }
 
@@ -986,7 +1954,7 @@ async fn dispatcher_second_observer_start_turn_uses_bound_model() {
         "bound model should be used instead of second observer selected model: {}",
         error.message
     );
-    wait_for_done_async(&second_pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&second_pushes, &started.run_id).await;
     cleanup_workspace(&workspace);
 }
 
@@ -1022,7 +1990,7 @@ async fn dispatcher_workspace_runtime_rejects_second_active_turn_across_dispatch
     assert_eq!(error.code, ProtocolErrorCode::AgentBusy);
     let cancelled = cancel_agent_async(&mut first_dispatcher, 47, &first.agent_id).await;
     assert!(cancelled.cancelled);
-    wait_for_done_async(&first_pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&first_pushes, &started.run_id).await;
     server_handle.abort();
     cleanup_workspace(&workspace);
 }
@@ -1043,14 +2011,14 @@ async fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
     // Without Rig Agent configuration the worker finishes almost immediately. Wait for
     // done/error before verifying that a new invoke succeeds after the
     // previous run completes.
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
 
     let restarted = invoke_agent_async(&mut dispatcher, 34, &session_id, "new run")
         .await
         .expect("restart succeeds");
     assert_eq!(restarted.session_id, session_id);
 
-    wait_for_done_async(&pushes, &restarted.run_id).await;
+    wait_for_terminal_event_async(&pushes, &restarted.run_id).await;
     cleanup_workspace(&workspace);
 }
 
@@ -1176,7 +2144,7 @@ async fn dispatcher_clears_agent_invoke_request_id_after_run_finishes() {
     )
     .await
     .expect("first invoke starts");
-    wait_for_done_async(&pushes, &first.run_id).await;
+    wait_for_terminal_event_async(&pushes, &first.run_id).await;
 
     let second = invoke_agent_with_client_request_id(
         &mut dispatcher,
@@ -1189,7 +2157,7 @@ async fn dispatcher_clears_agent_invoke_request_id_after_run_finishes() {
     .expect("request id is reusable after terminal run cleanup");
 
     assert_ne!(first.run_id, second.run_id);
-    wait_for_done_async(&pushes, &second.run_id).await;
+    wait_for_terminal_event_async(&pushes, &second.run_id).await;
     cleanup_workspace(&workspace);
 }
 
@@ -1286,7 +2254,15 @@ async fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
     let started = invoke_agent_async(&mut dispatcher, 35, &session_id, "create a small part")
         .await
         .expect("agent starts");
-    wait_for_done_async(&pushes, &started.run_id).await;
+    let error = wait_for_error_event_async(&pushes, &started.run_id).await;
+    assert_eq!(
+        error.error_type,
+        app_server_protocol::AgentErrorType::LlmError
+    );
+    assert!(
+        find_done_event(&pushes, &started.run_id).is_none(),
+        "failed Agent run must not emit agent.done"
+    );
 
     let history = read_chat_history_async(&mut dispatcher, &session_id).await;
     let assistant = history
@@ -1298,6 +2274,12 @@ async fn dispatcher_persists_agent_error_message_when_llm_is_unavailable() {
         .expect("agent failure should be persisted as assistant history");
     assert!(assistant.content.contains("Agent run failed"));
     assert!(assistant.content.contains("Rig Agent is not configured"));
+
+    let restarted = invoke_agent_async(&mut dispatcher, 136, &session_id, "retry after failure")
+        .await
+        .expect("failed run should release runtime");
+    assert_ne!(started.run_id, restarted.run_id);
+    let _ = wait_for_error_event_async(&pushes, &restarted.run_id).await;
 
     cleanup_workspace(&workspace);
 }
@@ -1336,11 +2318,88 @@ async fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload()
         other => panic!("unexpected agent.invoke response: {other:?}"),
     };
 
-    wait_for_done_async(&pushes, &started.run_id).await;
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
     assert_eq!(
         std::fs::read_to_string(workspace.join("parts/top_lid.py")).unwrap(),
         "old code\n"
     );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_rejects_start_turn_when_chat_jsonl_path_is_invalid() {
+    let workspace = temp_workspace("dispatcher-agent-start-invalid-chat-jsonl");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(
+        &mut dispatcher,
+        "agent start invalid chat jsonl",
+        Vec::new(),
+    )
+    .await;
+    let index = read_chats_json(&workspace);
+    let messages_path = index["chats"][0]["messages_path"]
+        .as_str()
+        .expect("messages path should be indexed");
+    let absolute_messages_path = workspace.join(messages_path);
+    std::fs::remove_file(&absolute_messages_path).expect("remove messages jsonl");
+    std::fs::create_dir(&absolute_messages_path).expect("replace messages jsonl with directory");
+
+    let error = start_agent_turn_result_async(&mut dispatcher, 49, &created.agent_id, "will fail")
+        .await
+        .expect_err("start turn should reject broken Chat JSONL");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+    assert!(
+        pushes
+            .lock()
+            .expect("push buffer lock")
+            .iter()
+            .all(|push| !matches!(
+                push.event,
+                ServerPushEvent::AgentDone(_) | ServerPushEvent::AgentError(_)
+            )),
+        "rejected start turn must not emit terminal Agent events"
+    );
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_snapshot_reports_chat_jsonl_error_when_runtime_log_exists() {
+    let workspace = temp_workspace("dispatcher-agent-terminal-write-fails-snapshot");
+    let (config_path, server_handle) = hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(
+        &mut dispatcher,
+        "agent terminal write fails snapshot",
+        Vec::new(),
+    )
+    .await;
+    let started =
+        start_agent_turn_async(&mut dispatcher, 50, &created.agent_id, "snapshot fail").await;
+    let cancelled = cancel_agent_async(&mut dispatcher, 51, &created.agent_id).await;
+    assert!(cancelled.cancelled);
+    let done = wait_for_done_event_async(&pushes, &started.run_id).await;
+    assert!(done.cancelled);
+
+    let index = read_chats_json(&workspace);
+    let messages_path = index["chats"][0]["messages_path"]
+        .as_str()
+        .expect("messages path should be indexed");
+    let absolute_messages_path = workspace.join(messages_path);
+    std::fs::remove_file(&absolute_messages_path).expect("remove messages jsonl");
+    std::fs::create_dir(&absolute_messages_path).expect("replace messages jsonl with directory");
+
+    let error = agent_snapshot_result_async(&mut dispatcher, 52, &created.agent_id)
+        .await
+        .expect_err("snapshot should report broken Chat JSONL");
+
+    assert_eq!(error.code, ProtocolErrorCode::InvalidPathHandle);
+    server_handle.abort();
     cleanup_workspace(&workspace);
 }
 
@@ -2059,7 +3118,21 @@ async fn agent_snapshot_async(
     request_id: u64,
     agent_id: &app_server_protocol::AgentId,
 ) -> app_server_protocol::AgentSnapshotResponse {
-    match dispatch_async(
+    match agent_snapshot_result_async(dispatcher, request_id, agent_id)
+        .await
+        .expect("agent.snapshot succeeds")
+    {
+        CommandSuccess::AgentSnapshot(response) => response,
+        other => panic!("unexpected agent.snapshot response: {other:?}"),
+    }
+}
+
+async fn agent_snapshot_result_async(
+    dispatcher: &mut HostRequestDispatcher,
+    request_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+) -> Result<CommandSuccess, app_server_protocol::ProtocolError> {
+    dispatch_async(
         dispatcher,
         request_id,
         ClientCommand::AgentSnapshot(AgentSnapshotRequest {
@@ -2069,11 +3142,6 @@ async fn agent_snapshot_async(
     )
     .await
     .result
-    .expect("agent.snapshot succeeds")
-    {
-        CommandSuccess::AgentSnapshot(response) => response,
-        other => panic!("unexpected agent.snapshot response: {other:?}"),
-    }
 }
 
 async fn cancel_agent_async(
@@ -2104,6 +3172,21 @@ fn confirmed_cadquery_request(target_path: PathHandle) -> CadQueryExecuteRequest
         code: "import cadquery as cq\n\ndef build(params=None):\n    return cq.Workplane('XY').box(1, 1, 1)\n".into(),
         export_formats: vec![CadQueryExportFormat::Step],
         params_json: "{}".into(),
+    }
+}
+
+fn agent_event_record(
+    event_id: u64,
+    agent_id: &app_server_protocol::AgentId,
+    turn_id: &AgentTurnId,
+    payload: AgentEventPayload,
+) -> AgentEventRecord {
+    AgentEventRecord {
+        event_id: AgentEventId(event_id),
+        agent_id: agent_id.clone(),
+        turn_id: Some(turn_id.clone()),
+        ts_ms: 100 + event_id,
+        payload,
     }
 }
 
@@ -2182,8 +3265,14 @@ fn path_handle<const N: usize>(segments: [&str; N]) -> PathHandle {
     PathHandle::new(WorkspaceId::new("workspace"), segments).expect("path handle")
 }
 
-async fn wait_for_done_async(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
-    let _ = wait_for_done_event_async(pushes, run_id).await;
+async fn wait_for_terminal_event_async(pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>, run_id: &str) {
+    for _ in 0..250 {
+        if find_done_event(pushes, run_id).is_some() || find_error_event(pushes, run_id).is_some() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("agent terminal event not observed for {run_id}");
 }
 
 async fn wait_for_done_event_async(

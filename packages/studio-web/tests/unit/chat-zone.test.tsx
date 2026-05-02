@@ -18,6 +18,7 @@ const STORE_DEFAULTS = {
   current_chat_session: null,
   current_chat_history: [] as ChatSnapshot["current_chat_history"],
   agent_run: null,
+  agent_runtime_status: null,
   agent_events: [] as ChatSnapshot["agent_events"],
   current_selection: null,
   llm_configured: true,
@@ -462,6 +463,70 @@ describe("ChatZone", () => {
         client={client as unknown as WasmClient}
       />,
     );
+
+    await waitFor(() => {
+      expect(client.dispatchChatHistory).toHaveBeenCalledWith({
+        session_id: "main",
+        limit: 100,
+      });
+    });
+  });
+
+  it("refreshes current chat history after agent error", async () => {
+    const client = fakeClient();
+    setSnapshot(chatSnapshot());
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+    await waitFor(() => expect(client.dispatchChatHistory).toHaveBeenCalled());
+    vi.mocked(client.dispatchChatHistory).mockClear();
+
+    act(() => {
+      useProtocolStore.setState({
+        agent_events: [
+          {
+            event: "agent.error",
+            payload: {
+              run_id: "run-1",
+              error_type: "llm_error",
+              message: "Rig Agent is not configured",
+            },
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(client.dispatchChatHistory).toHaveBeenCalledWith({
+        session_id: "main",
+        limit: 100,
+      });
+    });
+  });
+
+  it("refreshes current chat history after recovered failed state", async () => {
+    const client = fakeClient();
+    setSnapshot(chatSnapshot());
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+    await waitFor(() => expect(client.dispatchChatHistory).toHaveBeenCalled());
+    vi.mocked(client.dispatchChatHistory).mockClear();
+
+    act(() => {
+      useProtocolStore.setState({
+        agent_events: [
+          {
+            event: "agent.state_changed",
+            payload: { run_id: "run-1", state: "failed" },
+          },
+        ],
+      });
+    });
 
     await waitFor(() => {
       expect(client.dispatchChatHistory).toHaveBeenCalledWith({

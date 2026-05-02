@@ -1,14 +1,15 @@
 use app_server_core::{
-    AgentToolCall, AgentToolRunContext, AgentTurnInput, CadQueryCommitScope,
-    CadQueryContractConfig, CadQueryModelContract, CadQueryRunConfig, CadQueryRunResult,
-    CadQueryRunnerError, CadQueryRunnerErrorKind, CadQueryToolCachedResult, CadQueryToolRunRequest,
-    CadQueryToolRunResult, CadQueryToolRuntime, CadQueryToolRuntimeError,
-    ChatIndexListenerRegistration, ChatStore, FileWatcher, SlicerInstall, cadquery_result_ready,
-    current_workspace_owned, detect_slicer_paths, export_model, list_workspace_entries_owned,
-    load_config_dto, preview_ready_response, read_file_response_owned,
-    register_chat_index_listener, resolve_workspace_path_owned, resolve_workspace_write_path_owned,
-    run_cadquery_contract, run_cadquery_runner, run_cadquery_runner_with_cancel,
-    run_rig_agent_turn_with_config, save_config_dto, send_to_slicer, stage_cadquery_project_owned,
+    AGENT_ERROR_FACT_PREFIX, AgentToolCall, AgentToolRunContext, AgentTurnFinalFactKind,
+    AgentTurnInput, CadQueryCommitScope, CadQueryContractConfig, CadQueryModelContract,
+    CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
+    CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime,
+    CadQueryToolRuntimeError, ChatIndexListenerRegistration, ChatStore, FileWatcher, SlicerInstall,
+    cadquery_result_ready, current_workspace_owned, detect_slicer_paths, export_model,
+    list_workspace_entries_owned, load_config_dto, preview_ready_response,
+    read_file_response_owned, register_chat_index_listener, resolve_workspace_path_owned,
+    resolve_workspace_write_path_owned, run_cadquery_contract, run_cadquery_runner,
+    run_cadquery_runner_with_cancel, run_rig_agent_turn_with_config, save_config_dto,
+    send_to_slicer, stage_cadquery_project_owned,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
@@ -22,7 +23,7 @@ use app_server_protocol::{
     AgentSubscribeRequest, AgentSubscribeResponse, AgentTokenEvent, AgentToolResultEvent,
     AgentToolStartEvent, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
     CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatToolCallRecord,
+    CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatSessionId, ChatToolCallRecord,
     ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
     DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse, FileWriteTextResponse, HostLocalPath,
     PathHandle, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
@@ -50,6 +51,7 @@ pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
 const CADQUERY_RUNNER_TIMEOUT: Duration = Duration::from_secs(180);
 const CHAT_BOUND_MODEL_LOCK_REASON: &str = "chat_bound_model";
+const AGENT_INITIAL_IDEMPOTENCY_WINDOW: Duration = Duration::from_millis(10);
 static AGENT_RUNTIMES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<WorkspaceAgentRuntime>>>>> =
     OnceLock::new();
 static CHAT_PUSH_SUBSCRIBERS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, ServerPushSink>>>> =
@@ -227,6 +229,7 @@ impl HostRequestDispatcher {
         push_sink: ServerPushSink,
     ) -> Self {
         let agent_runtime = agent_runtime_for_workspace(workspace_path.as_deref());
+        spawn_agent_startup_recovery(workspace_path.as_deref(), &agent_runtime);
         let agent_runtime_subscription =
             register_agent_runtime_subscriber(&agent_runtime, Arc::clone(&push_sink));
         let chat_push_subscription =
@@ -259,6 +262,7 @@ impl HostRequestDispatcher {
     pub fn rebind_workspace(&mut self, workspace_path: PathBuf) {
         self.agent_runtime_subscription = None;
         self.agent_runtime = agent_runtime_for_workspace(Some(&workspace_path));
+        spawn_agent_startup_recovery(Some(&workspace_path), &self.agent_runtime);
         self.agent_runtime_subscription =
             register_agent_runtime_subscriber(&self.agent_runtime, Arc::clone(&self.push_sink));
         self.chat_push_subscription =
@@ -486,6 +490,19 @@ impl HostRequestDispatcher {
                 } else {
                     false
                 };
+                let persisted_run_id = if initial_turn.is_some() {
+                    match workspace_persisted_run_id(&store).await {
+                        Ok(run_id) => run_id,
+                        Err(error) => {
+                            if reserved_initial_turn {
+                                self.release_initial_turn_reservation(&client_request_id_value)?;
+                            }
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    None
+                };
                 let response = match store
                     .create_with_client_request_id_initial_message_and_model_outcome(
                         &client_request_id_value,
@@ -523,6 +540,7 @@ impl HostRequestDispatcher {
                             &self.agent_model_state,
                         ),
                         None,
+                        persisted_run_id,
                     ) {
                         Ok(started) => started,
                         Err(error) => {
@@ -881,8 +899,16 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let agent_id = store.agent_id_for_session(&request.session_id).await?;
         let bound_model = store.bound_model_for_session(&request.session_id).await?;
-        let persisted_event_id =
-            max_agent_event_id(&store.read_agent_events(&agent_id, None).await?);
+        let persisted_events = recover_agent_persisted_events(
+            &store,
+            &self.agent_runtime,
+            &request.session_id,
+            &agent_id,
+        )
+        .await?;
+        let persisted_event_id = max_agent_event_id(&persisted_events);
+        let persisted_run_id =
+            max_agent_run_id(&persisted_events).max(workspace_persisted_run_id(&store).await?);
         let model_state = agent_model_state_for_bound_or_request(
             bound_model.as_ref(),
             &self.agent_model_state,
@@ -899,6 +925,7 @@ impl HostRequestDispatcher {
             bound_model,
             model_state,
             persisted_event_id,
+            persisted_run_id,
         )
     }
 
@@ -909,8 +936,16 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let session_id = store.session_id_for_agent(&request.agent_id).await?;
         let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
-        let persisted_event_id =
-            max_agent_event_id(&store.read_agent_events(&request.agent_id, None).await?);
+        let persisted_events = recover_agent_persisted_events(
+            &store,
+            &self.agent_runtime,
+            &session_id,
+            &request.agent_id,
+        )
+        .await?;
+        let persisted_event_id = max_agent_event_id(&persisted_events);
+        let persisted_run_id =
+            max_agent_run_id(&persisted_events).max(workspace_persisted_run_id(&store).await?);
         self.start_agent_run(
             session_id,
             request.agent_id,
@@ -922,6 +957,7 @@ impl HostRequestDispatcher {
             bound_model.clone(),
             agent_model_state_for_bound_or_current(bound_model.as_ref(), &self.agent_model_state),
             persisted_event_id,
+            persisted_run_id,
         )
     }
 
@@ -937,6 +973,7 @@ impl HostRequestDispatcher {
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
         persisted_event_id: Option<AgentEventId>,
+        persisted_run_id: Option<u64>,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
             .agent_runtime
@@ -949,6 +986,7 @@ impl HostRequestDispatcher {
                 bound_model,
                 self.agent_subscriber_id(),
                 persisted_event_id,
+                persisted_run_id,
             )?;
         if !run.started_now {
             return Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
@@ -995,6 +1033,7 @@ impl HostRequestDispatcher {
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
         persisted_event_id: Option<AgentEventId>,
+        persisted_run_id: Option<u64>,
     ) -> Result<CommandSuccess, ProtocolError> {
         let run = self
             .agent_runtime
@@ -1007,6 +1046,7 @@ impl HostRequestDispatcher {
                 bound_model,
                 self.agent_subscriber_id(),
                 persisted_event_id,
+                persisted_run_id,
             )?;
         let response = AgentStartedResponse {
             session_id: run.session_id.clone(),
@@ -1062,7 +1102,13 @@ impl HostRequestDispatcher {
         let store = self.chat_store()?;
         let chat_id = store.session_id_for_agent(&request.agent_id).await?;
         let bound_model = store.bound_model_for_agent(&request.agent_id).await?;
-        let persisted_events = store.read_agent_events(&request.agent_id, None).await?;
+        let persisted_events = recover_agent_persisted_events(
+            &store,
+            &self.agent_runtime,
+            &chat_id,
+            &request.agent_id,
+        )
+        .await?;
         let snapshot = self
             .agent_runtime
             .lock()
@@ -1149,6 +1195,7 @@ struct WorkspaceAgentRuntime {
     logs: HashMap<AgentId, AgentRuntimeLog>,
     next_event_id: u64,
     event_persist_sender: Option<mpsc::UnboundedSender<AgentEventRecord>>,
+    pending_event_persists: Arc<Mutex<HashMap<AgentId, u64>>>,
 }
 
 struct AgentRuntimeSubscriber {
@@ -1168,7 +1215,7 @@ impl Drop for AgentRuntimeSubscription {
         let Ok(mut runtime) = self.runtime.lock() else {
             return;
         };
-        runtime.subscribers.remove(&self.id);
+        runtime.unregister_subscriber(self.id);
     }
 }
 
@@ -1215,6 +1262,25 @@ fn register_agent_runtime_subscriber(
     })
 }
 
+fn spawn_agent_startup_recovery(
+    workspace_path: Option<&Path>,
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+) {
+    let Some(workspace_path) = workspace_path else {
+        return;
+    };
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let store = ChatStore::new(workspace_path.to_path_buf());
+    let runtime = Arc::clone(runtime);
+    handle.spawn(async move {
+        if let Err(error) = recover_workspace_agent_events(&store, &runtime).await {
+            log::error!("[agent startup recovery] failed: {:?}", error);
+        }
+    });
+}
+
 fn agent_runtime_push_sink(
     runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
     run: &AgentRunHandle,
@@ -1246,6 +1312,11 @@ impl WorkspaceAgentRuntime {
             },
         );
         id
+    }
+
+    fn unregister_subscriber(&mut self, id: u64) {
+        self.subscribers.remove(&id);
+        self.prune_idle_unobserved_logs();
     }
 
     fn subscribe_agent(
@@ -1295,13 +1366,13 @@ impl WorkspaceAgentRuntime {
         bound_model: Option<BoundAgentModel>,
         subscriber_id: Option<u64>,
         persisted_event_id: Option<AgentEventId>,
+        persisted_run_id: Option<u64>,
     ) -> Result<AgentRunHandle, ProtocolError> {
+        self.advance_event_cursor(persisted_event_id);
+        self.advance_run_cursor(persisted_run_id);
         let run = self
             .registry
             .try_start(session_id, agent_id, client_request_id)?;
-        if run.started_now {
-            self.advance_event_cursor(persisted_event_id);
-        }
         self.record_run_started(&run, bound_model, subscriber_id);
         Ok(run)
     }
@@ -1314,15 +1385,15 @@ impl WorkspaceAgentRuntime {
         bound_model: Option<BoundAgentModel>,
         subscriber_id: Option<u64>,
         persisted_event_id: Option<AgentEventId>,
+        persisted_run_id: Option<u64>,
     ) -> Result<AgentRunHandle, ProtocolError> {
+        self.advance_event_cursor(persisted_event_id);
+        self.advance_run_cursor(persisted_run_id);
         let run = self.registry.try_start_reserved_initial_turn(
             session_id,
             agent_id,
             client_request_id,
         )?;
-        if run.started_now {
-            self.advance_event_cursor(persisted_event_id);
-        }
         self.record_run_started(&run, bound_model, subscriber_id);
         Ok(run)
     }
@@ -1331,8 +1402,68 @@ impl WorkspaceAgentRuntime {
         self.registry.cancel(agent_id)
     }
 
-    fn finish_if_current(&mut self, run_id: &str) -> Option<AgentRunHandle> {
-        self.registry.finish_if_current(run_id)
+    fn active_turn_id_for_agent(&self, agent_id: &AgentId) -> Option<AgentTurnId> {
+        self.registry
+            .running
+            .as_ref()
+            .filter(|run| &run.agent_id == agent_id)
+            .map(|run| run.turn_id.clone())
+    }
+
+    #[cfg(test)]
+    fn has_runtime_log_or_pending_persist_for_agent(&self, agent_id: &AgentId) -> bool {
+        self.logs.contains_key(agent_id)
+            || self
+                .pending_event_persists
+                .lock()
+                .ok()
+                .is_some_and(|pending| pending.contains_key(agent_id))
+    }
+
+    fn record_done_and_finish(
+        &mut self,
+        run: &AgentRunHandle,
+        cancelled: bool,
+    ) -> Option<(ServerPushEnvelope, Vec<ServerPushSink>)> {
+        let is_current = self
+            .registry
+            .running
+            .as_ref()
+            .is_some_and(|active| active.run_id == run.run_id);
+        if !is_current {
+            return None;
+        }
+        let envelope = ServerPushEnvelope {
+            event: ServerPushEvent::AgentDone(AgentDoneEvent {
+                session_id: run.session_id.clone(),
+                run_id: run.run_id.clone(),
+                cancelled,
+            }),
+        };
+        let sinks = self.record_push_and_collect_sinks(run, &envelope.event);
+        self.registry.finish_if_current(&run.run_id);
+        self.prune_idle_unobserved_logs();
+        Some((envelope, sinks))
+    }
+
+    fn run_is_failed(&self, run: &AgentRunHandle) -> bool {
+        self.logs
+            .get(&run.agent_id)
+            .is_some_and(|log| log.state == AgentRuntimeStatus::Failed)
+    }
+
+    fn finish_failed_without_done(&mut self, run: &AgentRunHandle) -> bool {
+        let is_current = self
+            .registry
+            .running
+            .as_ref()
+            .is_some_and(|active| active.run_id == run.run_id);
+        if !is_current {
+            return false;
+        }
+        self.registry.finish_if_current(&run.run_id);
+        self.prune_idle_unobserved_logs();
+        true
     }
 
     fn snapshot(
@@ -1383,6 +1514,30 @@ impl WorkspaceAgentRuntime {
         if let Some(event_id) = persisted_event_id {
             self.next_event_id = self.next_event_id.max(event_id.0);
         }
+    }
+
+    fn advance_run_cursor(&mut self, persisted_run_id: Option<u64>) {
+        if let Some(run_id) = persisted_run_id {
+            self.registry.next_run_id = self.registry.next_run_id.max(run_id);
+        }
+    }
+
+    fn prune_idle_unobserved_logs(&mut self) {
+        let observed_agents = self
+            .subscribers
+            .values()
+            .flat_map(|subscriber| subscriber.agents.iter().cloned())
+            .collect::<HashSet<_>>();
+        let running_agent = self
+            .registry
+            .running
+            .as_ref()
+            .map(|run| run.agent_id.clone());
+        self.logs.retain(|agent_id, log| {
+            running_agent.as_ref() == Some(agent_id)
+                || observed_agents.contains(agent_id)
+                || log.state == AgentRuntimeStatus::Running
+        });
     }
 
     fn record_run_started(
@@ -1482,11 +1637,14 @@ impl WorkspaceAgentRuntime {
         let Some(workspace_root) = self.workspace_root.clone() else {
             return;
         };
+        self.increment_pending_event_persist(&record.agent_id);
         if self.event_persist_sender.is_none() {
             let Ok(handle) = tokio::runtime::Handle::try_current() else {
+                self.decrement_pending_event_persist(&record.agent_id);
                 return;
             };
             let (sender, mut receiver) = mpsc::unbounded_channel::<AgentEventRecord>();
+            let pending_event_persists = Arc::clone(&self.pending_event_persists);
             handle.spawn(async move {
                 let store = ChatStore::new(workspace_root);
                 while let Some(record) = receiver.recv().await {
@@ -1497,13 +1655,26 @@ impl WorkspaceAgentRuntime {
                             error
                         );
                     }
+                    decrement_pending_event_persist(&pending_event_persists, &record.agent_id);
                 }
             });
             self.event_persist_sender = Some(sender);
         }
         if let Some(sender) = &self.event_persist_sender {
-            let _ = sender.send(record);
+            if let Err(error) = sender.send(record) {
+                self.decrement_pending_event_persist(&error.0.agent_id);
+            }
         }
+    }
+
+    fn increment_pending_event_persist(&self, agent_id: &AgentId) {
+        if let Ok(mut pending) = self.pending_event_persists.lock() {
+            *pending.entry(agent_id.clone()).or_insert(0) += 1;
+        }
+    }
+
+    fn decrement_pending_event_persist(&self, agent_id: &AgentId) {
+        decrement_pending_event_persist(&self.pending_event_persists, agent_id);
     }
 
     fn ensure_log(
@@ -1655,6 +1826,245 @@ fn max_agent_event_id(events: &[AgentEventRecord]) -> Option<AgentEventId> {
         .map(AgentEventId)
 }
 
+fn max_agent_run_id(events: &[AgentEventRecord]) -> Option<u64> {
+    events
+        .iter()
+        .filter_map(|event| event.turn_id.as_ref())
+        .filter_map(agent_turn_run_id)
+        .max()
+}
+
+fn agent_turn_run_id(turn_id: &AgentTurnId) -> Option<u64> {
+    turn_id.0.strip_prefix("agent-")?.parse::<u64>().ok()
+}
+
+fn agent_turn_id_is_after(left: &AgentTurnId, right: &AgentTurnId) -> bool {
+    match (agent_turn_run_id(left), agent_turn_run_id(right)) {
+        (Some(left), Some(right)) => left > right,
+        _ => false,
+    }
+}
+
+async fn recover_agent_persisted_events(
+    store: &ChatStore,
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    session_id: &ChatSessionId,
+    agent_id: &AgentId,
+) -> Result<Vec<AgentEventRecord>, ProtocolError> {
+    wait_for_pending_event_persist(runtime, agent_id).await?;
+    let mut events = store.read_agent_events(agent_id, None).await?;
+    let latest_final_fact = store
+        .latest_agent_turn_final_fact(session_id, agent_id)
+        .await?;
+    let event_turn_id = last_agent_turn_id(&events);
+    let (turn_id, final_fact) = match (event_turn_id, latest_final_fact) {
+        (Some(event_turn_id), Some(final_fact))
+            if agent_turn_id_is_after(&final_fact.turn_id, &event_turn_id) =>
+        {
+            if runtime_active_turn_id(runtime, agent_id)? == Some(final_fact.turn_id.clone()) {
+                return Ok(events);
+            }
+            (final_fact.turn_id, Some(final_fact.kind))
+        }
+        (Some(turn_id), _) => {
+            if runtime_active_turn_id(runtime, agent_id)? == Some(turn_id.clone()) {
+                return Ok(events);
+            }
+            let final_fact = store
+                .agent_turn_final_fact_kind(session_id, agent_id, &turn_id)
+                .await?;
+            (turn_id, final_fact)
+        }
+        (None, Some(final_fact)) => {
+            if runtime_active_turn_id(runtime, agent_id)? == Some(final_fact.turn_id.clone()) {
+                return Ok(events);
+            }
+            (final_fact.turn_id, Some(final_fact.kind))
+        }
+        (None, None) => return Ok(events),
+    };
+    let terminal_status = terminal_status_for_turn(&events, &turn_id);
+    let recovery_payload = match (terminal_status, final_fact) {
+        (None, None) => Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Interrupted,
+        }),
+        (None, Some(AgentTurnFinalFactKind::Success)) => {
+            Some(AgentEventPayload::Done { cancelled: false })
+        }
+        (None, Some(AgentTurnFinalFactKind::Failure)) => Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Failed,
+        }),
+        (Some(AgentRuntimeStatus::Done), Some(AgentTurnFinalFactKind::Failure)) => {
+            Some(AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::FailedNeedsRecovery,
+            })
+        }
+        (Some(AgentRuntimeStatus::Failed), Some(AgentTurnFinalFactKind::Success))
+        | (Some(AgentRuntimeStatus::Cancelled), Some(_)) => Some(AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::FailedNeedsRecovery,
+        }),
+        (Some(AgentRuntimeStatus::Done | AgentRuntimeStatus::Failed), None) => {
+            Some(AgentEventPayload::StateChanged {
+                state: AgentRuntimeStatus::FailedNeedsRecovery,
+            })
+        }
+        _ => None,
+    };
+    if let Some(payload) = recovery_payload {
+        if runtime_active_turn_id(runtime, agent_id)? == Some(turn_id.clone()) {
+            return Ok(events);
+        }
+        events = store
+            .recover_agent_event_if_current(agent_id, &turn_id, payload)
+            .await?;
+    }
+    Ok(events)
+}
+
+async fn recover_workspace_agent_events(
+    store: &ChatStore,
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+) -> Result<(), ProtocolError> {
+    let sessions = store.agent_identities(true).await?;
+    for session in sessions {
+        if let Err(error) =
+            recover_agent_persisted_events(store, runtime, &session.session_id, &session.agent_id)
+                .await
+        {
+            log::error!(
+                "[agent startup recovery session={} agent={}] failed: {:?}",
+                session.session_id.0,
+                session.agent_id.0,
+                error
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn workspace_persisted_run_id(store: &ChatStore) -> Result<Option<u64>, ProtocolError> {
+    let mut max_run_id = None;
+    for identity in store.agent_identities(true).await? {
+        let events = match store.read_agent_events(&identity.agent_id, None).await {
+            Ok(events) => events,
+            Err(error) => {
+                log::error!(
+                    "[agent run cursor session={} agent={}] failed: {:?}",
+                    identity.session_id.0,
+                    identity.agent_id.0,
+                    error
+                );
+                return Err(error);
+            }
+        };
+        max_run_id = max_run_id.max(max_agent_run_id(&events));
+        max_run_id = max_run_id.max(
+            store
+                .max_agent_turn_run_id(&identity.session_id, &identity.agent_id)
+                .await?,
+        );
+    }
+    Ok(max_run_id)
+}
+
+async fn wait_for_pending_event_persist(
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    agent_id: &AgentId,
+) -> Result<(), ProtocolError> {
+    for _ in 0..200 {
+        if !runtime_has_pending_event_persist(runtime, agent_id)? {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    Err(internal_error(format!(
+        "Agent event persist 未完成，暂停恢复: {}",
+        agent_id.0
+    )))
+}
+
+fn decrement_pending_event_persist(
+    pending_event_persists: &Arc<Mutex<HashMap<AgentId, u64>>>,
+    agent_id: &AgentId,
+) {
+    if let Ok(mut pending) = pending_event_persists.lock()
+        && let Some(count) = pending.get_mut(agent_id)
+    {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            pending.remove(agent_id);
+        }
+    }
+}
+
+fn runtime_active_turn_id(
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    agent_id: &AgentId,
+) -> Result<Option<AgentTurnId>, ProtocolError> {
+    runtime
+        .lock()
+        .map_err(|_| internal_error("Agent registry lock poisoned"))
+        .map(|runtime| runtime.active_turn_id_for_agent(agent_id))
+}
+
+fn runtime_has_pending_event_persist(
+    runtime: &Arc<Mutex<WorkspaceAgentRuntime>>,
+    agent_id: &AgentId,
+) -> Result<bool, ProtocolError> {
+    runtime
+        .lock()
+        .map_err(|_| internal_error("Agent registry lock poisoned"))
+        .map(|runtime| {
+            runtime
+                .pending_event_persists
+                .lock()
+                .ok()
+                .is_some_and(|pending| pending.contains_key(agent_id))
+        })
+}
+
+fn last_agent_turn_id(events: &[AgentEventRecord]) -> Option<AgentTurnId> {
+    events.iter().rev().find_map(|event| event.turn_id.clone())
+}
+
+fn terminal_status_for_turn(
+    events: &[AgentEventRecord],
+    turn_id: &AgentTurnId,
+) -> Option<AgentRuntimeStatus> {
+    let mut status = None;
+    for event in events
+        .iter()
+        .filter(|event| event.turn_id.as_ref() == Some(turn_id))
+    {
+        match &event.payload {
+            AgentEventPayload::Done { cancelled } => {
+                if *cancelled {
+                    status = Some(AgentRuntimeStatus::Cancelled);
+                } else if status != Some(AgentRuntimeStatus::Failed) {
+                    status = Some(AgentRuntimeStatus::Done);
+                }
+            }
+            AgentEventPayload::Error { .. } => status = Some(AgentRuntimeStatus::Failed),
+            AgentEventPayload::StateChanged { state } if is_terminal_runtime_status(*state) => {
+                status = Some(*state);
+            }
+            _ => {}
+        }
+    }
+    status
+}
+
+fn is_terminal_runtime_status(status: AgentRuntimeStatus) -> bool {
+    matches!(
+        status,
+        AgentRuntimeStatus::Done
+            | AgentRuntimeStatus::Failed
+            | AgentRuntimeStatus::Cancelled
+            | AgentRuntimeStatus::Interrupted
+            | AgentRuntimeStatus::FailedNeedsRecovery
+    )
+}
+
 fn event_is_after(event_id: AgentEventId, since_event_id: Option<AgentEventId>) -> bool {
     since_event_id.is_none_or(|since| event_id.0 > since.0)
 }
@@ -1667,6 +2077,8 @@ fn update_runtime_log(log: &mut AgentRuntimeLog, payload: &AgentEventPayload) {
                 log.current_text.clear();
                 log.current_reasoning.clear();
                 log.error = None;
+            } else if is_terminal_runtime_status(*state) {
+                log.active_turn_id = None;
             }
         }
         AgentEventPayload::Token { text } => log.current_text.push_str(text),
@@ -1674,6 +2086,7 @@ fn update_runtime_log(log: &mut AgentRuntimeLog, payload: &AgentEventPayload) {
         AgentEventPayload::Error { message, .. } => {
             log.state = AgentRuntimeStatus::Failed;
             log.error = Some(message.clone());
+            log.active_turn_id = None;
         }
         AgentEventPayload::Done { cancelled } => {
             if *cancelled {
@@ -1835,6 +2248,7 @@ impl AgentRunRegistry {
             turn_id: AgentTurnId(run_id),
             cancelled: Arc::new(AtomicBool::new(false)),
             started_now: true,
+            started_at: Instant::now(),
         };
         self.running = Some(run.clone());
         self.running_initial_create_request_id = None;
@@ -1901,6 +2315,7 @@ impl AgentRunRegistry {
             turn_id: AgentTurnId(run_id),
             cancelled: Arc::new(AtomicBool::new(false)),
             started_now: true,
+            started_at: Instant::now(),
         };
         self.running = Some(run.clone());
         self.running_initial_create_request_id = initial_create_request_id;
@@ -1943,6 +2358,7 @@ struct AgentRunHandle {
     turn_id: AgentTurnId,
     cancelled: Arc<AtomicBool>,
     started_now: bool,
+    started_at: Instant,
 }
 
 impl AgentRunHandle {
@@ -2312,12 +2728,12 @@ async fn run_text_agent(worker: AgentWorker) {
     let response_text = match run_text_agent_rig(&worker).await {
         Some(text) => text,
         None => {
-            finish_agent_worker(worker, false);
+            finish_agent_worker(worker, false).await;
             return;
         }
     };
     if worker.run.cancelled.load(Ordering::SeqCst) {
-        finish_agent_worker(worker, true);
+        finish_agent_worker(worker, true).await;
         return;
     }
     let saved_plan = if matches!(worker.mode, AgentMode::Plan) {
@@ -2329,9 +2745,18 @@ async fn run_text_agent(worker: AgentWorker) {
         try_propose_plan(&worker, saved_plan.as_ref());
     }
     if !response_text.trim().is_empty() {
-        append_agent_message(&worker.workspace_root, &worker.run, &response_text).await;
+        if let Err(error) =
+            append_agent_message(&worker.workspace_root, &worker.run, &response_text).await
+        {
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::PersistenceError,
+                format!("持久化 Agent 最终消息失败: {}", error.message),
+            );
+        }
     }
-    finish_agent_worker(worker, false);
+    finish_agent_worker(worker, false).await;
 }
 
 async fn latest_saved_plan_for_worker(worker: &AgentWorker) -> Option<SavedCadPlan> {
@@ -2694,12 +3119,6 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         Err(error) if error.message == "Rig Agent is not configured" => {
             let message =
                 "Rig Agent is not configured. Set BUDN_AGENT_CONFIG or a provider API key env.";
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::LlmError,
-                message,
-            );
             append_agent_error_message(
                 &worker.workspace_root,
                 &worker.run,
@@ -2707,16 +3126,16 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
                 message,
             )
             .await;
-            return None;
-        }
-        Err(error) => {
-            let message = error.message;
             push_agent_error(
                 &worker.push_sink,
                 &worker.run,
                 AgentErrorType::LlmError,
-                message.clone(),
+                message,
             );
+            return None;
+        }
+        Err(error) => {
+            let message = error.message;
             append_agent_error_message(
                 &worker.workspace_root,
                 &worker.run,
@@ -2724,6 +3143,12 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
                 &message,
             )
             .await;
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::LlmError,
+                message.clone(),
+            );
             return None;
         }
     };
@@ -2739,12 +3164,6 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         Ok(scope) => scope,
         Err(error) => {
             let message = error.message;
-            push_agent_error(
-                &worker.push_sink,
-                &worker.run,
-                AgentErrorType::PermissionDenied,
-                message.clone(),
-            );
             append_agent_error_message(
                 &worker.workspace_root,
                 &worker.run,
@@ -2752,6 +3171,12 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
                 &message,
             )
             .await;
+            push_agent_error(
+                &worker.push_sink,
+                &worker.run,
+                AgentErrorType::PermissionDenied,
+                message.clone(),
+            );
             return None;
         }
     };
@@ -2831,9 +3256,9 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         Ok(draft) => Some(draft.text),
         Err(message) => {
             let error_type = agent_error_type_for_rig_message(&message);
-            push_agent_error(&worker.push_sink, &worker.run, error_type, message.clone());
             append_agent_error_message(&worker.workspace_root, &worker.run, error_type, &message)
                 .await;
+            push_agent_error(&worker.push_sink, &worker.run, error_type, message.clone());
             None
         }
     }
@@ -3001,20 +3426,50 @@ fn contains_path(paths: &[PathHandle], target: &PathHandle) -> bool {
     paths.iter().any(|path| path == target)
 }
 
-fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
-    let finished = worker
+async fn finish_agent_worker(worker: AgentWorker, cancelled: bool) {
+    wait_for_initial_idempotency_window(worker.run.started_at).await;
+    if !cancelled && run_failed(&worker) {
+        let _ = worker
+            .agent_runtime
+            .lock()
+            .ok()
+            .map(|mut runtime| runtime.finish_failed_without_done(&worker.run));
+        return;
+    }
+    let done = worker
         .agent_runtime
         .lock()
         .ok()
-        .and_then(|mut runtime| runtime.finish_if_current(&worker.run.run_id));
-    if let Some(run) = finished {
-        push_agent_done(&worker.push_sink, &run, cancelled);
+        .and_then(|mut runtime| runtime.record_done_and_finish(&worker.run, cancelled));
+    if let Some((envelope, sinks)) = done {
+        for sink in sinks {
+            sink(envelope.clone());
+        }
     }
 }
 
-async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, content: &str) {
+fn run_failed(worker: &AgentWorker) -> bool {
+    worker
+        .agent_runtime
+        .lock()
+        .ok()
+        .is_some_and(|runtime| runtime.run_is_failed(&worker.run))
+}
+
+async fn wait_for_initial_idempotency_window(started_at: Instant) {
+    let elapsed = started_at.elapsed();
+    if elapsed < AGENT_INITIAL_IDEMPOTENCY_WINDOW {
+        tokio::time::sleep(AGENT_INITIAL_IDEMPOTENCY_WINDOW - elapsed).await;
+    }
+}
+
+async fn append_agent_message(
+    workspace_root: &Path,
+    run: &AgentRunHandle,
+    content: &str,
+) -> Result<(), ProtocolError> {
     let store = ChatStore::new(workspace_root.to_path_buf());
-    let _ = store
+    store
         .append_message_with_agent_turn(
             &run.session_id,
             ChatRole::Assistant,
@@ -3023,7 +3478,8 @@ async fn append_agent_message(workspace_root: &Path, run: &AgentRunHandle, conte
             &run.turn_id,
             Some(run.run_id.clone()),
         )
-        .await;
+        .await?;
+    Ok(())
 }
 
 async fn append_agent_capability_meta(
@@ -3058,10 +3514,10 @@ async fn append_agent_error_message(
     error_type: AgentErrorType,
     message: &str,
 ) {
-    append_agent_message(
+    let _ = append_agent_message(
         workspace_root,
         run,
-        &format!("Agent run failed ({error_type:?}): {message}"),
+        &format!("{AGENT_ERROR_FACT_PREFIX} ({error_type:?}): {message}"),
     )
     .await;
 }
@@ -3155,16 +3611,6 @@ fn push_agent_error(
             run_id: Some(run.run_id.clone()),
             error_type,
             message: msg,
-        }),
-    });
-}
-
-fn push_agent_done(push_sink: &ServerPushSink, run: &AgentRunHandle, cancelled: bool) {
-    (push_sink)(ServerPushEnvelope {
-        event: ServerPushEvent::AgentDone(AgentDoneEvent {
-            session_id: run.session_id.clone(),
-            run_id: run.run_id.clone(),
-            cancelled,
         }),
     });
 }
@@ -3460,6 +3906,7 @@ mod tests {
             turn_id: AgentTurnId("agent-1".into()),
             cancelled: Arc::new(AtomicBool::new(false)),
             started_now: true,
+            started_at: Instant::now(),
         };
         let cadquery_results = Arc::new(Mutex::new(CadQueryResultCache::new(
             CADQUERY_RESULT_CACHE_LIMIT,
@@ -3534,6 +3981,7 @@ mod tests {
             turn_id: AgentTurnId("agent-1".into()),
             cancelled: Arc::new(AtomicBool::new(false)),
             started_now: true,
+            started_at: Instant::now(),
         };
 
         append_agent_capability_meta(&workspace_root, &run, "anthropic", true).await;
@@ -3684,6 +4132,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("run starts");
 
@@ -3728,6 +4177,228 @@ mod tests {
             agent_token_texts(&delivered.lock().expect("push lock")),
             vec!["four"]
         );
+    }
+
+    #[test]
+    fn runtime_drops_terminal_log_without_subscribers() {
+        let mut runtime = WorkspaceAgentRuntime::default();
+        let run = runtime
+            .start_run(
+                ChatSessionId("chat-1".into()),
+                AgentId("agent-1".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("run starts");
+
+        let done = runtime.record_done_and_finish(&run, false);
+
+        assert!(done.is_some());
+        assert!(runtime.registry.running.is_none());
+        assert!(!runtime.logs.contains_key(&run.agent_id));
+    }
+
+    #[test]
+    fn runtime_keeps_terminal_log_for_observing_subscriber() {
+        let mut runtime = WorkspaceAgentRuntime::default();
+        let delivered = Arc::new(Mutex::new(Vec::<ServerPushEnvelope>::new()));
+        let sink: ServerPushSink = {
+            let delivered = Arc::clone(&delivered);
+            Arc::new(move |envelope| delivered.lock().expect("push lock").push(envelope))
+        };
+        let subscriber_id = runtime.register_subscriber(sink);
+        let run = runtime
+            .start_run(
+                ChatSessionId("chat-1".into()),
+                AgentId("agent-1".into()),
+                None,
+                None,
+                Some(subscriber_id),
+                None,
+                None,
+            )
+            .expect("run starts");
+
+        let done = runtime.record_done_and_finish(&run, false);
+
+        assert!(done.is_some());
+        assert!(runtime.logs.contains_key(&run.agent_id));
+        runtime.unregister_subscriber(subscriber_id);
+        assert!(!runtime.logs.contains_key(&run.agent_id));
+    }
+
+    #[test]
+    fn runtime_pending_persist_blocks_recovery_without_retaining_idle_log() {
+        let mut runtime = WorkspaceAgentRuntime::default();
+        let run = runtime
+            .start_run(
+                ChatSessionId("chat-1".into()),
+                AgentId("agent-1".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("run starts");
+        runtime
+            .pending_event_persists
+            .lock()
+            .expect("pending lock")
+            .insert(run.agent_id.clone(), 1);
+
+        let done = runtime.record_done_and_finish(&run, false);
+
+        assert!(done.is_some());
+        assert!(runtime.registry.running.is_none());
+        assert!(!runtime.logs.contains_key(&run.agent_id));
+        assert!(runtime.has_runtime_log_or_pending_persist_for_agent(&run.agent_id));
+
+        runtime.decrement_pending_event_persist(&run.agent_id);
+
+        assert!(!runtime.has_runtime_log_or_pending_persist_for_agent(&run.agent_id));
+    }
+
+    #[tokio::test]
+    async fn recovery_waits_for_pending_terminal_persist_before_snapshot() {
+        let temp_dir = tempfile::tempdir().expect("temp workspace");
+        let workspace_root = temp_dir.path().to_path_buf();
+        let store = ChatStore::new(workspace_root);
+        let created = store
+            .create("pending terminal recovery", None, Vec::new())
+            .await
+            .expect("chat session should be created");
+        let turn_id = AgentTurnId("agent-1".into());
+        store
+            .append_agent_event(
+                &created.agent_id,
+                &AgentEventRecord {
+                    event_id: AgentEventId(1),
+                    agent_id: created.agent_id.clone(),
+                    turn_id: Some(turn_id.clone()),
+                    ts_ms: 100,
+                    payload: AgentEventPayload::StateChanged {
+                        state: AgentRuntimeStatus::Running,
+                    },
+                },
+            )
+            .await
+            .expect("seed running event");
+        store
+            .append_message_with_agent_turn(
+                &created.session_id,
+                ChatRole::Assistant,
+                "final answer",
+                &created.agent_id,
+                &turn_id,
+                Some(turn_id.0.clone()),
+            )
+            .await
+            .expect("seed final assistant fact");
+        let runtime = Arc::new(Mutex::new(WorkspaceAgentRuntime::default()));
+        runtime
+            .lock()
+            .expect("runtime lock")
+            .pending_event_persists
+            .lock()
+            .expect("pending lock")
+            .insert(created.agent_id.clone(), 1);
+        let completion_store = store.clone();
+        let completion_runtime = Arc::clone(&runtime);
+        let completion_agent_id = created.agent_id.clone();
+        let completion_turn_id = turn_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            completion_store
+                .append_agent_event(
+                    &completion_agent_id,
+                    &AgentEventRecord {
+                        event_id: AgentEventId(2),
+                        agent_id: completion_agent_id.clone(),
+                        turn_id: Some(completion_turn_id),
+                        ts_ms: 101,
+                        payload: AgentEventPayload::Done { cancelled: false },
+                    },
+                )
+                .await
+                .expect("append pending terminal event");
+            completion_runtime
+                .lock()
+                .expect("runtime lock")
+                .decrement_pending_event_persist(&completion_agent_id);
+        });
+
+        let recovered = recover_agent_persisted_events(
+            &store,
+            &runtime,
+            &created.session_id,
+            &created.agent_id,
+        )
+        .await
+        .expect("recover waits for pending terminal");
+        let snapshot = runtime.lock().expect("runtime lock").snapshot(
+            &created.agent_id,
+            created.session_id,
+            None,
+            recovered,
+            None,
+        );
+
+        assert_eq!(snapshot.state, AgentRuntimeStatus::Done);
+    }
+
+    #[tokio::test]
+    async fn recovery_returns_error_when_pending_persist_does_not_complete() {
+        let temp_dir = tempfile::tempdir().expect("temp workspace");
+        let workspace_root = temp_dir.path().to_path_buf();
+        let store = ChatStore::new(workspace_root);
+        let created = store
+            .create("stuck pending recovery", None, Vec::new())
+            .await
+            .expect("chat session should be created");
+        let turn_id = AgentTurnId("agent-1".into());
+        store
+            .append_agent_event(
+                &created.agent_id,
+                &AgentEventRecord {
+                    event_id: AgentEventId(1),
+                    agent_id: created.agent_id.clone(),
+                    turn_id: Some(turn_id),
+                    ts_ms: 100,
+                    payload: AgentEventPayload::StateChanged {
+                        state: AgentRuntimeStatus::Running,
+                    },
+                },
+            )
+            .await
+            .expect("seed running event");
+        let runtime = Arc::new(Mutex::new(WorkspaceAgentRuntime::default()));
+        runtime
+            .lock()
+            .expect("runtime lock")
+            .pending_event_persists
+            .lock()
+            .expect("pending lock")
+            .insert(created.agent_id.clone(), 1);
+
+        let error = recover_agent_persisted_events(
+            &store,
+            &runtime,
+            &created.session_id,
+            &created.agent_id,
+        )
+        .await
+        .expect_err("stuck pending persist should block recovery");
+        let records = store
+            .read_agent_events(&created.agent_id, None)
+            .await
+            .expect("read event log");
+
+        assert_eq!(error.code, ProtocolErrorCode::Internal);
+        assert_eq!(records.len(), 1);
     }
 
     #[test]

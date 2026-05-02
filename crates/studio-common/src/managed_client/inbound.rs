@@ -129,7 +129,17 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 self.current_chat_history.clear();
                 self.latest_chat_history_request = None;
                 self.pending_chat_session = None;
-                self.agent_run = response.initial_turn.clone();
+                if let Some(initial_turn) = response.initial_turn.clone() {
+                    self.agent_run = Some(initial_turn);
+                    self.agent_runtime_status =
+                        Some(app_server_protocol::AgentRuntimeStatus::Running);
+                } else if !self
+                    .agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.agent_id == response.agent_id)
+                {
+                    self.agent_run = None;
+                }
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();
@@ -168,10 +178,12 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             }
             CommandSuccess::AgentStarted(response) => {
                 self.agent_run = Some(response.clone());
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Running);
             }
             CommandSuccess::AgentSnapshot(response) => {
                 self.agent_events.clear();
                 self.merge_agent_event_records(response.events.clone());
+                self.agent_runtime_status = Some(response.state);
                 if response.state == app_server_protocol::AgentRuntimeStatus::Running {
                     if let Some(turn_id) = response.active_turn_id.clone() {
                         self.agent_run = Some(app_server_protocol::AgentStartedResponse {
@@ -327,6 +339,24 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 .is_some_and(|run| run.run_id == event.run_id)
             {
                 self.agent_run = None;
+                self.agent_runtime_status = Some(if event.cancelled {
+                    app_server_protocol::AgentRuntimeStatus::Cancelled
+                } else {
+                    app_server_protocol::AgentRuntimeStatus::Done
+                });
+            }
+        }
+        if let ServerPushEvent::AgentError(event) = &event {
+            let matches_current_run = event.run_id.as_ref().is_some_and(|run_id| {
+                self.agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.run_id == *run_id)
+            });
+            if matches_current_run {
+                self.agent_run = None;
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Failed);
+            } else if self.agent_run.is_none() {
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Failed);
             }
         }
         self.agent_events.push(event.clone());

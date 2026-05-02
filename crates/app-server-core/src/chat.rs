@@ -9,16 +9,18 @@ use std::{
 };
 
 use app_server_protocol::{
-    AgentEventId, AgentEventRecord, AgentId, AgentSearchSource, AgentTurnId, BoundAgentModel,
-    ChatAckResponse, ChatArchivedResponse, ChatCreatedResponse, ChatHistoryResponse,
-    ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary,
-    ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolError, ProtocolErrorCode,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentRuntimeStatus,
+    AgentSearchSource, AgentTurnId, BoundAgentModel, ChatAckResponse, ChatArchivedResponse,
+    ChatCreatedResponse, ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole,
+    ChatSessionId, ChatSessionSummary, ChatToolCallRecord, ChatToolResultRecord, PathHandle,
+    ProtocolError, ProtocolErrorCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt};
 
 const CHAT_INDEX_FILE: &str = "chats.json";
 const CHAT_INDEX_VERSION: u32 = 1;
+pub const AGENT_ERROR_FACT_PREFIX: &str = "Agent run failed";
 static CHAT_STORE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
     OnceLock::new();
 static CHAT_INDEX_LISTENERS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, ChatIndexListener>>>> =
@@ -78,6 +80,24 @@ pub struct ChatSummaryUpdate {
     pub goal: String,
     pub related_files: Vec<PathHandle>,
     pub open_questions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnFinalFactKind {
+    Success,
+    Failure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTurnFinalFact {
+    pub turn_id: AgentTurnId,
+    pub kind: AgentTurnFinalFactKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatAgentIdentity {
+    pub session_id: ChatSessionId,
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,6 +307,22 @@ impl ChatStore {
         include_archived: bool,
     ) -> Result<ChatListResponse, ProtocolError> {
         self.list(include_archived).await
+    }
+
+    pub async fn agent_identities(
+        &self,
+        include_archived: bool,
+    ) -> Result<Vec<ChatAgentIdentity>, ProtocolError> {
+        let index = self.load_or_migrate_index().await?;
+        Ok(index
+            .chats
+            .into_iter()
+            .filter(|entry| include_archived || !entry.archived)
+            .map(|entry| ChatAgentIdentity {
+                session_id: entry.chat_id,
+                agent_id: entry.agent_id,
+            })
+            .collect())
     }
 
     pub async fn append_message(
@@ -688,7 +724,7 @@ impl ChatStore {
             .find(|entry| entry.agent_id == *agent_id)
             .ok_or_else(|| not_found("Agent 不存在"))?;
         let path = self.relative_path(&entry.events_path)?;
-        ensure_existing_jsonl_file(&self.workspace_root, &path).await?;
+        ensure_existing_agent_event_file(&self.workspace_root, &path).await?;
         Ok(path)
     }
 
@@ -956,6 +992,34 @@ impl ChatStore {
         append_agent_event_jsonl(&self.workspace_root, &path, event).await
     }
 
+    pub async fn recover_agent_event_if_current(
+        &self,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+        payload: AgentEventPayload,
+    ) -> Result<Vec<AgentEventRecord>, ProtocolError> {
+        let write_lock = workspace_write_lock(&self.workspace_root)?;
+        let _guard = write_lock.lock().await;
+        let index = self.load_or_migrate_index_without_lock().await?;
+        let path = self
+            .event_path_for_agent_from_index(agent_id, &index)
+            .await?;
+        let mut events = read_agent_event_records(&self.workspace_root, &path).await?;
+        if !should_append_recovery_payload(&events, turn_id, &payload) {
+            return Ok(events);
+        }
+        let record = AgentEventRecord {
+            event_id: AgentEventId(max_agent_event_id_in_records(&events).map_or(1, |id| id.0 + 1)),
+            agent_id: agent_id.clone(),
+            turn_id: Some(turn_id.clone()),
+            ts_ms: unix_now_ms(),
+            payload,
+        };
+        append_agent_event_jsonl(&self.workspace_root, &path, &record).await?;
+        events.push(record);
+        Ok(events)
+    }
+
     pub async fn read_agent_events(
         &self,
         agent_id: &AgentId,
@@ -970,6 +1034,78 @@ impl ChatStore {
             .into_iter()
             .filter(|event| since_event_id.is_none_or(|since| event.event_id.0 > since.0))
             .collect())
+    }
+
+    pub async fn agent_turn_has_final_fact(
+        &self,
+        session_id: &ChatSessionId,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+    ) -> Result<bool, ProtocolError> {
+        Ok(self
+            .agent_turn_final_fact_kind(session_id, agent_id, turn_id)
+            .await?
+            .is_some())
+    }
+
+    pub async fn agent_turn_final_fact_kind(
+        &self,
+        session_id: &ChatSessionId,
+        agent_id: &AgentId,
+        turn_id: &AgentTurnId,
+    ) -> Result<Option<AgentTurnFinalFactKind>, ProtocolError> {
+        let path = self.session_path(session_id).await?;
+        let messages = read_messages(&self.workspace_root, &path).await?;
+        Ok(messages
+            .iter()
+            .find(|message| {
+                is_agent_final_fact_message(message, agent_id)
+                    && message.turn_id.as_ref() == Some(turn_id)
+            })
+            .map(|message| {
+                if is_agent_error_fact(&message.content) {
+                    AgentTurnFinalFactKind::Failure
+                } else {
+                    AgentTurnFinalFactKind::Success
+                }
+            }))
+    }
+
+    pub async fn latest_agent_turn_final_fact(
+        &self,
+        session_id: &ChatSessionId,
+        agent_id: &AgentId,
+    ) -> Result<Option<AgentTurnFinalFact>, ProtocolError> {
+        let path = self.session_path(session_id).await?;
+        let messages = read_messages(&self.workspace_root, &path).await?;
+        Ok(messages
+            .iter()
+            .rev()
+            .find(|message| is_agent_final_fact_message(message, agent_id))
+            .and_then(|message| {
+                let turn_id = message.turn_id.clone()?;
+                let kind = if is_agent_error_fact(&message.content) {
+                    AgentTurnFinalFactKind::Failure
+                } else {
+                    AgentTurnFinalFactKind::Success
+                };
+                Some(AgentTurnFinalFact { turn_id, kind })
+            }))
+    }
+
+    pub async fn max_agent_turn_run_id(
+        &self,
+        session_id: &ChatSessionId,
+        agent_id: &AgentId,
+    ) -> Result<Option<u64>, ProtocolError> {
+        let path = self.session_path(session_id).await?;
+        let messages = read_messages(&self.workspace_root, &path).await?;
+        Ok(messages
+            .iter()
+            .filter(|message| message.agent_id.as_ref() == Some(agent_id))
+            .filter_map(|message| message.turn_id.as_ref())
+            .filter_map(|turn_id| turn_id.0.strip_prefix("agent-")?.parse::<u64>().ok())
+            .max())
     }
 
     async fn summary_from_index_entry(
@@ -1439,7 +1575,7 @@ async fn read_agent_event_records(
     workspace_root: &Path,
     path: &Path,
 ) -> Result<Vec<AgentEventRecord>, ProtocolError> {
-    ensure_existing_jsonl_file(workspace_root, path).await?;
+    ensure_existing_agent_event_file(workspace_root, path).await?;
     let contents = fs::read_to_string(path)
         .await
         .map_err(|error| internal_error(format!("读取 Agent event JSONL 失败: {error}")))?;
@@ -1454,10 +1590,149 @@ async fn read_agent_event_records(
     Ok(events)
 }
 
+async fn ensure_existing_agent_event_file(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<(), ProtocolError> {
+    ensure_parent(workspace_root, path).await?;
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(invalid_path("Agent event JSONL 文件不能是符号链接"))
+        }
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(invalid_path("Agent event JSONL 路径不能是目录")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(not_found("Agent event log 不存在"))
+        }
+        Err(error) => Err(internal_error(format!(
+            "读取 Agent event JSONL 状态失败: {error}"
+        ))),
+    }
+}
+
 fn trim_to_limit(messages: &mut Vec<JsonlMessage>, limit: usize) {
     if messages.len() > limit {
         messages.drain(0..messages.len() - limit);
     }
+}
+
+fn is_agent_error_fact(content: &str) -> bool {
+    content.starts_with(&format!("{AGENT_ERROR_FACT_PREFIX} ("))
+}
+
+fn is_agent_final_fact_message(message: &JsonlMessage, agent_id: &AgentId) -> bool {
+    message.agent_id.as_ref() == Some(agent_id)
+        && message.turn_id.is_some()
+        && message.role == ChatRole::Assistant
+        && message.tool_calls.is_empty()
+        && message.tool_result.is_none()
+}
+
+fn last_agent_turn_id_in_records(events: &[AgentEventRecord]) -> Option<&AgentTurnId> {
+    events.iter().rev().find_map(|event| event.turn_id.as_ref())
+}
+
+fn agent_turn_run_id(turn_id: &AgentTurnId) -> Option<u64> {
+    turn_id.0.strip_prefix("agent-")?.parse::<u64>().ok()
+}
+
+fn agent_turn_id_is_after(left: &AgentTurnId, right: &AgentTurnId) -> bool {
+    match (agent_turn_run_id(left), agent_turn_run_id(right)) {
+        (Some(left), Some(right)) => left > right,
+        _ => false,
+    }
+}
+
+fn terminal_status_for_records(
+    events: &[AgentEventRecord],
+    turn_id: &AgentTurnId,
+) -> Option<AgentRuntimeStatus> {
+    let mut status = None;
+    for event in events
+        .iter()
+        .filter(|event| event.turn_id.as_ref() == Some(turn_id))
+    {
+        match &event.payload {
+            AgentEventPayload::Done { cancelled } => {
+                if *cancelled {
+                    status = Some(AgentRuntimeStatus::Cancelled);
+                } else if status != Some(AgentRuntimeStatus::Failed) {
+                    status = Some(AgentRuntimeStatus::Done);
+                }
+            }
+            AgentEventPayload::Error { .. } => status = Some(AgentRuntimeStatus::Failed),
+            AgentEventPayload::StateChanged { state }
+                if matches!(
+                    state,
+                    AgentRuntimeStatus::Done
+                        | AgentRuntimeStatus::Failed
+                        | AgentRuntimeStatus::Cancelled
+                        | AgentRuntimeStatus::Interrupted
+                        | AgentRuntimeStatus::FailedNeedsRecovery
+                ) =>
+            {
+                status = Some(*state);
+            }
+            _ => {}
+        }
+    }
+    status
+}
+
+fn should_append_recovery_payload(
+    events: &[AgentEventRecord],
+    turn_id: &AgentTurnId,
+    payload: &AgentEventPayload,
+) -> bool {
+    let terminal_status = terminal_status_for_records(events, turn_id);
+    if terminal_status.is_none()
+        && last_agent_turn_id_in_records(events).is_some_and(|last| last != turn_id)
+    {
+        let Some(last) = last_agent_turn_id_in_records(events) else {
+            return false;
+        };
+        if !agent_turn_id_is_after(turn_id, last) {
+            return false;
+        }
+    }
+    match payload {
+        AgentEventPayload::Done { .. } => terminal_status.is_none(),
+        AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Interrupted,
+        } => terminal_status.is_none(),
+        AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::Failed,
+        } => terminal_status.is_none(),
+        AgentEventPayload::StateChanged {
+            state: AgentRuntimeStatus::FailedNeedsRecovery,
+        } => {
+            terminal_status.is_none()
+                || matches!(
+                    terminal_status,
+                    Some(
+                        AgentRuntimeStatus::Done
+                            | AgentRuntimeStatus::Failed
+                            | AgentRuntimeStatus::Cancelled
+                    )
+                )
+        }
+        _ => false,
+    }
+}
+
+fn max_agent_event_id_in_records(events: &[AgentEventRecord]) -> Option<AgentEventId> {
+    events
+        .iter()
+        .map(|event| event.event_id.0)
+        .max()
+        .map(AgentEventId)
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn validate_session_id(session_id: &ChatSessionId) -> Result<(), ProtocolError> {
@@ -1554,9 +1829,9 @@ async fn ensure_existing_jsonl_file(
         }
         Ok(metadata) if metadata.is_file() => Ok(()),
         Ok(_) => Err(invalid_path("Chat JSONL 路径不能是目录")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(not_found("Chat session 不存在"))
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(not_found(
+            "chats.json messages_path 指向的 Chat JSONL 不存在",
+        )),
         Err(error) => Err(internal_error(format!("读取 Chat JSONL 状态失败: {error}"))),
     }
 }

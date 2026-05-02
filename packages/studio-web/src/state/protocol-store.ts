@@ -13,6 +13,7 @@ import type {
 } from "../workbench/chat-zone";
 import type {
   CadQueryResultReady,
+  AgentRuntimeStatus,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
 
@@ -25,6 +26,7 @@ export type ChatSlice = {
   current_chat_session: string | null;
   current_chat_history: ChatMessageRecord[];
   agent_run: AgentRun | null;
+  agent_runtime_status: AgentRuntimeStatus | null;
   agent_events: AgentEvent[];
   agent_event_records: AgentEventRecord[];
   current_selection: SelectionUpdateRequest | null;
@@ -53,6 +55,7 @@ const INITIAL_CHAT: ChatSlice = {
   current_chat_session: null,
   current_chat_history: [],
   agent_run: null,
+  agent_runtime_status: null,
   agent_events: [],
   agent_event_records: [],
   current_selection: null,
@@ -117,6 +120,7 @@ function chatSnapshotSelector(s: ProtocolState): ChatSnapshot {
     current_chat_session: s.current_chat_session,
     current_chat_history: s.current_chat_history,
     agent_run: s.agent_run,
+    agent_runtime_status: s.agent_runtime_status,
     agent_events: s.agent_events,
     current_selection: s.current_selection,
     llm_configured: s.llm_configured,
@@ -181,6 +185,11 @@ function applyChatFields(
   const agentRun = (snap["agent_run"] as AgentRun | undefined) ?? null;
   if (!agentRunEqual(state.agent_run, agentRun)) {
     patch.agent_run = agentRun;
+  }
+  const agentRuntimeStatus =
+    (snap["agent_runtime_status"] as AgentRuntimeStatus | undefined) ?? null;
+  if (state.agent_runtime_status !== agentRuntimeStatus) {
+    patch.agent_runtime_status = agentRuntimeStatus;
   }
 
   const events = (snap["agent_events"] as AgentEvent[] | undefined) ?? [];
@@ -327,8 +336,13 @@ export function agentRunEqual(a: AgentRun | null, b: AgentRun | null): boolean {
 export function agentEventsEqual(a: AgentEvent[], b: AgentEvent[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
-  if (a.length === 0) return true;
-  return a[a.length - 1]!.event === b[b.length - 1]!.event;
+  return a.every((left, index) => {
+    const right = b[index]!;
+    return (
+      left.event === right.event &&
+      JSON.stringify(left.payload ?? {}) === JSON.stringify(right.payload ?? {})
+    );
+  });
 }
 
 type AgentEventRecord = {
@@ -374,6 +388,9 @@ function agentEventFromRecord(record: AgentEventRecord): AgentEvent | null {
   }
   if (event === "done") {
     return { event: "agent.done", payload: { ...metadata, ...payload } };
+  }
+  if (event === "state_changed") {
+    return { event: "agent.state_changed", payload: { ...metadata, ...payload } };
   }
   return null;
 }

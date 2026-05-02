@@ -1,5 +1,21 @@
 # 已知问题记录
 
+## 2026-05-03 05:11:42 CST: Agent 失败最终事实仍依赖消息前缀识别
+
+- 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 7 最终独立 review 时，复查失败 turn 的 Chat JSONL 最终事实恢复语义。
+- 原因：
+  - 当前 Phase 7 为了让刷新后的 Web Chat history 能展示 Agent 失败原因，会在失败路径写入一条 assistant 事实消息。
+  - 恢复流程通过共享常量 `Agent run failed (` 前缀区分“失败事实”和普通 assistant 最终回复。
+  - 该方式已经集中到 `AGENT_ERROR_FACT_PREFIX` 并由测试覆盖，但本质仍是从消息文本推断事实类型，而不是读取结构化 metadata。
+- 影响范围：
+  - 若后续调整失败提示文案、引入本地化文本，或真实 assistant 正常输出恰好以该前缀开头，恢复逻辑可能误判 turn 的最终事实类型。
+  - 当前 Phase 7 的恢复矩阵、Web history 刷新和 `FailedNeedsRecovery` 判断依赖这个识别规则，因此后续修改 Agent 错误事实写入时必须同步检查恢复语义。
+- 可能的解法：
+  - 在 Chat JSONL 的 assistant 事实记录中增加结构化 `final_fact_kind` 或 error metadata 字段，明确区分 success / failure。
+  - 或为失败终态持久化专用 Agent terminal event，并让恢复逻辑优先读取结构化 event 与 Chat record metadata。
+  - 迁移时保留对旧前缀记录的只读兼容，避免破坏已有 workspace。
+- 当前处理方式：Phase 7 保持共享常量和回归测试，避免失败路径再次被误恢复为 Done；结构化 metadata 迁移不纳入本 Phase。
+
 ## 2026-05-03 01:16:24 CST: Agent event log 异步持久化失败只记录日志
 
 - 来源：执行 `prompt-archives/2026050200-agent-lifecycle-runtime/plan-00.md` Phase 6 第二轮独立 review 时，复查 runtime event log 的异步写入路径。

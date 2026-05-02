@@ -297,6 +297,13 @@ fn preview_response(vertex_count: usize) -> PreviewReadyResponse {
 }
 
 #[test]
+fn runtime_status_failed_needs_recovery_borsh_roundtrip() {
+    let encoded = borsh::to_vec(&AgentRuntimeStatus::FailedNeedsRecovery).expect("status encode");
+    let decoded: AgentRuntimeStatus = borsh::from_slice(&encoded).expect("status decode");
+    assert_eq!(decoded, AgentRuntimeStatus::FailedNeedsRecovery);
+}
+
+#[test]
 fn reclaim_and_artifact_variants_roundtrip() {
     let response = CapabilityHandshakeResponse {
         negotiated_version: CURRENT_PROTOCOL_VERSION,

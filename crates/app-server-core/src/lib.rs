@@ -41,6 +41,7 @@ pub use cadquery::{
     validate_cadquery_mesh_payload,
 };
 pub use chat::{
+    AGENT_ERROR_FACT_PREFIX, AgentTurnFinalFact, AgentTurnFinalFactKind,
     ChatIndexListenerRegistration, ChatStore, ChatSummaryUpdate, register_chat_index_listener,
 };
 pub use config::{

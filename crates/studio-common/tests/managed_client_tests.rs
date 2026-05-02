@@ -1,21 +1,22 @@
 use std::collections::VecDeque;
 
 use app_server_protocol::{
-    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentEventId, AgentEventPayload,
-    AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode, AgentModelDiscoveryState,
-    AgentModelDiscoveryStatus, AgentModelRegistryModel, AgentModelRegistryProvider,
-    AgentModelRegistryResponse, AgentModelSource, AgentProviderCapabilities, AgentRuntimeStatus,
-    AgentSnapshotRequest, AgentSnapshotResponse, AgentStartedResponse, AgentTokenEvent,
-    AgentTurnId, CadQueryArtifactExport, CadQueryArtifactRelation, CadQueryResultReady,
-    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatCreatedResponse,
-    ChatHistoryResponse, ChatListResponse, ChatMessageRecord, ChatRole, ChatSessionId,
-    ChatSessionSummary, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
-    ClientRequestEnvelope, CommandSuccess, PathHandle, PreviewRequest, PreviewRequestKind,
-    ProtocolError, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind, SelectionRef,
-    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerEnvelope,
-    ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId,
-    WatchChangedEvent, WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse,
-    WorkspaceId, decode_client_frame, encode_server_frame, web_file_read_capability,
+    AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode,
+    AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelRegistryModel,
+    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSource,
+    AgentProviderCapabilities, AgentRuntimeStatus, AgentSnapshotRequest, AgentSnapshotResponse,
+    AgentStartedResponse, AgentTokenEvent, AgentTurnId, CadQueryArtifactExport,
+    CadQueryArtifactRelation, CadQueryResultReady, CapabilityHandshakeRequest,
+    CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
+    ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
+    ClientCommand, ClientEnvelope, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
+    PathHandle, PreviewRequest, PreviewRequestKind, ProtocolError, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
+    SelectionUpdateResponse, ServerCapabilities, ServerEnvelope, ServerPushEnvelope,
+    ServerPushEvent, ServerResponseEnvelope, SessionToken, SubscriptionId, WatchChangedEvent,
+    WatchSubscribeRequest, WatchSubscriptionAck, WorkspaceCurrentResponse, WorkspaceId,
+    decode_client_frame, encode_server_frame, web_file_read_capability,
 };
 use studio_common::{
     AppServerTransportError, AppServerTransportEvent, AppServerTransportPort, ClientError,
@@ -922,10 +923,125 @@ fn agent_snapshot_response_updates_structured_agent_events() {
         .unwrap();
 
     let snapshot = client.snapshot();
+    assert_eq!(
+        snapshot.agent_runtime_status,
+        Some(AgentRuntimeStatus::Done)
+    );
     assert_eq!(snapshot.agent_event_records.len(), 1);
     assert_eq!(
         snapshot.agent_event_records[0].agent_id,
         AgentId("agent-1".into())
+    );
+}
+
+#[test]
+fn chat_created_initial_turn_marks_agent_running() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let request_id = client
+        .dispatch_chat_create(app_server_protocol::ChatCreateRequest {
+            title: "main".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: None,
+            initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
+        })
+        .expect("dispatch chat.create");
+    let _ = drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                title: "main".into(),
+                initial_turn: Some(AgentStartedResponse {
+                    session_id: ChatSessionId("main".into()),
+                    agent_id: "agent-main".into(),
+                    run_id: "agent-1".into(),
+                    turn_id: "agent-1".into(),
+                }),
+            })),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        client.snapshot().agent_runtime_status,
+        Some(AgentRuntimeStatus::Running)
+    );
+    assert_eq!(
+        client.snapshot().agent_run.as_ref().map(|run| &run.run_id),
+        Some(&"agent-1".to_string())
+    );
+}
+
+#[test]
+fn chat_created_retry_without_initial_turn_keeps_running_agent() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let first_request_id = client
+        .dispatch_chat_create(app_server_protocol::ChatCreateRequest {
+            title: "main".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: None,
+            initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
+        })
+        .expect("dispatch first chat.create");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: first_request_id,
+            result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                title: "main".into(),
+                initial_turn: Some(AgentStartedResponse {
+                    session_id: ChatSessionId("main".into()),
+                    agent_id: "agent-main".into(),
+                    run_id: "agent-1".into(),
+                    turn_id: "agent-1".into(),
+                }),
+            })),
+        }))
+        .unwrap();
+    let retry_request_id = client
+        .dispatch_chat_create(app_server_protocol::ChatCreateRequest {
+            title: "main".into(),
+            goal: None,
+            related_files: Vec::new(),
+            client_request_id: None,
+            initial_user_message: None,
+            requested_model: None,
+            initial_turn: None,
+        })
+        .expect("dispatch retry chat.create");
+    let _ = drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: retry_request_id,
+            result: Ok(CommandSuccess::ChatCreated(ChatCreatedResponse {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                title: "main".into(),
+                initial_turn: None,
+            })),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        client.snapshot().agent_run.as_ref().map(|run| &run.run_id),
+        Some(&"agent-1".to_string())
+    );
+    assert_eq!(
+        client.snapshot().agent_runtime_status,
+        Some(AgentRuntimeStatus::Running)
     );
 }
 
@@ -992,6 +1108,107 @@ fn agent_cancel_ack_keeps_run_until_done_event() {
         }))
         .unwrap();
     assert!(client.snapshot().agent_run.is_none());
+}
+
+#[test]
+fn agent_error_for_current_run_clears_active_run() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let invoke_id = client
+        .dispatch_agent_invoke(AgentInvokeRequest {
+            session_id: ChatSessionId("main".into()),
+            client_request_id: None,
+            prompt: "inspect".into(),
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
+        })
+        .expect("dispatch agent.invoke");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: invoke_id,
+            result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                run_id: "agent-1".into(),
+                turn_id: "agent-1".into(),
+            })),
+        }))
+        .unwrap();
+
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentError(AgentErrorEvent {
+                session_id: ChatSessionId("main".into()),
+                run_id: Some("agent-1".into()),
+                error_type: AgentErrorType::PersistenceError,
+                message: "persist failed".into(),
+            }),
+        }))
+        .unwrap();
+
+    assert!(client.snapshot().agent_run.is_none());
+    assert_eq!(
+        client.snapshot().agent_runtime_status,
+        Some(AgentRuntimeStatus::Failed)
+    );
+}
+
+#[test]
+fn stale_agent_error_does_not_mark_current_run_failed() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let invoke_id = client
+        .dispatch_agent_invoke(AgentInvokeRequest {
+            session_id: ChatSessionId("main".into()),
+            client_request_id: None,
+            prompt: "inspect".into(),
+            mode: AgentMode::Agent,
+            plan_ref: None,
+            context_refs: Vec::new(),
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            service_label: None,
+        })
+        .expect("dispatch agent.invoke");
+    let _ = drain_outbound(&mut client);
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id: invoke_id,
+            result: Ok(CommandSuccess::AgentStarted(AgentStartedResponse {
+                session_id: ChatSessionId("main".into()),
+                agent_id: "agent-main".into(),
+                run_id: "agent-2".into(),
+                turn_id: "agent-2".into(),
+            })),
+        }))
+        .unwrap();
+
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentError(AgentErrorEvent {
+                session_id: ChatSessionId("main".into()),
+                run_id: Some("agent-1".into()),
+                error_type: AgentErrorType::PersistenceError,
+                message: "old run failed".into(),
+            }),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        client.snapshot().agent_run.as_ref().map(|run| &run.run_id),
+        Some(&"agent-2".to_string())
+    );
+    assert_eq!(
+        client.snapshot().agent_runtime_status,
+        Some(AgentRuntimeStatus::Running)
+    );
 }
 
 #[test]

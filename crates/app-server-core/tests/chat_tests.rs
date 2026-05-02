@@ -1,9 +1,12 @@
 use std::{fs, sync::Arc};
 
-use app_server_core::{ChatStore, ChatSummaryUpdate};
+use app_server_core::{
+    AGENT_ERROR_FACT_PREFIX, AgentTurnFinalFactKind, ChatStore, ChatSummaryUpdate,
+};
 use app_server_protocol::{
-    AgentId, AgentProviderType, AgentTurnId, BoundAgentModel, ChatRole, ChatSessionId,
-    ChatToolCallRecord, ChatToolResultRecord, PathHandle, ProtocolErrorCode, WorkspaceId,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentProviderType,
+    AgentRuntimeStatus, AgentTurnId, BoundAgentModel, ChatRole, ChatSessionId, ChatToolCallRecord,
+    ChatToolResultRecord, PathHandle, ProtocolErrorCode, WorkspaceId,
 };
 use serde_json::Value;
 
@@ -161,6 +164,28 @@ async fn chat_store_reads_history_from_chats_json_messages_path() {
     assert_eq!(history.session_id, created.session_id);
     assert_eq!(history.messages.len(), 1);
 
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_reports_missing_indexed_messages_path_as_corrupt_index() {
+    let root = temp_dir("chat-store-missing-indexed-messages-path");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store
+        .create("Missing Messages", None, Vec::new())
+        .await
+        .unwrap();
+    fs::remove_file(root.join(format!("chats/{}.jsonl", created.session_id.0))).unwrap();
+
+    let error = store
+        .history(&created.session_id, None)
+        .await
+        .expect_err("missing indexed messages path should be reported");
+
+    assert_eq!(error.code, ProtocolErrorCode::NotFound);
+    assert!(error.message.contains("chats.json"));
+    assert!(error.message.contains("messages_path"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -958,6 +983,203 @@ async fn agent_turn_refs_roundtrip_through_final_chat_jsonl_records() {
         assert_eq!(message.turn_id, Some(turn_id.clone()));
         assert_eq!(message.run_id.as_deref(), Some("agent-7"));
     }
+    assert!(
+        store
+            .agent_turn_has_final_fact(&created.session_id, &agent_id, &turn_id)
+            .await
+            .expect("final fact lookup")
+    );
+    assert!(
+        !store
+            .agent_turn_has_final_fact(
+                &created.session_id,
+                &agent_id,
+                &AgentTurnId("missing-turn".into()),
+            )
+            .await
+            .expect("missing final fact lookup")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_turn_final_fact_ignores_tool_intermediate_records() {
+    let root = temp_dir("chat-store-final-fact-ignore-tools");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store.create("tool only", None, Vec::new()).await.unwrap();
+    let turn_id = AgentTurnId("agent-7".into());
+    store
+        .append_tool_call_with_agent_turn(
+            &created.session_id,
+            "agent tool started",
+            ChatToolCallRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "read_file".into(),
+                args_json: "{}".into(),
+            },
+            &created.agent_id,
+            &turn_id,
+            Some("agent-7".into()),
+        )
+        .await
+        .expect("append tool call");
+    store
+        .append_tool_result_with_agent_turn(
+            &created.session_id,
+            "agent tool completed",
+            ChatToolResultRecord {
+                tool_call_id: "tool-1".into(),
+                tool_name: "read_file".into(),
+                result_json: "{\"ok\":true}".into(),
+            },
+            None,
+            &created.agent_id,
+            &turn_id,
+            Some("agent-7".into()),
+        )
+        .await
+        .expect("append tool result");
+
+    assert!(
+        !store
+            .agent_turn_has_final_fact(&created.session_id, &created.agent_id, &turn_id)
+            .await
+            .expect("final fact lookup")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_classifies_agent_turn_final_fact_kind() {
+    let root = temp_dir("chat-store-final-fact-kind");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store
+        .create("final fact kind", None, Vec::new())
+        .await
+        .unwrap();
+    let success_turn_id = AgentTurnId("agent-7".into());
+    let failed_turn_id = AgentTurnId("agent-8".into());
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            "final answer",
+            &created.agent_id,
+            &success_turn_id,
+            Some(success_turn_id.0.clone()),
+        )
+        .await
+        .expect("append success final fact");
+    store
+        .append_message_with_agent_turn(
+            &created.session_id,
+            ChatRole::Assistant,
+            &format!("{AGENT_ERROR_FACT_PREFIX} (LlmError): Rig Agent is not configured"),
+            &created.agent_id,
+            &failed_turn_id,
+            Some(failed_turn_id.0.clone()),
+        )
+        .await
+        .expect("append failed final fact");
+
+    assert_eq!(
+        store
+            .agent_turn_final_fact_kind(&created.session_id, &created.agent_id, &success_turn_id)
+            .await
+            .expect("success final fact lookup"),
+        Some(AgentTurnFinalFactKind::Success)
+    );
+    assert_eq!(
+        store
+            .agent_turn_final_fact_kind(&created.session_id, &created.agent_id, &failed_turn_id)
+            .await
+            .expect("failed final fact lookup"),
+        Some(AgentTurnFinalFactKind::Failure)
+    );
+    assert!(
+        store
+            .agent_turn_has_final_fact(&created.session_id, &created.agent_id, &failed_turn_id)
+            .await
+            .expect("failed final fact boolean lookup")
+    );
+    assert_eq!(
+        store
+            .latest_agent_turn_final_fact(&created.session_id, &created.agent_id)
+            .await
+            .expect("latest final fact lookup")
+            .map(|fact| (fact.turn_id, fact.kind)),
+        Some((failed_turn_id.clone(), AgentTurnFinalFactKind::Failure))
+    );
+    assert_eq!(
+        store
+            .max_agent_turn_run_id(&created.session_id, &created.agent_id)
+            .await
+            .expect("max agent turn run id lookup"),
+        Some(8)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_reports_missing_agent_event_log_from_index() {
+    let root = temp_dir("chat-store-missing-agent-event-log");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store
+        .create("missing event log", None, Vec::new())
+        .await
+        .unwrap();
+    fs::remove_file(
+        root.join("agent-events")
+            .join(format!("{}.jsonl", created.agent_id.0)),
+    )
+    .unwrap();
+
+    let error = store
+        .read_agent_events(&created.agent_id, None)
+        .await
+        .expect_err("missing event log should be rejected");
+
+    assert_eq!(error.code, ProtocolErrorCode::NotFound);
+    assert!(
+        error.message.contains("Agent event log"),
+        "unexpected error message: {}",
+        error.message
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_store_turn_final_fact_ignores_runtime_event_log() {
+    let root = temp_dir("chat-store-final-fact-ignore-events");
+    fs::create_dir_all(&root).unwrap();
+    let store = ChatStore::new(root.clone());
+    let created = store.create("event only", None, Vec::new()).await.unwrap();
+    let turn_id = AgentTurnId("agent-7".into());
+    store
+        .append_agent_event(
+            &created.agent_id,
+            &AgentEventRecord {
+                event_id: AgentEventId(1),
+                agent_id: created.agent_id.clone(),
+                turn_id: Some(turn_id.clone()),
+                ts_ms: 100,
+                payload: AgentEventPayload::StateChanged {
+                    state: AgentRuntimeStatus::Running,
+                },
+            },
+        )
+        .await
+        .expect("append runtime event");
+
+    assert!(
+        !store
+            .agent_turn_has_final_fact(&created.session_id, &created.agent_id, &turn_id)
+            .await
+            .expect("final fact lookup")
+    );
     let _ = fs::remove_dir_all(root);
 }
 

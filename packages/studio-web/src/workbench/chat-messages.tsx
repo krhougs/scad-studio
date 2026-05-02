@@ -410,6 +410,9 @@ function agentEventDetail(event: AgentEvent): string {
   if (event.event === "agent.done") {
     return payload["cancelled"] === true ? "cancelled" : "done";
   }
+  if (event.event === "agent.state_changed") {
+    return stringField(payload, "state") || "state changed";
+  }
   if (event.event === "agent.plan_proposed") {
     return stringField(payload, "change_description") || "plan proposed";
   }
@@ -524,6 +527,10 @@ const ERROR_MESSAGES: Record<string, FriendlyError> = {
   timeout: {
     title: "Operation timed out",
     hint: "The operation took too long. Try simplifying the request.",
+  },
+  persistence_error: {
+    title: "Save failed",
+    hint: "The agent response could not be saved. Check the workspace files and try again.",
   },
   file_conflict: {
     title: "File conflict",

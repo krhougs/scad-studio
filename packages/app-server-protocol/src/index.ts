@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 12;
+export const CURRENT_PROTOCOL_VERSION = 13;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -64,7 +64,8 @@ export type AgentRuntimeStatus =
   | "done"
   | "failed"
   | "cancelled"
-  | "interrupted";
+  | "interrupted"
+  | "failed_needs_recovery";
 export type AgentErrorType =
   | "llm_error"
   | "llm_refused"
@@ -75,7 +76,8 @@ export type AgentErrorType =
   | "tessellation_error"
   | "topology_mapping_error"
   | "export_error"
-  | "timeout";
+  | "timeout"
+  | "persistence_error";
 export type SelectionKind =
   | "component"
   | "part"

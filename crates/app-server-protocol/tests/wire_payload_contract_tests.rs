@@ -27,10 +27,10 @@ fn protocol_wire_payload_does_not_expose_pathbuf_or_json_config_payload() {
 }
 
 #[test]
-fn protocol_v12_capabilities_expose_chat_identity_fields() {
-    assert_eq!(CURRENT_PROTOCOL_VERSION, 12);
+fn protocol_v13_capabilities_expose_chat_identity_fields() {
+    assert_eq!(CURRENT_PROTOCOL_VERSION, 13);
     let capabilities = ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(12, 12),
+        protocol_version: ProtocolVersionRange::new(13, 13),
         reconnect_window_ms: 30_000,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
@@ -115,6 +115,16 @@ fn bound_agent_model_does_not_include_base_url() {
     assert!(
         !model_source.contains("base_url"),
         "bound model must not persist provider base_url"
+    );
+}
+
+#[test]
+fn runtime_status_exposes_failed_needs_recovery() {
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol.rs"))
+        .expect("protocol source should be readable");
+    assert!(
+        source.contains("FailedNeedsRecovery = 6"),
+        "runtime status must expose failed recovery state with stable discriminant"
     );
 }
 

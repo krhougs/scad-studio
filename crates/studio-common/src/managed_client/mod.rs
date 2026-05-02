@@ -8,9 +8,10 @@ mod watch;
 use std::collections::{HashMap, VecDeque};
 
 use app_server_protocol::{
-    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
-    CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord, ChatSessionId,
-    ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest, ServerPushEvent,
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentRuntimeStatus,
+    AgentStartedResponse, CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord,
+    ChatSessionId, ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest,
+    ServerPushEvent,
 };
 
 use crate::AppServerTransportPort;
@@ -48,6 +49,7 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) latest_chat_history_request: Option<RequestId>,
     pub(super) pending_chat_session: Option<ChatSessionId>,
     pub(super) agent_run: Option<AgentStartedResponse>,
+    pub(super) agent_runtime_status: Option<AgentRuntimeStatus>,
     pub(super) agent_events: Vec<ServerPushEvent>,
     pub(super) agent_event_records: Vec<AgentEventRecord>,
     pub(super) current_selection: SelectionUpdateRequest,
@@ -88,6 +90,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             latest_chat_history_request: None,
             pending_chat_session: None,
             agent_run: None,
+            agent_runtime_status: None,
             agent_events: Vec::new(),
             agent_event_records: Vec::new(),
             current_selection: SelectionUpdateRequest {
@@ -186,6 +189,7 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             current_chat_session: self.current_chat_session.clone(),
             current_chat_history: self.current_chat_history.clone(),
             agent_run: self.agent_run.clone(),
+            agent_runtime_status: self.agent_runtime_status,
             agent_events: self.agent_events.clone(),
             agent_event_records: self.agent_event_records.clone(),
             current_selection: self.current_selection.clone(),

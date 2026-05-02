@@ -5,6 +5,7 @@ import type {
   AgentModelRegistryModel as ProtocolAgentModelRegistryModel,
   AgentModelRegistryProvider as ProtocolAgentModelRegistryProvider,
   AgentModelRegistryResponse,
+  AgentRuntimeStatus,
   AgentProviderType,
   BoundAgentModel,
   SelectionRef,
@@ -38,6 +39,7 @@ export type ChatSnapshot = {
   current_chat_session?: string | null;
   current_chat_history?: ChatMessageRecord[];
   agent_run?: AgentRun | null;
+  agent_runtime_status?: AgentRuntimeStatus | null;
   agent_events?: AgentEvent[];
   current_selection?: SelectionUpdateRequest | null;
   llm_configured?: boolean;
@@ -227,7 +229,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     onStatus,
   );
   useAgentSnapshotSubscription(client, currentSession?.agent_id ?? null, onStatus);
-  useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
+  useAgentTerminalHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
   useInitialAgentModelRegistry(client, onStatus);
 
   const actions = useChatActions({
@@ -338,22 +340,22 @@ function useInitialChatHistory(
   }, [client, targetSessionId, onStatus]);
 }
 
-function useAgentDoneHistoryRefresh(
+function useAgentTerminalHistoryRefresh(
   client: WasmClient | null,
   currentSessionId: string | null,
   agentEvents: AgentEvent[],
   onStatus: ((message: string) => void) | undefined,
 ) {
-  const refreshedDoneRef = useRef<string | null>(null);
-  const doneKey = lastAgentDoneKey(agentEvents);
+  const refreshedTerminalRef = useRef<string | null>(null);
+  const terminalKey = lastAgentHistoryRefreshTerminalKey(agentEvents);
   useEffect(() => {
-    if (!client || !currentSessionId || !doneKey) return;
-    if (refreshedDoneRef.current === doneKey) return;
-    refreshedDoneRef.current = doneKey;
+    if (!client || !currentSessionId || !terminalKey) return;
+    if (refreshedTerminalRef.current === terminalKey) return;
+    refreshedTerminalRef.current = terminalKey;
     client
       .dispatchChatHistory({ session_id: currentSessionId, limit: 100 })
       .catch(reportError(onStatus));
-  }, [client, currentSessionId, doneKey, onStatus]);
+  }, [client, currentSessionId, terminalKey, onStatus]);
 }
 
 function useAgentSnapshotSubscription(
@@ -920,13 +922,28 @@ function agentEventRunId(event: AgentEvent | undefined): string | null {
   return typeof runId === "string" ? runId : null;
 }
 
-function lastAgentDoneKey(events: AgentEvent[]): string | null {
+function lastAgentHistoryRefreshTerminalKey(events: AgentEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index] as AgentEvent | undefined;
-    if (!event || event.event !== "agent.done") continue;
+    if (!event || !agentTerminalEventWritesChatHistory(event)) continue;
     const payload = event.payload ?? {};
     const runId = typeof payload["run_id"] === "string" ? payload["run_id"] : null;
-    return runId || `done-${index}`;
+    return runId ? `${event.event}:${runId}` : `${event.event}:${index}`;
   }
   return null;
+}
+
+function agentTerminalEventWritesChatHistory(event: AgentEvent): boolean {
+  if (event.event === "agent.done" || event.event === "agent.error") {
+    return true;
+  }
+  if (event.event !== "agent.state_changed") return false;
+  const state = event.payload?.["state"];
+  return (
+    state === "done" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "interrupted" ||
+    state === "failed_needs_recovery"
+  );
 }

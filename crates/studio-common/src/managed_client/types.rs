@@ -1,9 +1,9 @@
 use app_server_protocol::{
-    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentStartedResponse,
-    CadQueryResultReady, ChatMessageRecord, ChatSessionId, ChatSessionSummary, CommandSuccess,
-    PathHandle, RequestId, SelectionUpdateRequest, ServerCapabilities, ServerPushEvent,
-    SessionToken, SubscriptionId, WatchSubscribeRequest, WorkspaceCurrentResponse, WorkspaceEntry,
-    WorkspaceListResponse,
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentRuntimeStatus,
+    AgentStartedResponse, CadQueryResultReady, ChatMessageRecord, ChatSessionId,
+    ChatSessionSummary, CommandSuccess, PathHandle, RequestId, SelectionUpdateRequest,
+    ServerCapabilities, ServerPushEvent, SessionToken, SubscriptionId, WatchSubscribeRequest,
+    WorkspaceCurrentResponse, WorkspaceEntry, WorkspaceListResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -174,6 +174,7 @@ pub struct ClientSnapshot {
     pub current_chat_session: Option<ChatSessionId>,
     pub current_chat_history: Vec<ChatMessageRecord>,
     pub agent_run: Option<AgentStartedResponse>,
+    pub agent_runtime_status: Option<AgentRuntimeStatus>,
     pub agent_events: Vec<ServerPushEvent>,
     pub agent_event_records: Vec<AgentEventRecord>,
     pub current_selection: SelectionUpdateRequest,

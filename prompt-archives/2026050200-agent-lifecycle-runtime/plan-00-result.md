@@ -8,7 +8,8 @@
 - Phase 4「WorkspaceAgentRuntime 后端边界」已完成实现、验证、独立 review 和修正。
 - Phase 5「Chat 模型绑定与后端模型强制」已完成实现、验证、独立 review 和修正。
 - Phase 6「Event log、Snapshot 与重连恢复」已完成实现、验证、独立 review 和修正。
-- 本文件记录到 2026-05-02 的执行结果。
+- Phase 7「Idle 资源释放与重启恢复」已完成实现、验证、独立 review 和修正。
+- 本文件记录到 2026-05-03 的执行结果。
 
 ## Phase 1 完成情况
 
@@ -297,17 +298,63 @@
 - `rustfmt --edition 2024 --check`：已覆盖本 Phase 变更的 Rust 文件，通过。
 - `git diff --check`：通过。
 
+## Phase 7 完成情况
+
+### 实现摘要
+
+- Protocol version 升级到 13，新增 `AgentRuntimeStatus::FailedNeedsRecovery` 与 `AgentErrorType::PersistenceError`，Rust protocol、TS protocol 和 generated WASM 已同步。
+- Workspace runtime 在 terminal 后释放 active turn 状态；subscriber 数为 0 且 Agent idle 时清理内存事件，后续 snapshot 只从 `chats.json`、Chat JSONL 和 Agent event log 恢复。
+- active turn 无 subscriber 时继续运行；terminal event 写入仍等待 pending persist，避免最终状态未写入时被恢复流程误判。
+- 重启恢复矩阵已覆盖 event log 缺失、event log 为空、event log stale、Chat JSONL 已写最终事实但 event log 未写 terminal、terminal 与最终事实冲突、cancelled / failed / done 不一致、缺失消息文件、损坏 event log 等场景。
+- 恢复流程在缺少 terminal event 但 Chat JSONL 已存在最终事实时补写 recovered terminal event；运行中或 tool executing 的未 terminal turn 恢复为 Interrupted，不创建 LLM client、provider stream、tool executor 或 cancel token。
+- event log terminal 已存在但 Chat JSONL 缺少最终事实时进入 `FailedNeedsRecovery`，不会把 token delta 拼成最终 assistant message。
+- Agent 失败路径会先写入失败 assistant 事实，再记录 runtime error；最终 assistant 写入失败时记录 `PersistenceError`，不再写 Done。
+- 首发 `chat.create.initial_turn` 启动前同时扫描 Agent event log 与 Chat JSONL turn id，避免进程恢复后复用旧 turn id。
+- `studio-common` snapshot 新增 `agent_runtime_status`，并用结构化 event state 管理 Running / Done / Failed / Cancelled / Interrupted / FailedNeedsRecovery；stale `AgentError` 不再覆盖当前 run。
+- Web protocol store、Chat UI 和 history refresh 已消费结构化 `agent.state_changed` 与 `agent_runtime_status`；error、done、failed、cancelled、interrupted、failed_needs_recovery 终态会触发 Chat history 刷新。
+
+### 验收说明
+
+- active turn 完成后 runtime 不再持有 active turn handle，失败路径不再额外写入 Done。
+- idle 且无 subscriber 时内存 Agent 运行对象会释放；新 subscriber snapshot 不重建 LLM stream，只读取持久化状态。
+- active 且无 subscriber 时 turn 继续运行，并在后续 observer snapshot 中恢复。
+- terminal turn 在最终 Chat JSONL 写入成功前不会清理 event log；pending terminal persist 会阻塞恢复判断。
+- 进程重启恢复会把未 terminal turn 标记为 Interrupted，不重新执行未完成 tool call，不写入半截 assistant message。
+- 创建 chat 过程中崩溃后的孤儿 Chat JSONL / Agent event JSONL 不会被文件名恢复为正式 chat；恢复只信任 `chats.json` 身份。
+- `chats.json` 指向缺失 `messages_path` 或 `events_path` 时返回明确损坏错误。
+- Chat JSONL 已写最终事实但 event log 未写 terminal event 时，会补写 recovered terminal event。
+- event log terminal 与最终事实不一致时进入 `FailedNeedsRecovery`，不会伪造成功完成。
+- interrupted turn 后可以正常启动新的 turn，turn id 从 event log 和 Chat JSONL 中的最大值继续递增。
+- Web 只通过 protocol snapshot / event / history 更新展示，不直接读取后端状态文件。
+
+### Review 记录
+
+- 第一轮到多轮独立 review 发现并推动修复：active turn 恢复覆盖 live runtime、tool records 被误当最终事实、最终 Chat JSONL 写入失败仍写 Done、并发恢复重复 event id、pending persist race、Dropped Interrupted / FailedNeedsRecovery、idle log 未释放、启动期未恢复 terminal、旧 turn id 复用、损坏 Chat / event 文件被跳过、失败路径让客户端长期 running、stale `AgentError` 覆盖当前 run、重试清空当前 run、缺失消息文件错误不明确、失败事实被误恢复为 Done、Web error / structured failed 状态不刷新 history、event log stale 时忽略较新的 Chat final fact 等问题；均已修复并补充回归测试。
+- 最终独立 review 未发现阻塞项。
+- 最终独立 review 记录两个非阻塞风险：
+  - 失败最终事实仍通过 `Agent run failed (` 前缀识别，后续应迁移到结构化 metadata；已记录到 `docs/known_issues.md`。
+  - Web history refresh 当前依赖 terminal event；现有 snapshot 使用 `since_event_id: null` 能恢复当前范围，未来若调用方用 terminal `since_event_id` 增量恢复，需要同时消费 `agent_runtime_status`。
+
+### 验证结果
+
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：57 passed。
+- `cargo test -p app-server-host --lib`：16 passed。
+- `cargo test -p app-server-core --test chat_tests`：33 passed。
+- `cargo test -p studio-common --test managed_client_tests`：31 passed。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests --test wire_payload_contract_tests`：23 passed。
+- `cargo test -p studio-web-wasm --tests`：4 passed，另有 0-test smoke targets 通过。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run --cwd packages/studio-web test:unit -- protocol-store.test.ts chat-zone.test.tsx wasm-client.test.ts`：95 passed；仍有两个既有 React `act(...)` 警告。
+- `bun scripts/smoke/wasm_package_smoke.ts`：generated tree byte-identical。
+- `rustfmt --edition 2024 --check`：已覆盖本 Phase 变更的 Rust 文件，通过。
+- `git diff --check`：通过。
+
 ## 尚未执行
 
-- 尚未实现 idle 资源释放和完整进程重启恢复矩阵；这属于 Phase 7 范围。
+- 尚未执行 Async / 阻塞路径复核与最终验证；这属于 Phase 8 范围。
 - 未迁移根目录 `llm.toml`，且本计划不要求迁移。
 
 ## 后续执行入口
 
-- Phase 7 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 7 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义。
-- Phase 7 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
-- Phase 7 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
-- Phase 7 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。
-- Phase 7 执行时必须保护 Phase 5 已达成的边界：chat bound model 是后续 turn 的唯一模型来源，snapshot 返回 bound model 和 `model_lock_reason`，Web 绑定 chat 模型控件保持只读且展示绑定参数。
-- Phase 7 执行时必须保护 Phase 6 已达成的边界：runtime event 写入 Agent event JSONL，Chat JSONL 只保存最终对话事实，snapshot / subscribe 通过持久化 event log 恢复，Web 以 `agent_id` 过滤事件，最终 assistant / tool 历史记录携带 `agent_id + turn_id`。
+- Phase 8 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 8 执行时必须保护 Phase 1-7 已达成的全部边界，重点是：`chats.json` 权威身份、provider / model binding、Agent 生命周期与 WebSocket 生命周期分离、idle drop、interrupted / FailedNeedsRecovery 恢复语义，以及外部工具只能通过 app server 管理。

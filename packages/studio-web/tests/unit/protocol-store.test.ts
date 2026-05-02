@@ -1,6 +1,9 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   useProtocolStore,
+  useChatSnapshot,
   chatSessionsEqual,
   chatHistoryEqual,
   agentRunEqual,
@@ -36,6 +39,7 @@ describe("applySnapshot", () => {
       current_chat_session: null,
       current_chat_history: [],
       agent_run: null,
+      agent_runtime_status: null,
       agent_events: [],
       agent_event_records: [],
       current_selection: null,
@@ -45,6 +49,10 @@ describe("applySnapshot", () => {
       agent_model_registry: null,
       transport_status: null,
     });
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("updates workspace fields when changed", () => {
@@ -88,6 +96,25 @@ describe("applySnapshot", () => {
     expect(useProtocolStore.getState().agent_run).toEqual({ session_id: "s1", run_id: "r1" });
   });
 
+  it("updates agent_runtime_status when changed", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({ agent_runtime_status: "failed_needs_recovery" });
+    expect(useProtocolStore.getState().agent_runtime_status).toBe("failed_needs_recovery");
+  });
+
+  it("exposes agent_runtime_status through chat snapshot selector", () => {
+    useProtocolStore.setState({ agent_runtime_status: "failed_needs_recovery" });
+
+    function StatusProbe() {
+      const snapshot = useChatSnapshot();
+      return createElement("div", null, snapshot.agent_runtime_status ?? "missing");
+    }
+
+    render(createElement(StatusProbe));
+
+    expect(screen.getByText("failed_needs_recovery")).toBeTruthy();
+  });
+
   it("does not update agent_run when structurally equal", () => {
     const run: AgentRun = { session_id: "s1", run_id: "r1" };
     useProtocolStore.setState({ agent_run: run });
@@ -121,6 +148,33 @@ describe("applySnapshot", () => {
     const { applySnapshot } = useProtocolStore.getState();
     applySnapshot({ agent_events: [makeEvent("agent.token", { text: "hi" })] });
     expect(useProtocolStore.getState().agent_events).toHaveLength(1);
+  });
+
+  it("maps structured state_changed records into agent events", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({
+      agent_event_records: [
+        {
+          event_id: 2,
+          agent_id: "agent-main",
+          turn_id: "turn-1",
+          ts_ms: 1000,
+          payload: {
+            event: "state_changed",
+            payload: { state: "interrupted" },
+          },
+        },
+      ],
+    });
+
+    expect(useProtocolStore.getState().agent_events).toEqual([
+      makeEvent("agent.state_changed", {
+        agent_id: "agent-main",
+        turn_id: "turn-1",
+        run_id: "turn-1",
+        state: "interrupted",
+      }),
+    ]);
   });
 
   it("converts agent event records from snapshot into renderable agent events", () => {
@@ -195,14 +249,17 @@ describe("applySnapshot", () => {
     ]);
   });
 
-  it("does not update agent_events when length is same", () => {
+  it("updates agent_events when payload changes", () => {
     const events = [makeEvent("agent.token", { text: "hi" })];
     useProtocolStore.setState({ agent_events: events });
     const before = useProtocolStore.getState().agent_events;
 
     const { applySnapshot } = useProtocolStore.getState();
     applySnapshot({ agent_events: [makeEvent("agent.token", { text: "world" })] });
-    expect(useProtocolStore.getState().agent_events).toBe(before);
+    expect(useProtocolStore.getState().agent_events).not.toBe(before);
+    expect(useProtocolStore.getState().agent_events).toEqual([
+      makeEvent("agent.token", { text: "world" }),
+    ]);
   });
 
   it("handles null/undefined snapshot gracefully", () => {
@@ -386,11 +443,18 @@ describe("agentEventsEqual", () => {
     expect(agentEventsEqual(arr, arr)).toBe(true);
   });
 
-  it("returns true for same length and same last event", () => {
+  it("returns true for same event sequence", () => {
     expect(agentEventsEqual(
       [makeEvent("agent.token")],
       [makeEvent("agent.token")],
     )).toBe(true);
+  });
+
+  it("returns false when earlier event payload differs", () => {
+    expect(agentEventsEqual(
+      [makeEvent("agent.token", { text: "old" }), makeEvent("agent.done")],
+      [makeEvent("agent.token", { text: "new" }), makeEvent("agent.done")],
+    )).toBe(false);
   });
 
   it("returns false when last event type differs", () => {
