@@ -226,6 +226,15 @@ fn rig_agent_additional_params_omit_web_search_when_disabled() {
 }
 
 #[test]
+fn rig_agent_additional_params_omits_reasoning_when_none() {
+    let mut config = test_config(false);
+    config.reasoning_effort = None;
+    config.service_label = None;
+
+    assert!(rig_agent_additional_params(&config).is_none());
+}
+
+#[test]
 fn rig_agent_additional_params_include_hosted_web_search_when_enabled() {
     let config = test_config(true);
     let params = rig_agent_additional_params(&config).expect("web search params");

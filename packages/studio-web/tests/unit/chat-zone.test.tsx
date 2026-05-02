@@ -161,6 +161,134 @@ describe("ChatZone", () => {
     await waitFor(() => expect(modelSelect.disabled).toBe(false));
   });
 
+  it("keeps model controls read-only when the current chat has a bound model", async () => {
+    const client = fakeClient();
+    const snapshot = chatSnapshot(null, agentModelRegistry());
+    snapshot.chat_sessions = [
+      {
+        ...snapshot.chat_sessions![0]!,
+        bound_model: agentModelSelection(),
+      },
+    ];
+    setSnapshot(snapshot);
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    expect((screen.getByLabelText("agent model") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("reasoning effort") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("service label") as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it("keeps bound null params and unavailable model visible without active fallback", async () => {
+    const client = fakeClient();
+    const snapshot = chatSnapshot(null, agentModelRegistry());
+    snapshot.chat_sessions = [
+      {
+        ...snapshot.chat_sessions![0]!,
+        bound_model: {
+          provider_id: "missing",
+          provider_type: "openai_responses",
+          model_id: "retired-model",
+          reasoning_effort: null,
+          service_label: null,
+        },
+      },
+    ];
+    setSnapshot(snapshot);
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    const modelSelect = screen.getByLabelText("agent model") as HTMLSelectElement;
+    expect(modelSelect.disabled).toBe(true);
+    expect(modelSelect.value).toBe("missing/retired-model");
+    expect((screen.getByLabelText("reasoning effort") as HTMLSelectElement).value).toBe("");
+    expect((screen.getByLabelText("service label") as HTMLSelectElement).value).toBe("");
+    expect(screen.getByText("bound model unavailable")).toBeTruthy();
+  });
+
+  it("shows raw bound model when the registry is unavailable", async () => {
+    const client = fakeClient();
+    const snapshot = chatSnapshot(null, null);
+    snapshot.chat_sessions = [
+      {
+        ...snapshot.chat_sessions![0]!,
+        bound_model: {
+          provider_id: "openai",
+          provider_type: "openai_responses",
+          model_id: "gpt-5.2",
+          reasoning_effort: "xhigh",
+          service_label: "batch",
+        },
+      },
+    ];
+    setSnapshot(snapshot);
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    expect((screen.getByLabelText("agent model") as HTMLSelectElement).value).toBe("openai/gpt-5.2");
+    expect((screen.getByLabelText("reasoning effort") as HTMLSelectElement).value).toBe("xhigh");
+    expect((screen.getByLabelText("service label") as HTMLSelectElement).value).toBe("batch");
+  });
+
+  it("shows raw bound params when registry options no longer contain them", async () => {
+    const client = fakeClient();
+    const snapshot = chatSnapshot(null, agentModelRegistry());
+    snapshot.chat_sessions = [
+      {
+        ...snapshot.chat_sessions![0]!,
+        bound_model: {
+          provider_id: "openai",
+          provider_type: "openai_responses",
+          model_id: "gpt-5.2",
+          reasoning_effort: "xhigh",
+          service_label: "batch",
+        },
+      },
+    ];
+    setSnapshot(snapshot);
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    expect((screen.getByLabelText("reasoning effort") as HTMLSelectElement).value).toBe("xhigh");
+    expect((screen.getByLabelText("service label") as HTMLSelectElement).value).toBe("batch");
+  });
+
+  it("does not show active model applied warnings for a bound model", async () => {
+    const client = fakeClient();
+    const registry = agentModelRegistry();
+    registry.active_reasoning_effort_applied = false;
+    registry.active_service_label_applied = false;
+    const snapshot = chatSnapshot(null, registry);
+    snapshot.chat_sessions = [
+      {
+        ...snapshot.chat_sessions![0]!,
+        bound_model: agentModelSelection(),
+      },
+    ];
+    setSnapshot(snapshot);
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    expect(screen.getByText("bound model")).toBeTruthy();
+    expect(screen.queryByText("reasoning not applied")).toBeNull();
+    expect(screen.queryByText("service label not applied")).toBeNull();
+  });
+
   it("keeps null service label and shows active web search downgrade", async () => {
     const client = fakeClient();
     const registry = agentModelRegistry();

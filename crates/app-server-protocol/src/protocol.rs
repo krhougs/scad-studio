@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 10;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 11;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -1032,6 +1032,7 @@ pub struct AgentSnapshotResponse {
     pub agent_id: AgentId,
     pub chat_id: ChatSessionId,
     pub bound_model: Option<BoundAgentModel>,
+    pub model_lock_reason: Option<String>,
     pub state: AgentRuntimeStatus,
     pub active_turn_id: Option<AgentTurnId>,
     pub since_event_id: Option<AgentEventId>,

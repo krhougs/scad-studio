@@ -863,6 +863,12 @@ async fn dispatcher_second_observer_start_turn_uses_bound_model() {
         "use the bound model",
     )
     .await;
+    let snapshot = agent_snapshot_async(&mut second_dispatcher, 45, &created.agent_id).await;
+    assert_eq!(snapshot.bound_model, Some(bound_agent_model()));
+    assert_eq!(
+        snapshot.model_lock_reason.as_deref(),
+        Some("chat_bound_model")
+    );
 
     let error = wait_for_error_event_async(&second_pushes, &started.run_id).await;
     assert!(

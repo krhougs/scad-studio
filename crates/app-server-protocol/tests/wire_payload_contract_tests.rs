@@ -27,10 +27,10 @@ fn protocol_wire_payload_does_not_expose_pathbuf_or_json_config_payload() {
 }
 
 #[test]
-fn protocol_v10_capabilities_expose_chat_identity_fields() {
-    assert_eq!(CURRENT_PROTOCOL_VERSION, 10);
+fn protocol_v11_capabilities_expose_chat_identity_fields() {
+    assert_eq!(CURRENT_PROTOCOL_VERSION, 11);
     let capabilities = ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(10, 10),
+        protocol_version: ProtocolVersionRange::new(11, 11),
         reconnect_window_ms: 30_000,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],

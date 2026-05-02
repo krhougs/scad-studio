@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 10;
+export const CURRENT_PROTOCOL_VERSION = 11;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -673,6 +673,7 @@ export interface AgentSnapshotResponse {
   agent_id: AgentId;
   chat_id: ChatSessionId;
   bound_model: BoundAgentModel | null;
+  model_lock_reason: string | null;
   state: AgentRuntimeStatus;
   active_turn_id: AgentTurnId | null;
   since_event_id: AgentEventId | null;

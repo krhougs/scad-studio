@@ -49,6 +49,7 @@ pub type ServerPushSink = Arc<dyn Fn(ServerPushEnvelope) + Send + Sync>;
 
 const CADQUERY_RESULT_CACHE_LIMIT: usize = 8;
 const CADQUERY_RUNNER_TIMEOUT: Duration = Duration::from_secs(180);
+const CHAT_BOUND_MODEL_LOCK_REASON: &str = "chat_bound_model";
 static AGENT_RUNTIMES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<WorkspaceAgentRuntime>>>>> =
     OnceLock::new();
 static CHAT_PUSH_SUBSCRIBERS: OnceLock<Mutex<HashMap<PathBuf, HashMap<u64, ServerPushSink>>>> =
@@ -1321,10 +1322,12 @@ impl WorkspaceAgentRuntime {
             return idle_agent_snapshot(agent_id.clone(), chat_id, bound_model, since_event_id);
         };
         let events = filter_agent_events(&log.events, since_event_id);
+        let bound_model = log.bound_model.clone().or(bound_model);
         AgentSnapshotResponse {
             agent_id: agent_id.clone(),
             chat_id: log.chat_id.clone(),
-            bound_model: log.bound_model.clone().or(bound_model),
+            model_lock_reason: model_lock_reason_for(bound_model.as_ref()),
+            bound_model,
             state: log.state,
             active_turn_id: log.active_turn_id.clone(),
             since_event_id,
@@ -1486,6 +1489,7 @@ fn idle_agent_snapshot(
     AgentSnapshotResponse {
         agent_id,
         chat_id,
+        model_lock_reason: model_lock_reason_for(bound_model.as_ref()),
         bound_model,
         state: AgentRuntimeStatus::Idle,
         active_turn_id: None,
@@ -1495,6 +1499,10 @@ fn idle_agent_snapshot(
         current_reasoning: String::new(),
         error: None,
     }
+}
+
+fn model_lock_reason_for(bound_model: Option<&BoundAgentModel>) -> Option<String> {
+    bound_model.map(|_| CHAT_BOUND_MODEL_LOCK_REASON.to_owned())
 }
 
 fn filter_agent_events(

@@ -198,6 +198,48 @@
 - `git diff --check`：通过。
 - `bun run protocol:check-generated`：通过。
 
+## Phase 5 完成情况
+
+### 实现摘要
+
+- Protocol version 升级到 11，`AgentSnapshotResponse` 新增 `model_lock_reason`，用于表达模型控件只读原因。
+- Host runtime snapshot 在 chat 存在 `bound_model` 时返回 `model_lock_reason = "chat_bound_model"`；无绑定模型时返回 `None`。
+- 后端继续从 `chats.json.bound_model` 读取后续 turn 的模型，不使用 dispatcher 当前模型状态或旧 `agent.invoke` 请求参数覆盖 binding。
+- LLM 参数测试补充确认 OpenAI Responses 在 `reasoning_effort = None`、无 service label、无 web search 时不会生成 additional params。
+- Web 当前 chat summary 存在 `bound_model` 时，agent model、reasoning effort 和 service label 控件只读。
+- Web 只读控件优先展示 chat 的 bound model 和 bound params；bound 参数为 `null` 时显示 none，不回退全局 active 参数。
+- Web 在 registry 缺失或当前 registry 不包含 bound provider/model 时，仍显示原始 bound provider/model id，并显示绑定模型不可用状态。
+- Web 在 bound 参数不属于当前 registry options 时追加只读原始 option，避免 disabled select 错误显示为空。
+- Web bound model 状态不复用全局 active model 的 applied warning，避免绑定模型展示被全局 active 状态误导。
+
+### 验收说明
+
+- 前端草稿首次发送写入 `chats.json.bound_model`、后续 turn 使用 binding、刷新或新 dispatcher 恢复 bound model、绑定状态不依赖 Chat JSONL 的后端行为已由前序 Phase 和本 Phase host roundtrip 回归继续覆盖。
+- `AgentSnapshotResponse` 现在同时返回 `bound_model` 与 `model_lock_reason`；host 测试覆盖绑定 chat snapshot 的只读原因。
+- Web ChatZone 测试覆盖当前 chat 有 bound model 时模型控件只读。
+- Web ChatZone 测试覆盖 bound params 为 `null`、bound provider/model 不在 registry、registry 不可用、bound params 不在 registry options 等只读展示路径。
+- Reasoning `None` 不写 provider request 参数由 `rig_agent_additional_params_omits_reasoning_when_none` 覆盖；`Some(String)` 原样发送由既有 additional params 测试覆盖。
+
+### Review 记录
+
+- 第一轮独立 review 发现 Web bound params 为 `null` 时错误回退全局 active 参数，以及 bound model 不在 registry 时错误显示全局 active model；已修复并补测试。
+- 第二轮独立 review 发现 registry 为 `null` 时无法显示原始 bound model，且 bound params 不在 options 时 disabled select 可能显示为空；已修复并补测试。
+- 第三轮独立 review 未发现 Phase 5 阻塞问题。剩余非阻塞风险：
+  - Web 目前通过 `ChatSessionSummary.bound_model` 控制只读，尚未消费 `AgentSnapshotResponse.model_lock_reason`；Phase 6 接入 snapshot 恢复 UI 时需要把该字段纳入前端状态。
+
+### 验证结果
+
+- `cargo test -p app-server-core --test llm_tests`：46 passed。
+- `cargo test -p app-server-protocol --test borsh_payload_roundtrip_tests`：17 passed。
+- `cargo test -p app-server-protocol --test wire_payload_contract_tests`：4 passed。
+- `cargo test -p app-server-host --test shared_dispatcher_roundtrip_tests`：34 passed。
+- `cargo test -p studio-common --test managed_client_tests`：26 passed。
+- `bun run --cwd packages/studio-web test:unit -- chat-zone.test.tsx`：45 passed；仍有两个既有 React `act(...)` 警告。
+- `bun run --cwd packages/studio-web typecheck`：通过。
+- `bun run protocol:build`：通过。
+- `rustfmt --edition 2024 --check crates/app-server-protocol/src/protocol.rs crates/app-server-host/src/dispatcher.rs crates/app-server-host/tests/shared_dispatcher_roundtrip_tests.rs crates/app-server-core/tests/llm_tests.rs crates/app-server-protocol/tests/borsh_payload_roundtrip_tests.rs crates/app-server-protocol/tests/wire_payload_contract_tests.rs`：通过。
+- `git diff --check`：通过。
+
 ## 尚未执行
 
 - 尚未实现持久化 event log、前端刷新后的 snapshot 恢复、idle 资源释放和 interrupted 重启恢复。
@@ -205,8 +247,9 @@
 
 ## 后续执行入口
 
-- Phase 5 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
-- Phase 5 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 10。
-- Phase 5 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
-- Phase 5 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
-- Phase 5 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。
+- Phase 6 开始前必须重新通读 `plan-prompt.md`、`plan-00.md`、本结果文档、`docs/2026050200-agent-lifecycle-runtime/architecture.md` 和根 `AGENTS.md`。
+- Phase 6 执行时必须保护 Phase 1 已达成的边界：后端随机 `chat_id`、`chats.json` 权威状态、chat 等同于 agent 的身份关系、Web 首发草稿语义和 protocol version 11。
+- Phase 6 执行时必须保护 Phase 2 已达成的边界：三类 provider type、`base_url` 解析语义、`agents.toml` 私有配置边界、根目录 `llm.toml` 不作为产品配置入口，以及 Chat bound model 不持久化 `base_url`。
+- Phase 6 执行时必须保护 Phase 3 已达成的边界：外部 Agent 操作目标使用 `agent_id`，首发 `chat.create.initial_turn` 保证同 `client_request_id` 幂等，后续 turn 使用 `agent.start_turn`，cancel 使用 `agent_id`，旧 `agent.invoke` 对已绑定 chat 不允许前端模型参数覆盖后端 bound model。
+- Phase 6 执行时必须保护 Phase 4 已达成的边界：Agent runtime 按 workspace 共享，WebSocket disconnect 不取消 active Agent，多 dispatcher 可通过同一 `agent_id` snapshot / subscribe / cancel，runtime 强制 workspace 单 active turn。
+- Phase 6 执行时必须保护 Phase 5 已达成的边界：chat bound model 是后续 turn 的唯一模型来源，snapshot 返回 bound model 和 `model_lock_reason`，Web 绑定 chat 模型控件保持只读且展示绑定参数。

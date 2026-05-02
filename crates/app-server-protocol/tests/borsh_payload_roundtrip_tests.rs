@@ -191,6 +191,7 @@ fn agent_identity_commands_snapshot_and_events_roundtrip() {
             agent_id: agent_id.clone(),
             chat_id,
             bound_model: Some(model),
+            model_lock_reason: Some("chat_bound_model".into()),
             state: AgentRuntimeStatus::Running,
             active_turn_id: Some(turn_id),
             since_event_id: Some(AgentEventId(7)),

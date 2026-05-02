@@ -143,6 +143,8 @@ export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }:
         agentProvider={snapshot.agent_provider ?? null}
         agentModelRegistry={controller.agentModelRegistry}
         modelControlsDisabled={controller.modelControlsDisabled}
+        modelControlsReadonlyReason={controller.modelControlsReadonlyReason}
+        boundModel={controller.boundModel}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
@@ -179,6 +181,8 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
   const currentSessionId =
     draftSession?.session_id ?? snapshotCurrentSessionId ?? backendSessions[0]?.session_id ?? null;
+  const currentSession = sessions.find((session) => session.session_id === currentSessionId) ?? null;
+  const currentBoundModel = currentSession?.bound_model ?? null;
   const backendCurrentSessionId = draftSession ? null : currentSessionId;
   const messages = draftSession ? [] : snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
@@ -259,7 +263,9 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     contextPills,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
-    modelControlsDisabled: !client || busy || modelBusy || Boolean(agentRun),
+    modelControlsDisabled: !client || busy || modelBusy || Boolean(agentRun) || Boolean(currentBoundModel),
+    modelControlsReadonlyReason: currentBoundModel ? "Model is fixed for this chat" : null,
+    boundModel: currentBoundModel,
     agentModelRegistry,
     agentModelSelection,
     removePill: (refText: string) => {
@@ -418,6 +424,8 @@ function ChatHeader(props: {
   agentProvider: AgentProviderCapabilities | null;
   agentModelRegistry: AgentModelRegistry | null;
   modelControlsDisabled: boolean;
+  modelControlsReadonlyReason: string | null;
+  boundModel: BoundAgentModel | null;
   onNew: () => void;
   onSelect: (id: string) => void;
   onCancel: () => void;
@@ -441,6 +449,8 @@ function ChatHeader(props: {
           <AgentModelControls
             registry={props.agentModelRegistry}
             disabled={props.modelControlsDisabled}
+            disabledReason={props.modelControlsReadonlyReason}
+            boundModel={props.boundModel}
             onModelSelect={props.onModelSelect}
             onParamsUpdate={props.onParamsUpdate}
           />
@@ -488,11 +498,33 @@ function ChatHeader(props: {
 function AgentModelControls(props: {
   registry: AgentModelRegistry | null;
   disabled: boolean;
+  disabledReason: string | null;
+  boundModel: BoundAgentModel | null;
   onModelSelect: (value: string) => void;
   onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
-  const active = activeAgentModel(props.registry);
-  if (!props.registry || !active) {
+  if (props.boundModel && !props.registry) {
+    return (
+      <BoundAgentModelControls
+        boundModel={props.boundModel}
+        disabledReason={props.disabledReason}
+      />
+    );
+  }
+  const active = selectedAgentModel(props.registry, props.boundModel);
+  if (!props.registry) {
+    return <div className="agent-model-status">model registry unavailable</div>;
+  }
+  if (!active && props.boundModel) {
+    return (
+      <BoundAgentModelControls
+        boundModel={props.boundModel}
+        disabledReason={props.disabledReason}
+        status="bound model unavailable"
+      />
+    );
+  }
+  if (!active) {
     return <div className="agent-model-status">model registry unavailable</div>;
   }
   return (
@@ -502,6 +534,7 @@ function AgentModelControls(props: {
           aria-label="agent model"
           className="agent-model-select"
           disabled={props.disabled}
+          title={props.disabledReason ?? undefined}
           value={modelOptionValue(active.provider.id, active.model.id)}
           onChange={(event) => props.onModelSelect(event.target.value)}
         >
@@ -519,10 +552,16 @@ function AgentModelControls(props: {
         <AgentParamSelects
           registry={props.registry}
           disabled={props.disabled}
+          disabledReason={props.disabledReason}
+          boundModel={props.boundModel}
           onParamsUpdate={props.onParamsUpdate}
         />
       </div>
-      <AgentModelStatus registry={props.registry} active={active} />
+      <AgentModelStatus
+        registry={props.registry}
+        active={active}
+        boundModel={props.boundModel}
+      />
     </div>
   );
 }
@@ -530,19 +569,28 @@ function AgentModelControls(props: {
 function AgentParamSelects(props: {
   registry: AgentModelRegistry;
   disabled: boolean;
+  disabledReason: string | null;
+  boundModel: BoundAgentModel | null;
   onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
+  const reasoningEffort = props.boundModel
+    ? props.boundModel.reasoning_effort
+    : props.registry.active_reasoning_effort;
+  const serviceLabel = props.boundModel
+    ? props.boundModel.service_label
+    : props.registry.active_service_label;
   return (
     <>
       <select
         aria-label="reasoning effort"
         className="agent-param-select"
         disabled={props.disabled || props.registry.reasoning_effort_options.length === 0}
-        value={props.registry.active_reasoning_effort ?? ""}
+        title={props.disabledReason ?? undefined}
+        value={reasoningEffort ?? ""}
         onChange={(event) =>
           props.onParamsUpdate({
             reasoning_effort: event.target.value || null,
-            service_label: props.registry.active_service_label,
+            service_label: serviceLabel,
           })
         }
       >
@@ -550,15 +598,20 @@ function AgentParamSelects(props: {
         {props.registry.reasoning_effort_options.map((option) => (
           <option key={option} value={option}>{option}</option>
         ))}
+        {props.boundModel?.reasoning_effort &&
+        !props.registry.reasoning_effort_options.includes(props.boundModel.reasoning_effort) ? (
+          <option value={props.boundModel.reasoning_effort}>{props.boundModel.reasoning_effort}</option>
+        ) : null}
       </select>
       <select
         aria-label="service label"
         className="agent-param-select"
         disabled={props.disabled || props.registry.service_label_options.length === 0}
-        value={props.registry.active_service_label ?? ""}
+        title={props.disabledReason ?? undefined}
+        value={serviceLabel ?? ""}
         onChange={(event) =>
           props.onParamsUpdate({
-            reasoning_effort: props.registry.active_reasoning_effort,
+            reasoning_effort: reasoningEffort,
             service_label: event.target.value || null,
           })
         }
@@ -567,6 +620,79 @@ function AgentParamSelects(props: {
         {props.registry.service_label_options.map((option) => (
           <option key={option} value={option}>{option}</option>
         ))}
+        {props.boundModel?.service_label &&
+        !props.registry.service_label_options.includes(props.boundModel.service_label) ? (
+          <option value={props.boundModel.service_label}>{props.boundModel.service_label}</option>
+        ) : null}
+      </select>
+    </>
+  );
+}
+
+function BoundAgentModelControls(props: {
+  boundModel: BoundAgentModel;
+  disabledReason: string | null;
+  status?: string;
+}) {
+  return (
+    <div className="agent-model-controls">
+      <div className="agent-model-row">
+        <select
+          aria-label="agent model"
+          className="agent-model-select"
+          disabled
+          title={props.disabledReason ?? undefined}
+          value={boundModelOptionValue(props.boundModel)}
+        >
+          <option value={boundModelOptionValue(props.boundModel)}>
+            {boundModelOptionLabel(props.boundModel)}
+          </option>
+        </select>
+        <RawBoundParamSelects
+          boundModel={props.boundModel}
+          disabledReason={props.disabledReason}
+        />
+      </div>
+      <div className="agent-model-status">
+        <span>{props.status ?? "bound model"}</span>
+      </div>
+    </div>
+  );
+}
+
+function RawBoundParamSelects(props: {
+  boundModel: BoundAgentModel;
+  disabledReason: string | null;
+}) {
+  return (
+    <>
+      <select
+        aria-label="reasoning effort"
+        className="agent-param-select"
+        disabled
+        title={props.disabledReason ?? undefined}
+        value={props.boundModel.reasoning_effort ?? ""}
+      >
+        <option value="">none</option>
+        {props.boundModel.reasoning_effort ? (
+          <option value={props.boundModel.reasoning_effort}>
+            {props.boundModel.reasoning_effort}
+          </option>
+        ) : null}
+      </select>
+      <select
+        aria-label="service label"
+        className="agent-param-select"
+        disabled
+        title={props.disabledReason ?? undefined}
+        value={props.boundModel.service_label ?? ""}
+      >
+        <option value="">none</option>
+        {props.boundModel.service_label ? (
+          <option value={props.boundModel.service_label}>
+            {props.boundModel.service_label}
+          </option>
+        ) : null}
       </select>
     </>
   );
@@ -575,6 +701,7 @@ function AgentParamSelects(props: {
 function AgentModelStatus(props: {
   registry: AgentModelRegistry;
   active: ActiveAgentModel;
+  boundModel: BoundAgentModel | null;
 }) {
   const failedDiscovery = props.registry.providers.find(
     (provider) => provider.discovery.status === "failed",
@@ -586,11 +713,12 @@ function AgentModelStatus(props: {
     <div className="agent-model-status">
       <span>{modelSourceLabel(props.active.model.source)}</span>
       <span>{webSearchStateLabel(props.active.model)}</span>
+      {props.boundModel ? <span>bound model</span> : null}
       {!props.registry.active_reasoning_effort_applied ? (
-        <span>reasoning not applied</span>
+        !props.boundModel ? <span>reasoning not applied</span> : null
       ) : null}
       {!props.registry.active_service_label_applied ? (
-        <span>service label not applied</span>
+        !props.boundModel ? <span>service label not applied</span> : null
       ) : null}
       {failedDiscovery ? (
         <span>
@@ -661,8 +789,29 @@ function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel
   return null;
 }
 
+function selectedAgentModel(
+  registry: AgentModelRegistry | null,
+  boundModel: BoundAgentModel | null,
+): ActiveAgentModel | null {
+  if (!registry || !boundModel) return activeAgentModel(registry);
+  for (const provider of registry.providers) {
+    if (provider.id !== boundModel.provider_id) continue;
+    const model = provider.models.find((item) => item.id === boundModel.model_id);
+    if (model) return { provider, model };
+  }
+  return null;
+}
+
 function modelOptionValue(providerId: string, modelId: string): string {
   return `${providerId}/${modelId}`;
+}
+
+function boundModelOptionValue(boundModel: BoundAgentModel): string {
+  return modelOptionValue(boundModel.provider_id, boundModel.model_id);
+}
+
+function boundModelOptionLabel(boundModel: BoundAgentModel): string {
+  return `${boundModel.provider_id} / ${boundModel.model_id}`;
 }
 
 function parseModelOptionValue(value: string): [string | null, string | null] {
