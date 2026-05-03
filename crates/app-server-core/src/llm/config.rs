@@ -1,4 +1,7 @@
-use rig::prelude::ModelListingClient;
+use rig::{
+    http_client::{self, HttpClientExt},
+    prelude::ModelListingClient,
+};
 use serde::Deserialize;
 use std::{collections::HashSet, env, fmt, path::PathBuf, time::Duration};
 use tokio::{fs, time};
@@ -132,6 +135,17 @@ pub struct DiscoveredProviderModel {
     pub web_search_supported: bool,
 }
 
+#[derive(Deserialize)]
+struct OpenAiCompatibleModelList {
+    data: Vec<OpenAiCompatibleModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiCompatibleModelEntry {
+    id: String,
+    name: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct ModelExplicitFields {
     max_tokens: bool,
@@ -224,7 +238,8 @@ struct AgentConfigDefaultsFile {
 struct AgentProviderFile {
     id: String,
     kind: AgentProviderKind,
-    api_key_env: String,
+    api_key: Option<String>,
+    api_key_env: Option<String>,
     base_url: Option<String>,
     anthropic_version: Option<String>,
     discover_models: Option<bool>,
@@ -293,15 +308,16 @@ fn resolve_provider(
         return config_error(format!("duplicate provider id `{id}`"));
     }
     validate_anthropic_version(&provider.kind, provider.anthropic_version.as_deref())?;
-    let api_key_env = require_non_empty("api_key_env", provider.api_key_env)?;
-    let api_key = read_api_key_env(&api_key_env);
+    let api_key_env = non_empty(provider.api_key_env);
+    let api_key =
+        non_empty(provider.api_key).or_else(|| api_key_env.as_deref().and_then(read_api_key_env));
     let models = resolve_models(provider.models, &provider.kind, defaults)?;
     let base_url = resolve_provider_base_url(&provider.kind, provider.base_url)?;
     Ok(ResolvedAgentProvider {
         id,
         kind: provider.kind.clone(),
         api_key,
-        api_key_env,
+        api_key_env: api_key_env.unwrap_or_default(),
         anthropic_version: resolve_anthropic_version(&provider.kind, provider.anthropic_version),
         base_url,
         discover_models: provider.discover_models.unwrap_or(defaults.discover_models),
@@ -414,6 +430,8 @@ fn discovered_to_resolved_model(
     provider: &ResolvedAgentProvider,
     discovered: DiscoveredProviderModel,
 ) -> ResolvedAgentModel {
+    let web_search_supported =
+        discovered.web_search_supported && provider_default_web_search_supported(&provider.kind);
     ResolvedAgentModel {
         id: discovered.id,
         label: Some(discovered.label),
@@ -422,8 +440,8 @@ fn discovered_to_resolved_model(
         reasoning_effort: None,
         service_label: None,
         native_web_search: provider.defaults.native_web_search,
-        web_search_supported: discovered.web_search_supported,
-        web_search_unsupported_reason: (!discovered.web_search_supported).then(|| {
+        web_search_supported,
+        web_search_unsupported_reason: (!web_search_supported).then(|| {
             format!(
                 "{} provider model does not support provider-native web search",
                 provider.id
@@ -571,6 +589,15 @@ async fn discover_and_apply_provider_models(
     provider: &ResolvedAgentProvider,
 ) -> ResolvedAgentProvider {
     let result = discover_provider_models(provider).await;
+    if let Err(error) = &result {
+        log::error!(
+            "[agent model discovery] provider `{}` kind `{}` base_url `{}` failed: {}",
+            provider.id,
+            provider.kind.as_str(),
+            provider.base_url.as_deref().unwrap_or("<default>"),
+            error
+        );
+    }
     apply_provider_model_discovery(provider, result)
 }
 
@@ -589,32 +616,10 @@ pub async fn discover_provider_models(
     let discovery = async {
         match provider.kind {
             AgentProviderKind::OpenAiResponses => {
-                let mut builder = rig::providers::openai::Client::builder().api_key(api_key);
-                if let Some(base_url) = provider.base_url.as_deref() {
-                    builder = builder.base_url(base_url);
-                }
-                let client = builder.build().map_err(|error| error.to_string())?;
-                let models = client
-                    .list_models()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(models_to_discovered(models.data))
+                list_openai_compatible_models(api_key, provider.base_url.as_deref()).await
             }
             AgentProviderKind::OpenAiCompletions => {
-                let mut builder =
-                    rig::providers::openai::CompletionsClient::builder().api_key(api_key);
-                if let Some(base_url) = provider.base_url.as_deref() {
-                    builder = builder.base_url(base_url);
-                }
-                let client = builder
-                    .build()
-                    .map_err(|error| error.to_string())?
-                    .responses_api();
-                let models = client
-                    .list_models()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(models_to_discovered(models.data))
+                list_openai_compatible_models(api_key, provider.base_url.as_deref()).await
             }
             AgentProviderKind::Anthropic => {
                 let version = provider
@@ -639,6 +644,67 @@ pub async fn discover_provider_models(
     time::timeout(Duration::from_secs(10), discovery)
         .await
         .map_err(|_| "provider model discovery timed out".to_owned())?
+}
+
+async fn list_openai_compatible_models(
+    api_key: &str,
+    base_url: Option<&str>,
+) -> Result<Vec<DiscoveredProviderModel>, String> {
+    let path = "/models";
+    let mut builder = rig::providers::openai::Client::builder().api_key(api_key);
+    if let Some(base_url) = base_url {
+        builder = builder.base_url(base_url);
+    }
+    let client = builder.build().map_err(|error| error.to_string())?;
+    let req = client
+        .get(path)
+        .map_err(|error| error.to_string())?
+        .body(http_client::NoBody)
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .send::<_, Vec<u8>>(req)
+        .await
+        .map_err(|error| error.to_string())?;
+    let body = response
+        .into_body()
+        .await
+        .map_err(|error| error.to_string())?;
+    openai_compatible_models_to_discovered(&body, path)
+}
+
+pub fn openai_compatible_models_to_discovered(
+    body: &[u8],
+    path: &str,
+) -> Result<Vec<DiscoveredProviderModel>, String> {
+    let response: OpenAiCompatibleModelList = serde_json::from_slice(body).map_err(|error| {
+        format!(
+            "Parse error: provider=OpenAI path={path} parse_error={error} body_bytes={} response_body_preview:\n{}",
+            body.len(),
+            response_body_preview(body)
+        )
+    })?;
+    Ok(response
+        .data
+        .into_iter()
+        .map(|model| {
+            let label = model.name.unwrap_or_else(|| model.id.clone());
+            DiscoveredProviderModel {
+                id: model.id,
+                label,
+                web_search_supported: true,
+            }
+        })
+        .collect())
+}
+
+fn response_body_preview(body: &[u8]) -> String {
+    const LIMIT: usize = 2048;
+    let preview = if body.len() > LIMIT {
+        &body[..LIMIT]
+    } else {
+        body
+    };
+    String::from_utf8_lossy(preview).into_owned()
 }
 
 fn models_to_discovered(models: Vec<rig::model::Model>) -> Vec<DiscoveredProviderModel> {
@@ -836,6 +902,12 @@ fn validate_active_provider_key(
     };
     if provider.api_key.is_some() {
         return Ok(());
+    }
+    if provider.api_key_env.is_empty() {
+        return config_error(format!(
+            "provider `{}` must set api_key or api_key_env",
+            provider.id
+        ));
     }
     config_error(format!(
         "provider API key env `{}` is not set",

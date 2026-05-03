@@ -1,5 +1,7 @@
 mod config;
 
+#[doc(hidden)]
+pub use config::openai_compatible_models_to_discovered;
 pub use config::{
     AgentModelSource, AgentProviderKind, AgentProviderRegistry, DiscoveredProviderModel,
     ModelDiscoveryStatus, ResolvedAgentModel, ResolvedAgentProvider, RigAgentConfig,

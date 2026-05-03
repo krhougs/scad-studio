@@ -75,8 +75,8 @@ describe("ChatZone", () => {
     expect(modelSelect.textContent).toContain("GPT 5.2");
     expect(modelSelect.textContent).toContain("Claude Sonnet");
     expect(screen.getAllByText(/override/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/discovery failed/)).toBeTruthy();
-    expect(screen.getByText(/manual fallback remains available/)).toBeTruthy();
+    expect(screen.getByText(/model discovery failed; using configured models/)).toBeTruthy();
+    expect(screen.queryByText(/manual fallback remains available/)).toBeNull();
     expect(screen.getByText(/web search active/)).toBeTruthy();
     expect(screen.queryByText(/web search unavailable/)).toBeNull();
   });
@@ -309,9 +309,10 @@ describe("ChatZone", () => {
       .toBe("anthropic/claude-sonnet");
     expect((screen.getByLabelText("service label") as HTMLSelectElement).value)
       .toBe("");
-    expect(screen.getByText(/model does not support web search/)).toBeTruthy();
-    expect(screen.getByText(/agents.toml/)).toBeTruthy();
-    expect(screen.getByText(/BUDN_AGENT_CONFIG/)).toBeTruthy();
+    expect(screen.getByText(/web search unavailable for selected model/)).toBeTruthy();
+    expect(screen.queryByText(/model does not support web search/)).toBeNull();
+    expect(screen.queryByText(/agents.toml/)).toBeNull();
+    expect(screen.queryByText(/BUDN_AGENT_CONFIG/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText("reasoning effort"), {
       target: { value: "low" },

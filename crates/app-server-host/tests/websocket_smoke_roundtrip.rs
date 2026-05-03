@@ -19,6 +19,7 @@ fn websocket_smoke_roundtrip() {
     let runtime = Runtime::new().unwrap();
     runtime.block_on(async {
         let workspace = temp_workspace();
+        let _agent_env = configure_agent_environment(&workspace);
         let url = run_websocket_host_once(WebSocketHostConfig {
             bind_addr: "127.0.0.1:0".into(),
             workspace_path: workspace.clone(),
@@ -192,6 +193,7 @@ fn websocket_compressed_client_roundtrip_handles_large_frame() {
     let runtime = Runtime::new().unwrap();
     runtime.block_on(async {
         let workspace = temp_workspace();
+        let _agent_env = configure_agent_environment(&workspace);
         let large_bytes = vec![0xff_u8; 2 * 1024 * 1024];
         std::fs::write(workspace.join("large.bin"), &large_bytes).unwrap();
         let url = run_websocket_host_once(WebSocketHostConfig {
@@ -436,6 +438,70 @@ fn temp_workspace() -> std::path::PathBuf {
 
 fn current_protocol_version_range() -> ProtocolVersionRange {
     ProtocolVersionRange::new(CURRENT_PROTOCOL_VERSION, CURRENT_PROTOCOL_VERSION)
+}
+
+fn configure_agent_environment(workspace: &std::path::Path) -> EnvGuard {
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        r#"active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+discover_models = false
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key = "test-key"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-5.2"
+"#,
+    )
+    .unwrap();
+    EnvGuard::set("BUDN_AGENT_CONFIG", config_path.into_os_string())
+}
+
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: std::ffi::OsString) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self {
+            key,
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
+fn env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 fn cleanup_workspace(workspace: std::path::PathBuf) {

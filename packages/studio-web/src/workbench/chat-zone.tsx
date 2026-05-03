@@ -570,7 +570,7 @@ function AgentModelControls(props: {
   }
   const active = selectedAgentModel(props.registry, props.boundModel);
   if (!props.registry) {
-    return <div className="agent-model-status">model registry unavailable</div>;
+    return <div className="agent-model-status">agent model registry loading</div>;
   }
   if (!active && props.boundModel) {
     return (
@@ -582,7 +582,7 @@ function AgentModelControls(props: {
     );
   }
   if (!active) {
-    return <div className="agent-model-status">model registry unavailable</div>;
+    return <div className="agent-model-status">active agent model missing</div>;
   }
   return (
     <div className="agent-model-controls">
@@ -763,9 +763,6 @@ function AgentModelStatus(props: {
   const failedDiscovery = props.registry.providers.find(
     (provider) => provider.discovery.status === "failed",
   );
-  const activeWebSearchUnsupported =
-    props.active.model.native_web_search_enabled &&
-    !props.active.model.native_web_search_applied;
   return (
     <div className="agent-model-status">
       <span>{modelSourceLabel(props.active.model.source)}</span>
@@ -778,13 +775,7 @@ function AgentModelStatus(props: {
         !props.boundModel ? <span>service label not applied</span> : null
       ) : null}
       {failedDiscovery ? (
-        <span>
-          discovery failed
-          {failedDiscovery.discovery.error ? `: ${failedDiscovery.discovery.error}` : ""}
-        </span>
-      ) : null}
-      {activeWebSearchUnsupported ? (
-        <span>switch model or update agents.toml / BUDN_AGENT_CONFIG</span>
+        <span>model discovery failed; using configured models</span>
       ) : null}
     </div>
   );
@@ -892,8 +883,7 @@ function modelSourceLabel(source: AgentModelRegistryModel["source"]): string {
 function webSearchStateLabel(model: AgentModelRegistryModel): string {
   if (!model.native_web_search_enabled) return "web search off";
   if (model.native_web_search_applied) return "web search active";
-  const reason = model.web_search_unsupported_reason;
-  return reason ? `web search unavailable: ${reason}` : "web search unavailable";
+  return "web search unavailable for selected model";
 }
 
 function recentAgentEvents(

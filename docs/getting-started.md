@@ -127,7 +127,7 @@ bun run web
 | `VITE_WS_URL` | Vite | 空 | 前端直接连接的 WebSocket URL；优先级低于 URL 参数 `?ws=...`，高于同源代理 fallback |
 | `VITE_WS_PROXY_TARGET` | Vite dev server | `ws://127.0.0.1:38421` | `/app-server/ws` 的代理目标，通常由 `bun run web` 自动注入 |
 
-Agent provider 配置使用本机私有的 `agents.toml`。仓库提交 `agents.example.toml` 作为模板，真实 API key 只放在环境变量中，不写入 `agents.toml`：
+Agent provider 配置使用本机私有的 `agents.toml`。仓库提交 `agents.example.toml` 作为模板。开发环境可以在 `agents.toml` 中直接写 `api_key`，也可以用 `api_key_env` 从环境变量读取；提交到仓库的示例配置不得包含真实 API key：
 
 ```bash
 cp agents.example.toml agents.toml
@@ -139,7 +139,7 @@ printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
 `reasoning_effort` 和 `service_label` 既可以在 `agents.toml` 中作为模型默认值配置，也可以在 Web Chat header 中运行时切换。运行时切换只影响当前 host 进程，不会写回 `agents.toml`。
 `openai_completions` 面向 Chat Completions 兼容 endpoint，不注入 OpenAI Responses hosted web search、Responses reasoning 或 service tier 参数。
 
-根目录 `llm.toml` 仅保留为本地开发历史配置，不作为 budn' 产品配置入口；新增 provider 配置应使用 `agents.toml`。
+根目录 `llm.toml` 是旧本地开发配置，当前 budn' 产品配置入口只使用 `agents.toml`。
 
 手动试验不同工作目录：
 

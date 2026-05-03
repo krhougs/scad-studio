@@ -23,6 +23,7 @@ use serde_json::Value;
 #[tokio::test]
 async fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     let workspace = temp_workspace("shared-dispatcher");
+    let _agent_env = configure_agent_environment(&workspace);
     let pushes = Arc::new(Mutex::new(Vec::<ServerPushEnvelope>::new()));
     let push_sink = {
         let pushes = Arc::clone(&pushes);
@@ -135,6 +136,28 @@ async fn shared_dispatcher_roundtrips_handshake_workspace_file_and_preview() {
     }
 
     assert!(pushes.lock().expect("push buffer lock").is_empty());
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn dispatcher_handshake_rejects_missing_agent_provider_config() {
+    let workspace = temp_workspace("shared-dispatcher-missing-agent-config");
+    let _agent_env = unset_agent_environment();
+    let (mut dispatcher, _pushes) = dispatcher_with_pushes(&workspace);
+
+    let error = dispatcher
+        .handshake(handshake_request())
+        .await
+        .expect_err("missing provider config must reject handshake");
+
+    assert_eq!(error.code, ProtocolErrorCode::Internal);
+    assert!(
+        error.message.contains("Rig Agent is not configured")
+            || error.message.contains("provider")
+            || error.message.contains("BUDN_AGENT_CONFIG"),
+        "unexpected missing provider error: {}",
+        error.message
+    );
     cleanup_workspace(&workspace);
 }
 
@@ -3367,6 +3390,15 @@ fn temp_workspace(label: &str) -> std::path::PathBuf {
 
 fn cleanup_workspace(root: &std::path::Path) {
     let _ = std::fs::remove_dir_all(root);
+}
+
+fn configure_agent_environment(workspace: &std::path::Path) -> EnvGuard {
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(&config_path, agent_model_registry_config()).unwrap();
+    EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ])
 }
 
 fn agent_model_registry_config() -> &'static str {

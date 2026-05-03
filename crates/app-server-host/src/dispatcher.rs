@@ -277,12 +277,13 @@ impl HostRequestDispatcher {
         request: CapabilityHandshakeRequest,
     ) -> Result<CapabilityHandshakeResponse, ProtocolError> {
         let requested_preview_kinds = request.capabilities.supported_preview_kinds.clone();
-        let server_capabilities =
-            server_capabilities_for_request(requested_preview_kinds, &self.agent_model_state).await;
         let negotiated_version = negotiate_protocol_version(
             request.capabilities.protocol_version,
-            server_capabilities.protocol_version,
+            ProtocolVersionRange::new(CURRENT_PROTOCOL_VERSION, CURRENT_PROTOCOL_VERSION),
         )?;
+        let server_capabilities =
+            server_capabilities_for_request(requested_preview_kinds, &self.agent_model_state)
+                .await?;
         self.session
             .replace_capabilities(server_capabilities.clone());
         Ok(CapabilityHandshakeResponse {
@@ -3839,14 +3840,15 @@ fn server_capabilities(agent_provider: Option<AgentProviderCapabilities>) -> Ser
 async fn server_capabilities_for_request(
     requested_preview_kinds: Vec<PreviewRequestKind>,
     agent_model_state: &AgentModelRuntimeState,
-) -> ServerCapabilities {
-    let registry = app_server_core::llm::load_agent_provider_registry_with_discovery()
-        .await
-        .ok()
-        .flatten();
-    let agent_model_registry = registry
-        .as_ref()
-        .map(|registry| agent_model_registry_response(registry, agent_model_state));
+) -> Result<ServerCapabilities, ProtocolError> {
+    let registry = load_agent_model_registry().await.map_err(|error| {
+        log::error!(
+            "[agent provider config] required model registry failed during handshake: {}",
+            error.message
+        );
+        error
+    })?;
+    let agent_model_registry = Some(agent_model_registry_response(&registry, agent_model_state));
     let agent_provider = agent_model_registry
         .as_ref()
         .and_then(agent_provider_capability_from_registry);
@@ -3859,7 +3861,7 @@ async fn server_capabilities_for_request(
     if capabilities.supported_preview_kinds.is_empty() {
         capabilities.supported_preview_kinds = vec![PreviewRequestKind::GeometryArtifact];
     }
-    capabilities
+    Ok(capabilities)
 }
 
 fn agent_provider_capability_from_registry(

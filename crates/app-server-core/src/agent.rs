@@ -689,14 +689,10 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
             input.context_refs.join(", ")
         ));
     }
-    parts.push(format!(
-        "Native web search: {}",
-        if input.native_web_search_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
+    parts.push(provider_native_capabilities_context(
+        input.native_web_search_enabled,
     ));
+    parts.push(current_turn_app_tools_context(input.mode));
     if let Some(scope) = &input.execution_scope {
         parts.push(format!(
             "Execution scope:\n{}",
@@ -710,6 +706,35 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
         ));
     }
     parts.join("\n")
+}
+
+fn provider_native_capabilities_context(native_web_search_enabled: bool) -> String {
+    let web_search_state = if native_web_search_enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    format!(
+        "Provider-native capabilities:\n- Hosted native web search: {web_search_state}. This is provider-hosted behavior, not a named app function tool."
+    )
+}
+
+fn current_turn_app_tools_context(mode: AgentMode) -> String {
+    let mut lines = vec![
+        "Current turn app tools (registered by host):".to_owned(),
+        "- Before answering what tools are available, inspect this current-turn app tool list and the tool schemas registered by the host. Do not invent tools from memory.".to_owned(),
+    ];
+    let tools = agent_tool_definitions_for_mode(mode);
+    if tools.is_empty() {
+        lines.push("- none".to_owned());
+    } else {
+        lines.extend(
+            tools
+                .into_iter()
+                .map(|tool| format!("- `{}`: {}", tool.name, tool.description)),
+        );
+    }
+    lines.join("\n")
 }
 
 fn extract_latest_chat_summary(history: &[ChatMessageRecord]) -> Option<String> {

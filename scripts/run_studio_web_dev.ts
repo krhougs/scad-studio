@@ -152,6 +152,36 @@ function startWasmWatch(): { stop: () => void; initialBuild: Promise<void> } {
   };
 }
 
+function writePlainProcessOutput(
+  stream: ReadableStream<Uint8Array> | null,
+  sink: NodeJS.WriteStream,
+) {
+  if (!stream) return;
+  const decoder = new TextDecoder();
+  const reader = stream.getReader();
+  const pump = async () => {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      sink.write(stripControlSequences(decoder.decode(value, { stream: true })));
+    }
+    const rest = decoder.decode();
+    if (rest) sink.write(stripControlSequences(rest));
+  };
+  pump().catch((error) => {
+    console.error(
+      "[studio-web] failed to forward vite output:",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+}
+
+function stripControlSequences(value: string): string {
+  return value
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g, "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
 async function main() {
   const args = parseArgs(Bun.argv.slice(2));
   const parsed = resolveWsUrl(args.wsUrl);
@@ -183,19 +213,26 @@ async function main() {
       "--host",
       "0.0.0.0",
       "--strictPort",
+      "--clearScreen=false",
     ],
     {
       cwd: viteCwd,
-      stdout: "inherit",
-      stderr: "inherit",
+      stdout: "pipe",
+      stderr: "pipe",
       stdin: "ignore",
       env: {
         ...process.env,
+        CI: "true",
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        TERM: "dumb",
         VITE_WS_PROXY_TARGET: parsed.url,
         ...(directWsOverride ? { VITE_WS_URL: parsed.url } : {}),
       },
     },
   );
+  writePlainProcessOutput(vite.stdout, process.stdout);
+  writePlainProcessOutput(vite.stderr, process.stderr);
 
   const shutdown = async () => {
     wasmWatch.stop();

@@ -118,7 +118,7 @@ bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版
 
 ## Agent Provider 配置
 
-Agent provider 配置使用本机私有的 `agents.toml`。仓库只提交 `agents.example.toml` 作为模板，真实 API key 放在环境变量中，不写入 `agents.toml`：
+Agent provider 配置使用本机私有的 `agents.toml`。仓库只提交 `agents.example.toml` 作为模板。开发环境可以在 `agents.toml` 中直接写 `api_key`，也可以用 `api_key_env` 从环境变量读取；提交到仓库的示例配置不得包含真实 API key：
 
 ```bash
 cp agents.example.toml agents.toml
@@ -130,7 +130,7 @@ printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
 `reasoning_effort` 和 `service_label` 可以在配置文件中设定，也可以在 Web Chat header 中作为当前 host 进程内的运行时参数切换；运行时切换不会写回 `agents.toml`。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
 `openai_completions` 面向 Chat Completions 兼容 endpoint，不注入 OpenAI Responses hosted web search、Responses reasoning 或 service tier 参数。
 
-根目录 `llm.toml` 仅保留为本地开发历史配置，不作为 budn' 产品配置入口；新增 provider 配置应使用 `agents.toml`。
+根目录 `llm.toml` 是旧本地开发配置，当前 budn' 产品配置入口只使用 `agents.toml`。
 
 ## 进一步阅读
 

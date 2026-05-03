@@ -2,8 +2,8 @@ active_provider = "openai"
 active_model = "gpt-5.2"
 
 [defaults]
-timeout_secs = 120
-max_tokens = 8192
+timeout_secs = 1500
+max_tokens = 65535
 temperature = 0.7
 native_web_search = true
 discover_models = true

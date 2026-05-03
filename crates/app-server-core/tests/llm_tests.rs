@@ -2,7 +2,8 @@ use app_server_core::llm::{
     AgentModelSource, AgentProviderKind, DiscoveredProviderModel, ModelDiscoveryStatus,
     RigAgentConfig, RigAgentConfigSelection, apply_provider_model_discovery,
     load_agent_provider_registry, load_rig_agent_config, load_rig_agent_config_with_discovery,
-    merge_provider_models, rig_config_from_registry_selection,
+    merge_provider_models, openai_compatible_models_to_discovered,
+    rig_config_from_registry_selection,
 };
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
@@ -178,7 +179,31 @@ fn build_turn_context_includes_context_refs() {
     assert!(context.contains("context refs"));
     assert!(context.contains("@face[top_lid:f_0]"));
     assert!(context.contains("@part[bottom_case]"));
-    assert!(context.contains("Native web search: enabled"));
+    assert!(context.contains("Hosted native web search: enabled"));
+}
+
+#[test]
+fn build_turn_context_lists_current_turn_tools() {
+    let input = AgentTurnInput {
+        mode: AgentMode::Plan,
+        prompt: "unused".into(),
+        history: Vec::new(),
+        selections: Vec::new(),
+        active_selection_index: None,
+        plan_ref: None,
+        context_refs: Vec::new(),
+        native_web_search_enabled: true,
+        execution_scope: None,
+    };
+    let context = build_turn_context(&input);
+
+    assert!(context.contains("Provider-native capabilities"));
+    assert!(context.contains("Hosted native web search: enabled"));
+    assert!(context.contains("Current turn app tools"));
+    assert!(context.contains("inspect this current-turn app tool list"));
+    assert!(context.contains("- `read_file`: Read a bounded UTF-8 text file"));
+    assert!(context.contains("- `save_cad_plan`: Persist a structured Markdown CAD Plan"));
+    assert!(!context.contains("- `write_file`:"));
 }
 
 #[test]
@@ -460,6 +485,39 @@ api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
     assert_eq!(active.service_label.as_deref(), Some("fast"));
     assert!(active.native_web_search);
     assert!(active.web_search_supported);
+}
+
+#[tokio::test]
+async fn rig_agent_config_loads_direct_provider_api_key() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "glhf"
+active_model = "gemini-3.1-pro-preview"
+
+[[providers]]
+id = "glhf"
+kind = "openai_completions"
+api_key = "ah-direct-test"
+base_url = "https://l.glhf.do#"
+discover_models = false
+
+[[providers.models]]
+id = "gemini-3.1-pro-preview"
+label = "Gemini 3.1 Pro Preview"
+service_label = "high"
+"#,
+    )
+    .await
+    .expect("direct api key config should load");
+
+    let provider = registry.provider("glhf").expect("glhf provider");
+    assert_eq!(registry.active_provider_id, "glhf");
+    assert_eq!(registry.active_model_id, "gemini-3.1-pro-preview");
+    assert_eq!(provider.kind, AgentProviderKind::OpenAiCompletions);
+    assert_eq!(provider.api_key.as_deref(), Some("ah-direct-test"));
+    assert!(provider.api_key_env.is_empty());
+    assert_eq!(provider.base_url.as_deref(), Some("https://l.glhf.do"));
+    assert!(!provider.discover_models);
 }
 
 #[tokio::test]
@@ -1153,6 +1211,42 @@ label = "Manual Only"
 }
 
 #[tokio::test]
+async fn rig_agent_config_does_not_apply_discovered_web_search_for_openai_completions() {
+    let registry = load_registry_from_toml(
+        r#"
+active_provider = "openai"
+active_model = "manual-model"
+
+[[providers]]
+id = "openai"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+
+[[providers.models]]
+id = "manual-model"
+"#,
+    )
+    .await
+    .expect("config load should succeed");
+    let provider = registry.provider("openai").expect("provider");
+    let merged = merge_provider_models(
+        provider,
+        vec![DiscoveredProviderModel {
+            id: "discovered-model".into(),
+            label: "Discovered Model".into(),
+            web_search_supported: true,
+        }],
+    );
+    let discovered = merged
+        .iter()
+        .find(|model| model.id == "discovered-model")
+        .expect("discovered model");
+
+    assert!(!discovered.web_search_supported);
+    assert!(discovered.web_search_unsupported_reason.is_some());
+}
+
+#[tokio::test]
 async fn rig_agent_config_manual_override_preserves_unspecified_discovered_fields() {
     let registry = load_registry_from_toml(
         r#"
@@ -1258,6 +1352,19 @@ id = "manual-model"
         provider.model_discovery_status,
         ModelDiscoveryStatus::Failed("401 unauthorized".into())
     );
+}
+
+#[test]
+fn agent_model_discovery_accepts_openai_compatible_models_without_created() {
+    let models = openai_compatible_models_to_discovered(
+        br#"{"object":"list","data":[{"id":"deepseek-v4-flash","object":"model","owned_by":"deepseek"},{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"}]}"#,
+        "/models",
+    )
+    .expect("compatible model list should parse");
+
+    assert!(models.iter().any(|model| model.id == "deepseek-v4-flash"));
+    assert!(models.iter().any(|model| model.id == "deepseek-v4-pro"));
+    assert!(models.iter().all(|model| model.web_search_supported));
 }
 
 async fn load_registry_from_toml(

@@ -10,6 +10,7 @@ const wsProxyTarget =
   "ws://127.0.0.1:38421";
 
 export default defineConfig({
+  clearScreen: false,
   plugins: [
     wasm(),
     topLevelAwait(),
@@ -46,7 +47,7 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-    allowedHosts: true
+    allowedHosts: true,
   },
   build: {
     target: "es2022",
