@@ -505,9 +505,13 @@ where
                 let Some(item) = item else {
                     return Ok(());
                 };
-                let item = item.map_err(|error| RigAgentError {
-                    message: error.to_string(),
-                })?;
+                let item = match item {
+                    Ok(item) => item,
+                    Err(error) => {
+                        log::warn!("[agent] stream item error (skipping): {error}");
+                        continue;
+                    }
+                };
                 handle_rig_stream_item(item, state, pending_calls, tool_observer, callbacks);
             }
         }
@@ -759,14 +763,16 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
 }
 
 fn provider_native_capabilities_context(native_web_search_enabled: bool) -> String {
-    let web_search_state = if native_web_search_enabled {
-        "enabled"
+    if native_web_search_enabled {
+        "Provider-native capabilities:\n\
+         - Hosted native web search: enabled. The provider handles search execution natively; \
+         use it when you need current information, and do not look for a web search entry in the app tools list."
+            .to_owned()
     } else {
-        "disabled"
-    };
-    format!(
-        "Provider-native capabilities:\n- Hosted native web search: {web_search_state}. This is provider-hosted behavior, not a named app function tool."
-    )
+        "Provider-native capabilities:\n\
+         - Hosted native web search: disabled. Do not attempt web searches this turn."
+            .to_owned()
+    }
 }
 
 fn current_turn_app_tools_context(mode: AgentMode) -> String {
