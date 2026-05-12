@@ -27,10 +27,10 @@ fn protocol_wire_payload_does_not_expose_pathbuf_or_json_config_payload() {
 }
 
 #[test]
-fn protocol_v13_capabilities_expose_chat_identity_fields() {
-    assert_eq!(CURRENT_PROTOCOL_VERSION, 13);
+fn protocol_v14_capabilities_expose_hosted_tool_activity_events() {
+    assert_eq!(CURRENT_PROTOCOL_VERSION, 14);
     let capabilities = ServerCapabilities {
-        protocol_version: ProtocolVersionRange::new(13, 13),
+        protocol_version: ProtocolVersionRange::new(14, 14),
         reconnect_window_ms: 30_000,
         supports_watch: true,
         supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
@@ -62,6 +62,17 @@ fn protocol_v13_capabilities_expose_chat_identity_fields() {
     assert!(model.native_web_search_enabled);
     assert!(!model.native_web_search_applied);
     assert!(!model.web_search_supported);
+
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol.rs"))
+        .expect("protocol source should be readable");
+    assert!(
+        source.contains("AgentHostedToolActivity") && source.contains("agent.hosted_tool_activity"),
+        "protocol v14 must expose hosted tool activity as a push event"
+    );
+    assert!(
+        source.contains("HostedToolActivity") && source.contains("provider_kind"),
+        "protocol v14 must persist hosted tool activity payload with provider context"
+    );
 }
 
 #[test]

@@ -3,34 +3,34 @@ use app_server_core::{
     AgentTurnInput, CadQueryCommitScope, CadQueryContractConfig, CadQueryModelContract,
     CadQueryRunConfig, CadQueryRunResult, CadQueryRunnerError, CadQueryRunnerErrorKind,
     CadQueryToolCachedResult, CadQueryToolRunRequest, CadQueryToolRunResult, CadQueryToolRuntime,
-    CadQueryToolRuntimeError, ChatIndexListenerRegistration, ChatStore, FileWatcher, SlicerInstall,
-    cadquery_result_ready, current_workspace_owned, detect_slicer_paths, export_model,
-    list_workspace_entries_owned, load_config_dto, preview_ready_response,
-    read_file_response_owned, register_chat_index_listener, resolve_workspace_path_owned,
-    resolve_workspace_write_path_owned, run_cadquery_contract, run_cadquery_runner,
-    run_cadquery_runner_with_cancel, run_rig_agent_turn_with_config, save_config_dto,
-    send_to_slicer, stage_cadquery_project_owned,
+    CadQueryToolRuntimeError, ChatIndexListenerRegistration, ChatStore, FileWatcher,
+    HostedToolRequest, SlicerInstall, cadquery_result_ready, current_workspace_owned,
+    detect_slicer_paths, export_model, list_workspace_entries_owned, load_config_dto,
+    preview_ready_response, read_file_response_owned, register_chat_index_listener,
+    resolve_workspace_path_owned, resolve_workspace_write_path_owned, run_cadquery_contract,
+    run_cadquery_runner, run_cadquery_runner_with_cancel, run_rig_agent_turn_with_config,
+    save_config_dto, send_to_slicer, stage_cadquery_project_owned,
 };
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent,
-    AgentErrorEvent, AgentErrorType, AgentEventId, AgentEventPayload, AgentEventRecord, AgentId,
-    AgentInvokeRequest, AgentMeshReadyEvent, AgentMode, AgentModelDiscoveryState,
-    AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest, AgentModelRegistryModel,
-    AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSelectRequest,
-    AgentModelSource, AgentPlanConfirmRequest, AgentPlanProposedEvent, AgentPlanRejectRequest,
-    AgentProviderCapabilities, AgentProviderType, AgentReasoningEvent, AgentRuntimeStatus,
-    AgentSnapshotRequest, AgentSnapshotResponse, AgentStartTurnRequest, AgentStartedResponse,
-    AgentSubscribeRequest, AgentSubscribeResponse, AgentTokenEvent, AgentToolResultEvent,
-    AgentToolStartEvent, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
-    CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind, CapabilityHandshakeRequest,
-    CapabilityHandshakeResponse, ChatListResponse, ChatRole, ChatSessionId, ChatToolCallRecord,
-    ChatToolResultRecord, ClientCommand, ClientRequestEnvelope, CommandSuccess, ConfigLoadResponse,
-    DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse, FileWriteTextResponse, HostLocalPath,
-    PathHandle, PreviewRequestKind, ProtocolError, ProtocolErrorCode, ProtocolVersionRange,
-    SelectionUpdateRequest, SelectionUpdateResponse, ServerCapabilities, ServerPushEnvelope,
-    ServerPushEvent, ServerResponseEnvelope, SessionReclaimedResponse, SessionToken,
-    SubscriptionId, WatchChangedEvent, WatchErrorEvent, WatchSubscriptionAck, WorkspaceId,
-    WorkspaceListResponse, negotiate_protocol_version,
+    AgentErrorEvent, AgentErrorType, AgentEventId, AgentEventPayload, AgentEventRecord,
+    AgentHostedToolActivityEvent, AgentHostedToolActivityStatus, AgentId, AgentInvokeRequest,
+    AgentMeshReadyEvent, AgentMode, AgentModelDiscoveryState, AgentModelDiscoveryStatus,
+    AgentModelParamsUpdateRequest, AgentModelRegistryModel, AgentModelRegistryProvider,
+    AgentModelRegistryResponse, AgentModelSelectRequest, AgentModelSource, AgentPlanConfirmRequest,
+    AgentPlanProposedEvent, AgentPlanRejectRequest, AgentProviderCapabilities, AgentProviderType,
+    AgentReasoningEvent, AgentRuntimeStatus, AgentSnapshotRequest, AgentSnapshotResponse,
+    AgentStartTurnRequest, AgentStartedResponse, AgentSubscribeRequest, AgentSubscribeResponse,
+    AgentTokenEvent, AgentToolResultEvent, AgentToolStartEvent, AgentTurnId, BoundAgentModel,
+    CURRENT_PROTOCOL_VERSION, CadQueryExportFormat, CadQueryMeshPayload, CadQueryObjectKind,
+    CapabilityHandshakeRequest, CapabilityHandshakeResponse, ChatListResponse, ChatRole,
+    ChatSessionId, ChatToolCallRecord, ChatToolResultRecord, ClientCommand, ClientRequestEnvelope,
+    CommandSuccess, ConfigLoadResponse, DEFAULT_SESSION_RECONNECT_WINDOW_MS, ExportRunResponse,
+    FileWriteTextResponse, HostLocalPath, PathHandle, PreviewRequestKind, ProtocolError,
+    ProtocolErrorCode, ProtocolVersionRange, SelectionUpdateRequest, SelectionUpdateResponse,
+    ServerCapabilities, ServerPushEnvelope, ServerPushEvent, ServerResponseEnvelope,
+    SessionReclaimedResponse, SessionToken, SubscriptionId, WatchChangedEvent, WatchErrorEvent,
+    WatchSubscriptionAck, WorkspaceId, WorkspaceListResponse, negotiate_protocol_version,
 };
 
 use crate::cadquery_python_path;
@@ -2097,7 +2097,9 @@ fn update_runtime_log(log: &mut AgentRuntimeLog, payload: &AgentEventPayload) {
             }
             log.active_turn_id = None;
         }
-        AgentEventPayload::ToolStart { .. } | AgentEventPayload::ToolResult { .. } => {}
+        AgentEventPayload::ToolStart { .. }
+        | AgentEventPayload::ToolResult { .. }
+        | AgentEventPayload::HostedToolActivity { .. } => {}
     }
 }
 
@@ -2119,6 +2121,14 @@ fn agent_payload_from_push(event: &ServerPushEvent) -> Option<AgentEventPayload>
             tool_name: event.tool_name.clone(),
             result_json: event.result_json.clone(),
         }),
+        ServerPushEvent::AgentHostedToolActivity(event) => {
+            Some(AgentEventPayload::HostedToolActivity {
+                provider_id: event.provider_id.clone(),
+                provider_kind: event.provider_kind,
+                tool_type: event.tool_type.clone(),
+                status: event.status,
+            })
+        }
         ServerPushEvent::AgentError(event) => Some(AgentEventPayload::Error {
             error_type: event.error_type,
             message: event.message.clone(),
@@ -3237,6 +3247,32 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         push_agent_reasoning(&reasoning_push_sink, &reasoning_run, delta);
         true
     });
+    let hosted_tool_push_sink = Arc::clone(&worker.push_sink);
+    let hosted_tool_run = worker.run.clone();
+    let hosted_tool_cancelled = Arc::clone(&worker.run.cancelled);
+    let hosted_tool_provider_id = config.provider_id.clone();
+    let hosted_tool_provider_kind = agent_provider_type_from_kind(config.provider_kind);
+    let hosted_tool_model = config.model.clone();
+    let hosted_tool_requested = Arc::new(move |request: &HostedToolRequest| {
+        if hosted_tool_cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        log::info!(
+            "[agent run={}] hosted tool requested provider={} model={} tool_type={} status=requested",
+            hosted_tool_run.run_id,
+            hosted_tool_provider_id,
+            hosted_tool_model,
+            request.tool_type,
+        );
+        push_agent_hosted_tool_requested(
+            &hosted_tool_push_sink,
+            &hosted_tool_run,
+            &hosted_tool_provider_id,
+            hosted_tool_provider_kind,
+            request,
+        );
+        true
+    });
     let cancelled_for_rig = Arc::clone(&worker.run.cancelled);
     let turn_result = run_rig_agent_turn_with_config(
         input,
@@ -3247,6 +3283,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         app_server_core::RigAgentCallbacks {
             on_token: token_push,
             on_reasoning: reasoning_push,
+            on_hosted_tool_requested: hosted_tool_requested,
             cancelled: Arc::new(move || cancelled_for_rig.load(Ordering::SeqCst)),
         },
     )
@@ -3318,6 +3355,20 @@ fn agent_provider_type_label(provider_type: AgentProviderType) -> &'static str {
         AgentProviderType::Anthropic => "anthropic",
         AgentProviderType::OpenAiResponses => "openai_responses",
         AgentProviderType::OpenAiCompletions => "openai_completions",
+    }
+}
+
+fn agent_provider_type_from_kind(
+    kind: app_server_core::llm::AgentProviderKind,
+) -> AgentProviderType {
+    match kind {
+        app_server_core::llm::AgentProviderKind::Anthropic => AgentProviderType::Anthropic,
+        app_server_core::llm::AgentProviderKind::OpenAiResponses => {
+            AgentProviderType::OpenAiResponses
+        }
+        app_server_core::llm::AgentProviderKind::OpenAiCompletions => {
+            AgentProviderType::OpenAiCompletions
+        }
     }
 }
 
@@ -3580,6 +3631,25 @@ fn push_llm_tool_result(
             tool_call_id: call.id.clone(),
             tool_name: call.function_name.clone(),
             result_json: result.to_owned(),
+        }),
+    });
+}
+
+fn push_agent_hosted_tool_requested(
+    push_sink: &ServerPushSink,
+    run: &AgentRunHandle,
+    provider_id: &str,
+    provider_kind: AgentProviderType,
+    request: &HostedToolRequest,
+) {
+    (push_sink)(ServerPushEnvelope {
+        event: ServerPushEvent::AgentHostedToolActivity(AgentHostedToolActivityEvent {
+            session_id: run.session_id.clone(),
+            run_id: run.run_id.clone(),
+            provider_id: provider_id.to_owned(),
+            provider_kind,
+            tool_type: request.tool_type.clone(),
+            status: AgentHostedToolActivityStatus::Requested,
         }),
     });
 }
@@ -4006,6 +4076,31 @@ mod tests {
         assert_eq!(value["provider"], "anthropic");
         assert_eq!(value["native_web_search_enabled"], true);
         assert_eq!(meta.run_id.as_deref(), Some("agent-1"));
+    }
+
+    #[test]
+    fn hosted_tool_activity_push_maps_to_persisted_payload() {
+        let payload = agent_payload_from_push(&ServerPushEvent::AgentHostedToolActivity(
+            AgentHostedToolActivityEvent {
+                session_id: ChatSessionId("chat-1".into()),
+                run_id: "agent-1".into(),
+                provider_id: "openai".into(),
+                provider_kind: AgentProviderType::OpenAiResponses,
+                tool_type: "web_search".into(),
+                status: AgentHostedToolActivityStatus::Requested,
+            },
+        ))
+        .expect("hosted tool activity should persist");
+
+        assert_eq!(
+            payload,
+            AgentEventPayload::HostedToolActivity {
+                provider_id: "openai".into(),
+                provider_kind: AgentProviderType::OpenAiResponses,
+                tool_type: "web_search".into(),
+                status: AgentHostedToolActivityStatus::Requested,
+            }
+        );
     }
 
     #[test]

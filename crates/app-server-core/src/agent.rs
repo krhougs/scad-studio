@@ -59,9 +59,17 @@ pub struct RigAgentError {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostedToolRequest {
+    pub tool_type: String,
+    pub provider_tool_type: String,
+    pub provider_tool_name: Option<String>,
+}
+
 pub struct RigAgentCallbacks {
     pub on_token: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub on_reasoning: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    pub on_hosted_tool_requested: Arc<dyn Fn(&HostedToolRequest) -> bool + Send + Sync>,
     pub cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
@@ -226,6 +234,7 @@ where
     if let Some(additional_params) = rig_agent_additional_params(&config) {
         builder = builder.additional_params(additional_params);
     }
+    notify_hosted_tool_requests(&config, &callbacks);
     let (prompt, history) = build_rig_prompt_and_history(&input);
     let agent = builder.tools(tools).build();
     let stream_future = async {
@@ -271,6 +280,7 @@ async fn run_anthropic_rig_agent_turn_with_config(
     if let Some(additional_params) = rig_agent_additional_params(&config) {
         builder = builder.additional_params(additional_params);
     }
+    notify_hosted_tool_requests(&config, &callbacks);
     let (prompt, history) = build_rig_prompt_and_history(&input);
     let agent = builder.tools(tools).build();
     let stream_future = async {
@@ -374,6 +384,25 @@ pub fn rig_agent_temperature_param(config: &RigAgentConfig) -> Option<f64> {
     }
 }
 
+pub fn hosted_tool_requests_for_config(config: &RigAgentConfig) -> Vec<HostedToolRequest> {
+    if !config.native_web_search {
+        return Vec::new();
+    }
+    match config.provider_kind {
+        AgentProviderKind::OpenAiResponses => vec![HostedToolRequest {
+            tool_type: "web_search".into(),
+            provider_tool_type: "web_search".into(),
+            provider_tool_name: None,
+        }],
+        AgentProviderKind::Anthropic => vec![HostedToolRequest {
+            tool_type: "web_search".into(),
+            provider_tool_type: "web_search_20250305".into(),
+            provider_tool_name: Some("web_search".into()),
+        }],
+        AgentProviderKind::OpenAiCompletions => Vec::new(),
+    }
+}
+
 fn openai_responses_agent_additional_params(config: &RigAgentConfig) -> Option<serde_json::Value> {
     let mut params = serde_json::Map::new();
     if let Some(effort) = config.reasoning_effort.as_deref() {
@@ -382,8 +411,9 @@ fn openai_responses_agent_additional_params(config: &RigAgentConfig) -> Option<s
     if let Some(service_label) = config.service_label.as_deref() {
         params.insert("service_tier".into(), json!(service_label));
     }
-    if config.native_web_search {
-        params.insert("tools".into(), json!([{ "type": "web_search" }]));
+    let tools = hosted_tool_requests_json(config);
+    if !tools.is_empty() {
+        params.insert("tools".into(), serde_json::Value::Array(tools));
     }
     (!params.is_empty()).then(|| serde_json::Value::Object(params))
 }
@@ -401,13 +431,33 @@ fn anthropic_agent_additional_params(config: &RigAgentConfig) -> Option<serde_js
             }),
         );
     }
-    if config.native_web_search {
-        params.insert(
-            "tools".into(),
-            json!([{ "type": "web_search_20250305", "name": "web_search" }]),
-        );
+    let tools = hosted_tool_requests_json(config);
+    if !tools.is_empty() {
+        params.insert("tools".into(), serde_json::Value::Array(tools));
     }
     (!params.is_empty()).then(|| serde_json::Value::Object(params))
+}
+
+fn hosted_tool_requests_json(config: &RigAgentConfig) -> Vec<serde_json::Value> {
+    hosted_tool_requests_for_config(config)
+        .into_iter()
+        .map(|request| {
+            let mut tool = serde_json::Map::new();
+            tool.insert("type".into(), json!(request.provider_tool_type));
+            if let Some(name) = request.provider_tool_name {
+                tool.insert("name".into(), json!(name));
+            }
+            serde_json::Value::Object(tool)
+        })
+        .collect()
+}
+
+fn notify_hosted_tool_requests(config: &RigAgentConfig, callbacks: &RigAgentCallbacks) {
+    for request in hosted_tool_requests_for_config(config) {
+        if (callbacks.cancelled)() || !(callbacks.on_hosted_tool_requested)(&request) {
+            return;
+        }
+    }
 }
 
 fn anthropic_thinking_budget_tokens(effort: &str, max_tokens: u64) -> Option<u64> {
@@ -929,6 +979,7 @@ mod tests {
         let callbacks = RigAgentCallbacks {
             on_token: token_sink,
             on_reasoning: reasoning_sink,
+            on_hosted_tool_requested: Arc::new(|_| true),
             cancelled: Arc::new(|| false),
         };
         let mut state = RigStreamState::default();
@@ -996,6 +1047,50 @@ mod tests {
             [("call_1".into(), "{\"status\":\"ok\"}".into())]
         );
         assert_eq!(pending.lock().unwrap()[0].id, "call_1");
+    }
+
+    #[test]
+    fn hosted_tool_request_callback_uses_config_helper_output() {
+        let received = Arc::new(Mutex::new(Vec::<HostedToolRequest>::new()));
+        let callback_received = Arc::clone(&received);
+        let callbacks = RigAgentCallbacks {
+            on_token: Arc::new(|_| true),
+            on_reasoning: Arc::new(|_| true),
+            on_hosted_tool_requested: Arc::new(move |request| {
+                callback_received.lock().unwrap().push(request.clone());
+                true
+            }),
+            cancelled: Arc::new(|| false),
+        };
+        let config = test_rig_config(AgentProviderKind::Anthropic, true);
+
+        notify_hosted_tool_requests(&config, &callbacks);
+
+        let received = received.lock().unwrap();
+        assert_eq!(
+            received.as_slice(),
+            hosted_tool_requests_for_config(&config)
+        );
+    }
+
+    #[test]
+    fn hosted_tool_request_callback_omits_openai_completions() {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let callback_count = Arc::clone(&count);
+        let callbacks = RigAgentCallbacks {
+            on_token: Arc::new(|_| true),
+            on_reasoning: Arc::new(|_| true),
+            on_hosted_tool_requested: Arc::new(move |_| {
+                callback_count.fetch_add(1, Ordering::SeqCst);
+                true
+            }),
+            cancelled: Arc::new(|| false),
+        };
+        let config = test_rig_config(AgentProviderKind::OpenAiCompletions, true);
+
+        notify_hosted_tool_requests(&config, &callbacks);
+
+        assert_eq!(count.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1089,7 +1184,28 @@ mod tests {
         RigAgentCallbacks {
             on_token: Arc::new(|_| true),
             on_reasoning: Arc::new(|_| true),
+            on_hosted_tool_requested: Arc::new(|_| true),
             cancelled: Arc::new(move || cancelled.load(Ordering::SeqCst)),
+        }
+    }
+
+    fn test_rig_config(
+        provider_kind: AgentProviderKind,
+        native_web_search: bool,
+    ) -> RigAgentConfig {
+        RigAgentConfig {
+            provider_id: "test-provider".into(),
+            provider_kind,
+            api_key: "sk-test".into(),
+            model: "test-model".into(),
+            timeout_secs: 1,
+            max_tokens: 1024,
+            temperature: 0.0,
+            reasoning_effort: None,
+            service_label: None,
+            native_web_search,
+            anthropic_version: None,
+            base_url: None,
         }
     }
 }

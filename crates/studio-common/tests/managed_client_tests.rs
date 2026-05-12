@@ -2,11 +2,12 @@ use std::collections::VecDeque;
 
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentHostedToolActivityEvent,
+    AgentHostedToolActivityStatus, AgentId, AgentInvokeRequest, AgentMode,
     AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelRegistryModel,
     AgentModelRegistryProvider, AgentModelRegistryResponse, AgentModelSource,
-    AgentProviderCapabilities, AgentRuntimeStatus, AgentSnapshotRequest, AgentSnapshotResponse,
-    AgentStartedResponse, AgentTokenEvent, AgentTurnId, CadQueryArtifactExport,
+    AgentProviderCapabilities, AgentProviderType, AgentRuntimeStatus, AgentSnapshotRequest,
+    AgentSnapshotResponse, AgentStartedResponse, AgentTokenEvent, AgentTurnId, CadQueryArtifactExport,
     CadQueryArtifactRelation, CadQueryResultReady, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ChatCreatedResponse, ChatHistoryResponse, ChatListResponse,
     ChatMessageRecord, ChatRole, ChatSessionId, ChatSessionSummary, ClientCapabilities,
@@ -932,6 +933,89 @@ fn agent_snapshot_response_updates_structured_agent_events() {
         snapshot.agent_event_records[0].agent_id,
         AgentId("agent-1".into())
     );
+}
+
+#[test]
+fn hosted_tool_activity_push_enters_agent_events() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+
+    client
+        .receive_inbound(&encode_push(&ServerPushEnvelope {
+            event: ServerPushEvent::AgentHostedToolActivity(AgentHostedToolActivityEvent {
+                session_id: ChatSessionId("chat-1".into()),
+                run_id: "agent-1".into(),
+                provider_id: "openai".into(),
+                provider_kind: AgentProviderType::OpenAiResponses,
+                tool_type: "web_search".into(),
+                status: AgentHostedToolActivityStatus::Requested,
+            }),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.agent_events.len(), 1);
+    assert!(matches!(
+        &snapshot.agent_events[0],
+        ServerPushEvent::AgentHostedToolActivity(event)
+            if event.tool_type == "web_search"
+                && event.status == AgentHostedToolActivityStatus::Requested
+    ));
+}
+
+#[test]
+fn agent_snapshot_response_preserves_hosted_tool_activity_record() {
+    let mut client = ManagedClient::new(FakeTransport::default());
+    open_client_with_handshake(&mut client);
+    let request_id = client
+        .dispatch_agent_snapshot(AgentSnapshotRequest {
+            agent_id: AgentId("agent-1".into()),
+            since_event_id: None,
+        })
+        .expect("dispatch agent.snapshot");
+    drain_outbound(&mut client);
+
+    client
+        .receive_inbound(&encode_response(&ServerResponseEnvelope {
+            request_id,
+            result: Ok(CommandSuccess::AgentSnapshot(AgentSnapshotResponse {
+                agent_id: AgentId("agent-1".into()),
+                chat_id: ChatSessionId("chat-1".into()),
+                bound_model: None,
+                model_lock_reason: None,
+                state: AgentRuntimeStatus::Running,
+                active_turn_id: Some(AgentTurnId("agent-1".into())),
+                since_event_id: None,
+                events: vec![AgentEventRecord {
+                    event_id: AgentEventId(1),
+                    agent_id: AgentId("agent-1".into()),
+                    turn_id: Some(AgentTurnId("agent-1".into())),
+                    ts_ms: 1000,
+                    payload: AgentEventPayload::HostedToolActivity {
+                        provider_id: "openai".into(),
+                        provider_kind: AgentProviderType::OpenAiResponses,
+                        tool_type: "web_search".into(),
+                        status: AgentHostedToolActivityStatus::Requested,
+                    },
+                }],
+                current_text: String::new(),
+                current_reasoning: String::new(),
+                error: None,
+            })),
+        }))
+        .unwrap();
+
+    let snapshot = client.snapshot();
+    assert_eq!(snapshot.agent_event_records.len(), 1);
+    assert!(matches!(
+        &snapshot.agent_event_records[0].payload,
+        AgentEventPayload::HostedToolActivity {
+            provider_id,
+            provider_kind: AgentProviderType::OpenAiResponses,
+            tool_type,
+            status: AgentHostedToolActivityStatus::Requested,
+        } if provider_id == "openai" && tool_type == "web_search"
+    ));
 }
 
 #[test]

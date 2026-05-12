@@ -177,6 +177,41 @@ describe("applySnapshot", () => {
     ]);
   });
 
+  it("maps hosted tool activity records into agent events", () => {
+    const { applySnapshot } = useProtocolStore.getState();
+    applySnapshot({
+      agent_event_records: [
+        {
+          event_id: 3,
+          agent_id: "agent-main",
+          turn_id: "turn-1",
+          ts_ms: 1000,
+          payload: {
+            event: "hosted_tool_activity",
+            payload: {
+              provider_id: "openai",
+              provider_kind: "openai_responses",
+              tool_type: "web_search",
+              status: "requested",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(useProtocolStore.getState().agent_events).toEqual([
+      makeEvent("agent.hosted_tool_activity", {
+        agent_id: "agent-main",
+        turn_id: "turn-1",
+        run_id: "turn-1",
+        provider_id: "openai",
+        provider_kind: "openai_responses",
+        tool_type: "web_search",
+        status: "requested",
+      }),
+    ]);
+  });
+
   it("converts agent event records from snapshot into renderable agent events", () => {
     const { applySnapshot } = useProtocolStore.getState();
     applySnapshot({

@@ -11,9 +11,9 @@ mod watch;
 mod workspace;
 
 pub use agent::{
-    AgentTurnInput, RigAgentCallbacks, RigAgentError, RigAgentTurnResult,
+    AgentTurnInput, HostedToolRequest, RigAgentCallbacks, RigAgentError, RigAgentTurnResult,
     build_rig_prompt_and_history, build_turn_context, cadquery_agent_system_prompt,
-    extract_cadquery_code,
+    extract_cadquery_code, hosted_tool_requests_for_config,
     plan_package::{
         ParsedPlanPackage, PlanPackageError, PlanPackagePaths, PlanTimestamp,
         SaveCadPlanPackageInput, SavedPlanPackage, collect_plan_packages, parse_plan_package,

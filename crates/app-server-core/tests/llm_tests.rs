@@ -7,8 +7,8 @@ use app_server_core::llm::{
 };
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
-    cadquery_agent_system_prompt, extract_cadquery_code, rig_agent_additional_params,
-    rig_agent_temperature_param,
+    cadquery_agent_system_prompt, extract_cadquery_code, hosted_tool_requests_for_config,
+    rig_agent_additional_params, rig_agent_temperature_param,
 };
 use app_server_protocol::{
     AgentMode, CadQueryObjectKind, ChatMessageRecord, ChatRole, PathHandle, SelectionKind,
@@ -269,6 +269,44 @@ fn rig_agent_additional_params_include_hosted_web_search_when_enabled() {
 }
 
 #[test]
+fn hosted_tool_requests_include_openai_responses_web_search_when_enabled() {
+    let config = test_config(true);
+
+    let requests = hosted_tool_requests_for_config(&config);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tool_type, "web_search");
+    assert_eq!(requests[0].provider_tool_type, "web_search");
+    assert_eq!(requests[0].provider_tool_name, None);
+}
+
+#[test]
+fn hosted_tool_requests_include_anthropic_web_search_when_enabled() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::Anthropic;
+
+    let requests = hosted_tool_requests_for_config(&config);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tool_type, "web_search");
+    assert_eq!(requests[0].provider_tool_type, "web_search_20250305");
+    assert_eq!(
+        requests[0].provider_tool_name.as_deref(),
+        Some("web_search")
+    );
+}
+
+#[test]
+fn hosted_tool_requests_omit_openai_completions_web_search() {
+    let mut config = test_config(true);
+    config.provider_kind = AgentProviderKind::OpenAiCompletions;
+
+    let requests = hosted_tool_requests_for_config(&config);
+
+    assert!(requests.is_empty());
+}
+
+#[test]
 fn rig_agent_additional_params_include_openai_service_label_raw() {
     let mut config = test_config(false);
     config.service_label = Some("fast".into());
@@ -309,6 +347,7 @@ fn rig_agent_additional_params_include_anthropic_thinking_and_web_search() {
     assert_eq!(params["thinking"]["type"], "enabled");
     assert_eq!(params["thinking"]["budget_tokens"], 8191);
     assert_eq!(params["tools"][0]["type"], "web_search_20250305");
+    assert_eq!(params["tools"][0]["name"], "web_search");
     assert!(params.get("service_tier").is_none());
 }
 
@@ -335,6 +374,7 @@ fn rig_agent_additional_params_omits_anthropic_thinking_when_budget_too_small() 
 
     assert!(params.get("thinking").is_none());
     assert_eq!(params["tools"][0]["type"], "web_search_20250305");
+    assert_eq!(params["tools"][0]["name"], "web_search");
 }
 
 #[test]

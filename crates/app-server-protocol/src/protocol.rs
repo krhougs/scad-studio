@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SESSION_RECONNECT_WINDOW_MS: u64 = 30_000;
-pub const CURRENT_PROTOCOL_VERSION: u16 = 13;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 14;
 // Web 客户端默认无拒绝扩展名。核心产品流是：
 //   `.scad` → 服务端 OpenSCAD CLI → `.3mf` bytes → 前端 → 解码 + 渲染。
 // `.scad` 是源码文本（ScadSplitViewer 要读取）；`.stl` / `.3mf` 是预览
@@ -963,6 +963,25 @@ pub struct AgentToolResultEvent {
     pub result_json: String,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[borsh(use_discriminant = true)]
+pub enum AgentHostedToolActivityStatus {
+    Requested = 0,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AgentHostedToolActivityEvent {
+    pub session_id: ChatSessionId,
+    pub run_id: String,
+    pub provider_id: String,
+    pub provider_kind: AgentProviderType,
+    pub tool_type: String,
+    pub status: AgentHostedToolActivityStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AgentMeshReadyEvent {
     pub session_id: ChatSessionId,
@@ -1016,6 +1035,12 @@ pub enum AgentEventPayload {
     Done {
         cancelled: bool,
     } = 6,
+    HostedToolActivity {
+        provider_id: String,
+        provider_kind: AgentProviderType,
+        tool_type: String,
+        status: AgentHostedToolActivityStatus,
+    } = 7,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -1385,6 +1410,8 @@ pub enum ServerPushEvent {
     AgentReasoning(AgentReasoningEvent) = 10,
     #[serde(rename = "chat.list_changed")]
     ChatListChanged(ChatListResponse) = 11,
+    #[serde(rename = "agent.hosted_tool_activity")]
+    AgentHostedToolActivity(AgentHostedToolActivityEvent) = 12,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

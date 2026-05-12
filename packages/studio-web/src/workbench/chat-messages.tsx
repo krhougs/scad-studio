@@ -254,6 +254,18 @@ export function AgentEventRow({
   onRunPlan?: (plan: PlanRunAction) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  if (event.event === "agent.hosted_tool_activity" && isHostedWebSearchRequested(event)) {
+    return (
+      <button
+        type="button"
+        className="agent-op-line"
+        data-testid="agent-event-row"
+        onClick={() => setExpanded(true)}
+      >
+        <span>searched</span>
+      </button>
+    );
+  }
   if (event.event === "agent.error") {
     return <AgentErrorCard event={event} />;
   }
@@ -413,6 +425,9 @@ function agentEventDetail(event: AgentEvent): string {
   if (event.event === "agent.state_changed") {
     return stringField(payload, "state") || "state changed";
   }
+  if (event.event === "agent.hosted_tool_activity") {
+    return event.event.replace("agent.", "");
+  }
   if (event.event === "agent.plan_proposed") {
     return stringField(payload, "change_description") || "plan proposed";
   }
@@ -422,12 +437,24 @@ function agentEventDetail(event: AgentEvent): string {
 function agentEventSummary(event: AgentEvent, detail: string): string {
   const payload = event.payload ?? {};
   const tool = stringField(payload, "tool_name");
+  if (event.event === "agent.hosted_tool_activity" && isHostedWebSearchRequested(event)) {
+    return "searched";
+  }
   if (event.event === "agent.tool_start") return tool || detail || "started";
   if (event.event === "agent.tool_result")
     return tool ? `${tool} result ready` : "result ready";
   if (tool) return tool;
   if (event.event === "agent.mesh_ready") return "mesh ready";
   return detail || event.event;
+}
+
+function isHostedWebSearchRequested(event: AgentEvent): boolean {
+  const payload = event.payload ?? {};
+  return (
+    event.event === "agent.hosted_tool_activity" &&
+    payload["tool_type"] === "web_search" &&
+    payload["status"] === "requested"
+  );
 }
 
 function agentEventModalDetail(event: AgentEvent): string {

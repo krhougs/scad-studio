@@ -80,6 +80,47 @@ describe("AgentEventRow", () => {
     expect(modalText).toContain("call_789");
     expect(modalText).toContain("run_999");
   });
+
+  it("renders hosted web search requested as searched", () => {
+    render(
+      <AgentEventRow
+        event={{
+          event: "agent.hosted_tool_activity",
+          payload: {
+            tool_type: "web_search",
+            status: "requested",
+            provider_id: "openai",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("agent-event-row").textContent).toContain(
+      "searched",
+    );
+    expect(screen.getByTestId("agent-event-row").textContent).not.toContain(
+      "web_search",
+    );
+  });
+
+  it("does not add product copy for other hosted tools", () => {
+    render(
+      <AgentEventRow
+        event={{
+          event: "agent.hosted_tool_activity",
+          payload: {
+            tool_type: "code_interpreter",
+            status: "requested",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("searched")).toBeNull();
+    expect(screen.getByTestId("agent-event-row").textContent).toContain(
+      "hosted_tool_activity",
+    );
+  });
 });
 
 describe("SearchSourcesPart", () => {

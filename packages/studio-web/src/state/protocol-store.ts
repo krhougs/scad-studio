@@ -383,6 +383,9 @@ function agentEventFromRecord(record: AgentEventRecord): AgentEvent | null {
   if (event === "tool_result") {
     return { event: "agent.tool_result", payload: { ...metadata, ...payload } };
   }
+  if (event === "hosted_tool_activity") {
+    return { event: "agent.hosted_tool_activity", payload: { ...metadata, ...payload } };
+  }
   if (event === "error") {
     return { event: "agent.error", payload: { ...metadata, ...payload } };
   }

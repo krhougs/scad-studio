@@ -1,6 +1,7 @@
 use app_server_protocol::{
     AgentCancelRequest, AgentCancelledResponse, AgentDoneEvent, AgentErrorEvent, AgentErrorType,
-    AgentEventId, AgentEventPayload, AgentEventRecord, AgentId, AgentInvokeRequest, AgentMode,
+    AgentEventId, AgentEventPayload, AgentEventRecord, AgentHostedToolActivityEvent,
+    AgentHostedToolActivityStatus, AgentId, AgentInvokeRequest, AgentMode,
     AgentModelDiscoveryState, AgentModelDiscoveryStatus, AgentModelParamsUpdateRequest,
     AgentModelRegistryModel, AgentModelRegistryProvider, AgentModelRegistryResponse,
     AgentModelSelectRequest, AgentModelSource, AgentPlanPackageRef, AgentPlanSavedEvent,
@@ -791,6 +792,35 @@ fn agent_push_events_and_busy_error_roundtrip() {
     });
     let decoded = decode_server_frame(&encode_server_frame(&tool_start).unwrap()).unwrap();
     assert_eq!(decoded, tool_start);
+
+    let hosted_tool = ServerEnvelope::Push(ServerPushEnvelope {
+        event: ServerPushEvent::AgentHostedToolActivity(AgentHostedToolActivityEvent {
+            session_id: session_id.clone(),
+            run_id: "run-1".into(),
+            provider_id: "openai".into(),
+            provider_kind: AgentProviderType::OpenAiResponses,
+            tool_type: "web_search".into(),
+            status: AgentHostedToolActivityStatus::Requested,
+        }),
+    });
+    let decoded = decode_server_frame(&encode_server_frame(&hosted_tool).unwrap()).unwrap();
+    assert_eq!(decoded, hosted_tool);
+
+    let hosted_payload = AgentEventRecord {
+        event_id: AgentEventId(88),
+        agent_id: "agent-main".into(),
+        turn_id: Some("turn-1".into()),
+        ts_ms: 123_456,
+        payload: AgentEventPayload::HostedToolActivity {
+            provider_id: "openai".into(),
+            provider_kind: AgentProviderType::OpenAiResponses,
+            tool_type: "web_search".into(),
+            status: AgentHostedToolActivityStatus::Requested,
+        },
+    };
+    let decoded: AgentEventRecord =
+        borsh::from_slice(&borsh::to_vec(&hosted_payload).unwrap()).unwrap();
+    assert_eq!(decoded, hosted_payload);
 
     let done = ServerEnvelope::Push(ServerPushEnvelope {
         event: ServerPushEvent::AgentDone(AgentDoneEvent {

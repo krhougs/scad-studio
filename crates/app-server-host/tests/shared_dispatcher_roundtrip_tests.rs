@@ -4,18 +4,19 @@ use app_server_core::{AGENT_ERROR_FACT_PREFIX, ChatStore, ChatSummaryUpdate};
 use app_server_host::HostRequestDispatcher;
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentCancelRequest, AgentDoneEvent, AgentErrorEvent, AgentEventId,
-    AgentEventPayload, AgentEventRecord, AgentInvokeRequest, AgentMode,
-    AgentModelParamsUpdateRequest, AgentModelSelectRequest, AgentPlanConfirmRequest,
-    AgentProviderType, AgentRuntimeStatus, AgentSnapshotRequest, AgentStartTurnRequest,
-    AgentSubscribeRequest, AgentTurnId, BoundAgentModel, CURRENT_PROTOCOL_VERSION,
-    CadQueryExecuteRequest, CadQueryExportFormat, CadQueryObjectKind, CapabilityHandshakeRequest,
-    ChatArchiveRequest, ChatCreateInitialTurn, ChatCreateRequest, ChatHistoryRequest,
-    ChatListRequest, ChatRole, ChatSendRequest, ChatSessionId, ChatToolResultRecord,
-    ClientCapabilities, ClientCommand, ClientPlatform, ClientRequestEnvelope, CommandSuccess,
-    ExportFormat, ExportRunRequest, HostLocalPath, PathHandle, PreviewArtifact, PreviewRequest,
-    PreviewRequestKind, ProtocolErrorCode, ProtocolVersionRange, RequestId, SelectionKind,
-    SelectionRef, SelectionUpdateRequest, ServerPushEnvelope, ServerPushEvent, SessionToken,
-    WorkspaceId, WorkspaceListRequest, web_file_read_capability,
+    AgentEventPayload, AgentEventRecord, AgentHostedToolActivityEvent,
+    AgentHostedToolActivityStatus, AgentInvokeRequest, AgentMode, AgentModelParamsUpdateRequest,
+    AgentModelSelectRequest, AgentPlanConfirmRequest, AgentProviderType, AgentRuntimeStatus,
+    AgentSnapshotRequest, AgentStartTurnRequest, AgentSubscribeRequest, AgentTurnId,
+    BoundAgentModel, CURRENT_PROTOCOL_VERSION, CadQueryExecuteRequest, CadQueryExportFormat,
+    CadQueryObjectKind, CapabilityHandshakeRequest, ChatArchiveRequest, ChatCreateInitialTurn,
+    ChatCreateRequest, ChatHistoryRequest, ChatListRequest, ChatRole, ChatSendRequest,
+    ChatSessionId, ChatToolResultRecord, ClientCapabilities, ClientCommand, ClientPlatform,
+    ClientRequestEnvelope, CommandSuccess, ExportFormat, ExportRunRequest, HostLocalPath,
+    PathHandle, PreviewArtifact, PreviewRequest, PreviewRequestKind, ProtocolErrorCode,
+    ProtocolVersionRange, RequestId, SelectionKind, SelectionRef, SelectionUpdateRequest,
+    ServerPushEnvelope, ServerPushEvent, SessionToken, WorkspaceId, WorkspaceListRequest,
+    web_file_read_capability,
 };
 use futures_util::future::join_all;
 use serde_json::Value;
@@ -2019,6 +2020,62 @@ async fn dispatcher_workspace_runtime_rejects_second_active_turn_across_dispatch
 }
 
 #[tokio::test]
+async fn dispatcher_persists_hosted_web_search_requested_without_chat_tool_history() {
+    let workspace = temp_workspace("dispatcher-agent-hosted-web-search");
+    let (config_path, server_handle) = hosted_web_search_hanging_agent_config(&workspace).await;
+    let _agent_env = EnvGuard::set_many(vec![
+        ("BUDN_AGENT_CONFIG", config_path.into_os_string()),
+        ("BUDN_AGENT_OPENAI_API_KEY", "test-key".into()),
+    ]);
+    let (mut dispatcher, pushes) = dispatcher_with_pushes(&workspace);
+    let created = create_chat_async(&mut dispatcher, "hosted web search", Vec::new()).await;
+
+    let started = start_agent_turn_async(
+        &mut dispatcher,
+        36,
+        &created.agent_id,
+        "search current docs",
+    )
+    .await;
+    let hosted = wait_for_hosted_tool_activity_async(&pushes, &started.run_id).await;
+
+    assert_eq!(hosted.session_id, created.session_id);
+    assert_eq!(hosted.provider_id, "openai");
+    assert_eq!(hosted.provider_kind, AgentProviderType::OpenAiResponses);
+    assert_eq!(hosted.tool_type, "web_search");
+    assert_eq!(hosted.status, AgentHostedToolActivityStatus::Requested);
+
+    let event_log_path = workspace
+        .join("agent-events")
+        .join(format!("{}.jsonl", created.agent_id.0));
+    let records = wait_for_agent_event_records_async(&event_log_path, 2).await;
+    assert!(records.iter().any(|record| matches!(
+        &record.payload,
+        AgentEventPayload::HostedToolActivity {
+            provider_id,
+            provider_kind: AgentProviderType::OpenAiResponses,
+            tool_type,
+            status: AgentHostedToolActivityStatus::Requested,
+        } if provider_id == "openai" && tool_type == "web_search"
+    )));
+
+    let cancelled = cancel_agent_async(&mut dispatcher, 37, &created.agent_id).await;
+    assert!(cancelled.cancelled);
+    wait_for_terminal_event_async(&pushes, &started.run_id).await;
+
+    let history = read_chat_history_async(&mut dispatcher, &created.session_id).await;
+    assert!(history.iter().all(|message| message.tool_calls.is_empty()));
+    assert!(history.iter().all(|message| message.tool_result.is_none()));
+    assert!(
+        history
+            .iter()
+            .all(|message| !message.content.contains("agent.hosted_tool_activity"))
+    );
+    server_handle.abort();
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
 async fn dispatcher_rejects_second_agent_invoke_until_cancelled() {
     let workspace = temp_workspace("dispatcher-agent-busy");
     let _agent_env = unset_agent_environment();
@@ -3344,6 +3401,29 @@ async fn wait_for_error_event_async(
     panic!("agent.error not observed for {run_id}");
 }
 
+async fn wait_for_hosted_tool_activity_async(
+    pushes: &Arc<Mutex<Vec<ServerPushEnvelope>>>,
+    run_id: &str,
+) -> AgentHostedToolActivityEvent {
+    for _ in 0..250 {
+        if let Some(event) = pushes
+            .lock()
+            .expect("push buffer lock")
+            .iter()
+            .find_map(|push| match &push.event {
+                ServerPushEvent::AgentHostedToolActivity(event) if event.run_id == run_id => {
+                    Some(event.clone())
+                }
+                _ => None,
+            })
+        {
+            return event;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("agent.hosted_tool_activity not observed for {run_id}");
+}
+
 fn handshake_request() -> CapabilityHandshakeRequest {
     handshake_request_with_version(ProtocolVersionRange::new(
         CURRENT_PROTOCOL_VERSION,
@@ -3481,6 +3561,30 @@ async fn hanging_agent_config(
     (config_path, handle)
 }
 
+async fn hosted_web_search_hanging_agent_config(
+    workspace: &std::path::Path,
+) -> (std::path::PathBuf, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hosted web search agent server");
+    let addr = listener.local_addr().expect("read agent server addr");
+    let handle = tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _socket = socket;
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            });
+        }
+    });
+    let config_path = workspace.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        hosted_web_search_hanging_agent_registry_config(&addr.to_string()),
+    )
+    .expect("write hosted web search agent config");
+    (config_path, handle)
+}
+
 fn hanging_agent_registry_config(addr: &str) -> String {
     format!(
         r#"active_provider = "openai"
@@ -3499,6 +3603,30 @@ discover_models = false
 
 [[providers.models]]
 id = "gpt-5.2"
+"#
+    )
+}
+
+fn hosted_web_search_hanging_agent_registry_config(addr: &str) -> String {
+    format!(
+        r#"active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+discover_models = false
+timeout_secs = 30
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+base_url = "http://{addr}#"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-5.2"
+native_web_search = true
+web_search_supported = true
 "#
     )
 }

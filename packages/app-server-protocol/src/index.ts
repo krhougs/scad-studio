@@ -5,7 +5,7 @@ export type WorkspaceId = string;
 export type RequestId = number;
 export type SubscriptionId = string;
 export type SessionToken = string;
-export const CURRENT_PROTOCOL_VERSION = 13;
+export const CURRENT_PROTOCOL_VERSION = 14;
 
 export interface PathHandle {
   workspace_id: WorkspaceId;
@@ -623,6 +623,17 @@ export interface AgentToolResultEvent {
   result_json: string;
 }
 
+export type AgentHostedToolActivityStatus = "requested";
+
+export interface AgentHostedToolActivityEvent {
+  session_id: ChatSessionId;
+  run_id: string;
+  provider_id: string;
+  provider_kind: AgentProviderType;
+  tool_type: string;
+  status: AgentHostedToolActivityStatus;
+}
+
 export interface AgentMeshReadyEvent {
   session_id: ChatSessionId;
   run_id: string;
@@ -653,6 +664,15 @@ export type AgentEventPayload =
   | {
       event: "tool_result";
       payload: { tool_call_id: string; tool_name: string; result_json: string };
+    }
+  | {
+      event: "hosted_tool_activity";
+      payload: {
+        provider_id: string;
+        provider_kind: AgentProviderType;
+        tool_type: string;
+        status: AgentHostedToolActivityStatus;
+      };
     }
   | {
       event: "error";
@@ -846,6 +866,7 @@ export type ServerPushEvent =
   | { event: "agent.reasoning"; payload: AgentReasoningEvent }
   | { event: "agent.tool_start"; payload: AgentToolStartEvent }
   | { event: "agent.tool_result"; payload: AgentToolResultEvent }
+  | { event: "agent.hosted_tool_activity"; payload: AgentHostedToolActivityEvent }
   | { event: "agent.mesh_ready"; payload: AgentMeshReadyEvent }
   | { event: "agent.error"; payload: AgentErrorEvent }
   | { event: "agent.done"; payload: AgentDoneEvent }

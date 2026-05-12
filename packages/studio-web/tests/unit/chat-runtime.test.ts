@@ -293,6 +293,21 @@ describe("convertAll", () => {
     expect(result[2]!.streamText).toBe("part2");
   });
 
+  it("keeps hosted tool activity as an event message", () => {
+    const events: AgentEvent[] = [
+      makeEvent("agent.hosted_tool_activity", {
+        tool_type: "web_search",
+        status: "requested",
+      }),
+    ];
+    const run: AgentRun = { session_id: "s", run_id: "r1" };
+    const result = convertAll([], events, run);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.source).toBe("event");
+    expect(result[0]!.event!.event).toBe("agent.hosted_tool_activity");
+  });
+
   it("shows only the latest reasoning block", () => {
     const events: AgentEvent[] = [
       makeEvent("agent.reasoning", { text: "older thought. " }),
