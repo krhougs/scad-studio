@@ -283,6 +283,59 @@ pub fn file_write_success_schema() -> Value {
     )
 }
 
+pub fn web_search_input_schema() -> Value {
+    object_schema(
+        json!({
+            "query": string_schema("Search query text."),
+            "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+            "filters": {"type": "object"}
+        }),
+        &["query"],
+    )
+}
+
+pub fn web_search_success_schema() -> Value {
+    success_schema(
+        json!({
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": string_schema("Result title."),
+                        "url": string_schema("Result URL."),
+                        "snippet": string_schema("Result snippet or description."),
+                        "date": nullable_string_schema(),
+                        "source": nullable_string_schema()
+                    }
+                }
+            },
+            "result_count": {"type": "integer"}
+        }),
+        &["results", "result_count"],
+    )
+}
+
+pub fn fetch_url_input_schema() -> Value {
+    object_schema(
+        json!({
+            "url": string_schema("URL to fetch.")
+        }),
+        &["url"],
+    )
+}
+
+pub fn fetch_url_success_schema() -> Value {
+    success_schema(
+        json!({
+            "url": string_schema("Fetched URL."),
+            "content": string_schema("Page content as text or markdown."),
+            "content_length": {"type": "integer"}
+        }),
+        &["url", "content", "content_length"],
+    )
+}
+
 pub fn tool_error_schema() -> Value {
     object_schema(
         json!({
@@ -303,7 +356,8 @@ pub fn tool_error_schema() -> Value {
                     "cadquery_build_error",
                     "topology_mapping_error",
                     "export_error",
-                    "timeout"
+                    "timeout",
+                    "web_search_error"
                 ]
             },
             "retry_allowed": {"type": "boolean"},

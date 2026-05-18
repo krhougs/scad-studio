@@ -1,9 +1,9 @@
 use app_server_core::llm::{
     AgentModelSource, AgentProviderKind, DiscoveredProviderModel, ModelDiscoveryStatus,
-    RigAgentConfig, RigAgentConfigSelection, apply_provider_model_discovery,
-    load_agent_provider_registry, load_rig_agent_config, load_rig_agent_config_with_discovery,
-    merge_provider_models, openai_compatible_models_to_discovered,
-    rig_config_from_registry_selection,
+    RigAgentConfig, RigAgentConfigSelection, WebSearchAuth, WebSearchHttpMethod, WebSearchParams,
+    apply_provider_model_discovery, load_agent_provider_registry, load_rig_agent_config,
+    load_rig_agent_config_with_discovery, merge_provider_models,
+    openai_compatible_models_to_discovered, rig_config_from_registry_selection,
 };
 use app_server_core::{
     AgentExecutionScope, AgentTurnInput, build_rig_prompt_and_history, build_turn_context,
@@ -80,6 +80,7 @@ fn build_rig_prompt_and_history_includes_prompt_context_and_history() {
         plan_ref: None,
         context_refs: Vec::new(),
         native_web_search_enabled: false,
+        function_web_search_available: false,
         execution_scope: None,
     };
     let (prompt, history) = build_rig_prompt_and_history(&input);
@@ -104,6 +105,7 @@ fn build_rig_prompt_and_history_skips_empty_and_tool_history() {
         plan_ref: None,
         context_refs: Vec::new(),
         native_web_search_enabled: false,
+        function_web_search_available: false,
         execution_scope: None,
     };
     let (_prompt, history) = build_rig_prompt_and_history(&input);
@@ -124,6 +126,7 @@ fn build_turn_context_includes_mode_plan_ref_and_selection() {
         ),
         context_refs: Vec::new(),
         native_web_search_enabled: false,
+        function_web_search_available: false,
         execution_scope: Some(AgentExecutionScope::for_plan(
             "plans/2026050100-lid",
             "plans/2026050100-lid/plan-result.md",
@@ -154,6 +157,7 @@ fn build_turn_context_omits_selection_when_empty() {
         plan_ref: None,
         context_refs: Vec::new(),
         native_web_search_enabled: false,
+        function_web_search_available: false,
         execution_scope: None,
     };
     let context = build_turn_context(&input);
@@ -173,13 +177,14 @@ fn build_turn_context_includes_context_refs() {
         plan_ref: None,
         context_refs: vec!["@face[top_lid:f_0]".into(), "@part[bottom_case]".into()],
         native_web_search_enabled: true,
+        function_web_search_available: false,
         execution_scope: None,
     };
     let context = build_turn_context(&input);
     assert!(context.contains("context refs"));
     assert!(context.contains("@face[top_lid:f_0]"));
     assert!(context.contains("@part[bottom_case]"));
-    assert!(context.contains("Hosted native web search: enabled"));
+    assert!(context.contains("`web_search`: available this turn"));
 }
 
 #[test]
@@ -193,17 +198,80 @@ fn build_turn_context_lists_current_turn_tools() {
         plan_ref: None,
         context_refs: Vec::new(),
         native_web_search_enabled: true,
+        function_web_search_available: false,
         execution_scope: None,
     };
     let context = build_turn_context(&input);
 
-    assert!(context.contains("Provider-native capabilities"));
-    assert!(context.contains("Hosted native web search: enabled"));
+    assert!(context.contains("Provider-native tools"));
+    assert!(context.contains("`web_search`: available this turn"));
     assert!(context.contains("Current turn app tools"));
     assert!(context.contains("inspect this current-turn app tool list"));
     assert!(context.contains("- `read_file`: Read a bounded UTF-8 text file"));
     assert!(context.contains("- `save_cad_plan`: Persist a structured Markdown CAD Plan"));
     assert!(!context.contains("- `write_file`:"));
+}
+
+#[test]
+fn build_turn_context_shows_function_web_search_when_available() {
+    let input = AgentTurnInput {
+        mode: AgentMode::Agent,
+        prompt: "unused".into(),
+        history: Vec::new(),
+        selections: Vec::new(),
+        active_selection_index: None,
+        plan_ref: None,
+        context_refs: Vec::new(),
+        native_web_search_enabled: false,
+        function_web_search_available: true,
+        execution_scope: None,
+    };
+    let context = build_turn_context(&input);
+    assert!(
+        context.contains("`web_search` and `fetch_url` app tools are available"),
+        "should mention function web search tools"
+    );
+    assert!(
+        context.contains("cite the source URLs"),
+        "should include citation instruction"
+    );
+    assert!(
+        context.contains("- `web_search`:"),
+        "web_search should appear in app tool list"
+    );
+    assert!(
+        context.contains("- `fetch_url`:"),
+        "fetch_url should appear in app tool list"
+    );
+}
+
+#[test]
+fn build_turn_context_hides_web_search_tool_when_unavailable() {
+    let input = AgentTurnInput {
+        mode: AgentMode::Agent,
+        prompt: "unused".into(),
+        history: Vec::new(),
+        selections: Vec::new(),
+        active_selection_index: None,
+        plan_ref: None,
+        context_refs: Vec::new(),
+        native_web_search_enabled: false,
+        function_web_search_available: false,
+        execution_scope: None,
+    };
+    let context = build_turn_context(&input);
+    assert!(
+        context.contains("Web search: not available"),
+        "should state web search is not available"
+    );
+    assert!(
+        !context.contains("- `web_search`:"),
+        "web_search should not appear in app tool list"
+    );
+    assert!(
+        context.contains("- `fetch_url`:"),
+        "fetch_url should always appear in app tool list"
+    );
 }
 
 #[test]
@@ -1563,5 +1631,518 @@ fn test_selection() -> SelectionRef {
         build_id: Some("sha256:test".into()),
         result_id: Some("cq_1".into()),
         ambiguous: false,
+    }
+}
+
+#[tokio::test]
+async fn web_search_provider_parses_searxng_config() {
+    let registry = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+        active_web_search = "searxng-local"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "searxng-local"
+        endpoint = "http://localhost:8080/search"
+        method = "GET"
+        query_key = "q"
+        [web_search_providers.params]
+        format = "json"
+        engines = "google,bing"
+        [web_search_providers.result_map]
+        results = "results"
+        title = "title"
+        url = "url"
+        snippet = "content"
+        date = "publishedDate"
+        source = "engine"
+        "#,
+    )
+    .await
+    .expect("should parse");
+
+    assert_eq!(registry.active_web_search_id.as_deref(), Some("searxng-local"));
+    assert_eq!(registry.web_search_providers.len(), 1);
+    let p = &registry.web_search_providers[0];
+    assert_eq!(p.id, "searxng-local");
+    assert_eq!(p.endpoint, "http://localhost:8080/search");
+    assert_eq!(p.method, WebSearchHttpMethod::Get);
+    assert_eq!(p.query_key, "q");
+    assert!(matches!(p.auth, WebSearchAuth::None));
+    assert!(matches!(&p.params, WebSearchParams::QueryPairs(pairs) if pairs.len() == 2));
+    assert_eq!(p.result_map.results_path, "results");
+    assert_eq!(p.result_map.snippet, "content");
+    assert_eq!(p.result_map.date.as_deref(), Some("publishedDate"));
+    assert_eq!(p.result_map.source.as_deref(), Some("engine"));
+    assert!(registry.active_web_search_provider().is_some());
+}
+
+#[tokio::test]
+async fn web_search_provider_parses_post_with_header_auth() {
+    let registry = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+        active_web_search = "tavily"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "tavily"
+        endpoint = "https://api.tavily.com/search"
+        method = "POST"
+        query_key = "query"
+        api_key = "tvly-secret"
+        auth_header = "Authorization"
+        auth_prefix = "Bearer "
+        top_k_param = "max_results"
+        max_result_chars = 8000
+        [web_search_providers.params]
+        max_results = 5
+        [web_search_providers.result_map]
+        results = "results"
+        title = "title"
+        url = "url"
+        snippet = "content"
+        "#,
+    )
+    .await
+    .expect("should parse");
+
+    let p = &registry.web_search_providers[0];
+    assert_eq!(p.method, WebSearchHttpMethod::Post);
+    assert!(matches!(&p.auth, WebSearchAuth::Header { header, prefix, .. }
+        if header == "Authorization" && prefix.as_deref() == Some("Bearer ")));
+    assert_eq!(p.top_k_param.as_deref(), Some("max_results"));
+    assert_eq!(p.max_result_chars, Some(8000));
+    assert!(matches!(&p.params, WebSearchParams::JsonObject(m) if m.contains_key("max_results")));
+    assert!(p.result_map.date.is_none());
+    assert!(p.result_map.source.is_none());
+}
+
+#[tokio::test]
+async fn web_search_provider_parses_query_param_auth() {
+    let registry = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+        active_web_search = "serpapi"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "serpapi"
+        endpoint = "https://serpapi.com/search"
+        query_key = "q"
+        api_key = "serp-secret"
+        auth_query_param = "api_key"
+        [web_search_providers.result_map]
+        results = "organic_results"
+        title = "title"
+        url = "link"
+        snippet = "snippet"
+        "#,
+    )
+    .await
+    .expect("should parse");
+
+    let p = &registry.web_search_providers[0];
+    assert_eq!(p.method, WebSearchHttpMethod::Get);
+    assert!(matches!(&p.auth, WebSearchAuth::QueryParam { param, .. } if param == "api_key"));
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_mutual_exclusive_auth() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "bad"
+        endpoint = "https://example.com"
+        query_key = "q"
+        api_key = "key"
+        auth_header = "Authorization"
+        auth_query_param = "api_key"
+        [web_search_providers.result_map]
+        results = "results"
+        title = "title"
+        url = "url"
+        snippet = "snippet"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("mutually exclusive"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_auth_without_api_key() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "bad"
+        endpoint = "https://example.com"
+        query_key = "q"
+        auth_header = "X-Token"
+        [web_search_providers.result_map]
+        results = "results"
+        title = "title"
+        url = "url"
+        snippet = "snippet"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("auth requires api_key"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_duplicate_ids() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "dup"
+        endpoint = "https://a.com"
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "r"
+        title = "t"
+        url = "u"
+        snippet = "s"
+
+        [[web_search_providers]]
+        id = "dup"
+        endpoint = "https://b.com"
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "r"
+        title = "t"
+        url = "u"
+        snippet = "s"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("duplicate"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_invalid_method() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "bad"
+        endpoint = "https://example.com"
+        method = "PATCH"
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "r"
+        title = "t"
+        url = "u"
+        snippet = "s"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("GET or POST"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_invalid_active_web_search() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+        active_web_search = "nonexistent"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("nonexistent"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_defaults_to_empty_when_not_configured() {
+    let registry = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+        "#,
+    )
+    .await
+    .expect("should parse");
+
+    assert!(registry.active_web_search_id.is_none());
+    assert!(registry.web_search_providers.is_empty());
+    assert!(registry.active_web_search_provider().is_none());
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_empty_result_map_field() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "bad"
+        endpoint = "https://example.com"
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "results"
+        title = ""
+        url = "url"
+        snippet = "snippet"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("result_map.title"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_empty_id() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = ""
+        endpoint = "https://example.com"
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "r"
+        title = "t"
+        url = "u"
+        snippet = "s"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("web_search_providers.id"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_rejects_empty_endpoint() {
+    let err = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "bad"
+        endpoint = ""
+        query_key = "q"
+        [web_search_providers.result_map]
+        results = "r"
+        title = "t"
+        url = "u"
+        snippet = "s"
+        "#,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("web_search_providers.endpoint"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn web_search_provider_debug_hides_api_key() {
+    let registry = load_registry_from_toml(
+        r#"
+        active_provider = "openai"
+        active_model = "gpt-5.2"
+        active_web_search = "brave"
+
+        [[providers]]
+        id = "openai"
+        kind = "openai_responses"
+        api_key = "sk-test"
+        [[providers.models]]
+        id = "gpt-5.2"
+
+        [[web_search_providers]]
+        id = "brave"
+        endpoint = "https://api.search.brave.com/res/v1/web/search"
+        query_key = "q"
+        api_key = "BSA-super-secret"
+        auth_header = "X-Subscription-Token"
+        [web_search_providers.result_map]
+        results = "web.results"
+        title = "title"
+        url = "url"
+        snippet = "description"
+        "#,
+    )
+    .await
+    .expect("should parse");
+
+    let debug = format!("{:?}", registry.web_search_providers[0]);
+    assert!(!debug.contains("BSA-super-secret"));
+    assert!(debug.contains("***"));
+}
+
+#[tokio::test]
+#[ignore = "requires live LLM provider; run with: cargo test -p app-server-core --test llm_tests live_web_search -- --ignored"]
+async fn live_web_search_agent_turn() {
+    use app_server_core::{
+        AgentToolCall, AgentToolObserver, AgentToolRunContext, HostedToolRequest,
+        RigAgentCallbacks, ToolExecutor, run_rig_agent_turn,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct PrintObserver;
+    impl AgentToolObserver for PrintObserver {
+        fn tool_start(&self, call: &AgentToolCall) {
+            eprintln!("[tool_start] {}", call.function_name);
+        }
+        fn tool_result(&self, call: &AgentToolCall, result: &str) {
+            let n = result.len().min(120);
+            eprintln!("[tool_result] {} => {}...", call.function_name, &result[..n]);
+        }
+    }
+
+    struct StubExecutor;
+    #[async_trait::async_trait]
+    impl ToolExecutor for StubExecutor {
+        async fn execute(&self, call: &AgentToolCall, _ctx: &AgentToolRunContext) -> String {
+            format!(r#"{{"status":"error","tool":"{}","message":"not available in test harness"}}"#, call.function_name)
+        }
+    }
+
+    let hosted: Arc<Mutex<Vec<String>>> = Arc::default();
+    let hosted_cb = Arc::clone(&hosted);
+
+    let input = AgentTurnInput {
+        mode: AgentMode::Agent,
+        prompt: "What is the current weather in Tokyo? Use web search.".into(),
+        history: vec![],
+        selections: vec![],
+        active_selection_index: None,
+        plan_ref: None,
+        context_refs: vec![],
+        native_web_search_enabled: true,
+        function_web_search_available: false,
+        execution_scope: None,
+    };
+
+    let callbacks = RigAgentCallbacks {
+        on_token: Arc::new(|_| true),
+        on_reasoning: Arc::new(|_| true),
+        on_hosted_tool_requested: Arc::new(move |req: &HostedToolRequest| {
+            eprintln!("[hosted_tool_requested] type={}", req.tool_type);
+            hosted_cb.lock().unwrap().push(req.tool_type.clone());
+            true
+        }),
+        cancelled: Arc::new(|| false),
+    };
+
+    let executor: Arc<dyn ToolExecutor> = Arc::new(StubExecutor);
+    let ctx = AgentToolRunContext::new(std::path::PathBuf::from("/tmp/test-ws"), AgentMode::Agent);
+
+    let result = run_rig_agent_turn(input, executor, ctx, &PrintObserver, callbacks).await;
+
+    match result {
+        Ok(r) => {
+            let hosted = hosted.lock().unwrap();
+            eprintln!("[hosted tools] {:?}", *hosted);
+            assert!(hosted.iter().any(|t| t == "web_search"), "hosted web_search should be requested");
+            let n = r.text.len().min(300);
+            eprintln!("[agent response] {}", &r.text[..n]);
+            assert!(!r.text.is_empty(), "response should not be empty");
+        }
+        Err(e) => panic!("agent turn failed: {}", e.message),
     }
 }

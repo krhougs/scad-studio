@@ -3115,18 +3115,23 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         .await
         .map(|response| response.messages)
         .unwrap_or_default();
-    let config = match load_agent_model_registry().await.and_then(|registry| {
-        let selection = app_server_core::llm::RigAgentConfigSelection {
-            provider_id: worker.model_state.provider_id.clone(),
-            model_id: worker.model_state.model_id.clone(),
-            reasoning_effort: worker.model_state.reasoning_effort.clone(),
-            service_label: worker.model_state.service_label.clone(),
-        };
-        app_server_core::llm::rig_config_from_registry_selection(registry, &selection)
-            .map_err(|error| internal_error(error.message))
-            .and_then(|config| ensure_bound_provider_type(config, worker.model_state.provider_type))
-    }) {
-        Ok(config) => config,
+    let (config, web_search_provider) =
+        match load_agent_model_registry().await.and_then(|registry| {
+            let web_search = registry.active_web_search_provider().cloned();
+            let selection = app_server_core::llm::RigAgentConfigSelection {
+                provider_id: worker.model_state.provider_id.clone(),
+                model_id: worker.model_state.model_id.clone(),
+                reasoning_effort: worker.model_state.reasoning_effort.clone(),
+                service_label: worker.model_state.service_label.clone(),
+            };
+            app_server_core::llm::rig_config_from_registry_selection(registry, &selection)
+                .map_err(|error| internal_error(error.message))
+                .and_then(|config| {
+                    ensure_bound_provider_type(config, worker.model_state.provider_type)
+                })
+                .map(|config| (config, web_search))
+        }) {
+        Ok((config, web_search)) => (config, web_search),
         Err(error) if error.message == "Rig Agent is not configured" => {
             let message =
                 "Rig Agent is not configured. Set BUDN_AGENT_CONFIG or a provider API key env.";
@@ -3200,6 +3205,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         plan_ref: worker.plan_ref.clone(),
         context_refs: worker.context_refs.clone(),
         native_web_search_enabled: config.native_web_search,
+        function_web_search_available: web_search_provider.is_some(),
         execution_scope: execution_scope.clone(),
     };
     let cadquery_runtime = Arc::new(HostCadQueryToolRuntime {
@@ -3209,10 +3215,14 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         push_sink: Arc::clone(&worker.push_sink),
         run: worker.run.clone(),
     });
-    let tool_executor: Arc<dyn app_server_core::ToolExecutor> = Arc::new(
+    let web_search_available = web_search_provider.is_some();
+    let mut tool_executor =
         app_server_core::WorkspaceToolExecutor::new(worker.workspace_root.clone())
-            .with_cadquery_runtime(cadquery_runtime),
-    );
+            .with_cadquery_runtime(cadquery_runtime);
+    if let Some(provider) = web_search_provider {
+        tool_executor = tool_executor.with_web_search_provider(provider);
+    }
+    let tool_executor: Arc<dyn app_server_core::ToolExecutor> = Arc::new(tool_executor);
     let mut tool_context = AgentToolRunContext::new(worker.workspace_root.clone(), mode);
     tool_context.session_id = Some(worker.run.session_id.clone());
     tool_context.run_id = Some(worker.run.run_id.clone());
@@ -3220,6 +3230,7 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
     tool_context.active_selection_index = worker.selection_snapshot.active_index;
     tool_context.context_refs = worker.context_refs.clone();
     tool_context.execution_scope = execution_scope;
+    tool_context.web_search_available = web_search_available;
     let tool_observer = AgentToolEventRecorder {
         workspace_root: worker.workspace_root.clone(),
         cadquery_results: Arc::clone(&worker.cadquery_results),

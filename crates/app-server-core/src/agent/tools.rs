@@ -6,6 +6,7 @@ mod semantic;
 mod semantic_chat;
 mod semantic_export;
 mod tool_path_policy;
+mod web;
 
 use std::{
     path::PathBuf,
@@ -18,6 +19,8 @@ use app_server_protocol::{
 };
 use async_trait::async_trait;
 use serde_json::json;
+
+use crate::llm::ResolvedWebSearchProvider;
 
 use super::plan_package::ParsedPlanPackage;
 pub use registry::{
@@ -216,6 +219,7 @@ pub struct AgentToolRunContext {
     pub active_selection_index: Option<u32>,
     pub context_refs: Vec<String>,
     pub execution_scope: Option<AgentExecutionScope>,
+    pub web_search_available: bool,
 }
 
 impl AgentToolRunContext {
@@ -229,6 +233,7 @@ impl AgentToolRunContext {
             active_selection_index: None,
             context_refs: Vec::new(),
             execution_scope: None,
+            web_search_available: false,
         }
     }
 }
@@ -245,6 +250,8 @@ pub struct WorkspaceToolExecutor {
     workspace_root: PathBuf,
     cadquery_runtime: Option<Arc<dyn CadQueryToolRuntime>>,
     cadquery_committed: AtomicBool,
+    http_client: reqwest::Client,
+    web_search_provider: Option<ResolvedWebSearchProvider>,
 }
 
 impl WorkspaceToolExecutor {
@@ -253,11 +260,23 @@ impl WorkspaceToolExecutor {
             workspace_root,
             cadquery_runtime: None,
             cadquery_committed: AtomicBool::new(false),
+            http_client: reqwest::Client::new(),
+            web_search_provider: None,
         }
     }
 
     pub fn with_cadquery_runtime(mut self, runtime: Arc<dyn CadQueryToolRuntime>) -> Self {
         self.cadquery_runtime = Some(runtime);
+        self
+    }
+
+    pub fn with_web_search_provider(mut self, provider: ResolvedWebSearchProvider) -> Self {
+        if let Some(ua) = &provider.user_agent {
+            if let Ok(client) = reqwest::Client::builder().user_agent(ua).build() {
+                self.http_client = client;
+            }
+        }
+        self.web_search_provider = Some(provider);
         self
     }
 }
@@ -285,6 +304,17 @@ impl ToolExecutor for WorkspaceToolExecutor {
             "write_file" => file_write::write_file(&self.workspace_root, call, context).await,
             "patch_file" => file_write::patch_file(&self.workspace_root, call, context).await,
             "copy_file" => file_write::copy_file(&self.workspace_root, call, context).await,
+            "web_search" => {
+                let Some(provider) = &self.web_search_provider else {
+                    return tool_error_json(
+                        call,
+                        "web search provider not configured",
+                        "web_search_error",
+                    );
+                };
+                web::web_search(&self.http_client, provider, call).await
+            }
+            "fetch_url" => web::fetch_url(&self.http_client, call).await,
             "cadquery_analyze_source" => {
                 cadquery::analyze_source(
                     &self.workspace_root,

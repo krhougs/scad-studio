@@ -283,7 +283,9 @@ fn expected_tool_modes() -> Vec<(&'static str, Vec<AgentMode>)> {
         ("resolve_ref", readonly.clone()),
         ("cadquery_analyze_source", readonly.clone()),
         ("cadquery_get_result", readonly.clone()),
-        ("cadquery_resolve_selection", readonly),
+        ("cadquery_resolve_selection", readonly.clone()),
+        ("web_search", readonly.clone()),
+        ("fetch_url", readonly),
         ("update_chat_summary", vec![AgentMode::Agent]),
         ("save_cad_plan", vec![AgentMode::Plan]),
         (

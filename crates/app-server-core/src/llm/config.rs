@@ -3,7 +3,7 @@ use rig::{
     prelude::ModelListingClient,
 };
 use serde::Deserialize;
-use std::{collections::HashSet, env, fmt, path::PathBuf, time::Duration};
+use std::{collections::HashMap, collections::HashSet, env, fmt, path::PathBuf, time::Duration};
 use tokio::{fs, time};
 
 #[derive(Clone)]
@@ -80,6 +80,8 @@ pub struct AgentProviderRegistry {
     pub active_model_id: String,
     pub defaults: AgentConfigDefaults,
     pub providers: Vec<ResolvedAgentProvider>,
+    pub active_web_search_id: Option<String>,
+    pub web_search_providers: Vec<ResolvedWebSearchProvider>,
 }
 
 impl AgentProviderRegistry {
@@ -96,6 +98,11 @@ impl AgentProviderRegistry {
             .models
             .iter()
             .find(|model| model.id == self.active_model_id)
+    }
+
+    pub fn active_web_search_provider(&self) -> Option<&ResolvedWebSearchProvider> {
+        let id = self.active_web_search_id.as_deref()?;
+        self.web_search_providers.iter().find(|p| p.id == id)
     }
 }
 
@@ -155,6 +162,87 @@ struct ModelExplicitFields {
     native_web_search: bool,
     web_search_supported: bool,
     web_search_unsupported_reason: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WebSearchHttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Clone)]
+pub enum WebSearchAuth {
+    None,
+    Header {
+        header: String,
+        prefix: Option<String>,
+        api_key: String,
+    },
+    QueryParam {
+        param: String,
+        api_key: String,
+    },
+}
+
+impl fmt::Debug for WebSearchAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Header { header, prefix, .. } => f
+                .debug_struct("Header")
+                .field("header", header)
+                .field("prefix", prefix)
+                .field("api_key", &"***")
+                .finish(),
+            Self::QueryParam { param, .. } => f
+                .debug_struct("QueryParam")
+                .field("param", param)
+                .field("api_key", &"***")
+                .finish(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum WebSearchParams {
+    QueryPairs(Vec<(String, String)>),
+    JsonObject(serde_json::Map<String, serde_json::Value>),
+}
+
+#[derive(Clone, Debug)]
+pub struct WebSearchResultMap {
+    pub results_path: String,
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    pub date: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ResolvedWebSearchProvider {
+    pub id: String,
+    pub endpoint: String,
+    pub method: WebSearchHttpMethod,
+    pub query_key: String,
+    pub top_k_param: Option<String>,
+    pub auth: WebSearchAuth,
+    pub max_result_chars: Option<usize>,
+    pub user_agent: Option<String>,
+    pub params: WebSearchParams,
+    pub result_map: WebSearchResultMap,
+}
+
+impl fmt::Debug for ResolvedWebSearchProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolvedWebSearchProvider")
+            .field("id", &self.id)
+            .field("endpoint", &self.endpoint)
+            .field("method", &self.method)
+            .field("query_key", &self.query_key)
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for RigAgentConfig {
@@ -223,6 +311,37 @@ struct AgentsConfigFile {
     active_model: String,
     defaults: Option<AgentConfigDefaultsFile>,
     providers: Vec<AgentProviderFile>,
+    active_web_search: Option<String>,
+    #[serde(default)]
+    web_search_providers: Vec<WebSearchProviderFile>,
+}
+
+#[derive(Deserialize)]
+struct WebSearchProviderFile {
+    id: String,
+    endpoint: String,
+    method: Option<String>,
+    query_key: String,
+    top_k_param: Option<String>,
+    api_key: Option<String>,
+    auth_header: Option<String>,
+    auth_prefix: Option<String>,
+    auth_query_param: Option<String>,
+    max_result_chars: Option<usize>,
+    user_agent: Option<String>,
+    #[serde(default)]
+    params: HashMap<String, serde_json::Value>,
+    result_map: WebSearchResultMapFile,
+}
+
+#[derive(Deserialize)]
+struct WebSearchResultMapFile {
+    results: String,
+    title: String,
+    url: String,
+    snippet: String,
+    date: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -264,14 +383,20 @@ impl AgentsConfigFile {
     fn into_registry(self) -> Result<AgentProviderRegistry, RigAgentConfigError> {
         let defaults = resolve_defaults(self.defaults);
         let providers = resolve_providers(self.providers, &defaults)?;
+        let active_web_search_id = non_empty(self.active_web_search);
+        let web_search_providers =
+            resolve_web_search_providers(self.web_search_providers)?;
         let registry = AgentProviderRegistry {
             active_provider_id: require_non_empty("active_provider", self.active_provider)?,
             active_model_id: require_non_empty("active_model", self.active_model)?,
             defaults,
             providers,
+            active_web_search_id,
+            web_search_providers,
         };
         validate_active_model(&registry)?;
         validate_active_provider_key(&registry)?;
+        validate_active_web_search(&registry)?;
         Ok(registry)
     }
 }
@@ -479,6 +604,177 @@ fn apply_manual_model_override(existing: &mut ResolvedAgentModel, manual: &Resol
         existing.web_search_unsupported_reason = manual.web_search_unsupported_reason.clone();
     }
     existing.source = AgentModelSource::DiscoveredWithOverride;
+}
+
+fn resolve_web_search_providers(
+    providers: Vec<WebSearchProviderFile>,
+) -> Result<Vec<ResolvedWebSearchProvider>, RigAgentConfigError> {
+    let mut seen = HashSet::new();
+    providers
+        .into_iter()
+        .map(|p| resolve_web_search_provider(p, &mut seen))
+        .collect()
+}
+
+fn resolve_web_search_provider(
+    provider: WebSearchProviderFile,
+    seen: &mut HashSet<String>,
+) -> Result<ResolvedWebSearchProvider, RigAgentConfigError> {
+    let id = require_non_empty("web_search_providers.id", provider.id)?;
+    if !seen.insert(id.clone()) {
+        return config_error(format!("duplicate web_search_providers id `{id}`"));
+    }
+    let endpoint = require_non_empty("web_search_providers.endpoint", provider.endpoint)?;
+    let method = resolve_web_search_method(provider.method)?;
+    let query_key = require_non_empty("web_search_providers.query_key", provider.query_key)?;
+    let auth = resolve_web_search_auth(
+        &id,
+        provider.api_key,
+        provider.auth_header,
+        provider.auth_prefix,
+        provider.auth_query_param,
+    )?;
+    validate_web_search_result_map(&id, &provider.result_map)?;
+    let params = resolve_web_search_params(&method, provider.params);
+    let result_map = WebSearchResultMap {
+        results_path: provider.result_map.results,
+        title: provider.result_map.title,
+        url: provider.result_map.url,
+        snippet: provider.result_map.snippet,
+        date: non_empty(provider.result_map.date),
+        source: non_empty(provider.result_map.source),
+    };
+    Ok(ResolvedWebSearchProvider {
+        id,
+        endpoint,
+        method,
+        query_key,
+        top_k_param: non_empty(provider.top_k_param),
+        auth,
+        max_result_chars: provider.max_result_chars,
+        user_agent: non_empty(provider.user_agent),
+        params,
+        result_map,
+    })
+}
+
+fn resolve_web_search_method(
+    method: Option<String>,
+) -> Result<WebSearchHttpMethod, RigAgentConfigError> {
+    match method.as_deref().unwrap_or("GET") {
+        s if s.eq_ignore_ascii_case("GET") => Ok(WebSearchHttpMethod::Get),
+        s if s.eq_ignore_ascii_case("POST") => Ok(WebSearchHttpMethod::Post),
+        other => config_error(format!(
+            "web_search_providers.method must be GET or POST, got `{other}`"
+        )),
+    }
+}
+
+fn resolve_web_search_auth(
+    provider_id: &str,
+    api_key: Option<String>,
+    auth_header: Option<String>,
+    auth_prefix: Option<String>,
+    auth_query_param: Option<String>,
+) -> Result<WebSearchAuth, RigAgentConfigError> {
+    let has_header = auth_header.is_some();
+    let has_query_param = auth_query_param.is_some();
+    if has_header && has_query_param {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: auth_header and auth_query_param are mutually exclusive"
+        ));
+    }
+    let api_key = non_empty(api_key);
+    if (has_header || has_query_param) && api_key.is_none() {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: auth requires api_key"
+        ));
+    }
+    if let Some(header) = auth_header {
+        let header = require_non_empty("auth_header", header)?;
+        return Ok(WebSearchAuth::Header {
+            header,
+            prefix: auth_prefix.filter(|s| !s.is_empty()),
+            api_key: api_key.unwrap(),
+        });
+    }
+    if let Some(param) = auth_query_param {
+        let param = require_non_empty("auth_query_param", param)?;
+        return Ok(WebSearchAuth::QueryParam {
+            param,
+            api_key: api_key.unwrap(),
+        });
+    }
+    Ok(WebSearchAuth::None)
+}
+
+fn resolve_web_search_params(
+    method: &WebSearchHttpMethod,
+    params: HashMap<String, serde_json::Value>,
+) -> WebSearchParams {
+    match method {
+        WebSearchHttpMethod::Get => {
+            let pairs = params
+                .into_iter()
+                .map(|(k, v)| (k, json_value_to_query_string(&v)))
+                .collect();
+            WebSearchParams::QueryPairs(pairs)
+        }
+        WebSearchHttpMethod::Post => {
+            let map = params.into_iter().collect();
+            WebSearchParams::JsonObject(map)
+        }
+    }
+}
+
+fn json_value_to_query_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn validate_web_search_result_map(
+    provider_id: &str,
+    map: &WebSearchResultMapFile,
+) -> Result<(), RigAgentConfigError> {
+    if map.results.trim().is_empty() {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: result_map.results cannot be empty"
+        ));
+    }
+    if map.title.trim().is_empty() {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: result_map.title cannot be empty"
+        ));
+    }
+    if map.url.trim().is_empty() {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: result_map.url cannot be empty"
+        ));
+    }
+    if map.snippet.trim().is_empty() {
+        return config_error(format!(
+            "web_search_providers `{provider_id}`: result_map.snippet cannot be empty"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_active_web_search(
+    registry: &AgentProviderRegistry,
+) -> Result<(), RigAgentConfigError> {
+    let Some(id) = registry.active_web_search_id.as_deref() else {
+        return Ok(());
+    };
+    if registry.web_search_providers.iter().any(|p| p.id == id) {
+        return Ok(());
+    }
+    config_error(format!(
+        "active_web_search `{id}` does not match any web_search_providers"
+    ))
 }
 
 async fn load_from_file(path: PathBuf) -> Result<RigAgentConfig, RigAgentConfigError> {
@@ -760,6 +1056,8 @@ fn registry_from_openai_model(api_key: String, model: ResolvedAgentModel) -> Age
             defaults,
             models: vec![model],
         }],
+        active_web_search_id: None,
+        web_search_providers: Vec::new(),
     }
 }
 

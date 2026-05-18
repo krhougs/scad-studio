@@ -30,6 +30,7 @@ pub use agent::{
         ToolExecutor, WorkspaceToolExecutor, agent_tool_definitions_for_mode,
         agent_tool_permission, agent_tool_specs, execute_registered_tool,
     },
+    web_search,
 };
 pub use cadquery::{
     CadQueryCommitScope, CadQueryContractConfig, CadQueryContractResult, CadQueryExecuteConfig,

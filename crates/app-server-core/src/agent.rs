@@ -1,5 +1,6 @@
 pub mod plan_package;
 pub mod tools;
+pub mod web_search;
 
 use std::{
     collections::VecDeque,
@@ -15,8 +16,8 @@ use app_server_protocol::{
 };
 use futures_util::{Stream, StreamExt};
 use rig::{
-    agent::MultiTurnStreamItem,
-    completion::{Message, ToolDefinition},
+    agent::{MultiTurnStreamItem, PromptHook, ToolCallHookAction},
+    completion::{CompletionModel, Message, ToolDefinition},
     message::{ReasoningContent, ToolResultContent},
     prelude::*,
     streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat},
@@ -46,6 +47,7 @@ pub struct AgentTurnInput {
     pub plan_ref: Option<PathHandle>,
     pub context_refs: Vec<String>,
     pub native_web_search_enabled: bool,
+    pub function_web_search_available: bool,
     pub execution_scope: Option<tools::AgentExecutionScope>,
 }
 
@@ -223,11 +225,13 @@ where
         Arc::clone(&pending_calls),
         Arc::clone(&callbacks.cancelled),
     );
+    let hook = hosted_tool_hook(&config);
     let mut builder = client
         .agent(config.model.clone())
         .preamble(cadquery_agent_system_prompt())
         .max_tokens(config.max_tokens)
-        .default_max_turns(MAX_RIG_TOOL_TURNS);
+        .default_max_turns(MAX_RIG_TOOL_TURNS)
+        .hook(hook);
     if let Some(temperature) = rig_agent_temperature_param(&config) {
         builder = builder.temperature(temperature);
     }
@@ -269,11 +273,13 @@ async fn run_anthropic_rig_agent_turn_with_config(
         Arc::clone(&pending_calls),
         Arc::clone(&callbacks.cancelled),
     );
+    let hook = hosted_tool_hook(&config);
     let mut builder = client
         .agent(config.model.clone())
         .preamble(cadquery_agent_system_prompt())
         .max_tokens(config.max_tokens)
-        .default_max_turns(MAX_RIG_TOOL_TURNS);
+        .default_max_turns(MAX_RIG_TOOL_TURNS)
+        .hook(hook);
     if let Some(temperature) = rig_agent_temperature_param(&config) {
         builder = builder.temperature(temperature);
     }
@@ -460,6 +466,43 @@ fn notify_hosted_tool_requests(config: &RigAgentConfig, callbacks: &RigAgentCall
     }
 }
 
+#[derive(Clone)]
+struct HostedToolHook {
+    hosted_tool_names: Vec<String>,
+}
+
+impl<M: CompletionModel> PromptHook<M> for HostedToolHook {
+    fn on_tool_call(
+        &self,
+        tool_name: &str,
+        _tool_call_id: Option<String>,
+        _internal_call_id: &str,
+        _args: &str,
+    ) -> impl Future<Output = ToolCallHookAction> + Send {
+        let action = if self.hosted_tool_names.iter().any(|n| n == tool_name) {
+            log::info!(
+                "[agent] intercepted hosted tool call `{tool_name}` — \
+                 provider did not execute server-side"
+            );
+            ToolCallHookAction::skip(
+                "Provider-hosted tool. The search was not executed by the provider. \
+                 Answer from your existing knowledge.",
+            )
+        } else {
+            ToolCallHookAction::cont()
+        };
+        std::future::ready(action)
+    }
+}
+
+fn hosted_tool_hook(config: &RigAgentConfig) -> HostedToolHook {
+    let hosted_tool_names = hosted_tool_requests_for_config(config)
+        .into_iter()
+        .map(|r| r.provider_tool_name.unwrap_or(r.tool_type))
+        .collect();
+    HostedToolHook { hosted_tool_names }
+}
+
 fn anthropic_thinking_budget_tokens(effort: &str, max_tokens: u64) -> Option<u64> {
     let requested = match effort.trim().to_ascii_lowercase().as_str() {
         "minimal" | "low" => 1024,
@@ -487,6 +530,7 @@ where
     E: Display,
 {
     let mut cancellation_tick = cancellation_interval();
+    let mut first_error: Option<String> = None;
     loop {
         if (callbacks.cancelled)() {
             return Ok(());
@@ -503,12 +547,19 @@ where
             }
             item = stream.next() => {
                 let Some(item) = item else {
-                    return Ok(());
+                    if state.has_content() || first_error.is_none() {
+                        return Ok(());
+                    }
+                    return Err(RigAgentError {
+                        message: first_error.unwrap(),
+                    });
                 };
                 let item = match item {
                     Ok(item) => item,
                     Err(error) => {
-                        log::warn!("[agent] stream item error (skipping): {error}");
+                        let msg = error.to_string();
+                        log::warn!("[agent] stream item error (skipping): {msg}");
+                        first_error.get_or_insert(msg);
                         continue;
                     }
                 };
@@ -538,6 +589,10 @@ struct RigStreamState {
 }
 
 impl RigStreamState {
+    fn has_content(&self) -> bool {
+        self.final_text.is_some() || !self.text.is_empty() || !self.calls.is_empty()
+    }
+
     fn final_text(self) -> String {
         self.final_text.unwrap_or(self.text)
     }
@@ -624,8 +679,10 @@ fn rig_tools_for_context(
     pending_calls: Arc<Mutex<VecDeque<AgentToolCall>>>,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
 ) -> Vec<Box<dyn ToolDyn>> {
+    let web_search_available = context.web_search_available;
     agent_tool_definitions_for_mode(context.mode)
         .into_iter()
+        .filter(|d| d.name != "web_search" || web_search_available)
         .map(|definition| {
             Box::new(RigRegistryTool {
                 definition,
@@ -743,10 +800,14 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
             input.context_refs.join(", ")
         ));
     }
-    parts.push(provider_native_capabilities_context(
+    parts.push(web_search_capabilities_context(
         input.native_web_search_enabled,
+        input.function_web_search_available,
     ));
-    parts.push(current_turn_app_tools_context(input.mode));
+    parts.push(current_turn_app_tools_context(
+        input.mode,
+        input.function_web_search_available,
+    ));
     if let Some(scope) = &input.execution_scope {
         parts.push(format!(
             "Execution scope:\n{}",
@@ -762,25 +823,43 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
     parts.join("\n")
 }
 
-fn provider_native_capabilities_context(native_web_search_enabled: bool) -> String {
+fn web_search_capabilities_context(
+    native_web_search_enabled: bool,
+    function_web_search_available: bool,
+) -> String {
     if native_web_search_enabled {
-        "Provider-native capabilities:\n\
-         - Hosted native web search: enabled. The provider handles search execution natively; \
-         use it when you need current information, and do not look for a web search entry in the app tools list."
+        "Provider-native tools (server-side, not listed in app tools):\n\
+         - `web_search`: available this turn. Call the `web_search` tool in your tool schema \
+         when you need current information from the web. The provider executes the search \
+         server-side and returns results directly. This tool does not appear in the app tools \
+         section because it is provided by the model provider, not by the host."
+            .to_owned()
+    } else if function_web_search_available {
+        "Provider-native tools: none available this turn.\n\
+         Web search: the `web_search` and `fetch_url` app tools are available. \
+         Use `web_search` for queries that need current web information, and `fetch_url` to \
+         read specific web pages in full. When your answer relies on web search results, \
+         cite the source URLs inline."
             .to_owned()
     } else {
-        "Provider-native capabilities:\n\
-         - Hosted native web search: disabled. Do not attempt web searches this turn."
+        "Provider-native tools: none available this turn.\n\
+         Web search: not available. Do not attempt web searches."
             .to_owned()
     }
 }
 
-fn current_turn_app_tools_context(mode: AgentMode) -> String {
+fn current_turn_app_tools_context(
+    mode: AgentMode,
+    function_web_search_available: bool,
+) -> String {
     let mut lines = vec![
         "Current turn app tools (registered by host):".to_owned(),
         "- Before answering what tools are available, inspect this current-turn app tool list and the tool schemas registered by the host. Do not invent tools from memory.".to_owned(),
     ];
-    let tools = agent_tool_definitions_for_mode(mode);
+    let tools: Vec<_> = agent_tool_definitions_for_mode(mode)
+        .into_iter()
+        .filter(|t| t.name != "web_search" || function_web_search_available)
+        .collect();
     if tools.is_empty() {
         lines.push("- none".to_owned());
     } else {

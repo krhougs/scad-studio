@@ -11,6 +11,7 @@ pub enum AgentToolCategory {
     SemanticState,
     FileWrite,
     CadQuery,
+    WebSearch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,26 @@ pub fn agent_tool_specs() -> Vec<AgentToolSpec> {
             vec![AgentMode::Agent],
             false,
             agent_text_write_policy(CadQueryModelFilePolicy::CopyOnly),
+        ),
+        spec(
+            "web_search",
+            "Search the web using the configured search provider.",
+            web_search_input_schema(),
+            web_search_success_schema(),
+            AgentToolCategory::WebSearch,
+            readonly_ops(),
+            false,
+            no_path_policy(),
+        ),
+        spec(
+            "fetch_url",
+            "Fetch a web page and return its content as text or markdown.",
+            fetch_url_input_schema(),
+            fetch_url_success_schema(),
+            AgentToolCategory::WebSearch,
+            readonly_ops(),
+            false,
+            no_path_policy(),
         ),
         cadquery_analyze_source_spec(),
         cadquery_check_source_spec(),
