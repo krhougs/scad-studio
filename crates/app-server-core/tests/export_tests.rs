@@ -17,12 +17,13 @@ fn export_filename_uses_selected_format_extension() {
     );
 }
 
-#[test]
-fn manual_slicer_paths_are_returned_before_auto_detected_paths() {
-    let detected = detect_slicer_paths(&[SlicerInstall {
+#[tokio::test]
+async fn manual_slicer_paths_are_returned_before_auto_detected_paths() {
+    let detected = detect_slicer_paths(vec![SlicerInstall {
         name: "Cura".into(),
         path: PathBuf::from("/custom/Cura.app"),
-    }]);
+    }])
+    .await;
 
     assert_eq!(detected[0].name, "Cura");
     assert_eq!(detected[0].path, PathBuf::from("/custom/Cura.app"));

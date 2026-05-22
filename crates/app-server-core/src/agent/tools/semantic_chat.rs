@@ -3,23 +3,32 @@ use std::path::Path;
 use app_server_protocol::{ChatSessionId, PathHandle};
 use serde_json::{Value, json};
 
-use crate::{
-    chat::{ChatStore, ChatSummaryUpdate},
-    llm::LlmToolCall,
-};
+use crate::chat::{ChatStore, ChatSummaryUpdate};
 
 use super::{
-    AgentToolRunContext,
+    AgentToolCall, AgentToolRunContext,
     semantic::{
-        PLAN_SCOPE_ROOTS, non_empty_string_arg, normalize_allowed_path, optional_string_array,
+        first_segment, non_empty_string_arg, normalize_workspace_path, optional_string_array,
         parse_object, path_handle,
     },
     tool_error_json,
 };
 
-pub(super) fn update_chat_summary(
+const CHAT_RELATED_FILE_ROOTS: &[&str] = &[
+    "components",
+    "parts",
+    "assemblies",
+    "plans",
+    "refs",
+    "docs",
+    "outputs",
+];
+const CHAT_RELATED_FILE_DENIED_ROOTS: &[&str] =
+    &[".git", "target", "node_modules", "chats", ".budn_staging"];
+
+pub(super) async fn update_chat_summary(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
     let session_id = match context.session_id.as_ref() {
@@ -42,7 +51,10 @@ pub(super) fn update_chat_summary(
         related_files: args.related_files,
         open_questions: args.open_questions,
     };
-    match ChatStore::new(workspace_root.to_path_buf()).update_summary(session_id, update) {
+    match ChatStore::new(workspace_root.to_path_buf())
+        .update_summary(session_id, update)
+        .await
+    {
         Ok(ack) => chat_summary_success(call, session_id, &ack.message_id).to_string(),
         Err(error) => tool_error_json(call, &error.message, "invalid_arguments"),
     }
@@ -55,7 +67,7 @@ struct ChatSummaryArgs {
     open_questions: Vec<String>,
 }
 
-fn chat_summary_args(call: &LlmToolCall) -> Result<ChatSummaryArgs, String> {
+fn chat_summary_args(call: &AgentToolCall) -> Result<ChatSummaryArgs, String> {
     let value = parse_object(call)?;
     let related_files = optional_string_array(&value, "related_files", call)?
         .into_iter()
@@ -69,12 +81,31 @@ fn chat_summary_args(call: &LlmToolCall) -> Result<ChatSummaryArgs, String> {
     })
 }
 
-fn related_path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
-    let normalized = normalize_allowed_path(path, PLAN_SCOPE_ROOTS, call)?;
+fn related_path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
+    let normalized = normalize_workspace_path(path, call)?;
+    let root = first_segment(&normalized);
+    if CHAT_RELATED_FILE_DENIED_ROOTS.contains(&root) {
+        return Err(tool_error_json(
+            call,
+            &format!("path root '{root}' is denied for this tool"),
+            "permission_denied",
+        ));
+    }
+    if !CHAT_RELATED_FILE_ROOTS.contains(&root) {
+        return Err(tool_error_json(
+            call,
+            &format!("path root '{root}' is not allowed for this tool"),
+            "permission_denied",
+        ));
+    }
     path_handle(&normalized, call)
 }
 
-fn chat_summary_success(call: &LlmToolCall, session_id: &ChatSessionId, message_id: &str) -> Value {
+fn chat_summary_success(
+    call: &AgentToolCall,
+    session_id: &ChatSessionId,
+    message_id: &str,
+) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,

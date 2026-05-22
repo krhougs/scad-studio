@@ -109,8 +109,8 @@
 
 补充说明：
 
-- macOS 与 Windows 当前优先使用平台菜单；Linux 仍回退到应用内嵌菜单，因为现有 `winit` 架构下暂未接入 GTK 原生菜单。
-- OpenSCAD 可执行文件当前同时支持自动检测、环境变量 `OPENSCAD_PATH` 覆盖，以及设置窗口中的手动路径配置。
+- 旧原生 GUI 中的 macOS / Windows 平台菜单和 `winit` 接线已随 Rust 桌面端删除；当前生产 GUI 端为 Web。
+- OpenSCAD 可执行文件当前由 app server 统一管理，支持自动检测、环境变量 `OPENSCAD_PATH` 覆盖，以及 Web 设置页中的手动路径配置。
 - 预览链路现已改为优先输出并解析 3MF，保留 `mesh`、`basematerials`、`colorgroup` 与三角面级 `pid/p1/p2/p3` 的颜色语义。
 - 当前 3MF 预览仍不支持 `texture2d`、`texture2dgroup`、`compositematerials` 等扩展资源；遇到这些类型会明确报错，不做静默降级。
 

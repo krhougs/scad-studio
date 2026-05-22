@@ -1,79 +1,198 @@
+import { createContext, useContext, useState } from "react";
 import MarkdownPreview from "@uiw/react-markdown-preview";
 import rehypeSanitize from "rehype-sanitize";
+import type { AgentErrorType } from "@budn/app-server-protocol";
+import {
+  ThreadPrimitive,
+  MessagePrimitive,
+  useMessage,
+} from "@assistant-ui/react";
 import type {
-  AgentErrorType,
-  AgentPlanProposedEvent,
-} from "@budn/app-server-protocol";
+  DataMessagePartProps,
+  TextMessagePartProps,
+} from "@assistant-ui/react";
 import { markdownSanitizeSchema } from "../viewers/markdown-security";
-import type { ChatMessageRecord, AgentEvent } from "./chat-zone";
+import type { AgentEvent, AgentSearchSource } from "./chat-zone";
+import { pathSegments } from "./path-utils";
 
 const mdWrapperElement = { "data-color-mode": "dark" } as const;
 
+const ChatBodyCtx = createContext<{
+  planActionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
+}>({ planActionDisabled: false });
+
 export function ChatBody(props: {
-  messages: ChatMessageRecord[];
-  agentEvents: AgentEvent[];
-  pendingPlan: AgentPlanProposedEvent | null;
   llmConfigured: boolean;
-  streaming: boolean;
-  streamText: string;
-  onPreviewPlan: () => void;
-  onConfirmPlan: () => void;
-  onRejectPlan: () => void;
+  planActionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
 }) {
-  if (
-    props.messages.length === 0 &&
-    props.agentEvents.length === 0 &&
-    !props.pendingPlan &&
-    !props.streaming
-  ) {
-    if (!props.llmConfigured) return <LlmSetupGuide />;
-    return <WelcomeEmptyState />;
-  }
   return (
-    <div className="chat-body" data-testid="chat-body">
-      {props.messages.map((message) => (
-        <ChatMessage key={message.message_id} message={message} />
-      ))}
-      {props.agentEvents.map((event, index) => (
-        <AgentEventRow key={`${event.event}-${index}`} event={event} />
-      ))}
-      {props.streamText && <StreamingMessage text={props.streamText} />}
-      {!props.streamText && props.streaming && <ThinkingIndicator />}
-      {props.pendingPlan && (
-        <PlanConfirmationCard
-          plan={props.pendingPlan}
-          onPreview={props.onPreviewPlan}
-          onConfirm={props.onConfirmPlan}
-          onReject={props.onRejectPlan}
-        />
-      )}
+    <ChatBodyCtx.Provider
+      value={{
+        planActionDisabled: props.planActionDisabled,
+        onOpenPlan: props.onOpenPlan,
+        onRunPlan: props.onRunPlan,
+      }}
+    >
+      <ThreadPrimitive.Viewport
+        className="chat-body"
+        data-testid="chat-body"
+        autoScroll
+      >
+        <ThreadPrimitive.If empty>
+          {props.llmConfigured ? <WelcomeEmptyState /> : <LlmSetupGuide />}
+        </ThreadPrimitive.If>
+        <ThreadPrimitive.Messages>
+          {() => <ChatMessageItem />}
+        </ThreadPrimitive.Messages>
+        <ThinkingIndicator />
+        <div data-testid="chat-scroll-anchor" />
+      </ThreadPrimitive.Viewport>
+    </ChatBodyCtx.Provider>
+  );
+}
+
+function ChatMessageItem() {
+  const role = useMessage((s) => s.role);
+  const cls = role === "user" ? "msg user" : "msg agent";
+  return (
+    <MessagePrimitive.Root className={cls}>
+      <div className="who">
+        <b>{role}</b>
+      </div>
+      <MessagePrimitive.Content
+        components={{
+          Text: MarkdownText,
+          data: {
+            by_name: {
+              "agent.error": AgentErrorPart,
+              "agent.plan_saved": PlanSavedPart,
+              "agent.reasoning": ReasoningPart,
+              "agent.search_sources": SearchSourcesPart,
+            },
+            Fallback: AgentEventPart,
+          },
+        }}
+      />
+    </MessagePrimitive.Root>
+  );
+}
+
+function MarkdownText(props: TextMessagePartProps) {
+  return (
+    <div className="bubble">
+      <MarkdownPreview
+        source={props.text}
+        wrapperElement={mdWrapperElement}
+        className="chat-markdown"
+        rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
+      />
     </div>
   );
 }
 
-function StreamingMessage({ text }: { text: string }) {
+function AgentEventPart(props: DataMessagePartProps) {
+  const { planActionDisabled } = useContext(ChatBodyCtx);
+  const event = reconstructAgentEvent(props.name, props.data);
+  return <AgentEventRow event={event} actionDisabled={planActionDisabled} />;
+}
+
+function AgentErrorPart(props: DataMessagePartProps) {
+  const event = reconstructAgentEvent(props.name, props.data);
+  return <AgentEventRow event={event} />;
+}
+
+function PlanSavedPart(props: DataMessagePartProps) {
+  const { planActionDisabled, onOpenPlan, onRunPlan } = useContext(ChatBodyCtx);
+  const event = reconstructAgentEvent(props.name, props.data);
   return (
-    <article className="msg agent">
-      <div className="who"><b>assistant</b></div>
-      <div className="bubble">
-        <MarkdownPreview
-          source={text}
-          wrapperElement={mdWrapperElement}
-          className="chat-markdown"
-          rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-        />
-      </div>
-    </article>
+    <AgentEventRow
+      event={event}
+      actionDisabled={planActionDisabled}
+      onOpenPlan={onOpenPlan}
+      onRunPlan={onRunPlan}
+    />
   );
+}
+
+function ReasoningPart(props: DataMessagePartProps) {
+  const text = stringField(props.data, "text");
+  return (
+    <div className="agent-reasoning" data-testid="agent-reasoning">
+      <div className="agent-reasoning__head">
+        <span className="agent-reasoning__pulse" />
+        <span>Thinking</span>
+      </div>
+      <div className="agent-reasoning__body">{text}</div>
+    </div>
+  );
+}
+
+export function SearchSourcesPart(props: DataMessagePartProps) {
+  const sources = searchSourcesFromData(props.data);
+  if (sources.length === 0) return null;
+  return (
+    <div className="agent-search-sources" data-testid="agent-search-sources">
+      <div className="agent-search-sources__title">Sources</div>
+      <ol>
+        {sources.map((source, index) => (
+          <li key={`${source.url}-${index}`}>
+            <a href={source.url} target="_blank" rel="noreferrer">
+              {source.title || source.url}
+            </a>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function searchSourcesFromData(
+  data: Record<string, unknown>,
+): AgentSearchSource[] {
+  const rawSources = data["sources"];
+  if (!Array.isArray(rawSources)) return [];
+  return rawSources.filter(isRenderableSearchSource);
+}
+
+function isRenderableSearchSource(value: unknown): value is AgentSearchSource {
+  if (!value || typeof value !== "object") return false;
+  const source = value as Partial<AgentSearchSource>;
+  return (
+    typeof source.url === "string" &&
+    isHttpUrl(source.url) &&
+    (source.title === undefined || typeof source.title === "string")
+  );
+}
+
+function isHttpUrl(url: string): boolean {
+  return url.startsWith("https://") || url.startsWith("http://");
+}
+
+function reconstructAgentEvent(
+  name: string,
+  data: Record<string, unknown>,
+): AgentEvent {
+  const { event: eventName, ...payload } = data;
+  return {
+    event: typeof eventName === "string" ? eventName : name,
+    payload,
+  };
 }
 
 function ThinkingIndicator() {
   return (
-    <div className="agent-thinking" data-testid="agent-thinking">
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-    </div>
+    <ThreadPrimitive.If running>
+      <div className="agent-thinking" data-testid="agent-thinking">
+        <span className="agent-thinking__label">Thinking</span>
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+        <span className="thinking-dot" />
+      </div>
+    </ThreadPrimitive.If>
   );
 }
 
@@ -82,15 +201,18 @@ function LlmSetupGuide() {
     <div className="chat-body chat-empty-state" data-testid="llm-setup-guide">
       <div className="welcome-title">AI service not configured</div>
       <p className="welcome-desc">
-        Set the following environment variables to enable the agent:
+        Configure a provider in <code>agents.toml</code> or point the server at
+        another config file with <code>BUDN_AGENT_CONFIG</code>.
       </p>
       <ul className="welcome-suggestions">
-        <li><code>BUDN_LLM_BASE_URL</code></li>
-        <li><code>BUDN_LLM_API_KEY</code></li>
-        <li><code>BUDN_LLM_MODEL</code> (optional, defaults to gpt-4o)</li>
+        <li><code>BUDN_AGENT_OPENAI_API_KEY</code> or <code>OPENAI_API_KEY</code></li>
+        <li><code>BUDN_AGENT_ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_API_KEY</code></li>
+        <li><code>agents.example.toml</code> includes provider and model examples</li>
       </ul>
       <p className="welcome-hint">
-        Restart the server after setting the variables.
+        Restart the server after setting the variables. If a selected model does
+        not support web search, select another model or disable it in
+        <code>agents.toml</code>.
       </p>
     </div>
   );
@@ -115,111 +237,259 @@ function WelcomeEmptyState() {
   );
 }
 
-function ChatMessage({ message }: { message: ChatMessageRecord }) {
-  if (message.role === "meta") return null;
-  const role = message.role === "user" ? "user" : "agent";
+export type PlanRunAction = {
+  planId: string;
+  planRef: unknown;
+};
+
+export function AgentEventRow({
+  event,
+  actionDisabled = false,
+  onOpenPlan,
+  onRunPlan,
+}: {
+  event: AgentEvent;
+  actionDisabled?: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (event.event === "agent.hosted_tool_activity" && isHostedWebSearchRequested(event)) {
+    return (
+      <button
+        type="button"
+        className="agent-op-line"
+        data-testid="agent-event-row"
+        onClick={() => setExpanded(true)}
+      >
+        <span>searched</span>
+      </button>
+    );
+  }
+  if (event.event === "agent.error") {
+    return <AgentErrorCard event={event} />;
+  }
+  if (event.event === "agent.done") {
+    return <AgentDoneMark cancelled={event.payload?.["cancelled"] === true} />;
+  }
+  if (isCadQueryToolEvent(event)) {
+    return <CadQueryToolCard event={event} />;
+  }
+  if (event.event === "agent.mesh_ready") {
+    return (
+      <div className="cadquery-tool-card is-mesh-ready" data-testid="cadquery-mesh-ready">
+        <span className="cadquery-tool-status is-success">model updated</span>
+      </div>
+    );
+  }
+  if (event.event === "agent.plan_saved") {
+    const plan = parsePlanSavedEvent(event);
+    if (plan) {
+      return (
+        <PlanPackageCard
+          plan={plan}
+          actionDisabled={actionDisabled}
+          onOpenPlan={onOpenPlan}
+          onRunPlan={onRunPlan}
+        />
+      );
+    }
+  }
+  const label = event.event.replace("agent.", "");
+  const detail = agentEventDetail(event);
   return (
-    <article className={`msg ${role}`}>
-      <div className="who">
-        <b>{message.role}</b>
-        <time>{formatTime(message.ts_ms)}</time>
-      </div>
-      <div className="bubble">
-        {role === "agent" ? (
-          <MarkdownPreview
-            source={message.content}
-            wrapperElement={mdWrapperElement}
-            className="chat-markdown"
-            rehypePlugins={[[rehypeSanitize, markdownSanitizeSchema]]}
-          />
-        ) : (
-          message.content
-        )}
-      </div>
-    </article>
+    <>
+      <button
+        type="button"
+        className="agent-op-line"
+        data-testid="agent-event-row"
+        onClick={() => setExpanded(true)}
+      >
+        <span>{label}</span>
+        <code>{agentEventSummary(event, detail)}</code>
+      </button>
+      {expanded ? (
+        <AgentEventModal
+          title={label}
+          detail={agentEventModalDetail(event)}
+          onClose={() => setExpanded(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
-function PlanConfirmationCard(props: {
-  plan: AgentPlanProposedEvent;
-  onPreview: () => void;
-  onConfirm: () => void;
-  onReject: () => void;
+const CADQUERY_TOOL_NAMES = new Set([
+  "cadquery_dry_run",
+  "cadquery_execute",
+  "cadquery_analyze_source",
+  "cadquery_check_source",
+  "cadquery_get_result",
+  "cadquery_resolve_selection",
+]);
+
+function isCadQueryToolEvent(event: AgentEvent): boolean {
+  if (event.event !== "agent.tool_start" && event.event !== "agent.tool_result")
+    return false;
+  const tool = stringField(event.payload ?? {}, "tool_name");
+  return CADQUERY_TOOL_NAMES.has(tool);
+}
+
+function parseCadQueryToolEvent(event: AgentEvent) {
+  const payload = event.payload ?? {};
+  const toolName = stringField(payload, "tool_name");
+  const isResult = event.event === "agent.tool_result";
+  const args = safeParse(stringField(payload, "args_json"));
+  const parsed = safeParse(stringField(payload, "result_json"));
+  const isError = parsed?.status === "error";
+  const diagnostics = parsed?.diagnostics as Record<string, unknown> | undefined;
+  return {
+    label: toolName.replace("cadquery_", ""),
+    targetPath: args?.target_path as string | undefined,
+    isResult,
+    isError,
+    errorType: parsed?.error_type as string | undefined,
+    errorMessage: parsed?.message as string | undefined,
+    traceback: diagnostics?.traceback as string | undefined,
+    exports: parsed?.exports as string[] | undefined,
+    committedFiles: parsed?.committed_files as string[] | undefined,
+    statusClass: isResult ? (isError ? "is-error" : "is-success") : "is-running",
+    statusText: isResult ? (isError ? ((parsed?.error_type as string) ?? "error") : "success") : "running",
+  };
+}
+
+function CadQueryToolCard({ event }: { event: AgentEvent }) {
+  const [diagOpen, setDiagOpen] = useState(false);
+  const d = parseCadQueryToolEvent(event);
+
+  return (
+    <div className={`cadquery-tool-card ${d.statusClass}`} data-testid="cadquery-tool-card">
+      <div className="cadquery-tool-header">
+        <code className="cadquery-tool-name">{d.label}</code>
+        {d.targetPath && <code className="cadquery-tool-target">{d.targetPath}</code>}
+        <span className={`cadquery-tool-status ${d.statusClass}`}>{d.statusText}</span>
+      </div>
+      {d.isResult && !d.isError && (d.committedFiles?.length || d.exports?.length) ? (
+        <div className="cadquery-tool-detail">
+          {d.committedFiles?.map((f) => <code key={f}>{f}</code>)}
+          {d.exports?.map((e) => <code key={e}>{e}</code>)}
+        </div>
+      ) : null}
+      {d.isError && d.errorMessage && (
+        <div className="cadquery-tool-error">
+          <p>{d.errorMessage}</p>
+          {d.traceback && (
+            <button
+              type="button"
+              className="cadquery-diag-toggle"
+              onClick={() => setDiagOpen(!diagOpen)}
+            >
+              {diagOpen ? "hide diagnostics" : "show diagnostics"}
+            </button>
+          )}
+          {diagOpen && d.traceback && (
+            <pre className="cadquery-tool-traceback">
+              {d.traceback.split("\n").slice(0, 3).join("\n")}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function safeParse(json: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function AgentDoneMark({ cancelled }: { cancelled: boolean }) {
+  return (
+    <div
+      className={`agent-done-mark${cancelled ? " is-cancelled" : ""}`}
+      data-testid="agent-done-mark"
+      aria-label={cancelled ? "assistant cancelled" : "assistant done"}
+    >
+      budn&apos;
+    </div>
+  );
+}
+
+function AgentEventModal(props: {
+  title: string;
+  detail: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="agent-event-modal-backdrop" data-testid="agent-event-modal">
+      <div className="agent-event-modal" role="dialog" aria-modal="true">
+        <div className="agent-event-modal__head">
+          <span>{props.title}</span>
+          <button type="button" onClick={props.onClose}>
+            close
+          </button>
+        </div>
+        <pre>{props.detail}</pre>
+      </div>
+    </div>
+  );
+}
+
+type PlanPackageCardData = {
+  planId: string;
+  status: string;
+  targetPath: string;
+  affectedFiles: string[];
+  newFiles: string[];
+  exportTargets: string[];
+  planRef: unknown;
+  planPath: unknown;
+};
+
+function PlanPackageCard(props: {
+  plan: PlanPackageCardData;
+  actionDisabled: boolean;
+  onOpenPlan?: (path: unknown) => void;
+  onRunPlan?: (plan: PlanRunAction) => void;
 }) {
   const { plan } = props;
-  const targetDisplay = plan.target_path.path_segments.join("/");
-  const affectedPaths = plan.affected_files.map((f) => f.path_segments.join("/"));
-  const affectedAssemblies = findAffectedAssemblies(affectedPaths);
   return (
-    <div className="plan-card" data-testid="plan-confirmation-card">
-      <div className="plan-card-header">Plan Confirmation</div>
-      {plan.change_description && (
-        <p className="plan-card-desc">{plan.change_description}</p>
-      )}
-      <dl className="plan-card-details">
-        <dt>Target</dt>
-        <dd>
-          <code>{targetDisplay}</code>{" "}
-          <span className="plan-type-tag">{plan.target_type}</span>
-        </dd>
-        <dt>Affected files</dt>
-        <dd><code>{affectedPaths.join(", ")}</code></dd>
-        <dt>Export</dt>
-        <dd>
-          <code>
-            {plan.export_targets
-              .map((t) => t.path_segments.join("/"))
-              .join(", ")}
-          </code>
-        </dd>
-      </dl>
-      {affectedAssemblies.length > 0 && (
-        <AssemblyImpactWarning assemblies={affectedAssemblies} />
-      )}
+    <div className="agent-op plan-package-card" data-testid="plan-package-card">
+      <div className="op-head">
+        <span>{plan.status || "planned"}</span>
+      </div>
+      <div className="plan-card-title">{plan.planId}</div>
+      <PlanField label="target" values={[plan.targetPath]} />
+      <PlanField label="affected" values={plan.affectedFiles} />
+      <PlanField label="new" values={plan.newFiles} />
+      <PlanField label="exports" values={plan.exportTargets} />
       <div className="plan-card-actions">
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          data-testid="plan-preview-btn"
-          onClick={props.onPreview}
-        >
-          Preview
+        <button type="button" onClick={() => props.onOpenPlan?.(plan.planPath)}>
+          Open Plan
         </button>
         <button
           type="button"
-          className="btn btn--primary btn--sm"
-          data-testid="plan-confirm-btn"
-          onClick={props.onConfirm}
+          disabled={props.actionDisabled}
+          onClick={() =>
+            props.onRunPlan?.({ planId: plan.planId, planRef: plan.planRef })
+          }
         >
-          Confirm Execute
-        </button>
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          data-testid="plan-reject-btn"
-          onClick={props.onReject}
-        >
-          Cancel
+          Run Plan
         </button>
       </div>
     </div>
   );
 }
 
-export function AgentEventRow({ event }: { event: AgentEvent }) {
-  if (event.event === "agent.error") {
-    return <AgentErrorCard event={event} />;
-  }
-  const label = event.event.replace("agent.", "");
-  const detail = agentEventDetail(event);
+function PlanField(props: { label: string; values: string[] }) {
+  const values = props.values.length > 0 ? props.values : ["none"];
   return (
-    <div className="agent-op">
-      <div className="op-head">
-        <span className={event.event === "agent.done" ? "ok" : undefined}>
-          {label}
-        </span>
-      </div>
-      <div className="op-detail">{detail}</div>
+    <div className="plan-card-field">
+      <span>{props.label}</span>
+      <code>{values.join(", ")}</code>
     </div>
   );
 }
@@ -249,23 +519,98 @@ function agentEventDetail(event: AgentEvent): string {
   if (event.event === "agent.done") {
     return payload["cancelled"] === true ? "cancelled" : "done";
   }
+  if (event.event === "agent.state_changed") {
+    return stringField(payload, "state") || "state changed";
+  }
+  if (event.event === "agent.hosted_tool_activity") {
+    return event.event.replace("agent.", "");
+  }
   if (event.event === "agent.plan_proposed") {
     return stringField(payload, "change_description") || "plan proposed";
   }
   return event.event;
 }
 
-function AssemblyImpactWarning(props: { assemblies: string[] }) {
+function agentEventSummary(event: AgentEvent, detail: string): string {
+  const payload = event.payload ?? {};
+  const tool = stringField(payload, "tool_name");
+  if (event.event === "agent.hosted_tool_activity" && isHostedWebSearchRequested(event)) {
+    return "searched";
+  }
+  if (event.event === "agent.tool_start") return tool || detail || "started";
+  if (event.event === "agent.tool_result")
+    return tool ? `${tool} result ready` : "result ready";
+  if (tool) return tool;
+  if (event.event === "agent.mesh_ready") return "mesh ready";
+  return detail || event.event;
+}
+
+function isHostedWebSearchRequested(event: AgentEvent): boolean {
+  const payload = event.payload ?? {};
   return (
-    <div className="plan-assembly-warning" data-testid="assembly-impact-warning">
-      <strong>This change affects assemblies:</strong>
-      <ul>
-        {props.assemblies.map((path) => (
-          <li key={path}><code>{path}</code></li>
-        ))}
-      </ul>
-    </div>
+    event.event === "agent.hosted_tool_activity" &&
+    payload["tool_type"] === "web_search" &&
+    payload["status"] === "requested"
   );
+}
+
+function agentEventModalDetail(event: AgentEvent): string {
+  const payload = event.payload ?? {};
+  try {
+    return JSON.stringify(agentEventModalPayload(event, payload), null, 2);
+  } catch {
+    return agentEventDetail(event);
+  }
+}
+
+function agentEventModalPayload(
+  event: AgentEvent,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (event.event === "agent.tool_result") {
+    return {
+      event: event.event,
+      ...payload,
+      result: parseJsonString(stringField(payload, "result_json")),
+    };
+  }
+  if (event.event === "agent.tool_start") {
+    return {
+      event: event.event,
+      ...payload,
+      arguments: parseJsonString(stringField(payload, "args_json")),
+    };
+  }
+  return { event: event.event, ...payload };
+}
+
+function parseJsonString(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function parsePlanSavedEvent(event: AgentEvent): PlanPackageCardData | null {
+  const payload = event.payload ?? {};
+  const planPackage = objectField(payload, "package");
+  const planId = stringField(planPackage, "plan_id");
+  const planRef = planPackage["plan_ref"];
+  const planPath = planPackage["plan_path"];
+  if (!planId || !planRef || !planPath) return null;
+  if (!isPlanMarkdownPath(planId, planRef, planPath)) return null;
+  return {
+    planId,
+    status: stringField(payload, "status"),
+    targetPath: pathText(payload["target_path"]),
+    affectedFiles: pathList(payload["affected_files"]),
+    newFiles: pathList(payload["new_files"]),
+    exportTargets: pathList(payload["export_targets"]),
+    planRef,
+    planPath,
+  };
 }
 
 export function findAffectedAssemblies(paths: string[]): string[] {
@@ -277,7 +622,7 @@ type FriendlyError = { title: string; hint: string };
 const ERROR_MESSAGES: Record<string, FriendlyError> = {
   llm_error: {
     title: "AI service error",
-    hint: "The AI service returned an error. Check your LLM configuration and try again.",
+    hint: "The AI service returned an error. Check the active provider configuration and try again.",
   },
   llm_refused: {
     title: "Request refused",
@@ -307,13 +652,17 @@ const ERROR_MESSAGES: Record<string, FriendlyError> = {
     title: "Operation timed out",
     hint: "The operation took too long. Try simplifying the request.",
   },
+  persistence_error: {
+    title: "Save failed",
+    hint: "The agent response could not be saved. Check the workspace files and try again.",
+  },
   file_conflict: {
     title: "File conflict",
     hint: "The target file was modified externally. Refresh and try again.",
   },
   permission_denied: {
     title: "Permission denied",
-    hint: "The operation was not permitted. Ensure you have confirmed the plan.",
+    hint: "The operation was not permitted. Switch to Agent mode or run an existing plan.",
   },
 };
 
@@ -326,10 +675,48 @@ function stringField(payload: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function formatTime(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "";
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function objectField(payload: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = payload[key];
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function pathText(value: unknown): string {
+  const joined = pathSegments(value).join("/");
+  return joined || "none";
+}
+
+function pathList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(pathText).filter((item) => item !== "none");
+}
+
+function isPlanMarkdownPath(
+  planId: string,
+  planRef: unknown,
+  planPath: unknown,
+): boolean {
+  const planRefSegments = pathSegments(planRef);
+  const planPathSegments = pathSegments(planPath);
+  const planRefWorkspace = workspaceIdKey(planRef);
+  const planPathWorkspace = workspaceIdKey(planPath);
+  return (
+    planRefSegments.length === 2 &&
+    planRefSegments[0] === "plans" &&
+    planRefSegments[1] === planId &&
+    planPathSegments.length === 3 &&
+    planPathSegments[0] === planRefSegments[0] &&
+    planPathSegments[1] === planRefSegments[1] &&
+    planPathSegments[2] === "plan.md" &&
+    planRefWorkspace !== null &&
+    planRefWorkspace === planPathWorkspace
+  );
+}
+
+function workspaceIdKey(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (!("workspace_id" in record)) return null;
+  return JSON.stringify(record["workspace_id"]);
 }

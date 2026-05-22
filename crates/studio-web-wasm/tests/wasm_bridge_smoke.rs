@@ -7,6 +7,7 @@
 use std::io::{Cursor, Write};
 
 use app_server_protocol::{
+    AgentProviderCapabilities, CadQueryArtifactExport, CadQueryArtifactRelation,
     CadQueryFeatureFaces, CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh,
     CadQueryResultGetRequest, CancelRequest, CapabilityHandshakeRequest,
     CapabilityHandshakeResponse, ClientCapabilities, ClientCommand, ClientEnvelope, ClientPlatform,
@@ -45,7 +46,7 @@ fn handshake_params() -> CapabilityHandshakeRequest {
         capabilities: ClientCapabilities {
             client_name: "wasm-bridge-smoke".into(),
             platform: ClientPlatform::Web,
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             file_read: web_file_read_capability(),
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
         },
@@ -53,11 +54,15 @@ fn handshake_params() -> CapabilityHandshakeRequest {
 }
 
 fn handshake_ack_bytes() -> Vec<u8> {
+    handshake_ack_bytes_with_provider(None)
+}
+
+fn handshake_ack_bytes_with_provider(agent_provider: Option<AgentProviderCapabilities>) -> Vec<u8> {
     let ack = CapabilityHandshakeResponse {
-        negotiated_version: 2,
+        negotiated_version: 4,
         session_token: SessionToken("test-session".into()),
         server_capabilities: ServerCapabilities {
-            protocol_version: ProtocolVersionRange::new(3, 3),
+            protocol_version: ProtocolVersionRange::new(4, 4),
             reconnect_window_ms: 30_000,
             supports_watch: true,
             supported_preview_kinds: vec![PreviewRequestKind::GeometryArtifact],
@@ -65,7 +70,9 @@ fn handshake_ack_bytes() -> Vec<u8> {
             cadquery: true,
             agent: false,
             selection_sync: false,
-            llm_configured: false,
+            llm_configured: agent_provider.is_some(),
+            agent_provider,
+            agent_model_registry: None,
         },
     };
     encode_server_frame(&ServerEnvelope::HandshakeAck(ack)).expect("handshake ack encodes")
@@ -113,6 +120,15 @@ fn cadquery_mesh_success() -> CommandSuccess {
         unit: PreviewUnit::Millimeter,
         root_ref_text: "@part[top_lid]".into(),
         root_object_kind: CadQueryObjectKind::Part,
+        artifact_relation: Some(CadQueryArtifactRelation {
+            source_path: "parts/top_lid.py".into(),
+            exports: vec![CadQueryArtifactExport {
+                name: "step".into(),
+                path: "outputs/top_lid.step".into(),
+                hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+            }],
+        }),
         parts: vec![cadquery_part_mesh()],
     })
 }
@@ -398,6 +414,49 @@ fn handshake_completes_and_emits_event() {
 }
 
 #[wasm_bindgen_test]
+fn handshake_snapshot_exposes_agent_provider_capability() {
+    let mut handle = client_create();
+    client_begin_handshake(&mut handle, to_js(&handshake_params())).expect("begin_handshake");
+    let _ = client_next_outbound(&mut handle)
+        .expect("handle alive")
+        .expect("handshake outbound");
+    client_receive_inbound(
+        &mut handle,
+        &handshake_ack_bytes_with_provider(Some(AgentProviderCapabilities {
+            provider: "openai_responses".into(),
+            model: Some("gpt-5.2".into()),
+            native_web_search_enabled: true,
+            search_sources_supported: false,
+        })),
+    )
+    .expect("inbound ack");
+
+    let snapshot = client_snapshot(&handle).expect("snapshot");
+    let provider =
+        Reflect::get(&snapshot, &JsValue::from_str("agent_provider")).expect("agent_provider");
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("provider"))
+            .expect("provider")
+            .as_string()
+            .as_deref(),
+        Some("openai_responses")
+    );
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("model"))
+            .expect("model")
+            .as_string()
+            .as_deref(),
+        Some("gpt-5.2")
+    );
+    assert_eq!(
+        Reflect::get(&provider, &JsValue::from_str("native_web_search_enabled"))
+            .expect("native_web_search_enabled")
+            .as_bool(),
+        Some(true)
+    );
+}
+
+#[wasm_bindgen_test]
 fn request_success_emits_succeeded_event() {
     let mut handle = client_create();
     perform_handshake(&mut handle);
@@ -573,6 +632,18 @@ fn cadquery_mesh_payload_is_buffered_by_result_id() {
             .pointer("/payload/result_id")
             .and_then(|value| value.as_str()),
         Some("cq_abc")
+    );
+    assert_eq!(
+        payload
+            .pointer("/payload/artifact_relation/source_path")
+            .and_then(|value| value.as_str()),
+        Some("parts/top_lid.py")
+    );
+    assert_eq!(
+        payload
+            .pointer("/payload/artifact_relation/exports/0/path")
+            .and_then(|value| value.as_str()),
+        Some("outputs/top_lid.step")
     );
     assert!(payload.pointer("/payload/parts").is_none());
 

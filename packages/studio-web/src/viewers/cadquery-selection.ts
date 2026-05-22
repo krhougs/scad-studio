@@ -6,15 +6,34 @@ import type {
 import type { CadQueryScenePayload } from "./cadquery-mesh";
 
 export type CadQuerySelectionMode =
+  | "component"
   | "assembly"
   | "part"
+  | "instance"
+  | "feature"
   | "face"
   | "edge"
   | "vertex";
 
+export type CadQueryViewerMode = "preview" | CadQuerySelectionMode;
+
+export const CADQUERY_SELECTION_MODES: CadQuerySelectionMode[] = [
+  "component",
+  "part",
+  "assembly",
+  "instance",
+  "feature",
+  "face",
+  "edge",
+  "vertex",
+];
+
 export type CadQueryPickTarget =
-  | { kind: "assembly"; additive: boolean }
+  | { kind: "assembly"; partIndex?: number; additive: boolean }
+  | { kind: "component"; partIndex: number; additive: boolean }
   | { kind: "part"; partIndex: number; additive: boolean }
+  | { kind: "instance"; partIndex: number; additive: boolean }
+  | { kind: "feature"; partIndex: number; feature: string; additive: boolean }
   | { kind: "face"; partIndex: number; faceIndex: number; additive: boolean }
   | { kind: "edge"; partIndex: number; edgeIndex: number; additive: boolean }
   | {
@@ -28,13 +47,62 @@ export function selectionRefFromCadQueryPick(
   scene: CadQueryScenePayload,
   pick: CadQueryPickTarget,
 ): SelectionRef {
-  if (pick.kind === "assembly") return assemblySelection(scene);
+  if (pick.kind === "assembly") {
+    if (typeof pick.partIndex === "number") {
+      const assemblyPart = scene.parts[pick.partIndex];
+      if (!assemblyPart) {
+        throw new Error("cadquery assembly selection out of range");
+      }
+      return objectSelection(scene, assemblyPart, "assembly");
+    }
+    return assemblySelection(scene);
+  }
   const part = scene.parts[pick.partIndex];
-  if (!part) throw new Error("cadquery part selection out of range");
-  if (pick.kind === "part") return partSelection(scene, part);
+  if (!part) throw new Error("cadquery object selection out of range");
+  if (pick.kind === "component" || pick.kind === "part")
+    return objectSelection(scene, part, pick.kind);
+  if (pick.kind === "instance") return instanceSelection(scene, part);
+  if (pick.kind === "feature")
+    return selectionRefFromCadQueryFeature(scene, pick.partIndex, pick.feature);
   if (pick.kind === "face") return faceSelection(scene, part, pick.faceIndex);
   if (pick.kind === "edge") return edgeSelection(scene, part, pick.edgeIndex);
   return vertexSelection(scene, part, pick.vertexIndex);
+}
+
+export function selectionRefFromCadQueryObject(
+  scene: CadQueryScenePayload,
+  partIndex: number,
+): SelectionRef {
+  const part = scene.parts[partIndex];
+  if (!part) throw new Error("cadquery object selection out of range");
+  return objectSelection(scene, part, part.objectKind);
+}
+
+export function selectionRefFromCadQueryInstance(
+  scene: CadQueryScenePayload,
+  partIndex: number,
+): SelectionRef | null {
+  const part = scene.parts[partIndex];
+  if (!part) throw new Error("cadquery instance selection out of range");
+  return part.instancePath ? instanceSelection(scene, part) : null;
+}
+
+export function selectionRefFromCadQueryFeature(
+  scene: CadQueryScenePayload,
+  partIndex: number,
+  feature: string,
+): SelectionRef {
+  const part = scene.parts[partIndex];
+  if (!part) throw new Error("cadquery feature selection out of range");
+  return baseSelection({
+    kind: "feature",
+    refText: `@feature[${ownerIdFromRef(part.refText)}.${feature}]`,
+    ownerRefText: part.refText,
+    ownerObjectKind: part.objectKind,
+    instancePath: part.instancePath,
+    buildId: scene.buildId,
+    resultId: scene.resultId,
+  });
 }
 
 export function updateCadQuerySelection(
@@ -50,6 +118,17 @@ export function updateCadQuerySelection(
   ];
 }
 
+export function toggleCadQuerySelection(
+  previous: SelectionRef[],
+  next: SelectionRef,
+): SelectionRef[] {
+  const key = cadQuerySelectionKey(next);
+  if (previous.some((item) => cadQuerySelectionKey(item) === key)) {
+    return previous.filter((item) => cadQuerySelectionKey(item) !== key);
+  }
+  return [...previous, next];
+}
+
 export function cadQuerySelectionKey(selection: SelectionRef): string {
   return [
     selection.kind,
@@ -62,6 +141,22 @@ export function cadQuerySelectionKey(selection: SelectionRef): string {
   ].join("|");
 }
 
+export function cadQueryAvailableSelectionModes(
+  scene: CadQueryScenePayload | null,
+): CadQuerySelectionMode[] {
+  if (!scene) return [];
+  const available = new Set<CadQuerySelectionMode>();
+  for (const part of scene.parts) {
+    if (part.refText !== scene.rootRefText) available.add(part.objectKind);
+    if (part.instancePath) available.add("instance");
+    if (part.featureMap.length > 0) available.add("feature");
+    if (part.faces.length > 0) available.add("face");
+    if (part.edges.length > 0) available.add("edge");
+    if (part.vertices.length > 0) available.add("vertex");
+  }
+  return CADQUERY_SELECTION_MODES.filter((mode) => available.has(mode));
+}
+
 function assemblySelection(scene: CadQueryScenePayload): SelectionRef {
   return baseSelection({
     kind: scene.rootObjectKind,
@@ -71,24 +166,35 @@ function assemblySelection(scene: CadQueryScenePayload): SelectionRef {
   });
 }
 
-function partSelection(
+function objectSelection(
   scene: CadQueryScenePayload,
   part: CadQueryScenePayload["parts"][number],
+  expectedKind: CadQueryObjectKind,
 ): SelectionRef {
-  if (part.instancePath) {
-    return baseSelection({
-      kind: "instance",
-      refText: `@instance[${part.instancePath}]`,
-      ownerRefText: part.refText,
-      ownerObjectKind: part.objectKind,
-      instancePath: part.instancePath,
-      buildId: scene.buildId,
-      resultId: scene.resultId,
-    });
+  if (part.objectKind !== expectedKind) {
+    throw new Error(`cadquery ${expectedKind} selection out of range`);
   }
   return baseSelection({
     kind: part.objectKind,
     refText: part.refText,
+    buildId: scene.buildId,
+    resultId: scene.resultId,
+  });
+}
+
+function instanceSelection(
+  scene: CadQueryScenePayload,
+  part: CadQueryScenePayload["parts"][number],
+): SelectionRef {
+  if (!part.instancePath) {
+    throw new Error("cadquery instance selection out of range");
+  }
+  return baseSelection({
+    kind: "instance",
+    refText: `@instance[${part.instancePath}]`,
+    ownerRefText: part.refText,
+    ownerObjectKind: part.objectKind,
+    instancePath: part.instancePath,
     buildId: scene.buildId,
     resultId: scene.resultId,
   });

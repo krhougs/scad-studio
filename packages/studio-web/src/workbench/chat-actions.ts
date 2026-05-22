@@ -1,33 +1,57 @@
-import type {
-  CadQueryExportFormat,
-  AgentOperationLevel,
-  AgentPlanProposedEvent,
-} from "@budn/app-server-protocol";
+import type { AgentMode, AgentProviderType } from "@budn/app-server-protocol";
 import type { WasmClient } from "../wasm-bridge";
-import type { ChatSnapshot, ContextPill, AgentRun, ChatSessionSummary } from "./chat-zone";
+import type {
+  AgentModelSelection,
+  AgentModelRegistry,
+  AgentModelRegistryModel,
+  AgentModelRegistryProvider,
+  AgentRun,
+  ChatSessionSummary,
+} from "./chat-zone";
 
 export async function createChatSession(
   client: WasmClient | null,
   sessions: ChatSessionSummary[],
   onStatus: ((message: string) => void) | undefined,
-  setBusy: (value: boolean) => void,
-): Promise<string | null> {
+  clientRequestId?: string | null,
+  initialUserMessage?: string | null,
+  agentModelSelection?: AgentModelSelection | null,
+  initialTurn?: {
+    mode: AgentMode;
+    plan_ref: unknown | null;
+  } | null,
+): Promise<{ sessionId: string; agentRun: AgentRun | null } | null> {
   if (!client) return null;
-  setBusy(true);
+  if (initialTurn && !agentModelSelection) {
+    onStatus?.("当前没有可用的 Agent 模型，无法创建 chat");
+    return null;
+  }
   try {
+    const backendSessionCount = sessions.filter(
+      (session) => !session.client_request_id,
+    ).length;
     const response = await client.dispatchChatCreate({
-      title: sessions.length === 0 ? "main" : `chat ${sessions.length + 1}`,
+      title: backendSessionCount === 0 ? "main" : `chat ${backendSessionCount + 1}`,
       goal: null,
       related_files: [],
+      client_request_id: clientRequestId ?? null,
+      initial_user_message: initialUserMessage ?? null,
+      requested_model: boundAgentModel(agentModelSelection ?? null),
+      initial_turn: initialTurn ?? null,
     });
-    await client.dispatchChatList({ include_archived: false });
-    const created = unwrapPayload(response) as { session_id?: string };
-    return created.session_id ?? null;
+    const created = unwrapPayload(response) as {
+      session_id?: string;
+      initial_turn?: AgentRun | null;
+    };
+    await client
+      .dispatchChatList({ include_archived: false })
+      .catch(reportError(onStatus));
+    return created.session_id
+      ? { sessionId: created.session_id, agentRun: created.initial_turn ?? null }
+      : null;
   } catch (err) {
     reportError(onStatus)(err);
     return null;
-  } finally {
-    setBusy(false);
   }
 }
 
@@ -38,7 +62,7 @@ export async function selectChatSession(
 ): Promise<void> {
   if (!client) return;
   await client
-    .dispatchChatHistory({ session_id: sessionId, limit: 100 })
+    .dispatchChatSelect(sessionId, { session_id: sessionId, limit: 100 })
     .catch(reportError(onStatus));
 }
 
@@ -48,32 +72,59 @@ export async function cancelAgentRun(
   onStatus?: (message: string) => void,
 ): Promise<void> {
   if (!client || !agentRun) return;
+  const agentId = agentRun.agent_id;
+  if (!agentId) return;
   await client
-    .dispatchAgentCancel({ run_id: agentRun.run_id })
+    .dispatchAgentCancel({ agent_id: agentId })
     .catch(reportError(onStatus));
 }
 
 export async function sendChatMessage(params: {
   client: WasmClient | null;
-  draft: string;
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
   agentRun: AgentRun | null;
   busy: boolean;
-  contextPills: ContextPill[];
+  agentModelSelection?: AgentModelSelection | null;
+  draftClientRequestId?: string | null;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
-  setDraft: (value: string) => void;
-}): Promise<void> {
-  if (!params.client || params.busy || params.agentRun) return;
-  const content = params.draft.trim();
-  if (!content) return;
+}, text: string): Promise<boolean> {
+  if (!params.client || params.busy || params.agentRun) return false;
+  const content = text.trim();
+  if (!content) return false;
   params.setBusy(true);
   try {
-    await sendChatMessageInner(params, content);
+    return await sendChatMessageInner(params, content);
   } catch (err) {
     reportError(params.onStatus)(err);
+    return false;
+  } finally {
+    params.setBusy(false);
+  }
+}
+
+export async function runSavedPlan(params: {
+  client: WasmClient | null;
+  planId: string;
+  planRef: unknown;
+  currentSessionId: string | null;
+  sessions: ChatSessionSummary[];
+  agentRun: AgentRun | null;
+  busy: boolean;
+  agentModelSelection?: AgentModelSelection | null;
+  draftClientRequestId?: string | null;
+  onStatus?: (message: string) => void;
+  setBusy: (value: boolean) => void;
+}): Promise<boolean> {
+  if (!params.client || params.busy || params.agentRun) return false;
+  params.setBusy(true);
+  try {
+    return await runSavedPlanInner(params);
+  } catch (err) {
+    reportError(params.onStatus)(err);
+    return false;
   } finally {
     params.setBusy(false);
   }
@@ -82,140 +133,147 @@ export async function sendChatMessage(params: {
 async function sendChatMessageInner(
   params: {
     client: WasmClient | null;
-    operation: AgentOperationLevel;
+    mode: AgentMode;
     currentSessionId: string | null;
     sessions: ChatSessionSummary[];
-    contextPills: ContextPill[];
+    agentModelSelection?: AgentModelSelection | null;
+    draftClientRequestId?: string | null;
     onStatus?: (message: string) => void;
     setBusy: (value: boolean) => void;
-    setDraft: (value: string) => void;
   },
   content: string,
-): Promise<void> {
+): Promise<boolean> {
   const client = params.client;
-  if (!client) return;
+  if (!client) return false;
+  const explicitCommand = parseExplicitSlashCommand(content);
+  const { mode, prompt } =
+    explicitCommand ?? { mode: params.mode, prompt: content.trim() };
+  const displayContent = prompt || content;
+  const clientRequestId =
+    params.draftClientRequestId ??
+    (params.currentSessionId ? null : newClientRequestId());
   const sessionId =
     params.currentSessionId ??
     (await createChatSession(
       client,
       params.sessions,
       params.onStatus,
-      params.setBusy,
-    ));
-  if (!sessionId) return;
-  const explicitCommand = parseExplicitSlashCommand(content);
-  const { operation, prompt } =
-    explicitCommand ?? { operation: params.operation, prompt: content.trim() };
-  const displayContent = prompt || content;
-  await client.dispatchChatSend({
-    session_id: sessionId,
-    content: displayContent,
-    related_files: [],
-  });
-  params.setDraft("");
-  const context_refs = params.contextPills.map((pill) => pill.ref_text);
-  await client.dispatchAgentInvoke({
-    session_id: sessionId,
-    prompt: displayContent,
-    operation,
-    confirmed_cadquery: null,
-    context_refs,
-  });
+      clientRequestId,
+      displayContent,
+      params.agentModelSelection ?? null,
+      {
+        mode,
+        plan_ref: null,
+      },
+    ))?.sessionId;
+  if (!sessionId) return false;
+  const createdNewSession = !params.currentSessionId;
+  const agentId = createdNewSession
+    ? null
+    : agentIdForSession(params.sessions, sessionId);
+  if (!createdNewSession && !agentId) {
+    params.onStatus?.("当前 chat 缺少 agent_id，无法启动 Agent turn");
+    return false;
+  }
+  if (params.currentSessionId) {
+    await client.dispatchChatSend({
+      session_id: sessionId,
+      content: displayContent,
+      related_files: [],
+      client_request_id: clientRequestId,
+    });
+  }
+  if (createdNewSession) {
+    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+    return true;
+  }
+  try {
+    await client.dispatchAgentStartTurn({
+      agent_id: agentId,
+      client_request_id: clientRequestId,
+      prompt: displayContent,
+      mode,
+      plan_ref: null,
+    });
+  } catch (err) {
+    throw err;
+  }
   await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+  return true;
 }
 
-export async function previewPlan(
-  client: WasmClient | null,
-  plan: AgentPlanProposedEvent,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  await client
-    .dispatchCadQueryPreview({
-      target_path: plan.target_path,
-      export_formats: [],
-      params_json: "{}",
-    })
-    .catch(reportError(onStatus));
-}
-
-// plan.run_id identifies the plan-proposing run; the backend creates a new Execute run on confirm.
-export async function confirmPlan(
-  client: WasmClient | null,
-  plan: AgentPlanProposedEvent,
-  _snapshot: ChatSnapshot,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  const confirmation = {
-    request: {
-      target_path: plan.target_path,
-      target_type: plan.target_type,
-      code: "",
-      export_formats: exportFormatsForTargets(plan.export_targets),
-      params_json: "{}",
-    },
-    plan_ref: plan.plan_ref,
-    affected_files: plan.affected_files,
-    new_files: plan.new_files ?? [],
-    export_targets: plan.export_targets,
-  };
-  await client
-    .dispatchAgentPlanConfirm({
-      session_id: plan.session_id,
-      run_id: plan.run_id,
-      confirmed_cadquery: confirmation,
-    })
-    .catch(reportError(onStatus));
-}
-
-function exportFormatsForTargets(
-  targets: AgentPlanProposedEvent["export_targets"],
-): CadQueryExportFormat[] {
-  const formats = targets
-    .map((target) => target.path_segments.at(-1) ?? "")
-    .map(exportFormatFromFilename)
-    .filter((format): format is CadQueryExportFormat => Boolean(format));
-  return Array.from(new Set(formats));
-}
-
-function exportFormatFromFilename(
-  filename: string,
-): CadQueryExportFormat | null {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".step")) return "step";
-  if (lower.endsWith(".stl")) return "stl";
-  if (lower.endsWith(".3mf")) return "three_mf";
-  return null;
-}
-
-export async function rejectPlan(
-  client: WasmClient | null,
-  sessionId: string,
-  runId: string,
-  onStatus?: (message: string) => void,
-): Promise<void> {
-  if (!client) return;
-  await client
-    .dispatchAgentPlanReject({ session_id: sessionId, run_id: runId })
-    .catch(reportError(onStatus));
+async function runSavedPlanInner(params: {
+  client: WasmClient | null;
+  planId: string;
+  planRef: unknown;
+  currentSessionId: string | null;
+  sessions: ChatSessionSummary[];
+  agentModelSelection?: AgentModelSelection | null;
+  draftClientRequestId?: string | null;
+  onStatus?: (message: string) => void;
+  setBusy: (value: boolean) => void;
+}): Promise<boolean> {
+  const client = params.client;
+  if (!client) return false;
+  const prompt = `Run plan ${params.planId}`;
+  const clientRequestId =
+    params.draftClientRequestId ??
+    (params.currentSessionId ? null : newClientRequestId());
+  const sessionId =
+    params.currentSessionId ??
+    (await createChatSession(
+      client,
+      params.sessions,
+      params.onStatus,
+      clientRequestId,
+      prompt,
+      params.agentModelSelection ?? null,
+      {
+        mode: "agent",
+        plan_ref: params.planRef,
+      },
+    ))?.sessionId;
+  if (!sessionId) return false;
+  const createdNewSession = !params.currentSessionId;
+  params.onStatus?.(`Running plan ${params.planId} in Agent mode`);
+  if (createdNewSession) {
+    await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+    return true;
+  }
+  const agentId = agentIdForSession(params.sessions, sessionId);
+  if (!agentId) {
+    params.onStatus?.("当前 chat 缺少 agent_id，无法启动 Agent turn");
+    return false;
+  }
+  try {
+    await client.dispatchAgentStartTurn({
+      agent_id: agentId,
+      client_request_id: clientRequestId,
+      prompt,
+      mode: "agent",
+      plan_ref: params.planRef,
+    });
+  } catch (err) {
+    throw err;
+  }
+  await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
+  return true;
 }
 
 type SlashCommandResult = {
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   prompt: string;
 };
 
-const SLASH_COMMANDS: Record<string, AgentOperationLevel> = {
+const SLASH_COMMANDS: Record<string, AgentMode> = {
+  "/agent": "agent",
   "/plan": "plan",
-  "/execute": "execute",
-  "/inform": "inform",
 };
 
 export function parseSlashCommand(input: string): SlashCommandResult {
   return (
     parseExplicitSlashCommand(input) ?? {
-      operation: "auto",
+      mode: "agent",
       prompt: input.trim(),
     }
   );
@@ -223,20 +281,71 @@ export function parseSlashCommand(input: string): SlashCommandResult {
 
 function parseExplicitSlashCommand(input: string): SlashCommandResult | null {
   const trimmed = input.trimStart();
-  for (const [prefix, operation] of Object.entries(SLASH_COMMANDS)) {
+  for (const [prefix, mode] of Object.entries(SLASH_COMMANDS)) {
     if (!trimmed.startsWith(prefix)) continue;
     const afterCmd = trimmed.slice(prefix.length);
     if (afterCmd.length === 0 || /^\s/.test(afterCmd)) {
-      return { operation, prompt: afterCmd.trim() };
+      return { mode, prompt: afterCmd.trim() };
     }
   }
   return null;
+}
+
+type ActiveAgentModel = {
+  provider: AgentModelRegistryProvider;
+  model: AgentModelRegistryModel;
+};
+
+export function activeAgentModelSelection(
+  registry: AgentModelRegistry | null,
+): AgentModelSelection | null {
+  const active = activeAgentModel(registry);
+  if (!active || !registry) return null;
+  return {
+    provider_id: registry.active_provider_id,
+    provider_type: active.provider.kind as AgentProviderType,
+    model_id: registry.active_model_id,
+    reasoning_effort: registry.active_reasoning_effort,
+    service_label: registry.active_service_label,
+  };
+}
+
+function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel | null {
+  if (!registry) return null;
+  for (const provider of registry.providers) {
+    if (provider.id !== registry.active_provider_id) continue;
+    const model = provider.models.find((item) => item.id === registry.active_model_id);
+    return model ? { provider, model } : null;
+  }
+  return null;
+}
+
+function newClientRequestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `request-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function unwrapPayload(response: unknown): unknown {
   if (!response || typeof response !== "object") return response;
   const record = response as Record<string, unknown>;
   return record["payload"] ?? response;
+}
+
+function boundAgentModel(selection: AgentModelSelection | null) {
+  if (!selection) return null;
+  return {
+    provider_id: selection.provider_id,
+    provider_type: selection.provider_type,
+    model_id: selection.model_id,
+    reasoning_effort: selection.reasoning_effort,
+    service_label: selection.service_label,
+  };
+}
+
+function agentIdForSession(sessions: ChatSessionSummary[], sessionId: string): string | null {
+  return sessions.find((session) => session.session_id === sessionId)?.agent_id ?? null;
 }
 
 export function reportError(onStatus?: (message: string) => void) {

@@ -1,4 +1,5 @@
 use app_server_protocol::{
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentRuntimeStatus,
     AgentStartedResponse, CadQueryResultReady, ChatMessageRecord, ChatSessionId,
     ChatSessionSummary, CommandSuccess, PathHandle, RequestId, SelectionUpdateRequest,
     ServerCapabilities, ServerPushEvent, SessionToken, SubscriptionId, WatchSubscribeRequest,
@@ -50,6 +51,7 @@ pub enum ClientEvent {
     AgentEvent {
         payload: ServerPushEvent,
     },
+    SnapshotChanged,
     TransportOpen,
     TransportClosed {
         reason: TransportCloseReason,
@@ -172,7 +174,9 @@ pub struct ClientSnapshot {
     pub current_chat_session: Option<ChatSessionId>,
     pub current_chat_history: Vec<ChatMessageRecord>,
     pub agent_run: Option<AgentStartedResponse>,
+    pub agent_runtime_status: Option<AgentRuntimeStatus>,
     pub agent_events: Vec<ServerPushEvent>,
+    pub agent_event_records: Vec<AgentEventRecord>,
     pub current_selection: SelectionUpdateRequest,
     pub cadquery_results: Vec<CadQueryResultReady>,
     pub preview_tasks: Vec<PreviewTaskState>,
@@ -182,4 +186,6 @@ pub struct ClientSnapshot {
     pub last_error: Option<ClientError>,
     pub transport_status: TransportStatus,
     pub llm_configured: bool,
+    pub agent_provider: Option<AgentProviderCapabilities>,
+    pub agent_model_registry: Option<AgentModelRegistryResponse>,
 }

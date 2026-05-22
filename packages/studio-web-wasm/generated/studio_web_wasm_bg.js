@@ -359,6 +359,47 @@ export function client_dispatch_agent_invoke(handle, params) {
  * @param {any} params
  * @returns {bigint}
  */
+export function client_dispatch_agent_model_params_update(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_model_params_update(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_model_registry(handle) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_model_registry(handle.__wbg_ptr);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_model_select(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_model_select(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
 export function client_dispatch_agent_plan_confirm(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_agent_plan_confirm(handle.__wbg_ptr, params);
@@ -376,6 +417,48 @@ export function client_dispatch_agent_plan_confirm(handle, params) {
 export function client_dispatch_agent_plan_reject(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_agent_plan_reject(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_snapshot(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_snapshot(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_start_turn(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_start_turn(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_agent_subscribe(handle, params) {
+    _assertClass(handle, ClientHandle);
+    const ret = wasm.client_dispatch_agent_subscribe(handle.__wbg_ptr, params);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -474,6 +557,23 @@ export function client_dispatch_chat_history(handle, params) {
 export function client_dispatch_chat_list(handle, params) {
     _assertClass(handle, ClientHandle);
     const ret = wasm.client_dispatch_chat_list(handle.__wbg_ptr, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BigInt.asUintN(64, ret[0]);
+}
+
+/**
+ * @param {ClientHandle} handle
+ * @param {string} session_id
+ * @param {any} params
+ * @returns {bigint}
+ */
+export function client_dispatch_chat_select(handle, session_id, params) {
+    _assertClass(handle, ClientHandle);
+    const ptr0 = passStringToWasm0(session_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.client_dispatch_chat_select(handle.__wbg_ptr, ptr0, len0, params);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }

@@ -104,7 +104,7 @@ fn websocket_options() -> Options {
 
 async fn handle_connection<S>(socket: WebSocket<S>, workspace_path: PathBuf)
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (mut sink, mut stream) = socket.split();
     let (push_tx, mut push_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEnvelope>();
@@ -128,8 +128,11 @@ where
     let request = match decode_client_message(handshake) {
         Ok(ClientEnvelope::Handshake(request)) | Ok(ClientEnvelope::Reconnect(request)) => request,
         Ok(_) => {
-            let _ = send_transport_error(&mut sink, "websocket handshake frame was not handshake")
-                .await;
+            let _ = send_transport_error(
+                &mut sink,
+                "websocket handshake frame was not handshake".to_owned(),
+            )
+            .await;
             return;
         }
         Err(error) => {
@@ -137,7 +140,7 @@ where
             return;
         }
     };
-    let response = match dispatcher.handshake(request) {
+    let response = match dispatcher.handshake(request).await {
         Ok(response) => ServerEnvelope::HandshakeAck(response),
         Err(error) => {
             let _ = send_transport_error(
@@ -179,7 +182,8 @@ where
                 };
                 match request {
                     ClientEnvelope::Request(envelope) => {
-                        let response = ServerEnvelope::Response(dispatcher.dispatch_envelope(envelope));
+                        let dispatch = dispatcher.dispatch_envelope(envelope);
+                        let response = ServerEnvelope::Response(require_send(dispatch).await);
                         if send_server_message(&mut sink, response).await.is_err() {
                             dispatcher.disconnect();
                             break;
@@ -190,7 +194,7 @@ where
                         break;
                     }
                     ClientEnvelope::Handshake(_) | ClientEnvelope::Reconnect(_) => {
-                        let _ = send_transport_error(&mut sink, "unexpected websocket handshake frame").await;
+                        let _ = send_transport_error(&mut sink, "unexpected websocket handshake frame".to_owned()).await;
                         dispatcher.disconnect();
                         break;
                     }
@@ -198,6 +202,10 @@ where
             }
         }
     }
+}
+
+fn require_send<T: Send>(value: T) -> T {
+    value
 }
 
 fn decode_client_message(message: Frame) -> Result<ClientEnvelope, ServerEnvelope> {
@@ -229,10 +237,7 @@ fn transport_error(message: impl Into<String>) -> ServerEnvelope {
     })
 }
 
-async fn send_transport_error<S>(
-    sink: &mut S,
-    message: impl Into<String>,
-) -> Result<(), yawc::WebSocketError>
+async fn send_transport_error<S>(sink: &mut S, message: String) -> Result<(), yawc::WebSocketError>
 where
     S: Sink<Frame, Error = yawc::WebSocketError> + Unpin,
 {

@@ -1,0 +1,11 @@
+{
+  "id": "b04",
+  "name": "L-bracket with mounting holes",
+  "prompt": "Create an L-shaped mounting bracket: vertical plate 50x40mm, horizontal plate 50x30mm, 3mm thick. Add two M3 mounting holes on each plate.",
+  "criteria": {
+    "cadquery_execute_success": true,
+    "brief_expected": true,
+    "exports_generated": true,
+    "max_dry_run_attempts": 4
+  }
+}

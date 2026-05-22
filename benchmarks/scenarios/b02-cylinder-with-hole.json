@@ -1,0 +1,11 @@
+{
+  "id": "b02",
+  "name": "Cylinder with center hole",
+  "prompt": "Create a cylinder 30mm diameter, 20mm tall, with a 10mm through-hole in the center.",
+  "criteria": {
+    "cadquery_execute_success": true,
+    "brief_expected": true,
+    "exports_generated": true,
+    "max_dry_run_attempts": 3
+  }
+}

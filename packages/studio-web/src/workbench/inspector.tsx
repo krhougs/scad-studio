@@ -29,6 +29,7 @@ type InspectorProps = {
   appearanceSlot?: React.ReactNode;
   parametersSlot?: React.ReactNode;
   presetsSlot?: React.ReactNode;
+  refTreeSlot?: React.ReactNode;
 };
 
 export function Inspector(props: InspectorProps) {
@@ -47,6 +48,7 @@ export function Inspector(props: InspectorProps) {
     appearanceSlot,
     parametersSlot,
     presetsSlot,
+    refTreeSlot,
   } = props;
   const readyConfig = appConfig.kind === "ready" ? appConfig.config : null;
   const displayUnit = readyConfig?.display_unit ?? "millimeter";
@@ -71,6 +73,11 @@ export function Inspector(props: InspectorProps) {
             displayUnit={displayUnit}
           />
         </InspectorSection>
+        {refTreeSlot ? (
+          <InspectorSection id="cadquery-refs" title="refs">
+            {refTreeSlot}
+          </InspectorSection>
+        ) : null}
         <InspectorSection id="config" title="config">
           <ConfigSummary
             appConfig={appConfig}

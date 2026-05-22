@@ -9,8 +9,8 @@ MVP 要跑通：
 ```text
 多 Chat Session
 → CAD 方案讨论
-→ Markdown CAD Plan
-→ 用户确认执行
+→ Markdown CAD Plan package
+→ Agent mode 执行 plan
 → CadQuery 生成 / 修改模型
 → Viewer 查看模型
 → Viewer 选择 component / part / assembly / 点 / 线 / 面
@@ -28,7 +28,7 @@ MVP 要跑通：
 4. 每个 component / part / assembly 都有对应 Markdown 文档。
 5. 用户只是讨论时，Agent 不应直接动手。
 6. 用户要方案时，Agent 输出 Markdown CAD Plan。
-7. 用户确认后，Agent 才调用 CadQuery 工具执行。
+7. Agent mode 执行时才调用 CadQuery 工具；Plan mode 只创建计划档案。
 8. Viewer 选择结果要能传给 Agent，作为后续修改目标。
 9. 先不做复杂 Project State / Variant 系统。
 10. 先不考虑沙盒和部署。
@@ -45,7 +45,7 @@ MVP 要跑通：
 2. 文件系统项目结构
 3. component / part / assembly 独立文件
 4. 每个对象有同名 Markdown 说明文档
-5. Agent 支持 Inform / Plan / Execute 三种行为
+5. Agent 支持 Agent / Plan 两个模式
 6. CadQuery 作为模型生成 / 修改工具
 7. Rust 后端负责任务编排和产品状态
 8. Python CadQuery 工具调用先跑起来
@@ -118,8 +118,14 @@ project/
 │   └── exploded_view.md
 │
 ├── plans/
-│   ├── slide_lid_plan.md
-│   └── wall_mount_plan.md
+│   ├── 2026050100-slide-lid/
+│   │   ├── request.md
+│   │   ├── plan.md
+│   │   └── plan-result.md
+│   └── 2026050101-wall-mount/
+│       ├── request.md
+│       ├── plan.md
+│       └── plan-result.md
 │
 ├── refs/
 │   └── current_selection.md
@@ -254,10 +260,17 @@ Markdown 说明包含：
 
 ### 6.5 `plans/`
 
-保存 Agent 生成的 Markdown CAD Plan。
+保存 Agent 生成的 workspace plan package。
 
-Plan 不直接等于执行。  
-用户确认后，Agent 才执行对应修改。
+Plan package 使用 `plans/YYYYmmddnn-name/` 目录，每个目录包含：
+
+```text
+request.md
+plan.md
+plan-result.md
+```
+
+`Plan` mode 只允许创建或更新这三个计划档案文件，不修改 CAD 源文件，也不生成 outputs。`Agent` mode 可以读取已有 plan package 并执行，执行记录写入 `plan-result.md`。
 
 ---
 
@@ -324,15 +337,14 @@ JSONL 支持 tool calls / function results 的结构化存储，可追加、可�
 
 ## 8. Agent 行为模型
 
-Agent 每轮先判断用户想要什么。
+Agent 使用两个产品模式：
 
-### 8.1 Operation Level
+### 8.1 Mode
 
-| Level | 含义 | 是否改模型 |
+| Mode | 含义 | 是否改模型 |
 |---|---|---|
-| Inform | 只回答问题 / 分析 / 建议 | 否 |
-| Plan | 输出 Markdown CAD Plan | 否 |
-| Execute | 调用工具生成 / 修改 / 渲染 | 是 |
+| Plan | 只读分析，创建 workspace plan package | 否 |
+| Agent | 读写执行，可直接执行当前请求或已有 plan | 是 |
 
 ---
 
@@ -342,25 +354,27 @@ Agent 每轮先判断用户想要什么。
 1. Resolve Context
    判断当前 Project / Chat / 相关文件 / Viewer 选择对象。
 
-2. Classify Operation Level
-   判断是 Inform / Plan / Execute。
+2. Resolve Mode
+   使用用户选择的 `Agent` 或 `Plan` 模式。
 
 3. Read Files
    读取相关 .py 和 .md 文件。
 
 4. Act
 
-   Inform:
-     只返回有效信息，不改文件。
-
    Plan:
-     生成 Markdown CAD Plan，写入 plans/。
+     生成 workspace plan package，写入 plans/YYYYmmddnn-name/。
+     不修改 CAD 源文件。
+     不生成 outputs。
 
-   Execute:
+   Agent:
+     如果带 plan_ref，读取 plans/<id>/request.md、plan.md 和 execution scope。
+     如果不带 plan_ref，基于当前请求和 refs 形成 execution scope。
      修改相关 .py。
      更新相关 .md。
      调用 CadQuery 工具。
      生成 outputs。
+     如果本次带 plan_ref，则更新对应 plan-result.md。
      返回结果。
 
 5. Reply
@@ -377,9 +391,41 @@ Agent 每轮先判断用户想要什么。
 
 ## 10. Markdown CAD Plan
 
-当用户要方案但未确认执行时，Agent 输出 CAD Plan。
+当用户需要方案或想先评估风险时，Plan mode 创建 workspace plan package。Agent mode 可以直接执行已有 plan，也可以在没有 plan_ref 时按当前请求工作。
 
-### 10.1 CAD Plan 格式
+### 10.1 Plan Package 格式
+
+目录结构：
+
+```text
+plans/YYYYmmddnn-name/
+├── request.md
+├── plan.md
+└── plan-result.md
+```
+
+`YYYYmmdd` 使用创建当天日期，`nn` 是当天第 n 个 plan，从 `00` 开始按已有同日期 plan 目录递增。`name` 使用小写 ASCII、数字和连字符。
+
+`plan.md` 必须包含 machine-readable YAML front matter：
+
+```yaml
+---
+plan_id: 2026050100-create-a-new-box
+mode: plan
+target_path: parts/box.py
+target_type: part
+affected_files:
+  - parts/box.py
+new_files: []
+export_targets:
+  - outputs/box.step
+status: planned
+created_at: 2026-05-01T09:12:00+08:00
+source_chat_session: chat-1
+---
+```
+
+正文格式：
 
 ```md
 # CAD Plan: <title>
@@ -419,11 +465,11 @@ Agent 每轮先判断用户想要什么。
 ## Execution Boundary
 
 会修改什么，不会修改什么。
-
-## Confirmation Needed
-
-需要用户确认什么。
 ```
+
+`plan-result.md` 初始状态为 `pending`。Agent mode 执行该 plan 后追加 run、提交文件、生成 outputs、失败诊断和剩余风险。
+
+Legacy `plans/*.md` 是历史计划文件，只读展示，不作为可直接执行的 plan package。
 
 ---
 
@@ -487,8 +533,8 @@ Agent 收到 ref 后：
 1. 判断 ref 属于哪个文件
 2. 读取对应 .py 和 .md
 3. 如果只是讨论，返回分析
-4. 如果用户要方案，生成 CAD Plan
-5. 如果用户确认执行，修改对应文件并生成结果
+4. 如果用户在 Plan mode 中要方案，生成 workspace plan package
+5. 如果用户在 Agent mode 中要求执行，修改对应文件并生成结果
 ```
 
 ---
@@ -531,8 +577,8 @@ MVP 用文件复制和新 Chat 处理实验版本。
 
 ```text
 1. 新建 Chat
-2. 新建 CAD Plan
-3. 需要执行时复制相关 part / assembly 文件
+2. 新建 workspace plan package
+3. Agent mode 执行实验方案时复制相关 part / assembly 文件
 4. 生成实验版本文件
 ```
 
@@ -544,7 +590,7 @@ parts/top_lid_slide_experiment.md
 assemblies/full_enclosure_slide_experiment.py
 assemblies/full_enclosure_slide_experiment.md
 chats/slide-lid-experiment.md
-plans/slide_lid_plan.md
+plans/2026050100-slide-lid/plan.md
 ```
 
 ---
@@ -564,7 +610,7 @@ Agent：只分析，不改文件。
 
 ```text
 用户：给我一个滑盖方案，先别动模型。
-Agent：生成 plans/slide_lid_plan.md。
+Agent：生成 plans/2026050100-slide-lid/{request.md,plan.md,plan-result.md}。
 ```
 
 ---
@@ -572,12 +618,13 @@ Agent：生成 plans/slide_lid_plan.md。
 ### 14.3 执行
 
 ```text
-用户：确认，生成这个滑盖版本。
+用户：在 Agent mode 运行这个滑盖 plan。
 Agent：
 - 创建 / 修改对应 .py
 - 更新对应 .md
 - 调用 CadQuery
 - 输出预览和模型文件
+- 更新 plans/<id>/plan-result.md
 ```
 
 ---
@@ -614,10 +661,10 @@ MVP 完成后应满足：
 1. 一个 Project 可以有多个 Chat。
 2. Chat 可以关联相关 component / part / assembly 文件。
 3. 每个 component / part / assembly 都有独立 .py 和 .md。
-4. Agent 能判断 Inform / Plan / Execute。
-5. Inform 不修改文件。
-6. Plan 生成 Markdown CAD Plan。
-7. Execute 能调用 CadQuery 工具生成模型。
+4. Agent 支持 Agent / Plan 两个模式。
+5. Plan mode 不修改 CAD 源文件，不生成 outputs，只创建 plan package。
+6. Plan 生成 `plans/YYYYmmddnn-name/{request.md,plan.md,plan-result.md}`。
+7. Agent mode 能调用 CadQuery 工具生成模型。
 8. Viewer 能显示生成模型。
 9. Viewer 能选择 component / part / assembly。
 10. Viewer 能选择 face / edge / vertex。
@@ -637,8 +684,8 @@ MVP 成功是跑通闭环：
 
 ```text
 用户多 Chat 讨论
-→ Agent 生成 CAD Plan
-→ 用户确认执行
+→ Agent 生成 workspace plan package
+→ Agent mode 执行 plan
 → CadQuery 生成模型
 → Viewer 选择模型局部
 → Agent 基于选择继续修改
@@ -657,4 +704,3 @@ Chat 负责讨论上下文，
 CadQuery 负责生成和修改，
 Viewer Ref 负责把用户选择交给 Agent。
 ```
-

@@ -1,8 +1,9 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde_json::{Value, json};
+use tokio::fs;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::{
     canonical_or_original, collect_files, matches_pattern, optional_string_arg, parse_object,
@@ -12,20 +13,20 @@ use super::{
 const MAX_SEARCH_FILE_BYTES: usize = 256 * 1024;
 const MAX_SEARCH_RESULTS: usize = 50;
 
-pub(super) fn search_files(workspace_root: &Path, call: &LlmToolCall) -> String {
-    let workspace_root = canonical_or_original(workspace_root);
+pub(super) async fn search_files(workspace_root: &Path, call: &AgentToolCall) -> String {
+    let workspace_root = canonical_or_original(workspace_root).await;
     let args = match search_files_args(call) {
         Ok(args) => args,
         Err(result) => return result,
     };
-    let base = match resolve_existing_path(&workspace_root, &args.path, call) {
+    let base = match resolve_existing_path(&workspace_root, &args.path, call).await {
         Ok(path) => path,
         Err(result) => return result,
     };
     let mut files = Vec::new();
-    collect_files(&workspace_root, &base, &mut files);
+    collect_files(&workspace_root, &base, &mut files).await;
     files.sort();
-    let (matches, truncated) = search_file_matches(&workspace_root, files, &args);
+    let (matches, truncated) = search_file_matches(&workspace_root, files, &args).await;
     search_files_success(call, &args.query, matches, truncated).to_string()
 }
 
@@ -36,7 +37,7 @@ struct SearchFilesArgs {
     max_results: usize,
 }
 
-fn search_files_args(call: &LlmToolCall) -> Result<SearchFilesArgs, String> {
+fn search_files_args(call: &AgentToolCall) -> Result<SearchFilesArgs, String> {
     let args = parse_object(&call.arguments, call)?;
     Ok(SearchFilesArgs {
         query: string_arg(&args, "query", call)?,
@@ -48,7 +49,7 @@ fn search_files_args(call: &LlmToolCall) -> Result<SearchFilesArgs, String> {
     })
 }
 
-fn search_file_matches(
+async fn search_file_matches(
     workspace_root: &Path,
     files: Vec<String>,
     args: &SearchFilesArgs,
@@ -58,20 +59,20 @@ fn search_file_matches(
         .into_iter()
         .filter(|path| matches_pattern(path, &args.pattern))
     {
-        if push_file_matches(workspace_root, &relative, args, &mut matches) {
+        if push_file_matches(workspace_root, &relative, args, &mut matches).await {
             return (matches, true);
         }
     }
     (matches, false)
 }
 
-fn push_file_matches(
+async fn push_file_matches(
     workspace_root: &Path,
     relative: &str,
     args: &SearchFilesArgs,
     matches: &mut Vec<Value>,
 ) -> bool {
-    let Some(text) = readable_search_text(&workspace_root.join(relative)) else {
+    let Some(text) = readable_search_text(&workspace_root.join(relative)).await else {
         return false;
     };
     for (line_index, line) in text
@@ -91,8 +92,8 @@ fn push_file_matches(
     false
 }
 
-fn readable_search_text(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
+async fn readable_search_text(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).await.ok()?;
     if is_probably_binary(&bytes) {
         return None;
     }
@@ -102,7 +103,7 @@ fn readable_search_text(path: &Path) -> Option<String> {
 }
 
 fn search_files_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     query: &str,
     matches: Vec<Value>,
     truncated: bool,

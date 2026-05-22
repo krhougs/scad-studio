@@ -15,6 +15,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import {
+  isolatedHostEnvWithTestCadqueryRunner,
+  type HostEnvHandle,
+} from "./_smoke-harness";
 
 const SPEC_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SPEC_DIR, "..", "..", "..", "..");
@@ -72,11 +76,13 @@ endsolid double
 
 let hostProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
+let hostEnv: HostEnvHandle | null = null;
 let originalReadme = "";
 let originalImage = Buffer.alloc(0);
 let originalModel = "";
 
 test.beforeAll(async () => {
+  hostEnv = isolatedHostEnvWithTestCadqueryRunner();
   await mkdir(HOST_WORKSPACE, { recursive: true });
   await rm(WATCH_SMOKE_FILE, { force: true });
   await rm(PRESET_FILE, { force: true });
@@ -98,7 +104,11 @@ test.beforeAll(async () => {
       "--bind",
       HOST_BIND,
     ],
-    { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: hostEnv.env,
+    },
   );
   hostProc = host;
   host.stdout?.on("data", () => {});
@@ -141,6 +151,8 @@ test.afterAll(async () => {
   await writeFile(IMAGE_FILE, originalImage);
   await writeFile(MODEL_FILE, originalModel);
   rmSync(HOST_WORKSPACE, { recursive: true, force: true });
+  hostEnv?.cleanup();
+  hostEnv = null;
 });
 
 test.beforeEach(async ({ page }) => {

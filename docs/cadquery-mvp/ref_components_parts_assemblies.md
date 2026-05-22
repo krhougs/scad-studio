@@ -10,7 +10,7 @@
 Viewer 选择对象
 → 生成 Ref
 → Agent 定位到对应文件和语义对象
-→ Agent 讨论 / 出 Plan / 执行修改
+→ Agent 讨论 / 创建 Plan package / 在 Agent mode 执行修改
 → CadQuery 重新生成模型
 ```
 
@@ -26,7 +26,7 @@ Viewer 选择对象
 5. 优先选择 component / part / assembly / feature。
 6. face / edge / vertex 只作为精细定位和兜底。
 7. Agent 修改模型时只能改源文件，不直接改 artifact。
-8. 用户只是讨论时不改文件；用户要方案时输出 Plan；用户确认后才执行。
+8. 用户只是讨论时不改文件；Plan mode 只创建计划档案；Agent mode 才执行修改。
 ```
 
 ---
@@ -451,7 +451,7 @@ REFS["features"]["top_surface"]
 ```text
 只作为当前 artifact 的精细定位。
 可能随着重新生成失效。
-Agent 应优先尝试映射到 feature；若不能稳定映射，保留 raw geometry ref 并要求用户确认风险。
+Agent 应优先尝试映射到 feature；若不能稳定映射，保留 raw geometry ref，并向用户明确风险后追问。
 ```
 
 ---
@@ -769,7 +769,7 @@ Ref：
 2. 查该 face 是否绑定 feature。
 3. 若绑定 feature，转成 @feature[...]。
 4. 若不能绑定，生成内部 selector candidate。
-5. 若 selector 不唯一，要求用户确认。
+5. 若 selector 不唯一，要求用户选择具体目标。
 ```
 
 Agent 不应长期依赖 `f_123`。
@@ -1031,8 +1031,8 @@ Agent 判断：
 ## Risks
 该选择是否稳定，是否可能影响装配。
 
-## Confirmation Needed
-是否需要用户确认。
+## Execution Mode / Plan Run
+说明该 Ref 修改应由 Agent mode 直接执行，还是先通过 Plan mode 生成 plan package；如果使用已有 plan package，记录 `plan_ref` 和 execution scope。
 ```
 
 ---

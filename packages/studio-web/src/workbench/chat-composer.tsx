@@ -1,34 +1,36 @@
+import { forwardRef, useCallback, useRef, type MutableRefObject } from "react";
 import { ArrowUp, Cube, Paperclip, Ruler, X } from "@phosphor-icons/react";
-import type { AgentOperationLevel } from "@budn/app-server-protocol";
+import type { AgentMode } from "@budn/app-server-protocol";
+import { ComposerPrimitive } from "@assistant-ui/react";
 import type { ContextPill } from "./chat-zone";
 
 export function ChatComposer(props: {
-  value: string;
   disabled: boolean;
-  operation: AgentOperationLevel;
+  mode: AgentMode;
   contextPills: ContextPill[];
-  onChange: (value: string) => void;
-  onOperationChange: (value: AgentOperationLevel) => void;
+  onModeChange: (value: AgentMode) => void;
   onRemovePill: (refText: string) => void;
-  onSend: () => void;
 }) {
   return (
-    <footer className="chat-input">
+    <ComposerPrimitive.Root className="chat-input">
       <div className="wrap">
         <ContextPillBar pills={props.contextPills} onRemove={props.onRemovePill} />
-        <ChatTextarea
-          value={props.value}
-          onChange={props.onChange}
-          onSend={props.onSend}
-        />
+        <ComposerPrimitive.Input
+          asChild
+          placeholder="Describe what you want to build or change..."
+          submitMode="ctrlEnter"
+          data-testid="chat-input"
+          aria-label="chat message"
+        >
+          <ImeSafeTextarea />
+        </ComposerPrimitive.Input>
         <ChatComposerTools
           disabled={props.disabled}
-          operation={props.operation}
-          onOperationChange={props.onOperationChange}
-          onSend={props.onSend}
+          mode={props.mode}
+          onModeChange={props.onModeChange}
         />
       </div>
-    </footer>
+    </ComposerPrimitive.Root>
   );
 }
 
@@ -56,71 +58,45 @@ function ContextPillBar(props: {
   );
 }
 
-function ChatTextarea(props: {
-  value: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
-}) {
-  return (
-    <textarea
-      placeholder="Describe what you want to build or change..."
-      value={props.value}
-      onChange={(ev) => props.onChange((ev.target as HTMLTextAreaElement).value)}
-      onKeyDown={(ev) => {
-        if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) props.onSend();
-      }}
-      data-testid="chat-input"
-    />
-  );
-}
-
 function ChatComposerTools(props: {
   disabled: boolean;
-  operation: AgentOperationLevel;
-  onOperationChange: (value: AgentOperationLevel) => void;
-  onSend: () => void;
+  mode: AgentMode;
+  onModeChange: (value: AgentMode) => void;
 }) {
   return (
     <div className="tools">
       <div className="tools-left">
         <OperationSelect
           disabled={props.disabled}
-          value={props.operation}
-          onChange={props.onOperationChange}
+          value={props.mode}
+          onChange={props.onModeChange}
         />
         <DisabledToolButtons />
       </div>
-      <button
-        type="button"
-        className="send"
-        disabled={props.disabled}
-        onClick={props.onSend}
-      >
+      <ComposerPrimitive.Send className="send">
         send <ArrowUp size={12} weight="bold" aria-hidden="true" />
-      </button>
+      </ComposerPrimitive.Send>
     </div>
   );
 }
 
 function OperationSelect(props: {
   disabled: boolean;
-  value: AgentOperationLevel;
-  onChange: (value: AgentOperationLevel) => void;
+  value: AgentMode;
+  onChange: (value: AgentMode) => void;
 }) {
   return (
     <select
-      aria-label="agent operation"
+      aria-label="agent mode"
       className="operation-select"
       disabled={props.disabled}
       value={props.value}
       onChange={(event) =>
-        props.onChange((event.target as HTMLSelectElement).value as AgentOperationLevel)
+        props.onChange((event.target as HTMLSelectElement).value as AgentMode)
       }
     >
-      <option value="auto">auto</option>
-      <option value="inform">inform</option>
-      <option value="plan">plan</option>
-      <option value="execute">execute</option>
+      <option value="agent">Agent</option>
+      <option value="plan">Plan</option>
     </select>
   );
 }
@@ -139,4 +115,64 @@ function DisabledToolButtons() {
       </button>
     </>
   );
+}
+
+const ImeSafeTextarea = forwardRef<
+  HTMLTextAreaElement,
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>
+>(function ImeSafeTextarea({ value, onCompositionStart, onCompositionEnd, ...rest }, forwardedRef) {
+  const composingRef = useRef(false);
+
+  const setRef = useCallback((node: HTMLTextAreaElement | null) => {
+    if (typeof forwardedRef === "function") forwardedRef(node);
+    else if (forwardedRef) forwardedRef.current = node;
+
+    if (node) installImeSafeValueSetter(node, composingRef);
+  }, [forwardedRef]);
+
+  return (
+    <textarea
+      {...rest}
+      ref={setRef}
+      value={value}
+      onCompositionStart={(e) => {
+        composingRef.current = true;
+        onCompositionStart?.(e);
+      }}
+      onCompositionEnd={(e) => {
+        composingRef.current = false;
+        onCompositionEnd?.(e);
+      }}
+    />
+  );
+});
+
+type ImeSafeTextareaNode = HTMLTextAreaElement & {
+  __budnImeSafeValueSetter?: boolean;
+};
+
+function installImeSafeValueSetter(
+  node: HTMLTextAreaElement,
+  composingRef: MutableRefObject<boolean>,
+): void {
+  const typedNode = node as ImeSafeTextareaNode;
+  if (typedNode.__budnImeSafeValueSetter) return;
+
+  const proto = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  );
+  if (!proto?.get || !proto.set) return;
+
+  Object.defineProperty(node, "value", {
+    get() {
+      return proto.get!.call(this);
+    },
+    set(v: string) {
+      if (composingRef.current) return;
+      proto.set!.call(this, v);
+    },
+    configurable: true,
+  });
+  typedNode.__budnImeSafeValueSetter = true;
 }

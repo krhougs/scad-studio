@@ -19,6 +19,8 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         self.transport_status = TransportStatus::Open;
         self.pending_handshake = None;
         self.llm_configured = ack.server_capabilities.llm_configured;
+        self.agent_provider = ack.server_capabilities.agent_provider.clone();
+        self.agent_model_registry = ack.server_capabilities.agent_model_registry.clone();
         self.events.push_back(ClientEvent::HandshakeAccepted {
             session_token: ack.session_token.clone(),
             server_capabilities: ack.server_capabilities.clone(),
@@ -119,17 +121,49 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                         .iter()
                         .map(|part| part.vertices.len() as u32)
                         .sum(),
+                    artifact_relation: payload.artifact_relation.clone(),
                 });
             }
             CommandSuccess::ChatCreated(response) => {
                 self.current_chat_session = Some(response.session_id.clone());
+                self.current_chat_history.clear();
+                self.latest_chat_history_request = None;
+                self.pending_chat_session = None;
+                if let Some(initial_turn) = response.initial_turn.clone() {
+                    self.agent_run = Some(initial_turn);
+                    self.agent_runtime_status =
+                        Some(app_server_protocol::AgentRuntimeStatus::Running);
+                } else if !self
+                    .agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.agent_id == response.agent_id)
+                {
+                    self.agent_run = None;
+                }
             }
             CommandSuccess::ChatList(response) => {
                 self.chat_sessions = response.sessions.clone();
+                if self.pending_chat_session.is_none() {
+                    self.current_chat_session = response.active_chat_id.clone();
+                }
             }
             CommandSuccess::ChatHistory(response) => {
-                self.current_chat_session = Some(response.session_id.clone());
-                self.current_chat_history = response.messages.clone();
+                if self.pending_chat_session.as_ref() == Some(&response.session_id) {
+                    self.current_chat_session = Some(response.session_id.clone());
+                    self.pending_chat_session = None;
+                }
+                if self.latest_chat_history_request == Some(request_id) {
+                    let mesh_results = response
+                        .messages
+                        .iter()
+                        .filter_map(|message| message.mesh_result.clone())
+                        .collect::<Vec<_>>();
+                    self.current_chat_history = response.messages.clone();
+                    for result in mesh_results {
+                        self.upsert_cadquery_result(result);
+                    }
+                    self.latest_chat_history_request = None;
+                }
             }
             CommandSuccess::ChatAck(response) => {
                 self.current_chat_session = Some(response.session_id.clone());
@@ -144,6 +178,33 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             }
             CommandSuccess::AgentStarted(response) => {
                 self.agent_run = Some(response.clone());
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Running);
+            }
+            CommandSuccess::AgentSnapshot(response) => {
+                self.agent_events.clear();
+                self.merge_agent_event_records(response.events.clone());
+                self.agent_runtime_status = Some(response.state);
+                if response.state == app_server_protocol::AgentRuntimeStatus::Running {
+                    if let Some(turn_id) = response.active_turn_id.clone() {
+                        self.agent_run = Some(app_server_protocol::AgentStartedResponse {
+                            session_id: response.chat_id.clone(),
+                            agent_id: response.agent_id.clone(),
+                            run_id: turn_id.0.clone(),
+                            turn_id,
+                        });
+                    }
+                } else if self
+                    .agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.agent_id == response.agent_id)
+                {
+                    self.agent_run = None;
+                }
+            }
+            CommandSuccess::AgentModelRegistry(response) => {
+                self.agent_model_registry = Some(response.clone());
+                self.agent_provider = agent_provider_capability(response);
+                self.llm_configured = !response.providers.is_empty();
             }
             CommandSuccess::AgentPlanConfirmed(response) => {
                 self.agent_run = Some(response.clone());
@@ -258,6 +319,11 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
         match push.event {
             ServerPushEvent::WatchChanged(event) => self.handle_watch_changed(event),
             ServerPushEvent::WatchError(event) => self.handle_watch_error(event),
+            ServerPushEvent::ChatListChanged(response) => {
+                self.chat_sessions = response.sessions.clone();
+                self.current_chat_session = response.active_chat_id.clone();
+                self.events.push_back(ClientEvent::SnapshotChanged);
+            }
             event => self.handle_agent_event(event),
         }
     }
@@ -273,11 +339,40 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
                 .is_some_and(|run| run.run_id == event.run_id)
             {
                 self.agent_run = None;
+                self.agent_runtime_status = Some(if event.cancelled {
+                    app_server_protocol::AgentRuntimeStatus::Cancelled
+                } else {
+                    app_server_protocol::AgentRuntimeStatus::Done
+                });
+            }
+        }
+        if let ServerPushEvent::AgentError(event) = &event {
+            let matches_current_run = event.run_id.as_ref().is_some_and(|run_id| {
+                self.agent_run
+                    .as_ref()
+                    .is_some_and(|run| run.run_id == *run_id)
+            });
+            if matches_current_run {
+                self.agent_run = None;
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Failed);
+            } else if self.agent_run.is_none() {
+                self.agent_runtime_status = Some(app_server_protocol::AgentRuntimeStatus::Failed);
             }
         }
         self.agent_events.push(event.clone());
         self.events
             .push_back(ClientEvent::AgentEvent { payload: event });
+    }
+
+    fn merge_agent_event_records(&mut self, records: Vec<app_server_protocol::AgentEventRecord>) {
+        for record in records {
+            self.agent_event_records.retain(|existing| {
+                existing.agent_id != record.agent_id || existing.event_id != record.event_id
+            });
+            self.agent_event_records.push(record);
+        }
+        self.agent_event_records
+            .sort_by_key(|record| (record.agent_id.0.clone(), record.event_id.0));
     }
 
     fn upsert_cadquery_result(&mut self, ready: app_server_protocol::CadQueryResultReady) {
@@ -316,6 +411,25 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             payload,
         });
     }
+}
+
+fn agent_provider_capability(
+    registry: &app_server_protocol::AgentModelRegistryResponse,
+) -> Option<app_server_protocol::AgentProviderCapabilities> {
+    let provider = registry
+        .providers
+        .iter()
+        .find(|provider| provider.id == registry.active_provider_id)?;
+    let model = provider
+        .models
+        .iter()
+        .find(|model| model.id == registry.active_model_id)?;
+    Some(app_server_protocol::AgentProviderCapabilities {
+        provider: provider.kind.clone(),
+        model: Some(model.id.clone()),
+        native_web_search_enabled: model.native_web_search_applied,
+        search_sources_supported: model.search_sources_supported,
+    })
 }
 
 fn protocol_error_code_label(code: ProtocolErrorCode) -> &'static str {

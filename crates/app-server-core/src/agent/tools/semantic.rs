@@ -1,15 +1,12 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
-use app_server_protocol::WorkspaceId;
+use app_server_protocol::{CadQueryObjectKind, WorkspaceId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::llm::LlmToolCall;
+use crate::agent::plan_package::{SaveCadPlanPackageInput, save_plan_package};
 
-use super::{AgentToolRunContext, semantic_export, tool_error_json};
+use super::{AgentToolCall, AgentToolRunContext, semantic_export, tool_error_json};
 
 const DENIED_RELATION_ROOTS: &[&str] = &[
     ".git",
@@ -22,74 +19,51 @@ const DENIED_RELATION_ROOTS: &[&str] = &[
 pub(super) const PLAN_SCOPE_ROOTS: &[&str] =
     &["components", "parts", "assemblies", "plans", "refs", "docs"];
 
-pub(super) fn save_cad_plan(
+pub(super) async fn save_cad_plan(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
 ) -> String {
-    let args = match save_plan_args(call) {
+    let mut args = match save_plan_args(call) {
         Ok(args) => args,
         Err(result) => return result,
     };
-    let plan_path = match unique_plan_path(workspace_root, &args.title, call) {
-        Ok(path) => path,
-        Err(result) => return result,
+    args.source_chat_session = context.session_id.as_ref().map(|session| session.0.clone());
+    let saved = match save_plan_package(workspace_root, &args).await {
+        Ok(saved) => saved,
+        Err(error) => return tool_error_json(call, &error.message, error.error_type),
     };
-    let markdown = render_plan_markdown(&args);
-    if let Err(error) = fs::write(&plan_path.absolute, markdown.as_bytes()) {
-        return tool_error_json(
-            call,
-            &format!("写入 CAD Plan 失败: {error}"),
-            "file_conflict",
-        );
-    }
-    save_plan_success(call, context, args, plan_path.relative, markdown).to_string()
+    save_plan_success(call, context, args, saved).to_string()
 }
 
-struct SavePlanArgs {
-    title: String,
-    target_ref: String,
-    resolved_target: String,
-    affected_files: Vec<String>,
-    new_files: Vec<String>,
-    export_targets: Vec<String>,
-    strategy: String,
-    risks: Vec<String>,
-    acceptance: Vec<String>,
-    execution_boundary: String,
-}
+type SavePlanArgs = SaveCadPlanPackageInput;
 
-struct PlanPath {
-    relative: String,
-    absolute: PathBuf,
-}
-
-fn save_plan_args(call: &LlmToolCall) -> Result<SavePlanArgs, String> {
+fn save_plan_args(call: &AgentToolCall) -> Result<SavePlanArgs, String> {
     let value = parse_object(call)?;
-    let resolved_target = cadquery_target_arg(&value, "resolved_target", call)?;
+    let target_path = cadquery_target_arg(&value, "target_path", call)?;
     let affected_files = plan_scope_paths(&value, "affected_files", call)?;
     let args = SavePlanArgs {
         title: non_empty_string_arg(&value, "title", call)?,
+        request: non_empty_string_arg(&value, "request", call)?,
         target_ref: non_empty_string_arg(&value, "target_ref", call)?,
-        resolved_target,
+        target_path,
+        target_type: target_type_arg(&value, call)?,
         affected_files,
         new_files: optional_plan_scope_paths(&value, "new_files", call)?,
         export_targets: export_targets(&value, call)?,
         strategy: non_empty_string_arg(&value, "strategy", call)?,
         risks: optional_string_array(&value, "risks", call)?,
         acceptance: optional_string_array(&value, "acceptance", call)?,
-        execution_boundary: non_empty_string_arg(&value, "execution_boundary", call)?,
+        execution_scope: non_empty_string_arg(&value, "execution_scope", call)?,
+        source_chat_session: None,
     };
-    validate_plan_confirmation_scope(&args, call)?;
-    semantic_export::validate_plan_export_targets(
-        &args.resolved_target,
-        &args.export_targets,
-        call,
-    )?;
+    validate_target_type_matches_path(&args, call)?;
+    validate_plan_execution_scope(&args, call)?;
+    semantic_export::validate_plan_export_targets(&args.target_path, &args.export_targets, call)?;
     Ok(args)
 }
 
-pub(super) fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
+pub(super) fn parse_object(call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(&call.arguments).map_err(|error| {
         tool_error_json(
             call,
@@ -102,7 +76,7 @@ pub(super) fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
 pub(super) fn non_empty_string_arg(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let text = value.get(key).and_then(Value::as_str).unwrap_or("").trim();
     if text.is_empty() {
@@ -116,7 +90,7 @@ pub(super) fn non_empty_string_arg(
     }
 }
 
-fn plan_scope_paths(value: &Value, key: &str, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn plan_scope_paths(value: &Value, key: &str, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let paths = optional_plan_scope_paths(value, key, call)?;
     if paths.is_empty() {
         Err(tool_error_json(
@@ -132,7 +106,7 @@ fn plan_scope_paths(value: &Value, key: &str, call: &LlmToolCall) -> Result<Vec<
 fn optional_plan_scope_paths(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<String>, String> {
     optional_string_array(value, key, call)?
         .into_iter()
@@ -140,7 +114,7 @@ fn optional_plan_scope_paths(
         .collect()
 }
 
-fn export_targets(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn export_targets(value: &Value, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let targets = optional_string_array(value, "export_targets", call)?
         .into_iter()
         .map(|path| normalize_export_target(&path, call))
@@ -155,42 +129,72 @@ fn export_targets(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, Stri
     Ok(targets)
 }
 
-fn validate_plan_confirmation_scope(args: &SavePlanArgs, call: &LlmToolCall) -> Result<(), String> {
+fn validate_plan_execution_scope(args: &SavePlanArgs, call: &AgentToolCall) -> Result<(), String> {
     if args
         .affected_files
         .iter()
-        .any(|path| path == &args.resolved_target)
-        || args
-            .new_files
-            .iter()
-            .any(|path| path == &args.resolved_target)
+        .any(|path| path == &args.target_path)
+        || args.new_files.iter().any(|path| path == &args.target_path)
     {
         return Ok(());
     }
     Err(tool_error_json(
         call,
-        "resolved_target must be included in affected_files or new_files",
+        "target_path must be included in affected_files or new_files",
         "invalid_arguments",
     ))
 }
 
-fn cadquery_target_arg(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn cadquery_target_arg(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     let path = non_empty_string_arg(value, key, call)?;
     let normalized = normalize_allowed_path(&path, &["components", "parts", "assemblies"], call)?;
     if !normalized.ends_with(".py") {
         return Err(tool_error_json(
             call,
-            "resolved_target must be a CadQuery .py model source",
+            "target_path must be a CadQuery .py model source",
             "invalid_arguments",
         ));
     }
     Ok(normalized)
 }
 
+fn target_type_arg(value: &Value, call: &AgentToolCall) -> Result<CadQueryObjectKind, String> {
+    match non_empty_string_arg(value, "target_type", call)?.as_str() {
+        "assembly" => Ok(CadQueryObjectKind::Assembly),
+        "component" => Ok(CadQueryObjectKind::Component),
+        "part" => Ok(CadQueryObjectKind::Part),
+        _ => Err(tool_error_json(
+            call,
+            "target_type must be part, component, or assembly",
+            "invalid_arguments",
+        )),
+    }
+}
+
+fn validate_target_type_matches_path(
+    args: &SavePlanArgs,
+    call: &AgentToolCall,
+) -> Result<(), String> {
+    let expected = match first_segment(&args.target_path) {
+        "assemblies" => CadQueryObjectKind::Assembly,
+        "components" => CadQueryObjectKind::Component,
+        _ => CadQueryObjectKind::Part,
+    };
+    if args.target_type == expected {
+        Ok(())
+    } else {
+        Err(tool_error_json(
+            call,
+            "target_type does not match target_path",
+            "invalid_arguments",
+        ))
+    }
+}
+
 pub(super) fn optional_string_array(
     value: &Value,
     key: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<String>, String> {
     let Some(raw) = value.get(key) else {
         return Ok(Vec::new());
@@ -218,7 +222,7 @@ pub(super) fn optional_string_array(
 
 pub(super) fn path_handle(
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<app_server_protocol::PathHandle, String> {
     app_server_protocol::PathHandle::new(
         WorkspaceId::new("workspace"),
@@ -233,7 +237,7 @@ pub(super) fn path_handle(
     })
 }
 
-fn normalize_export_target(path: &str, call: &LlmToolCall) -> Result<String, String> {
+fn normalize_export_target(path: &str, call: &AgentToolCall) -> Result<String, String> {
     let normalized = normalize_workspace_path(path, call)?;
     if first_segment(&normalized) != "outputs" {
         return Err(tool_error_json(
@@ -261,7 +265,7 @@ fn supported_export_extension(path: &str) -> bool {
 pub(super) fn normalize_allowed_path(
     path: &str,
     allowed_roots: &[&str],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
     let normalized = normalize_workspace_path(path, call)?;
     let root = first_segment(&normalized);
@@ -283,7 +287,7 @@ pub(super) fn normalize_allowed_path(
     }
 }
 
-fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn normalize_workspace_path(path: &str, call: &AgentToolCall) -> Result<String, String> {
     let cleaned = path.trim().replace('\\', "/");
     if cleaned.is_empty() || cleaned.starts_with('/') || cleaned.contains(':') {
         return Err(tool_error_json(
@@ -307,157 +311,46 @@ fn normalize_workspace_path(path: &str, call: &LlmToolCall) -> Result<String, St
         .join("/"))
 }
 
-fn unique_plan_path(
-    workspace_root: &Path,
-    title: &str,
-    call: &LlmToolCall,
-) -> Result<PlanPath, String> {
-    let plans_dir = safe_plans_dir(workspace_root, call)?;
-    let slug = slugify(title);
-    for index in 1..=999 {
-        let file_name = if index == 1 {
-            format!("{slug}.md")
-        } else {
-            format!("{slug}-{index}.md")
-        };
-        let absolute = plans_dir.join(&file_name);
-        if !path_occupied(&absolute, call)? {
-            return Ok(PlanPath {
-                relative: format!("plans/{file_name}"),
-                absolute,
-            });
-        }
-    }
-    Err(tool_error_json(
-        call,
-        "unable to allocate unique CAD Plan path",
-        "file_conflict",
-    ))
-}
-
-fn path_occupied(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(tool_error_json(
-            call,
-            &format!("读取 CAD Plan 路径失败: {error}"),
-            "file_conflict",
-        )),
-    }
-}
-
-fn safe_plans_dir(workspace_root: &Path, call: &LlmToolCall) -> Result<PathBuf, String> {
-    let plans_dir = workspace_root.join("plans");
-    match fs::symlink_metadata(&plans_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
-            call,
-            "plans directory must not be a symlink",
-            "permission_denied",
-        )),
-        Ok(metadata) if metadata.is_dir() => Ok(plans_dir),
-        Ok(_) => Err(tool_error_json(
-            call,
-            "plans path must be a directory",
-            "invalid_arguments",
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&plans_dir).map_err(|error| {
-                tool_error_json(
-                    call,
-                    &format!("创建 plans 目录失败: {error}"),
-                    "file_conflict",
-                )
-            })?;
-            Ok(plans_dir)
-        }
-        Err(error) => Err(tool_error_json(
-            call,
-            &format!("读取 plans 目录失败: {error}"),
-            "file_conflict",
-        )),
-    }
-}
-
-fn render_plan_markdown(args: &SavePlanArgs) -> String {
-    [
-        format!("# {}", args.title),
-        "## Target".into(),
-        format!("- Target Ref: {}", args.target_ref),
-        format!("- Resolved Target: {}", args.resolved_target),
-        list_section("Affected Files", &args.affected_files),
-        list_section("New Files", &args.new_files),
-        list_section("Export Targets", &args.export_targets),
-        "## CadQuery Strategy".into(),
-        args.strategy.clone(),
-        list_section("Risks", &args.risks),
-        list_section("Acceptance", &args.acceptance),
-        "## Execution Boundary".into(),
-        args.execution_boundary.clone(),
-    ]
-    .join("\n\n")
-}
-
-fn list_section(title: &str, items: &[String]) -> String {
-    let body = if items.is_empty() {
-        "- none".into()
-    } else {
-        items
-            .iter()
-            .map(|item| format!("- {item}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    format!("## {title}\n{body}")
-}
-
 fn save_plan_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     args: SavePlanArgs,
-    plan_ref: String,
-    markdown: String,
+    saved: crate::agent::plan_package::SavedPlanPackage,
 ) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,
-        "message": "CAD Plan saved",
-        "plan_ref": plan_ref.clone(),
-        "display_path": plan_ref,
-        "hash": sha256_text(&markdown),
+        "message": "CAD Plan package saved",
+        "plan_id": saved.paths.plan_id,
+        "plan_ref": saved.paths.plan_ref,
+        "request_path": saved.paths.request_path,
+        "plan_path": saved.paths.plan_path,
+        "result_path": saved.paths.result_path,
+        "hash": sha256_text(&saved.hash_source),
         "summary": args.strategy,
-        "target_ref": args.target_ref,
-        "target_path": args.resolved_target,
+        "target_path": args.target_path,
+        "target_type": target_type_label(args.target_type),
         "affected_files": args.affected_files,
         "new_files": args.new_files,
         "export_targets": args.export_targets,
-        "execution_boundary": args.execution_boundary,
+        "plan_status": saved.plan_status,
         "run_id": context.run_id
     })
-}
-
-fn slugify(title: &str) -> String {
-    let mut slug = String::new();
-    for character in title.chars().flat_map(|value| value.to_lowercase()) {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character);
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_matches('-').to_owned();
-    if slug.is_empty() {
-        "cad-plan".into()
-    } else {
-        slug
-    }
 }
 
 fn sha256_text(text: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
 }
 
-fn first_segment(path: &str) -> &str {
+fn target_type_label(target_type: CadQueryObjectKind) -> &'static str {
+    match target_type {
+        CadQueryObjectKind::Assembly => "assembly",
+        CadQueryObjectKind::Component => "component",
+        CadQueryObjectKind::Part => "part",
+    }
+}
+
+pub(super) fn first_segment(path: &str) -> &str {
     path.split('/')
         .find(|segment| !segment.is_empty())
         .unwrap_or("")

@@ -6,26 +6,35 @@ import {
   type CadQueryScenePayload,
 } from "./cadquery-mesh";
 import {
+  cadQueryAvailableSelectionModes,
   cadQuerySelectionKey,
+  CADQUERY_SELECTION_MODES,
   selectionRefFromCadQueryPick,
   updateCadQuerySelection,
   type CadQueryPickTarget,
   type CadQuerySelectionMode,
+  type CadQueryViewerMode,
 } from "./cadquery-selection";
 import type { MeshInfo } from "./mesh-info";
 import { createMeshViewer, type MeshViewerHandle } from "./mesh-three";
 import type { MeshViewerOptions } from "./viewer-options";
 import type { SelectionRef } from "@budn/app-server-protocol";
+import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
 
 type CadQueryViewerProps = {
   resultId: string;
   client: CadQueryViewerClient;
   label: string;
   selectionMode: CadQuerySelectionMode;
+  mode?: CadQueryViewerMode;
+  onMode?: (mode: CadQueryViewerMode) => void;
   viewerOptions?: MeshViewerOptions;
   cameraPreset?: CameraPreset | null;
   cameraOverride?: CameraState | null;
+  interactionMode?: "select" | "preview";
+  selectionSnapshot?: SelectionUpdateRequest | null;
   refreshSignal?: number;
+  onScene?: (scene: CadQueryScenePayload | null) => void;
   onPreviewStatus?: (status: string) => void;
   onInfo?: (info: MeshInfo | null) => void;
   onCameraChange?: (camera: CameraState) => void;
@@ -49,6 +58,7 @@ type CadQueryLoadInput = {
   onInfo?: (info: MeshInfo | null) => void;
   onPick: (pick: CadQueryPickTarget) => void;
   onPreviewStatus?: (status: string) => void;
+  onScene?: (scene: CadQueryScenePayload | null) => void;
   sceneRef: React.MutableRefObject<CadQueryScenePayload | null>;
   viewerRef: React.MutableRefObject<MeshViewerHandle | null>;
 };
@@ -57,15 +67,30 @@ export function CadQueryViewer(props: CadQueryViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<MeshViewerHandle | null>(null);
   const sceneRef = useRef<CadQueryScenePayload | null>(null);
-  const [mode, setMode] = useState<CadQuerySelectionMode>(props.selectionMode);
-  const selection = useCadQuerySelection(props.client, sceneRef);
+  const [scene, setScene] = useState<CadQueryScenePayload | null>(null);
+  const [localMode, setLocalMode] = useState<CadQueryViewerMode>(
+    props.interactionMode === "preview" ? "preview" : props.selectionMode,
+  );
+  const mode = props.mode ?? localMode;
+  const interactionMode = mode === "preview" ? "preview" : "select";
+  const selectionMode = mode === "preview" ? props.selectionMode : mode;
+  const setMode = props.onMode ?? setLocalMode;
+  const selection = useCadQuerySelection(
+    props.client,
+    sceneRef,
+    props.selectionSnapshot,
+  );
 
   useViewerLifecycle(canvasRef, viewerRef, props.onCameraChange);
   useViewerOptions(viewerRef, props.viewerOptions);
-  useSelectionMode(viewerRef, mode);
-  useSelectionKeys(viewerRef, selection.selectedKeys);
+  useSelectionEnabled(viewerRef, interactionMode === "select");
+  useSelectionMode(viewerRef, selectionMode);
+  useSelectionKeys(
+    viewerRef,
+    interactionMode === "select" ? selection.selectedKeys : [],
+  );
   useCameraEffects(props, viewerRef);
-  useCadQueryResultLoad(props, viewerRef, sceneRef, selection.handlePick);
+  useCadQueryResultLoad(props, viewerRef, sceneRef, setScene, selection.handlePick);
 
   return (
     <CadQueryViewerFrame
@@ -73,8 +98,17 @@ export function CadQueryViewer(props: CadQueryViewerProps) {
       label={props.label}
       mode={mode}
       onMode={setMode}
+      availableModes={cadQueryAvailableSelectionModes(scene)}
+      selectionCount={(props.selectionSnapshot?.selections ?? []).length}
+      onClearSelection={() => {
+        void props.client.dispatchSelectionUpdate({
+          selections: [],
+          active_index: null,
+        });
+      }}
       pending={selection.pending}
       activeSelection={selection.activeSelection}
+      interactionMode={interactionMode}
       onCancelPending={selection.cancelPending}
       onConfirmPending={selection.confirmPending}
     />
@@ -84,6 +118,7 @@ export function CadQueryViewer(props: CadQueryViewerProps) {
 function useCadQuerySelection(
   client: CadQueryViewerClient,
   sceneRef: React.MutableRefObject<CadQueryScenePayload | null>,
+  selectionSnapshot: SelectionUpdateRequest | null | undefined,
 ) {
   const selectionsRef = useRef<SelectionRef[]>([]);
   const [pending, setPending] = useState<PendingSelection | null>(null);
@@ -107,6 +142,12 @@ function useCadQuerySelection(
     },
     [client],
   );
+  useEffect(() => {
+    const selections = selectionSnapshot?.selections ?? [];
+    selectionsRef.current = selections;
+    setSelectedKeys(selections.map(cadQuerySelectionKey));
+    setActiveSelection(activeSelectionFromSnapshot(selectionSnapshot));
+  }, [selectionSnapshot]);
   const handlePick = useCallback(
     (pick: CadQueryPickTarget) => {
       const scene = sceneRef.current;
@@ -130,13 +171,29 @@ function useCadQuerySelection(
   };
 }
 
+function activeSelectionFromSnapshot(
+  snapshot: SelectionUpdateRequest | null | undefined,
+): SelectionRef | null {
+  const selections = snapshot?.selections ?? [];
+  if (selections.length === 0) return null;
+  const active = snapshot?.active_index;
+  if (typeof active === "number" && active >= 0 && active < selections.length) {
+    return selections[active] ?? null;
+  }
+  return selections[selections.length - 1] ?? null;
+}
+
 function CadQueryViewerFrame(props: {
   canvasRef: React.MutableRefObject<HTMLCanvasElement | null>;
   label: string;
-  mode: CadQuerySelectionMode;
+  mode: CadQueryViewerMode;
+  availableModes: CadQuerySelectionMode[];
+  selectionCount: number;
+  onClearSelection: () => void;
   pending: PendingSelection | null;
   activeSelection: SelectionRef | null;
-  onMode: (mode: CadQuerySelectionMode) => void;
+  interactionMode: "select" | "preview";
+  onMode: (mode: CadQueryViewerMode) => void;
   onCancelPending: () => void;
   onConfirmPending: () => void;
 }) {
@@ -145,15 +202,25 @@ function CadQueryViewerFrame(props: {
       className="viewer viewer--mesh viewer--cadquery"
       data-testid="cadquery-viewer"
     >
-      <CadQuerySelectionDock mode={props.mode} onMode={props.onMode} />
-      <CadQuerySelectionStatus selection={props.activeSelection} />
+      {props.interactionMode === "select" ? (
+        <>
+          <CadQuerySelectionDock
+            mode={props.mode === "preview" ? null : props.mode}
+            availableModes={props.availableModes}
+            selectionCount={props.selectionCount}
+            onMode={props.onMode}
+            onClear={props.onClearSelection}
+          />
+          <CadQuerySelectionStatus selection={props.activeSelection} />
+        </>
+      ) : null}
       <canvas
         ref={props.canvasRef}
         className="mesh-viewer__canvas"
         data-testid="cadquery-canvas"
         data-label={props.label}
       />
-      {props.pending ? (
+      {props.pending && props.interactionMode === "select" ? (
         <AmbiguousSelectionDialog
           selection={props.pending.ref}
           onCancel={props.onCancelPending}
@@ -208,6 +275,7 @@ function useCadQueryResultLoad(
   props: CadQueryViewerProps,
   viewerRef: React.MutableRefObject<MeshViewerHandle | null>,
   sceneRef: React.MutableRefObject<CadQueryScenePayload | null>,
+  setScene: (scene: CadQueryScenePayload | null) => void,
   onPick: (pick: CadQueryPickTarget) => void,
 ) {
   const {
@@ -217,6 +285,7 @@ function useCadQueryResultLoad(
     refreshSignal,
     onInfo,
     onPreviewStatus,
+    onScene,
   } = props;
   useEffect(() => {
     let cancelled = false;
@@ -228,6 +297,10 @@ function useCadQueryResultLoad(
         onInfo,
         onPick,
         onPreviewStatus,
+        onScene: (scene) => {
+          setScene(scene);
+          onScene?.(scene);
+        },
         sceneRef,
         viewerRef,
       },
@@ -242,6 +315,8 @@ function useCadQueryResultLoad(
     onInfo,
     onPick,
     onPreviewStatus,
+    setScene,
+    onScene,
     refreshSignal,
     resultId,
     sceneRef,
@@ -262,6 +337,7 @@ function loadCadQueryResult(
       if (!handle) throw new Error("cadquery mesh missing");
       const scene = cadQuerySceneFromHandle(handle);
       input.sceneRef.current = scene;
+      input.onScene?.(scene);
       const info =
         input.viewerRef.current?.setCadQueryMesh(scene, {
           frame: true,
@@ -275,6 +351,7 @@ function loadCadQueryResult(
       if (isCancelled()) return;
       input.onPreviewStatus?.(`cadquery error: ${errorMessage(err)}`);
       input.onInfo?.(null);
+      input.onScene?.(null);
     });
 }
 
@@ -296,6 +373,15 @@ function useSelectionMode(
   }, [selectionMode, viewerRef]);
 }
 
+function useSelectionEnabled(
+  viewerRef: React.MutableRefObject<MeshViewerHandle | null>,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    viewerRef.current?.setCadQuerySelectionEnabled(enabled);
+  }, [enabled, viewerRef]);
+}
+
 function useSelectionKeys(
   viewerRef: React.MutableRefObject<MeshViewerHandle | null>,
   selectedKeys: string[],
@@ -315,22 +401,83 @@ function useCameraEffects(
   }, [props.cameraOverride, viewerRef]);
 }
 
+const OBJECT_MODES: CadQuerySelectionMode[] = [
+  "component",
+  "part",
+  "assembly",
+  "instance",
+];
+const GEOMETRY_MODES: CadQuerySelectionMode[] = [
+  "feature",
+  "face",
+  "edge",
+  "vertex",
+];
+
 function CadQuerySelectionDock(props: {
-  mode: CadQuerySelectionMode;
-  onMode: (mode: CadQuerySelectionMode) => void;
+  mode: CadQuerySelectionMode | null;
+  availableModes: CadQuerySelectionMode[];
+  selectionCount: number;
+  onMode: (mode: CadQueryViewerMode) => void;
+  onClear: () => void;
 }) {
+  const modes =
+    props.availableModes.length > 0
+      ? props.availableModes
+      : CADQUERY_SELECTION_MODES;
+  const objectModes = modes.filter((m) => OBJECT_MODES.includes(m));
+  const geometryModes = modes.filter((m) => GEOMETRY_MODES.includes(m));
   return (
     <div className="cadquery-select-dock" data-testid="cadquery-select-dock">
-      {(["part", "face", "edge", "vertex", "assembly"] as const).map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          className={props.mode === mode ? "active" : undefined}
-          onClick={() => props.onMode(mode)}
-        >
-          {mode}
-        </button>
-      ))}
+      {objectModes.length > 0 && (
+        <div className="cadquery-select-dock__group">
+          {objectModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={props.mode === mode ? "active" : undefined}
+              onClick={() => props.onMode(mode)}
+              data-testid={`cadquery-select-mode-${mode}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      )}
+      {objectModes.length > 0 && geometryModes.length > 0 && (
+        <div className="cadquery-select-dock__sep" />
+      )}
+      {geometryModes.length > 0 && (
+        <div className="cadquery-select-dock__group">
+          {geometryModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={props.mode === mode ? "active" : undefined}
+              onClick={() => props.onMode(mode)}
+              data-testid={`cadquery-select-mode-${mode}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      )}
+      {props.selectionCount > 0 && (
+        <>
+          <div className="cadquery-select-dock__sep" />
+          <span className="cadquery-select-dock__count">
+            {props.selectionCount}
+          </span>
+          <button
+            type="button"
+            className="cadquery-select-dock__clear"
+            onClick={props.onClear}
+            data-testid="cadquery-select-clear"
+          >
+            clear
+          </button>
+        </>
+      )}
     </div>
   );
 }

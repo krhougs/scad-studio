@@ -200,19 +200,13 @@ grid-template-areas:
 
 本节是 Phase 4 强制交付的书面结论（plan-00.md §Phase 4 步骤 3）。
 
-**结论：不把任何 token / 组件放入 `scad-ui`。**
+**结论：Web 设计系统不依赖旧 Rust egui UI 层。**
 
 理由：
 
-1. `scad-ui` 是 egui-based desktop UI 共享层，自己的视觉栈基于 `egui::Style` 与 `eframe` 的 painter；不消费 CSS 自定义属性。把 `--bg-page` / `--fg-primary` 之类的 CSS token 抽到 Rust 常量，desktop 不会真的用这些字符串去构造颜色，反而引入死代码与双向漂移的维护面。
+1. 旧 Rust egui UI 层的视觉栈基于 `egui::Style` 与 `eframe` 的 painter；不消费 CSS 自定义属性。把 `--bg-page` / `--fg-primary` 之类的 CSS token 抽到 Rust 常量，旧 UI 层不会真的用这些字符串去构造颜色，反而引入死代码与双向维护成本。
 2. Buddin 设计系统的核心表达（1 px hairline、零圆角、mono 大写元数据、blur 仅限 canvas 浮动工具栏）直接依赖 DOM / CSS 渲染语义：`backdrop-filter`、`text-transform`、`letter-spacing`、`color-mix(in oklab, ...)`；egui 的等价实现需要另写一遍，共享不了。
-3. 字体 fallback（`"Geist", system-ui, ...`）理论上可以做成 `scad-ui::GEIST_FAMILY_FALLBACK` 字符串常量，但 `scad-ui` 当前（`crates/scad-ui/src/lib.rs`）并没有可接入的字体配置出口；为了本次 Phase 4 就在 `scad-ui` 增设一个空的挂点，违反 AGENTS.md “只写解决问题所需的最少代码”。保留为后续工作建议即可。
-4. toolbar / statusbar / panel 等命名约定在 egui 端有自己的约定（`work_area_frame`、`panel_switcher`、`widgets`），语义不等价；强行统一命名会让 desktop 端现有代码失去语义，收益为零。
+3. 字体 fallback（`"Geist", system-ui, ...`）理论上可以做成 Rust 字符串常量，但旧 UI 层没有可接入的字体配置出口；为了本次 Phase 4 增设一个空的挂点，违反 AGENTS.md “只写解决问题所需的最少代码”。保留为后续工作建议即可。
+4. toolbar / statusbar / panel 等命名约定在旧 egui 层曾有自己的约定（`work_area_frame`、`panel_switcher`、`widgets`），语义不等价；强行统一命名会把历史 UI 细节带回当前 Web 设计系统，收益为零。
 
-**未来若 desktop 端要统一视觉表达**，流程如下：
-
-1. 在 `crates/scad-ui/` 下先为字体家族、口音色、spacing 基线增加共享常量 / 挂点（需要修改 `studio-app`、`scad-ui` 的公共 API）。
-2. 修订本文件与 `packages/studio-web/src/styles/tokens.css`，把字体 / 口音色 / spacing 基线从“web CSS 自定义属性”升级为“跨端语义常量 + web CSS 引用”。
-3. 新开 `prompt-archives/` 计划并独立 review 通过后再合入；不在本 Phase 隐式推进。
-
-作为折中保障：`studio-datasheet-workbench.md` 与 `tokens.css` 的字段命名使用通用语义（`bg-page` / `fg-primary` / `accent-live`），不绑定“Buddin 品牌专有词”，降低未来跨端对齐时的文字改名成本。
+当前 Web 是唯一生产 GUI 端，`studio-datasheet-workbench.md` 与 `tokens.css` 的字段命名使用通用语义（`bg-page` / `fg-primary` / `accent-live`），不绑定“Buddin 品牌专有词”，降低后续调整文字命名的成本。

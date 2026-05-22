@@ -34,8 +34,8 @@
 | @file | @part[name]、@component[name] |
 | @codebase | 项目结构自动上下文（components/parts/assemblies 目录） |
 | 文件编辑器选择 | Viewer 3D 选择（面/边/顶点/部件） |
-| Agent Mode | Agent 自动判断 + Plan 确认后执行 |
-| Plan Mode | Agent Plan 确认卡片 |
+| Agent Mode | 读写执行，可直接使用当前请求或已有 plan package |
+| Plan Mode | 生成 workspace plan package |
 
 ### 不适用于 budn' 的部分
 
@@ -51,8 +51,8 @@ budn' 不是代码编辑器，也不是通用 Agent 平台。它是 **3D CAD 设
 
 独特优势：
 1. **空间 @-mention**——在 3D Viewer 中点击一个面就是最自然的"引用"方式，比任何文本编辑器的 @-mention 都更直观
-2. **Ref 系统**——5 层精确引用（component → part → assembly → feature → face/edge/vertex）是结构化的，不是自由文本搜索
-3. **Preview before commit**——CAD 工具的核心模式，代码编辑器不需要这种"执行前预览效果"
+2. **Ref 系统**——MVP 用户可见 Ref 覆盖 component / part / assembly、instance、feature、face / edge / vertex，结构化程度高于自由文本搜索
+3. **Plan package before run**——CAD 复杂修改需要可审阅、可复用、可记录结果的任务包
 4. **物理世界约束**——尺寸、制造工艺、材料属性是 CAD 对话中的一等公民，代码编辑器不涉及
 
 设计时应发挥这些独特优势，而不是简单复制代码编辑器的交互模式。

@@ -3,26 +3,37 @@ use std::path::Path;
 use app_server_protocol::{CadQueryMeshPayload, CadQueryObjectKind, CadQueryPartMesh};
 use serde_json::{Value, json};
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::super::{CadQueryToolCachedResult, CadQueryToolRunResult};
+
+const REQUIRED_MODEL_DETAILS: [&str; 6] = [
+    "purpose",
+    "key_dimensions",
+    "intended_use",
+    "assumptions",
+    "interaction_notes",
+    "manufacturing_or_placement_constraints",
+];
 
 #[derive(Debug, Clone)]
 pub(super) struct SourceContract {
     pub(super) target_type_matches: bool,
     pub(super) has_build_function: bool,
     pub(super) has_refs: bool,
+    pub(super) has_model_description: bool,
     pub(super) unsafe_calls: Vec<&'static str>,
     pub(super) invalid_imports: Vec<String>,
 }
 
-pub(super) fn analyze_success(
+pub(super) async fn analyze_success(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     target_path: &str,
     include_paired_doc: bool,
     include_dependencies: bool,
     source: &str,
+    has_model_description: bool,
 ) -> Value {
     json!({
         "status": "ok",
@@ -32,10 +43,11 @@ pub(super) fn analyze_success(
         "target_type": target_type_label(target_type_from_path(target_path)),
         "has_build_function": has_build_function(source),
         "has_refs": has_refs(source),
-        "paired_doc_path": include_paired_doc.then(|| paired_doc_path(workspace_root, target_path)).flatten(),
+        "has_model_description": has_model_description,
+        "paired_doc_path": if include_paired_doc { paired_doc_path(workspace_root, target_path).await } else { None },
         "local_dependencies": if include_dependencies { local_dependencies(source) } else { Vec::new() },
         "ref_keys": feature_keys(source),
-        "warnings": analyze_warnings(source)
+        "warnings": analyze_warnings(source, has_model_description)
     })
 }
 
@@ -49,6 +61,7 @@ pub(super) fn source_contract(
             == expected_type,
         has_build_function: has_build_function(source),
         has_refs: has_refs(source),
+        has_model_description: has_model_description(source),
         unsafe_calls: unsafe_calls(source),
         invalid_imports: invalid_project_imports(source),
     }
@@ -59,6 +72,7 @@ pub(super) fn contract_json(contract: &SourceContract) -> Value {
         "target_type_matches": contract.target_type_matches,
         "has_build_function": contract.has_build_function,
         "has_refs": contract.has_refs,
+        "has_model_description": contract.has_model_description,
         "unsafe_calls": contract.unsafe_calls,
         "invalid_imports": contract.invalid_imports
     })
@@ -70,7 +84,14 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
         warnings.push("missing build function");
     }
     if !contract.has_refs {
-        warnings.push("missing REFS features");
+        warnings.push(
+            "missing REFS.features; add REFS = {\"type\":\"part\",\"features\":{...}} with stable feature keys chosen from this model's semantics",
+        );
+    }
+    if !contract.has_model_description {
+        warnings.push(
+            "missing MODEL_DESCRIPTION / MODEL_DETAILS; add purpose, key_dimensions, intended_use, assumptions, interaction_notes, and manufacturing_or_placement_constraints",
+        );
     }
     if !contract.target_type_matches {
         warnings.push("target type does not match REFS type");
@@ -85,7 +106,7 @@ pub(super) fn contract_warnings(contract: &SourceContract) -> Vec<&'static str> 
 }
 
 pub(super) fn run_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     result: CadQueryToolRunResult,
     committed: bool,
 ) -> Value {
@@ -120,7 +141,7 @@ pub(super) fn run_success(
     }
 }
 
-pub(super) fn result_success(call: &LlmToolCall, result: &CadQueryToolCachedResult) -> Value {
+pub(super) fn result_success(call: &AgentToolCall, result: &CadQueryToolCachedResult) -> Value {
     json!({
         "status": "ok",
         "tool": call.function_name,
@@ -135,7 +156,7 @@ pub(super) fn result_success(call: &LlmToolCall, result: &CadQueryToolCachedResu
 }
 
 pub(super) fn resolve_selection_success(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     mesh: &CadQueryMeshPayload,
     ref_text: &str,
 ) -> Value {
@@ -174,7 +195,7 @@ pub(super) fn target_type_label(kind: CadQueryObjectKind) -> &'static str {
     }
 }
 
-fn target_type_from_path(path: &str) -> CadQueryObjectKind {
+pub(super) fn target_type_from_path(path: &str) -> CadQueryObjectKind {
     match path.split('/').next().unwrap_or("") {
         "components" => CadQueryObjectKind::Component,
         "assemblies" => CadQueryObjectKind::Assembly,
@@ -182,9 +203,12 @@ fn target_type_from_path(path: &str) -> CadQueryObjectKind {
     }
 }
 
-fn paired_doc_path(root: &Path, source: &str) -> Option<String> {
+async fn paired_doc_path(root: &Path, source: &str) -> Option<String> {
     let doc = source.strip_suffix(".py")?.to_owned() + ".md";
-    root.join(&doc).is_file().then_some(doc)
+    tokio::fs::metadata(root.join(&doc))
+        .await
+        .is_ok_and(|metadata| metadata.is_file())
+        .then_some(doc)
 }
 
 fn has_build_function(source: &str) -> bool {
@@ -193,6 +217,279 @@ fn has_build_function(source: &str) -> bool {
 
 fn has_refs(source: &str) -> bool {
     source.contains("REFS") && source.contains("features")
+}
+
+fn has_model_description(source: &str) -> bool {
+    has_string_assignment(source, "MODEL_DESCRIPTION")
+        && assignment_dict(source, "MODEL_DETAILS").is_some_and(|dict| {
+            REQUIRED_MODEL_DETAILS
+                .iter()
+                .all(|field| dict_has_key(dict, field))
+        })
+}
+
+fn has_string_assignment(source: &str, name: &str) -> bool {
+    module_assignment_value(source, name)
+        .map(str::trim_start)
+        .is_some_and(|value| {
+            let Some(quote @ ('\'' | '"')) = value.chars().next() else {
+                return false;
+            };
+            python_string_at(value, 0, quote).is_some_and(|(_, text)| !text.trim().is_empty())
+        })
+}
+
+fn assignment_dict<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let value = module_assignment_value(source, name)?;
+    let start = skip_ws(value, 0);
+    dict_body_at(value, start)
+}
+
+fn module_assignment_value<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let mut index = 0;
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            index = quoted_string_end(source, index, ch)?;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(source, index);
+            continue;
+        }
+        if !is_line_start(source, index) || !source[index..].starts_with(name) {
+            index += ch.len_utf8();
+            continue;
+        }
+        if !is_identifier_boundary(source, index, name.len()) {
+            index += name.len();
+            continue;
+        }
+        if let Some(value_start) = assignment_value_start(source, index + name.len()) {
+            return Some(&source[value_start..]);
+        }
+        index += name.len();
+    }
+    None
+}
+
+fn assignment_value_start(source: &str, name_end: usize) -> Option<usize> {
+    let index = skip_inline_ws(source, name_end);
+    if source[index..].starts_with('=') && !source[index + 1..].starts_with('=') {
+        return Some(index + 1);
+    }
+    if !source[index..].starts_with(':') {
+        return None;
+    }
+    let line_end = source[index..]
+        .find('\n')
+        .map_or(source.len(), |offset| index + offset);
+    let assign = source[index + 1..line_end].find('=')? + index + 1;
+    (!source[assign + 1..].starts_with('=')).then_some(assign + 1)
+}
+
+fn dict_has_key(dict: &str, key: &str) -> bool {
+    value_start_for_key(dict, key)
+        .is_some_and(|value_start| dict_value_is_non_empty(dict, value_start))
+}
+
+fn value_start_for_key(dict: &str, key: &str) -> Option<usize> {
+    let mut index = 0;
+    let mut depth = 0usize;
+    while index < dict.len() {
+        let ch = dict[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            let (end, text) = python_string_at(dict, index, ch)?;
+            if depth == 0 && text == key {
+                let colon = skip_ws(dict, end);
+                if dict[colon..].starts_with(':') {
+                    return Some(colon + 1);
+                }
+            }
+            index = end;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(dict, index);
+            continue;
+        }
+        update_depth(ch, &mut depth);
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn dict_value_is_non_empty(dict: &str, value_start: usize) -> bool {
+    let value_start = skip_ws(dict, value_start);
+    let Some(ch) = dict[value_start..].chars().next() else {
+        return false;
+    };
+    match ch {
+        '\'' | '"' => {
+            python_string_at(dict, value_start, ch).is_some_and(|(_, text)| !text.trim().is_empty())
+        }
+        '{' => dict_body_at(dict, value_start).is_some_and(collection_body_has_content),
+        '[' => list_body_at(dict, value_start).is_some_and(collection_body_has_content),
+        _ => false,
+    }
+}
+
+fn collection_body_has_content(body: &str) -> bool {
+    let mut index = 0;
+    while index < body.len() {
+        let Some(ch) = body[index..].chars().next() else {
+            break;
+        };
+        match ch {
+            '\'' | '"' => {
+                let Some((end, text)) = python_string_at(body, index, ch) else {
+                    return false;
+                };
+                if !text.trim().is_empty() {
+                    return true;
+                }
+                index = end;
+            }
+            '#' => index = line_comment_end(body, index),
+            ':' | ',' | '{' | '}' | '[' | ']' | '(' | ')' => index += ch.len_utf8(),
+            _ if ch.is_whitespace() => index += ch.len_utf8(),
+            _ => return true,
+        }
+    }
+    false
+}
+
+fn dict_body_at(source: &str, open_index: usize) -> Option<&str> {
+    collection_body_at(source, open_index, '{', '}')
+}
+
+fn list_body_at(source: &str, open_index: usize) -> Option<&str> {
+    collection_body_at(source, open_index, '[', ']')
+}
+
+fn collection_body_at(source: &str, open_index: usize, open: char, close: char) -> Option<&str> {
+    if !source[open_index..].starts_with(open) {
+        return None;
+    }
+    let mut index = open_index;
+    let mut depth = 0usize;
+    let mut content_start = open_index;
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        if ch == '\'' || ch == '"' {
+            index = quoted_string_end(source, index, ch)?;
+            continue;
+        }
+        if ch == '#' {
+            index = line_comment_end(source, index);
+            continue;
+        }
+        if ch == open {
+            if depth == 0 {
+                content_start = index + ch.len_utf8();
+            }
+        }
+        update_depth(ch, &mut depth);
+        if ch == close {
+            if depth == 0 {
+                return Some(&source[content_start..index]);
+            }
+        }
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn python_string_at(source: &str, quote_index: usize, quote: char) -> Option<(usize, &str)> {
+    let marker = if quote == '\'' { "'''" } else { "\"\"\"" };
+    if source[quote_index..].starts_with(marker) {
+        let content_start = quote_index + marker.len();
+        let offset = source[content_start..].find(marker)?;
+        let content_end = content_start + offset;
+        return Some((
+            content_end + marker.len(),
+            &source[content_start..content_end],
+        ));
+    }
+    quoted_string_at(source, quote_index, quote)
+}
+
+fn quoted_string_at(source: &str, quote_index: usize, quote: char) -> Option<(usize, &str)> {
+    let content_start = quote_index + quote.len_utf8();
+    let mut escaped = false;
+    for (offset, ch) in source[content_start..].char_indices() {
+        let index = content_start + offset;
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            return Some((index + ch.len_utf8(), &source[content_start..index]));
+        }
+    }
+    None
+}
+
+fn quoted_string_end(source: &str, quote_index: usize, quote: char) -> Option<usize> {
+    python_string_at(source, quote_index, quote).map(|(end, _)| end)
+}
+
+fn update_depth(ch: char, depth: &mut usize) {
+    match ch {
+        '{' | '[' | '(' => *depth += 1,
+        '}' | ']' | ')' => *depth = depth.saturating_sub(1),
+        _ => {}
+    }
+}
+
+fn skip_ws(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let Some(ch) = source[index..].chars().next() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn skip_inline_ws(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let Some(ch) = source[index..].chars().next() else {
+            break;
+        };
+        if !matches!(ch, ' ' | '\t') {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn line_comment_end(source: &str, index: usize) -> usize {
+    source[index..]
+        .find('\n')
+        .map_or(source.len(), |offset| index + offset + 1)
+}
+
+fn is_line_start(source: &str, index: usize) -> bool {
+    index == 0 || source[..index].chars().next_back() == Some('\n')
+}
+
+fn is_identifier_boundary(source: &str, start: usize, len: usize) -> bool {
+    let before = source[..start].chars().next_back();
+    let after = source[start + len..].chars().next();
+    !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
 }
 
 fn declared_type(source: &str) -> Option<CadQueryObjectKind> {
@@ -277,13 +574,16 @@ fn invalid_import_root(module: &str) -> bool {
     )
 }
 
-fn analyze_warnings(source: &str) -> Vec<&'static str> {
+fn analyze_warnings(source: &str, has_model_description: bool) -> Vec<&'static str> {
     let mut warnings = Vec::new();
     if !has_build_function(source) {
         warnings.push("missing build function");
     }
     if !has_refs(source) {
         warnings.push("missing REFS features");
+    }
+    if !has_model_description {
+        warnings.push("missing MODEL_DESCRIPTION / MODEL_DETAILS");
     }
     warnings
 }

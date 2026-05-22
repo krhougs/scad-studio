@@ -1,6 +1,4 @@
-use super::{
-    AgentToolConfirmationScope, AgentToolPathPolicy, CadQueryModelFilePolicy, OutputPathPolicy,
-};
+use super::{AgentExecutionScope, AgentToolPathPolicy, CadQueryModelFilePolicy, OutputPathPolicy};
 
 pub(super) struct ToolPolicyError {
     pub(super) message: String,
@@ -27,38 +25,32 @@ pub(super) fn validate_tool_path_policy(
     tool_name: &str,
     args: &str,
     policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
+    execution_scope: Option<&AgentExecutionScope>,
 ) -> Result<(), ToolPolicyError> {
     let parsed: serde_json::Value = serde_json::from_str(args).map_err(|error| {
         ToolPolicyError::invalid_arguments(format!("invalid tool arguments: {error}"))
     })?;
-    let path_args = collect_normalized_path_args(&parsed, policy)?;
+    let path_args = collect_normalized_path_args(tool_name, &parsed, policy)?;
     validate_copy_model_boundary(tool_name, &path_args)?;
     for (field, normalized) in path_args {
         validate_cadquery_model_file_policy(&field, &normalized, policy)?;
-        validate_confirmation_file_scope(
-            tool_name,
-            &field,
-            &normalized,
-            policy,
-            confirmation_scope,
-        )?;
+        validate_execution_file_scope(tool_name, &field, &normalized, policy, execution_scope)?;
     }
     let export_targets = parsed
         .get("export_targets")
         .map(parse_export_targets)
         .transpose()?;
     if export_formats_requested(&parsed)
-        && policy.output_paths == OutputPathPolicy::ConfirmationOutputsOnly
+        && policy.output_paths == OutputPathPolicy::ExecutionScopeOutputs
         && export_targets.as_ref().is_none_or(Vec::is_empty)
     {
         return Err(ToolPolicyError::permission_denied(
-            "export_formats require confirmed export_targets",
+            "export_formats require export_targets",
         ));
     }
     if let Some(exports) = export_targets {
         for export in exports {
-            validate_export_target_scope(&export, policy, confirmation_scope)?;
+            validate_export_target_scope(&export, policy, execution_scope)?;
         }
     }
     Ok(())
@@ -67,13 +59,13 @@ pub(super) fn validate_tool_path_policy(
 pub(super) fn validate_registry_tool_intent(
     tool_name: &str,
     args: &str,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
+    execution_scope: Option<&AgentExecutionScope>,
 ) -> Result<(), ToolPolicyError> {
     let parsed: serde_json::Value = serde_json::from_str(args).map_err(|error| {
         ToolPolicyError::invalid_arguments(format!("invalid tool arguments: {error}"))
     })?;
     let path_args = collect_normalized_workspace_path_args(&parsed)?;
-    validate_write_file_intent(tool_name, &path_args, &parsed, confirmation_scope)
+    validate_write_file_intent(tool_name, &path_args, &parsed, execution_scope)
 }
 
 pub(super) fn normalize_scope_paths(paths: Vec<String>) -> Vec<String> {
@@ -93,15 +85,26 @@ fn collect_normalized_workspace_path_args(
 }
 
 fn collect_normalized_path_args(
+    tool_name: &str,
     parsed: &serde_json::Value,
     policy: &AgentToolPathPolicy,
 ) -> Result<Vec<(&'static str, String)>, ToolPolicyError> {
-    collect_workspace_path_args(parsed)
+    collect_workspace_path_args_for_tool(tool_name, parsed)
         .into_iter()
         .map(|(field, path)| {
             let normalized = validate_one_tool_path(&path, policy)?;
             Ok((field, normalized))
         })
+        .collect()
+}
+
+fn collect_workspace_path_args_for_tool(
+    tool_name: &str,
+    parsed: &serde_json::Value,
+) -> Vec<(&'static str, String)> {
+    collect_workspace_path_args(parsed)
+        .into_iter()
+        .filter(|(field, _)| !(tool_name == "save_cad_plan" && *field == "target_path"))
         .collect()
 }
 
@@ -165,23 +168,23 @@ fn validate_write_file_intent(
     tool_name: &str,
     paths: &[(&'static str, String)],
     parsed: &serde_json::Value,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
+    execution_scope: Option<&AgentExecutionScope>,
 ) -> Result<(), ToolPolicyError> {
     if tool_name != "write_file" {
         return Ok(());
     }
-    let (Some(scope), Some(path)) = (confirmation_scope, path_arg(paths, "path")) else {
+    let (Some(scope), Some(path)) = (execution_scope, path_arg(paths, "path")) else {
         return Ok(());
     };
     let has_expected_hash = parsed.get("expected_hash").is_some();
     if scope.contains_new_file(path) && has_expected_hash {
         return Err(ToolPolicyError::permission_denied(
-            "write_file paths in confirmed new_files must not provide expected_hash",
+            "write_file paths in execution new_files must not provide expected_hash",
         ));
     }
     if scope.contains_affected_file(path) && !has_non_empty_expected_hash(parsed) {
         return Err(ToolPolicyError::permission_denied(
-            "write_file paths in confirmed affected_files require expected_hash",
+            "write_file paths in execution affected_files require expected_hash",
         ));
     }
     Ok(())
@@ -223,30 +226,28 @@ fn validate_cadquery_model_file_policy(
     }
 }
 
-fn validate_confirmation_file_scope(
+fn validate_execution_file_scope(
     tool_name: &str,
     field: &str,
     path: &str,
     policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
+    execution_scope: Option<&AgentExecutionScope>,
 ) -> Result<(), ToolPolicyError> {
-    if !policy.requires_confirmation_scope || field == "source_path" {
+    if !policy.uses_execution_scope || field == "source_path" {
         return Ok(());
     }
-    let Some(scope) = confirmation_scope else {
-        return Err(ToolPolicyError::permission_denied(
-            "tool requires confirmed execution scope",
-        ));
+    let Some(scope) = execution_scope else {
+        return Ok(());
     };
     match (tool_name, field) {
         ("patch_file", "path") if !scope.contains_affected_file(path) => {
             return Err(ToolPolicyError::permission_denied(format!(
-                "patch_file path '{path}' must be in confirmed affected_files"
+                "patch_file path '{path}' must be in execution affected_files"
             )));
         }
         ("copy_file", "target_path") if !scope.contains_new_file(path) => {
             return Err(ToolPolicyError::permission_denied(format!(
-                "copy_file target_path '{path}' must be in confirmed new_files"
+                "copy_file target_path '{path}' must be in execution new_files"
             )));
         }
         _ => {}
@@ -257,14 +258,14 @@ fn validate_confirmation_file_scope(
         && !scope.contains_new_file(path)
     {
         return Err(ToolPolicyError::permission_denied(
-            "copy_file target CadQuery model .py must be in confirmed new_files",
+            "copy_file target CadQuery model .py must be in execution new_files",
         ));
     }
     if scope.contains_affected_file(path) || scope.contains_new_file(path) {
         Ok(())
     } else {
         Err(ToolPolicyError::permission_denied(format!(
-            "path '{path}' is outside confirmed affected_files / new_files"
+            "path '{path}' is outside execution affected_files / new_files"
         )))
     }
 }
@@ -298,7 +299,7 @@ fn parse_export_targets(value: &serde_json::Value) -> Result<Vec<String>, ToolPo
 fn validate_export_target_scope(
     path: &str,
     policy: &AgentToolPathPolicy,
-    confirmation_scope: Option<&AgentToolConfirmationScope>,
+    execution_scope: Option<&AgentExecutionScope>,
 ) -> Result<(), ToolPolicyError> {
     if policy.output_paths == OutputPathPolicy::Denied {
         return Err(ToolPolicyError::permission_denied(
@@ -313,7 +314,7 @@ fn validate_export_target_scope(
             "export target must be under outputs/",
         ));
     }
-    if policy.output_paths != OutputPathPolicy::ConfirmationOutputsOnly {
+    if policy.output_paths != OutputPathPolicy::ExecutionScopeOutputs {
         return Ok(());
     }
     if first_path_segment(path) != "outputs" {
@@ -321,16 +322,14 @@ fn validate_export_target_scope(
             "export target must be under outputs/",
         ));
     }
-    let Some(scope) = confirmation_scope else {
-        return Err(ToolPolicyError::permission_denied(
-            "export target requires confirmed execution scope",
-        ));
+    let Some(scope) = execution_scope else {
+        return Ok(());
     };
     if scope.contains_export_target(path) {
         Ok(())
     } else {
         Err(ToolPolicyError::permission_denied(format!(
-            "export target '{path}' is outside confirmed export_targets"
+            "export target '{path}' is outside execution export_targets"
         )))
     }
 }

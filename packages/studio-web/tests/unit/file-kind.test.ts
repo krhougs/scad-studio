@@ -8,6 +8,7 @@ describe("fileKindLabel", () => {
 
   it("returns explicit labels for supported file types", () => {
     expect(fileKindLabel({ kind: "file", label: "part.scad" })).toBe("SCAD");
+    expect(fileKindLabel({ kind: "file", label: "part.py" })).toBe("PY");
     expect(fileKindLabel({ kind: "file", label: "mesh.stl" })).toBe("STL");
     expect(fileKindLabel({ kind: "file", label: "plate.3mf" })).toBe("3MF");
     expect(fileKindLabel({ kind: "file", label: "notes.md" })).toBe("MD");

@@ -1,8 +1,6 @@
 use app_server_protocol::ExportFormat;
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 use crate::{CliOutputFormat, OpenScadError, build_cli_args, detect_openscad_path};
 
@@ -20,32 +18,36 @@ pub fn build_export_filename(source_path: &Path, format: ExportFormat) -> String
     format!("{stem}.{}", format.extension())
 }
 
-pub fn detect_slicer_paths(configured_slicers: &[SlicerInstall]) -> Vec<SlicerInstall> {
-    let mut detected = configured_slicers.to_vec();
-    detected.extend(
-        default_slicer_candidates()
-            .into_iter()
-            .filter(|candidate| candidate.path.exists()),
-    );
+pub async fn detect_slicer_paths(configured_slicers: Vec<SlicerInstall>) -> Vec<SlicerInstall> {
+    let mut detected = configured_slicers;
+    for candidate in default_slicer_candidates() {
+        if tokio::fs::try_exists(candidate.path.clone())
+            .await
+            .unwrap_or(false)
+        {
+            detected.push(candidate);
+        }
+    }
     detected
 }
 
-pub fn export_model(
+pub async fn export_model(
     configured_openscad_path: Option<PathBuf>,
-    source_path: &Path,
-    defines: &[String],
-    output_path: &Path,
+    source_path: PathBuf,
+    defines: Vec<String>,
+    output_path: PathBuf,
     format: ExportFormat,
 ) -> Result<(), OpenScadError> {
-    let executable = detect_openscad_path(configured_openscad_path)?;
+    let executable = detect_openscad_path(configured_openscad_path).await?;
     let status = Command::new(executable)
         .args(build_cli_args(
             format.into(),
-            output_path,
-            defines,
-            source_path,
+            &output_path,
+            &defines,
+            &source_path,
         ))
         .status()
+        .await
         .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
     if status.success() {
         Ok(())
@@ -54,7 +56,7 @@ pub fn export_model(
     }
 }
 
-pub fn send_to_slicer(slicer_path: &Path, model_path: &Path) -> Result<(), String> {
+pub async fn send_to_slicer(slicer_path: PathBuf, model_path: PathBuf) -> Result<(), String> {
     Command::new(slicer_path)
         .arg(model_path)
         .spawn()

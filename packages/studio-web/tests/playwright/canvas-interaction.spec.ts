@@ -3,7 +3,7 @@
 // drives the Inspector camera presets to verify camera state updates the canvas
 // chrome, plus that pointer drag on the Three.js canvas triggers an orbit.
 
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -104,7 +104,7 @@ test("@canvas-interaction sidebar camera preset switches active view", async ({ 
   await expect(page.getByTestId("camera-azimuth")).toHaveValue("-45.000");
 });
 
-test("@canvas-interaction viewer toolbar drives render state", async ({ page }) => {
+test("@canvas-interaction viewer toolbar drives render state", async ({ page }, testInfo) => {
   await page.goto(`${HARNESS.baseUrl}/?ws=${encodeURIComponent(HARNESS.wsUrl)}&left-panel=files`);
   await page
     .getByTestId("entry-model.stl")
@@ -124,17 +124,33 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await expect(canvas).toHaveAttribute("data-lighting-intensity", "1.25");
   await expect(canvas).toHaveAttribute("data-gizmo-size", /\d+/);
   await expect(canvas).toHaveAttribute("data-clip-far", /\d+\.\d{3}/);
+  const solidImage = await canvas.screenshot({
+    path: testInfo.outputPath("render-mode-solid.png"),
+  });
+
+  await page.getByTestId("viewer-render-wireframe").click();
+  await expect(canvas).toHaveAttribute("data-render-mode", "wireframe");
+  const wireframeImage = await canvas.screenshot({
+    path: testInfo.outputPath("render-mode-wireframe.png"),
+  });
+
+  await page.getByTestId("viewer-render-xray").click();
+  await expect(canvas).toHaveAttribute("data-render-mode", "xray");
+  const xrayImage = await canvas.screenshot({
+    path: testInfo.outputPath("render-mode-xray.png"),
+  });
+  await expect(imageDifferenceRatio(page, solidImage, wireframeImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
+  await expect(imageDifferenceRatio(page, wireframeImage, xrayImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
+
   const distanceBeforeResize = await page.getByTestId("camera-distance").inputValue();
   await page.setViewportSize({ width: 900, height: 1200 });
   await expect(page.getByTestId("camera-distance")).not.toHaveValue(
     distanceBeforeResize,
   );
-
-  await page.getByTestId("viewer-render-wireframe").click();
-  await expect(canvas).toHaveAttribute("data-render-mode", "wireframe");
-
-  await page.getByTestId("viewer-render-xray").click();
-  await expect(canvas).toHaveAttribute("data-render-mode", "xray");
 
   await page.getByTestId("viewer-projection-orthographic").click();
   await expect(canvas).toHaveAttribute("data-projection-mode", "orthographic");
@@ -203,6 +219,75 @@ test("@canvas-interaction viewer toolbar drives render state", async ({ page }) 
   await page.getByTestId("viewer-toggle-clip").click();
   await expect(canvas).toHaveAttribute("data-clip-plane-enabled", "true");
 });
+
+test("@canvas-interaction cadquery toolbar drives render state", async ({
+  page,
+}, testInfo) => {
+  await page.goto(HARNESS.baseUrl);
+  await page.evaluate(async () => {
+    const harnessPath = "/tests/playwright/cadquery-canvas-zone-harness.tsx";
+    const harness = (await import(
+      /* @vite-ignore */ harnessPath
+    )) as {
+      mountCadQueryCanvasZone: () => void;
+    };
+    harness.mountCadQueryCanvasZone();
+  });
+
+  const canvas = page.getByTestId("cadquery-canvas");
+  await canvas.waitFor({ state: "visible", timeout: 30_000 });
+  await expect(page.getByTestId("viewer-toolbar")).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-render-mode", "solid");
+  const solidImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-solid.png"),
+  });
+
+  await page.getByTestId("viewer-render-wireframe").click();
+  await expect(canvas).toHaveAttribute("data-render-mode", "wireframe");
+  const wireframeImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-wireframe.png"),
+  });
+
+  await page.getByTestId("viewer-render-xray").click();
+  await expect(canvas).toHaveAttribute("data-render-mode", "xray");
+  const xrayImage = await canvas.screenshot({
+    path: testInfo.outputPath("cadquery-render-mode-xray.png"),
+  });
+
+  await expect(imageDifferenceRatio(page, solidImage, wireframeImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
+  await expect(imageDifferenceRatio(page, wireframeImage, xrayImage)).resolves.toBeGreaterThan(
+    0.001,
+  );
+});
+
+async function imageDifferenceRatio(page: Page, a: Buffer, b: Buffer): Promise<number> {
+  return page.evaluate(async ({ aBase64, bBase64 }) => {
+    async function decode(base64: string) {
+      const response = await fetch(`data:image/png;base64,${base64}`);
+      const bitmap = await createImageBitmap(await response.blob());
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("2D canvas context unavailable");
+      context.drawImage(bitmap, 0, 0);
+      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      return { width: bitmap.width, height: bitmap.height, data: Array.from(data) };
+    }
+    const first = await decode(aBase64);
+    const second = await decode(bBase64);
+    if (first.width !== second.width || first.height !== second.height) {
+      throw new Error("screenshots must have matching pixel dimensions");
+    }
+    let different = 0;
+    for (let index = 0; index < first.data.length; index += 1) {
+      if (first.data[index] !== second.data[index]) different += 1;
+    }
+    return different / first.data.length;
+  }, { aBase64: a.toString("base64"), bBase64: b.toString("base64") });
+}
 
 test("@canvas-interaction scad preview appearance controls persist per file", async ({
   page,

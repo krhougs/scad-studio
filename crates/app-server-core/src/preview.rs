@@ -1,19 +1,16 @@
-use crate::terminate_child;
 use app_server_protocol::{
     PreviewArtifact, PreviewArtifact3mf, PreviewArtifactStl, PreviewReadyResponse,
     PreviewRequestKind,
 };
 use scad_scene::three_mf;
 use std::{
-    env, fmt, fs,
+    env, fmt,
     io::Cursor,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
-    thread,
-    time::Duration,
+    process::Stdio,
 };
+use tokio::{fs, process::Command};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -50,71 +47,28 @@ impl OpenScadError {
     }
 }
 
-pub struct OpenScadRunner {
-    tx: Sender<RunnerCommand>,
-}
-
-enum RunnerCommand {
-    Render(RenderRequest),
-}
-
-struct RunningJob {
-    request: RenderRequest,
-    preview_path: PathBuf,
-    child: Child,
-}
-
-struct JobCompletion {
-    logs: Vec<LogEntry>,
-    result: Result<RenderedArtifact, OpenScadError>,
-}
-
-#[derive(Debug, Clone)]
-struct RenderRequest {
-    source_path: PathBuf,
-    defines: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliOutputFormat {
     BinaryStl,
     ThreeMf,
 }
 
-impl OpenScadRunner {
-    pub fn new<F>(notify: F) -> Self
-    where
-        F: Fn(OpenScadMessage) + Send + 'static,
-    {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || worker_loop(rx, notify));
-        Self { tx }
-    }
-
-    pub fn render_with_defines(&self, source_path: PathBuf, defines: Vec<String>) {
-        let _ = self.tx.send(RunnerCommand::Render(RenderRequest {
-            source_path,
-            defines,
-        }));
-    }
-}
-
-pub fn preview_ready_response(
+pub async fn preview_ready_response(
     configured_openscad_path: Option<PathBuf>,
-    source_path: &Path,
-    defines: &[String],
+    source_path: PathBuf,
+    defines: Vec<String>,
 ) -> Result<PreviewReadyResponse, OpenScadError> {
-    let artifact = preview_artifact(configured_openscad_path, source_path, defines)?;
+    let artifact = preview_artifact(configured_openscad_path, source_path, defines).await?;
     Ok(PreviewReadyResponse {
         requested_kind: PreviewRequestKind::GeometryArtifact,
         artifact,
     })
 }
 
-pub fn preview_artifact(
+pub async fn preview_artifact(
     configured_openscad_path: Option<PathBuf>,
-    source_path: &Path,
-    defines: &[String],
+    source_path: PathBuf,
+    defines: Vec<String>,
 ) -> Result<PreviewArtifact, OpenScadError> {
     let extension = source_path
         .extension()
@@ -122,125 +76,57 @@ pub fn preview_artifact(
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "stl" => read_preview_bytes(source_path).map(|bytes| {
+        "stl" => read_preview_bytes(source_path).await.map(|bytes| {
             PreviewArtifact::Stl(PreviewArtifactStl {
                 bytes,
                 media_type: "model/stl".into(),
             })
         }),
-        "3mf" => read_preview_bytes(source_path).map(|bytes| {
+        "3mf" => read_preview_bytes(source_path).await.map(|bytes| {
             PreviewArtifact::ThreeMf(PreviewArtifact3mf {
                 bytes,
                 media_type: "model/3mf".into(),
             })
         }),
-        "scad" => render_scad_preview(configured_openscad_path, source_path, defines),
+        "scad" => render_scad_preview(configured_openscad_path, source_path, defines).await,
         _ => Err(OpenScadError::new("暂不支持的预览文件类型")),
     }
 }
 
-fn read_preview_bytes(path: &Path) -> Result<Vec<u8>, OpenScadError> {
-    fs::read(path).map_err(|error| OpenScadError::new(format!("读取预览文件失败: {error}")))
+async fn read_preview_bytes(path: PathBuf) -> Result<Vec<u8>, OpenScadError> {
+    fs::read(path)
+        .await
+        .map_err(|error| OpenScadError::new(format!("读取预览文件失败: {error}")))
 }
 
-fn render_scad_preview(
+async fn render_scad_preview(
     configured_openscad_path: Option<PathBuf>,
-    source_path: &Path,
-    defines: &[String],
+    source_path: PathBuf,
+    defines: Vec<String>,
 ) -> Result<PreviewArtifact, OpenScadError> {
-    let executable = detect_openscad_path(configured_openscad_path)?;
-    let (preview_path, args) = build_preview_job_args(source_path, defines);
+    let executable = detect_openscad_path(configured_openscad_path).await?;
+    let (preview_path, args) = build_preview_job_args(&source_path, &defines);
     let output = Command::new(executable)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
+        .await
         .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
     let artifact = finalize_job(
-        source_path.to_path_buf(),
+        source_path,
         preview_path,
         output.status.success(),
         Ok(output),
-    )?;
+    )
+    .await?;
     Ok(PreviewArtifact::ThreeMf(PreviewArtifact3mf {
         bytes: artifact.bytes,
         media_type: "model/3mf".into(),
     }))
 }
 
-fn worker_loop<F>(rx: Receiver<RunnerCommand>, notify: F)
-where
-    F: Fn(OpenScadMessage) + Send + 'static,
-{
-    let mut active_job: Option<RunningJob> = None;
-    loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(RunnerCommand::Render(request)) => {
-                cancel_job(&mut active_job);
-                notify(OpenScadMessage::Started(request.source_path.clone()));
-                active_job = start_job(request, &notify);
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-        if let Some(completion) = poll_job(&mut active_job) {
-            for entry in completion.logs {
-                notify(OpenScadMessage::Log(entry));
-            }
-            notify(OpenScadMessage::Finished(completion.result));
-        }
-    }
-    cancel_job(&mut active_job);
-}
-
-fn start_job<F>(request: RenderRequest, notify: &F) -> Option<RunningJob>
-where
-    F: Fn(OpenScadMessage),
-{
-    match build_job(&request) {
-        Ok(job) => Some(job),
-        Err(error) => {
-            notify(OpenScadMessage::Finished(Err(error)));
-            None
-        }
-    }
-}
-
-fn build_job(request: &RenderRequest) -> Result<RunningJob, OpenScadError> {
-    let executable = detect_openscad_path(None)?;
-    let (preview_path, args) = build_preview_job_args(&request.source_path, &request.defines);
-    let child = Command::new(executable)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| OpenScadError::new(format!("启动 OpenSCAD CLI 失败: {error}")))?;
-    Ok(RunningJob {
-        request: request.clone(),
-        preview_path,
-        child,
-    })
-}
-
-fn poll_job(job: &mut Option<RunningJob>) -> Option<JobCompletion> {
-    let status = job.as_mut()?.child.try_wait().ok()??;
-    let RunningJob {
-        request,
-        preview_path,
-        child,
-    } = job.take()?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| OpenScadError::new(format!("等待 OpenSCAD CLI 结束失败: {error}")));
-    let logs = output
-        .as_ref()
-        .map(|output| collect_process_logs(&output.stdout, &output.stderr, status.success()))
-        .unwrap_or_default();
-    let result = finalize_job(request.source_path, preview_path, status.success(), output);
-    Some(JobCompletion { logs, result })
-}
-
-pub fn finalize_job(
+pub async fn finalize_job(
     source_path: PathBuf,
     preview_path: PathBuf,
     success: bool,
@@ -249,12 +135,12 @@ pub fn finalize_job(
     let output = match output {
         Ok(output) => output,
         Err(error) => {
-            remove_preview_file(&preview_path);
+            remove_preview_file(preview_path.clone()).await;
             return Err(error);
         }
     };
     if !success {
-        remove_preview_file(&preview_path);
+        remove_preview_file(preview_path.clone()).await;
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let message = if stderr.is_empty() {
             "OpenSCAD 3MF 预览失败：CLI 返回非零状态，当前环境可能不支持 3MF 导出".to_owned()
@@ -263,28 +149,20 @@ pub fn finalize_job(
         };
         return Err(OpenScadError::new(message));
     }
-    if !preview_path.is_file() {
+    if !fs::try_exists(preview_path.clone()).await.unwrap_or(false) {
         return Err(OpenScadError::new(
             "OpenSCAD 3MF 预览失败：CLI 未生成可解析的 3MF 输出文件",
         ));
     }
-    let bytes = fs::read(&preview_path)
+    let bytes = fs::read(preview_path.clone())
+        .await
         .map_err(|error| OpenScadError::new(format!("读取 OpenSCAD 3MF 预览失败: {error}")));
-    remove_preview_file(&preview_path);
+    remove_preview_file(preview_path).await;
     let bytes = bytes?;
     let mut cursor = Cursor::new(&bytes);
     three_mf::load_3mf_from_reader(&mut cursor)
         .map_err(|error| OpenScadError::new(format!("解析 OpenSCAD 3MF 预览失败: {error}")))?;
     Ok(RenderedArtifact { source_path, bytes })
-}
-
-fn cancel_job(job: &mut Option<RunningJob>) {
-    if let Some(active_job) = job.as_mut() {
-        terminate_child(&mut active_job.child);
-        let _ = active_job.child.wait();
-        remove_preview_file(&active_job.preview_path);
-    }
-    *job = None;
 }
 
 pub fn collect_process_logs(stdout: &[u8], stderr: &[u8], success: bool) -> Vec<LogEntry> {
@@ -315,20 +193,21 @@ fn extend_logs(entries: &mut Vec<LogEntry>, bytes: &[u8], level: LogLevel) {
     }
 }
 
-pub fn detect_openscad_path(configured_path: Option<PathBuf>) -> Result<PathBuf, OpenScadError> {
+pub async fn detect_openscad_path(
+    configured_path: Option<PathBuf>,
+) -> Result<PathBuf, OpenScadError> {
     let env_path = env::var_os("OPENSCAD_PATH").map(PathBuf::from);
-    resolve_openscad_path(
-        configured_path,
-        env_path,
-        find_in_path().or_else(find_platform_path),
-    )
+    match resolve_openscad_path(configured_path, env_path, find_in_path().await).await {
+        Ok(path) => Ok(path),
+        Err(_) => resolve_openscad_path(None, None, find_platform_path().await).await,
+    }
 }
 
-fn find_in_path() -> Option<PathBuf> {
-    find_command_in_path(default_openscad_command_names())
+async fn find_in_path() -> Option<PathBuf> {
+    find_command_in_path(default_openscad_command_names()).await
 }
 
-fn find_platform_path() -> Option<PathBuf> {
+async fn find_platform_path() -> Option<PathBuf> {
     let candidates = if cfg!(target_os = "macos") {
         vec![
             "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD",
@@ -342,10 +221,11 @@ fn find_platform_path() -> Option<PathBuf> {
     } else {
         vec!["/usr/bin/openscad", "/usr/local/bin/openscad"]
     };
-    candidates
+    let candidates = candidates
         .into_iter()
-        .map(PathBuf::from)
-        .find(|candidate| candidate.is_file())
+        .map(|path| PathBuf::from(path.to_owned()))
+        .collect::<Vec<_>>();
+    first_existing_file(candidates).await
 }
 
 fn temp_preview_path(source_path: &Path) -> PathBuf {
@@ -383,29 +263,38 @@ pub fn build_cli_args(
     args
 }
 
-pub fn resolve_openscad_path(
+pub async fn resolve_openscad_path(
     configured_path: Option<PathBuf>,
     env_path: Option<PathBuf>,
     auto_path: Option<PathBuf>,
 ) -> Result<PathBuf, OpenScadError> {
-    configured_path
-        .into_iter()
-        .flat_map(expand_configured_openscad_candidate)
-        .chain(
-            env_path
-                .into_iter()
-                .flat_map(expand_configured_openscad_candidate),
-        )
-        .chain(auto_path)
-        .find(|candidate| is_usable_openscad_candidate(candidate))
-        .ok_or_else(|| OpenScadError::new(openscad_not_found_message()))
+    if let Some(path) = configured_path {
+        for candidate in expand_configured_openscad_candidate(path).await {
+            if is_usable_openscad_candidate(candidate.clone()).await {
+                return Ok(candidate);
+            }
+        }
+    }
+    if let Some(path) = env_path {
+        for candidate in expand_configured_openscad_candidate(path).await {
+            if is_usable_openscad_candidate(candidate.clone()).await {
+                return Ok(candidate);
+            }
+        }
+    }
+    if let Some(candidate) = auto_path
+        && is_usable_openscad_candidate(candidate.clone()).await
+    {
+        return Ok(candidate);
+    }
+    Err(OpenScadError::new(openscad_not_found_message()))
 }
 
 fn openscad_not_found_message() -> &'static str {
     "未找到 OpenSCAD CLI，可设置环境变量 OPENSCAD_PATH 或在 Settings 中配置 OpenSCAD 路径"
 }
 
-fn expand_configured_openscad_candidate(path: PathBuf) -> Vec<PathBuf> {
+async fn expand_configured_openscad_candidate(path: PathBuf) -> Vec<PathBuf> {
     let mut candidates = if is_bare_command_name(&path) {
         Vec::new()
     } else {
@@ -415,15 +304,19 @@ fn expand_configured_openscad_candidate(path: PathBuf) -> Vec<PathBuf> {
         candidates.push(path.join("Contents/MacOS/OpenSCAD"));
     }
     if is_bare_command_name(&path) {
-        candidates.extend(find_command_in_path(command_names_for_configured_path(
-            &path,
-        )));
+        candidates.extend(
+            find_command_in_path(command_names_for_configured_path(&path))
+                .await
+                .into_iter(),
+        );
     }
     candidates
 }
 
-fn is_usable_openscad_candidate(path: &Path) -> bool {
-    path.is_file()
+async fn is_usable_openscad_candidate(path: PathBuf) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .is_ok_and(|metadata| metadata.is_file())
 }
 
 fn is_macos_app_bundle_path(path: &Path) -> bool {
@@ -438,12 +331,21 @@ fn is_bare_command_name(path: &Path) -> bool {
         && components.next().is_none()
 }
 
-fn find_command_in_path(names: Vec<&'static str>) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|value| {
-        env::split_paths(&value)
-            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-            .find(|candidate| candidate.is_file())
-    })
+async fn find_command_in_path(names: Vec<&'static str>) -> Option<PathBuf> {
+    let value = env::var_os("PATH")?;
+    let paths = env::split_paths(&value)
+        .flat_map(|dir| names.clone().into_iter().map(move |name| dir.join(name)))
+        .collect::<Vec<_>>();
+    first_existing_file(paths).await
+}
+
+async fn first_existing_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    for path in paths {
+        if is_usable_openscad_candidate(path.clone()).await {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn default_openscad_command_names() -> Vec<&'static str> {
@@ -485,8 +387,8 @@ impl fmt::Display for OpenScadError {
     }
 }
 
-fn remove_preview_file(path: &Path) {
-    if let Err(error) = fs::remove_file(path)
+async fn remove_preview_file(path: PathBuf) {
+    if let Err(error) = fs::remove_file(path).await
         && error.kind() != ErrorKind::NotFound
     {
         log::warn!("清理临时 3MF 预览文件失败: {error}");

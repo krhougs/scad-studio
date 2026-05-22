@@ -4,9 +4,9 @@
 // 挂载到 Canvas Zone）。左栏 Files 点击文件 → 按扩展名路由到对应 viewer tab；
 // 不支持的扩展名仅更新状态条消息，不开 tab。
 //
-// 协议业务状态仍在 wasm 内；Zustand 只存 UI 壳状态（openTabs / activeTabId
-// / sidePanelOpen 等）。viewer 自己发 FileRead / PreviewRequest，tab 只记
-// id / label / path / kind。
+// 协议业务状态通过 protocol-store (Zustand) 按域拆分订阅，避免全树
+// re-render。UI 壳状态在 ui-store。viewer 自己发 FileRead /
+// PreviewRequest，tab 只记 id / label / path / kind。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -25,14 +25,26 @@ import {
 } from "../config/app-config-store";
 import { WasmClient } from "../wasm-bridge";
 import { useUiStore } from "../state/ui-store";
+import {
+  useProtocolStore,
+  useWorkspaceName,
+  useAgentRun,
+  useChatSessions,
+  useCurrentChatSession,
+} from "../state/protocol-store";
 import { CanvasZone, type ViewPreset } from "./canvas-zone";
-import type { ChatSnapshot } from "./chat-zone";
+import { activeAgentModelSelection, runSavedPlan } from "./chat-actions";
 import type { CameraState } from "../canvas/camera-state";
 import { CameraInspector } from "./camera-inspector";
 import {
-  cadQueryResultTab,
   extractCadQueryReadyFromAgentEvent,
 } from "./cadquery-result-tab";
+import {
+  cadQueryArtifactTabPathForFile,
+  cadQueryTabMatchesReady,
+  isCadQueryStepFile,
+} from "./cadquery-source-path";
+import { CadQueryRefTree } from "./cadquery-ref-tree";
 import { documentTitleForFile } from "./document-title";
 import { Inspector } from "./inspector";
 import { LeftPanel } from "./left-panel";
@@ -48,6 +60,9 @@ import { derivePresetPath } from "./preset-io";
 import { resolveTabKind, extensionOf } from "./tab-kind";
 import { Topbar, type TopbarStatus } from "./topbar";
 import type { MeshInfo } from "../viewers/mesh-info";
+import type { CadQueryScenePayload } from "../viewers/cadquery-mesh";
+import type { PlanRunTarget } from "../viewers/plan-preview-path";
+import type { SelectionUpdateRequest } from "@budn/app-server-protocol";
 import type { WorkspaceDirectoryNode, WorkspaceEntry } from "./workspace-tree";
 import {
   createTransport,
@@ -56,6 +71,10 @@ import {
 } from "./workbench-wiring";
 import { describeFileReadError } from "../viewers/file-read-decoder";
 import { resolveWorkbenchWsUrl } from "./ws-url";
+import {
+  shouldRefreshDocumentForWatch,
+  shouldRefreshScadSettingsForWatch,
+} from "./watch-refresh";
 
 type Phase = "idle" | "connecting" | "handshaking" | "ready" | "error";
 
@@ -66,22 +85,6 @@ type ProtocolEntry = {
   path_error?: unknown;
 };
 
-type Snapshot = {
-  workspace_current?: {
-    workspace_id?: unknown;
-    root_name?: string;
-  } | null;
-  workspace_list?: {
-    directory?: unknown;
-    entries?: ProtocolEntry[];
-  } | null;
-  chat_sessions?: ChatSnapshot["chat_sessions"];
-  current_chat_session?: ChatSnapshot["current_chat_session"];
-  current_chat_history?: ChatSnapshot["current_chat_history"];
-  agent_run?: ChatSnapshot["agent_run"];
-  agent_events?: ChatSnapshot["agent_events"];
-  transport_status?: string;
-} | null;
 
 function phaseToStatus(phase: Phase): TopbarStatus {
   switch (phase) {
@@ -95,6 +98,20 @@ function phaseToStatus(phase: Phase): TopbarStatus {
     case "error":
       return "error";
   }
+}
+
+function useWorkbenchAgentModelRegistry(
+  client: WasmClient | null,
+  onStatus: (message: string) => void,
+) {
+  useEffect(() => {
+    if (!client) return;
+    client
+      .dispatchAgentModelRegistry()
+      .catch((err: unknown) =>
+        onStatus(err instanceof Error ? err.message : String(err)),
+      );
+  }, [client, onStatus]);
 }
 
 function toWorkspaceEntry(entry: ProtocolEntry): WorkspaceEntry {
@@ -126,7 +143,18 @@ export function WorkbenchLayout() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState<string>("");
-  const [snapshot, setSnapshot] = useState<Snapshot>(null);
+  const applySnapshot = useProtocolStore((s) => s.applySnapshot);
+  const rootName = useWorkspaceName();
+  const agentRun = useAgentRun();
+  const chatSessions = useChatSessions();
+  const currentChatSession = useCurrentChatSession();
+  const currentSelection = useProtocolStore((s) => s.current_selection);
+  const cadQueryResults = useProtocolStore((s) => s.cadquery_results);
+  const agentModelRegistry = useProtocolStore((s) => s.agent_model_registry);
+  const agentModelSelection = useMemo(
+    () => activeAgentModelSelection(agentModelRegistry),
+    [agentModelRegistry],
+  );
   const [expanded, setExpanded] = useState<Map<string, WorkspaceDirectoryNode>>(
     () => new Map(),
   );
@@ -135,10 +163,13 @@ export function WorkbenchLayout() {
   const [clientReady, setClientReady] = useState(false);
   const activeView: ViewPreset = "iso";
   const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
+  const [cadQueryScene, setCadQueryScene] =
+    useState<CadQueryScenePayload | null>(null);
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
   const [cameraOverride, setCameraOverride] = useState<CameraState | null>(
     null,
   );
+  const [markdownPlanBusy, setMarkdownPlanBusy] = useState(false);
   const [activeDefines, setActiveDefines] = useState<string[]>([]);
   const [panelWidths, setPanelWidths] = useState({
     left: 360,
@@ -161,6 +192,8 @@ export function WorkbenchLayout() {
     [searchParams],
   );
   const clientRef = useRef<WasmClient | null>(null);
+  const applySnapshotRef = useRef(applySnapshot);
+  applySnapshotRef.current = applySnapshot;
   const expandedRef = useRef<Map<string, WorkspaceDirectoryNode>>(new Map());
   const watchActiveRef = useRef(false);
   const log = useLogBuffer();
@@ -186,6 +219,7 @@ export function WorkbenchLayout() {
     onPreviewStatus: setMessage,
     enabled: activeTab?.kind === "scad" && client !== null,
   });
+  useWorkbenchAgentModelRegistry(client, setMessage);
 
   useEffect(() => {
     if (appConfig.kind !== "ready") return;
@@ -329,6 +363,13 @@ export function WorkbenchLayout() {
     [setExpandedBoth],
   );
 
+  const handleRefreshFiles = useCallback(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    refreshRootListing(client);
+    refreshExpandedDirectories(client);
+  }, [refreshExpandedDirectories, refreshRootListing]);
+
   const handleExpandDirectory = useCallback(
     (entry: WorkspaceEntry) => {
       if (entry.isOperable === false || entry.pathError) return;
@@ -418,7 +459,7 @@ export function WorkbenchLayout() {
       buildClientCallbacks({
         onSnapshotDirty: () => {
           if (disposed) return;
-          setSnapshot(client.snapshot() as Snapshot);
+          applySnapshotRef.current(client.snapshot());
         },
         onHandshakeAccepted: () => {
           if (disposed) return;
@@ -459,40 +500,29 @@ export function WorkbenchLayout() {
               activeTab.kind === "scad"
                 ? pathKey(derivePresetPath(activeTab.path))
                 : "";
-            const matchedSpecific = changed.has(activeKey);
             const matchedSettings =
               activeSettingsKey.length > 0 && changed.has(activeSettingsKey);
-            const refreshableDocument =
-              activeTab.kind === "scad" ||
-              activeTab.kind === "mesh" ||
-              activeTab.kind === "markdown" ||
-              activeTab.kind === "image";
-            const directoryRefreshableDocument =
-              activeTab.kind === "mesh" ||
-              activeTab.kind === "markdown" ||
-              activeTab.kind === "image";
-            if (
-              (matchedSpecific && refreshableDocument) ||
-              (!matchedSpecific &&
-                !matchedSettings &&
-                directoryRefreshableDocument)
-            ) {
+            if (shouldRefreshDocumentForWatch(activeTab, changed, matchedSettings)) {
               setDocumentRefreshSignal((n) => n + 1);
               logRef.current.append(
                 "info",
                 `document refresh triggered by ${activeKey}`,
               );
-            } else if (matchedSettings) {
+            }
+            if (
+              shouldRefreshScadSettingsForWatch(
+                activeTab,
+                changed,
+                matchedSettings,
+              )
+            ) {
               setScadSettingsRefreshSignal((n) => n + 1);
+              const source = matchedSettings
+                ? activeSettingsKey
+                : "directory change";
               logRef.current.append(
                 "info",
-                `scad settings refresh triggered by ${activeSettingsKey}`,
-              );
-            } else if (activeTab.kind === "scad") {
-              setScadSettingsRefreshSignal((n) => n + 1);
-              logRef.current.append(
-                "info",
-                `scad settings refresh triggered by directory change`,
+                `scad settings refresh triggered by ${source}`,
               );
             }
           }
@@ -507,15 +537,34 @@ export function WorkbenchLayout() {
         onAgentEvent: (payload) => {
           if (disposed) return;
           const ready = extractCadQueryReadyFromAgentEvent(payload);
-          if (ready) openTab(cadQueryResultTab(ready));
-          logRef.current.append(
-            "info",
-            `agent event: ${describeAgentEvent(payload)}`,
-          );
+          if (ready) {
+            const activeId = activeTabIdRef.current;
+            const activeTab =
+              openTabsRef.current.find((tab) => tab.id === activeId) ?? null;
+            if (
+              activeTab?.kind === "cadquery" &&
+              cadQueryTabMatchesReady(activeTab.path, ready)
+            ) {
+              setDocumentRefreshSignal((n) => n + 1);
+            }
+            setMessage(`cadquery ready ${ready.result_id}`);
+          }
+          const eventName = describeAgentEvent(payload);
+          logRef.current.append("info", `agent event: ${eventName}`);
+          if (eventName === "error") {
+            const p = payload as Record<string, unknown>;
+            console.error(
+              `[agent error] ${p["error_type"] ?? "unknown"}: ${p["message"] ?? "(no message)"}`,
+            );
+          }
         },
       }),
     );
     clientRef.current = client;
+    if (import.meta.env.DEV) {
+      (window as Window & { __budn_test_client?: WasmClient }).
+        __budn_test_client = client;
+    }
     setClientReady(true);
 
     const transport = createTransport({
@@ -558,6 +607,10 @@ export function WorkbenchLayout() {
       transport.stop();
       client.destroy();
       clientRef.current = null;
+      if (import.meta.env.DEV) {
+        (window as Window & { __budn_test_client?: WasmClient }).
+          __budn_test_client = undefined;
+      }
       setClientReady(false);
       watchActiveRef.current = false;
     };
@@ -565,7 +618,39 @@ export function WorkbenchLayout() {
 
   const entriesLoaded = rootLoaded;
   const entries: WorkspaceEntry[] = rootEntries;
-  const rootName = snapshot?.workspace_current?.root_name ?? "(loading)";
+
+  const handleOpenPath = useCallback(
+    (path: unknown, label = pathLabel(path)) => {
+      if (isCadQueryStepFile(label)) {
+        const artifactPath = cadQueryArtifactTabPathForFile(
+          path,
+          cadQueryResults,
+        );
+        if (!artifactPath) {
+          setMessage(`unsupported file type: ${extensionOf(label)}`);
+          return;
+        }
+        openTab({
+          id: `cadquery-artifact:${pathKey(path)}`,
+          label,
+          path: artifactPath,
+          kind: "cadquery",
+        });
+        setMessage(`opened ${label}`);
+        return;
+      }
+      const kind = resolveTabKind(label);
+      if (!kind) {
+        const ext = extensionOf(label) || "(no extension)";
+        setMessage(`unsupported file type: ${ext}`);
+        return;
+      }
+      const id = pathKey(path);
+      openTab({ id, label, path, kind });
+      setMessage(`opened ${label}`);
+    },
+    [cadQueryResults, openTab],
+  );
 
   const handleOpenEntry = useCallback(
     (entry: WorkspaceEntry) => {
@@ -573,17 +658,35 @@ export function WorkbenchLayout() {
         setMessage(`invalid workspace entry: ${entry.label}`);
         return;
       }
-      const kind = resolveTabKind(entry.label);
-      if (!kind) {
-        const ext = extensionOf(entry.label) || "(no extension)";
-        setMessage(`unsupported file type: ${ext}`);
-        return;
-      }
-      const id = pathKey(entry.path);
-      openTab({ id, label: entry.label, path: entry.path, kind });
-      setMessage(`opened ${entry.label}`);
+      handleOpenPath(entry.path, entry.label);
     },
-    [openTab],
+    [handleOpenPath],
+  );
+
+  const handleRunMarkdownPlan = useCallback(
+    (target: PlanRunTarget) => {
+      const activeClient = clientRef.current;
+      if (!activeClient || markdownPlanBusy || agentRun) return;
+      void runSavedPlan({
+        client: activeClient,
+        planId: target.planId,
+        planRef: target.planRef,
+        currentSessionId: currentChatSession,
+        sessions: chatSessions,
+        agentRun,
+        busy: markdownPlanBusy,
+        agentModelSelection,
+        onStatus: setMessage,
+        setBusy: setMarkdownPlanBusy,
+      });
+    },
+    [
+      agentRun,
+      agentModelSelection,
+      markdownPlanBusy,
+      chatSessions,
+      currentChatSession,
+    ],
   );
 
   const previewTargetLabel = activeTab ? activeTab.label : "—";
@@ -606,6 +709,17 @@ export function WorkbenchLayout() {
     setCameraOverride(null);
     setCameraState(null);
   }, [activeTab?.kind, activeTab?.path]);
+
+  useEffect(() => {
+    if (activeTab?.kind !== "cadquery") setCadQueryScene(null);
+  }, [activeTab?.kind, activeTab?.path]);
+
+  const handleCadQuerySelectionChange = useCallback(
+    (next: SelectionUpdateRequest) => {
+      void clientRef.current?.dispatchSelectionUpdate(next);
+    },
+    [],
+  );
 
   const scadInspectorPanels =
     activeTab?.kind === "scad"
@@ -639,11 +753,12 @@ export function WorkbenchLayout() {
         expandedDirectories={expanded}
         directoryKey={pathKey}
         onRequestPreview={handleOpenEntry}
+        onOpenPath={handleOpenPath}
         onExpandDirectory={handleExpandDirectory}
         onCollapseDirectory={handleCollapseDirectory}
+        onRefreshFiles={handleRefreshFiles}
         logEntries={log.entries}
         client={client}
-        snapshot={snapshot as ChatSnapshot | null}
         onStatus={setMessage}
         appConfig={appConfig}
         wsUrl={wsUrl}
@@ -664,10 +779,17 @@ export function WorkbenchLayout() {
         meshInfo={meshInfo}
         activeView={activeView}
         onMeshInfo={setMeshInfo}
+        onCadQueryScene={setCadQueryScene}
+        cadQueryScene={cadQueryScene}
+        cadQuerySelection={currentSelection}
         cameraState={cameraState}
         cameraOverride={cameraOverride}
         onCameraChange={setCameraState}
         scadWorkbenchState={scadWorkbenchState}
+        planRunDisabled={
+          !client || markdownPlanBusy || Boolean(agentRun) || !agentModelSelection
+        }
+        onRunPlan={handleRunMarkdownPlan}
       />
       <Inspector
         rootName={rootName}
@@ -680,6 +802,15 @@ export function WorkbenchLayout() {
         exportDefines={activeTab?.kind === "scad" ? activeDefines : []}
         appConfig={appConfig}
         onExportStatus={setMessage}
+        refTreeSlot={
+          activeTab?.kind === "cadquery" ? (
+            <CadQueryRefTree
+              scene={cadQueryScene}
+              selection={currentSelection}
+              onSelectionChange={handleCadQuerySelectionChange}
+            />
+          ) : null
+        }
         cameraSlot={
           showMeshPanels ? (
             <CameraInspector
@@ -791,6 +922,11 @@ async function onHandshakeAck(
   }
   if (ctx.disposedRef()) return;
   ctx.refreshRoot();
+  client
+    .dispatchChatList({ include_archived: false })
+    .catch((err) => {
+      ctx.setMessage(`chat list failed: ${describeError(err)}`);
+    });
   ctx.setPhase("ready");
   ctx.setMessage("workspace ready");
   if (!ctx.watchActiveRef.current) {

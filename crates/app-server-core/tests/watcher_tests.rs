@@ -5,8 +5,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[test]
-fn matches_path_accepts_canonicalized_equivalent_paths() {
+#[tokio::test]
+async fn matches_path_accepts_canonicalized_equivalent_paths() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
@@ -20,7 +20,7 @@ fn matches_path_accepts_canonicalized_equivalent_paths() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&file_path, &symlink_path).expect("symlink should be created");
 
-    let matched = matches_path(std::slice::from_ref(&file_path), Some(&symlink_path));
+    let matched = matches_path(std::slice::from_ref(&file_path), Some(&symlink_path)).await;
 
     assert!(matched);
 
@@ -29,29 +29,29 @@ fn matches_path_accepts_canonicalized_equivalent_paths() {
     let _ = fs::remove_dir(&root);
 }
 
-#[test]
-fn matches_path_rejects_unrelated_paths() {
+#[tokio::test]
+async fn matches_path_rejects_unrelated_paths() {
     let watched = PathBuf::from("/tmp/example.scad");
     let changed = vec![PathBuf::from("/tmp/other.scad")];
 
-    assert!(!matches_path(&changed, Some(&watched)));
+    assert!(!matches_path(&changed, Some(&watched)).await);
 }
 
-#[test]
-fn matches_any_watched_path_when_preset_file_changes() {
+#[tokio::test]
+async fn matches_any_watched_path_when_preset_file_changes() {
     let watched = vec![
         PathBuf::from("/tmp/example.scad"),
         PathBuf::from("/tmp/example.scad.json"),
     ];
     let changed = vec![PathBuf::from("/tmp/example.scad.json")];
 
-    assert!(matches_any_path(&changed, &watched));
+    assert!(matches_any_path(&changed, &watched).await);
 }
 
-#[test]
-fn matches_any_path_accepts_changes_inside_watched_directory() {
+#[tokio::test]
+async fn matches_any_path_accepts_changes_inside_watched_directory() {
     let watched = vec![PathBuf::from("/tmp/workspace")];
     let changed = vec![PathBuf::from("/tmp/workspace/docs/readme.md")];
 
-    assert!(matches_any_path(&changed, &watched));
+    assert!(matches_any_path(&changed, &watched).await);
 }

@@ -35,12 +35,18 @@ pub fn cadquery_execute_input_schema() -> Value {
     object_schema(
         cadquery_source_properties(json!({
             "params_json": string_schema("JSON parameter object encoded as a string."),
-            "export_formats": string_array_schema(),
-            "export_targets": string_array_schema(),
+            "export_formats": export_formats_schema(),
+            "export_targets": export_targets_schema(),
             "plan_ref": string_schema("Saved plan path."),
             "reason": string_schema("Short execution reason.")
         })),
-        &["target_path", "target_type", "code"],
+        &[
+            "target_path",
+            "target_type",
+            "code",
+            "export_formats",
+            "export_targets",
+        ],
     )
 }
 
@@ -172,9 +178,27 @@ fn cadquery_source_properties(extra: Value) -> Value {
     );
     properties.insert(
         "code".into(),
-        string_schema("Complete CadQuery Python source."),
+        string_schema(
+            "Complete CadQuery Python source. Must include module-level MODEL_DESCRIPTION, MODEL_DETAILS with purpose, key_dimensions, intended_use, assumptions, interaction_notes, and manufacturing_or_placement_constraints, REFS with type part|component|assembly and non-empty features named from the actual model semantics, and def build(params=None): ... returning the model.",
+        ),
     );
     Value::Object(properties)
+}
+
+fn export_formats_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {"type": "string", "enum": ["step", "stl", "3mf"]},
+        "description": "Derived artifact formats to export. cadquery_execute must include step so .py source and .step output stay synchronized."
+    })
+}
+
+fn export_targets_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Workspace-relative derived artifact paths under outputs/. cadquery_execute must include the matching outputs/<target-stem>.step path."
+    })
 }
 
 fn contract_schema() -> Value {
@@ -183,6 +207,7 @@ fn contract_schema() -> Value {
             "target_type_matches": {"type": "boolean"},
             "has_build_function": {"type": "boolean"},
             "has_refs": {"type": "boolean"},
+            "has_model_description": {"type": "boolean"},
             "unsafe_calls": string_array_schema(),
             "invalid_imports": string_array_schema()
         }),
@@ -190,6 +215,7 @@ fn contract_schema() -> Value {
             "target_type_matches",
             "has_build_function",
             "has_refs",
+            "has_model_description",
             "unsafe_calls",
             "invalid_imports",
         ],

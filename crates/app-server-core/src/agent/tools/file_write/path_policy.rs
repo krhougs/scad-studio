@@ -1,13 +1,11 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+use tokio::fs;
 
 use app_server_protocol::{PathHandle, WorkspaceId};
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
-use super::super::{AgentToolConfirmationScope, AgentToolRunContext, tool_error_json};
+use super::super::{AgentExecutionScope, AgentToolRunContext, tool_error_json};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -45,21 +43,21 @@ pub(super) enum ExistingFilePolicy {
     CopySource,
 }
 
-pub(super) fn safe_write_target(
+pub(super) async fn safe_write_target(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     context: &AgentToolRunContext,
     policy: WriteTargetPolicy,
 ) -> Result<WriteTarget, String> {
-    let absolute = resolve_write_path(root, path, call)?;
-    let relative = workspace_relative_path(root, &absolute, call)?;
+    let absolute = resolve_write_path(root, path, call).await?;
+    let relative = workspace_relative_path(root, &absolute, call).await?;
     validate_actual_write_path(&relative, policy.allows_model_target(), call)?;
-    let existed = target_status(&absolute, call)?;
-    validate_write_confirmation(
+    let existed = target_status(&absolute, call).await?;
+    validate_write_execution_scope(
         &relative,
         existed,
-        context.confirmation_scope.as_ref(),
+        context.execution_scope.as_ref(),
         policy,
         call,
     )?;
@@ -70,18 +68,19 @@ pub(super) fn safe_write_target(
     })
 }
 
-pub(super) fn safe_existing_file(
+pub(super) async fn safe_existing_file(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     policy: ExistingFilePolicy,
 ) -> Result<ExistingFile, String> {
     let handle = path_handle(path, call)?;
-    let literal = literal_workspace_path(root, &handle);
-    validate_existing_literal_file(&literal, call)?;
+    let literal = literal_workspace_path(root, &handle).await;
+    validate_existing_literal_file(&literal, call).await?;
     let absolute = crate::resolve_workspace_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "permission_denied"))?;
-    let relative = workspace_relative_path(root, &absolute, call)?;
+    let relative = workspace_relative_path(root, &absolute, call).await?;
     validate_actual_write_path(&relative, policy.allows_model_source(), call)?;
     Ok(ExistingFile { absolute, relative })
 }
@@ -89,14 +88,10 @@ pub(super) fn safe_existing_file(
 pub(super) fn validate_existing_affected_scope(
     relative: &str,
     context: &AgentToolRunContext,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
-    let Some(scope) = context.confirmation_scope.as_ref() else {
-        return Err(tool_error_json(
-            call,
-            "tool requires confirmed execution scope",
-            "permission_denied",
-        ));
+    let Some(scope) = context.execution_scope.as_ref() else {
+        return Ok(());
     };
     if scope.contains_affected_file(relative) {
         return Ok(());
@@ -104,19 +99,19 @@ pub(super) fn validate_existing_affected_scope(
     if scope.contains_new_file(relative) {
         return Err(tool_error_json(
             call,
-            "confirmed new_files cannot patch existing files",
+            "execution new_files cannot patch existing files",
             "file_conflict",
         ));
     }
     Err(tool_error_json(
         call,
-        "path is outside confirmed execution scope",
+        "path is outside execution scope",
         "permission_denied",
     ))
 }
 
-fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
+async fn target_status(path: &Path, call: &AgentToolCall) -> Result<bool, String> {
+    match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
             "target path must not be a symlink",
@@ -140,8 +135,8 @@ fn target_status(path: &Path, call: &LlmToolCall) -> Result<bool, String> {
     }
 }
 
-fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
+async fn validate_existing_literal_file(path: &Path, call: &AgentToolCall) -> Result<(), String> {
+    match fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(tool_error_json(
             call,
             "source path must not be a symlink",
@@ -164,7 +159,7 @@ fn validate_existing_literal_file(path: &Path, call: &LlmToolCall) -> Result<(),
 #[cfg(unix)]
 fn validate_no_hard_link_alias(
     metadata: &std::fs::Metadata,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if metadata.nlink() > 1 {
         return Err(tool_error_json(
@@ -179,18 +174,23 @@ fn validate_no_hard_link_alias(
 #[cfg(not(unix))]
 fn validate_no_hard_link_alias(
     _metadata: &std::fs::Metadata,
-    _call: &LlmToolCall,
+    _call: &AgentToolCall,
 ) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_write_path(root: &Path, path: &str, call: &LlmToolCall) -> Result<PathBuf, String> {
+async fn resolve_write_path(
+    root: &Path,
+    path: &str,
+    call: &AgentToolCall,
+) -> Result<PathBuf, String> {
     let handle = path_handle(path, call)?;
     crate::resolve_workspace_write_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "invalid_arguments"))
 }
 
-fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
+fn path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
     PathHandle::new(
         WorkspaceId::new("workspace"),
         path.split('/').map(str::to_owned),
@@ -204,20 +204,24 @@ fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
     })
 }
 
-fn literal_workspace_path(root: &Path, handle: &PathHandle) -> PathBuf {
-    let mut path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+async fn literal_workspace_path(root: &Path, handle: &PathHandle) -> PathBuf {
+    let mut path = fs::canonicalize(root)
+        .await
+        .unwrap_or_else(|_| root.to_path_buf());
     for segment in handle.path_segments() {
         path.push(segment);
     }
     path
 }
 
-fn workspace_relative_path(
+async fn workspace_relative_path(
     root: &Path,
     absolute: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<String, String> {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = fs::canonicalize(root)
+        .await
+        .unwrap_or_else(|_| root.to_path_buf());
     absolute
         .strip_prefix(&root)
         .ok()
@@ -236,7 +240,7 @@ fn workspace_relative_path(
 fn validate_actual_write_path(
     relative: &str,
     allow_cadquery_model: bool,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let root = first_path_segment(relative);
     if WRITE_DENIED_ROOTS.contains(&root) || !WRITE_ALLOWED_ROOTS.contains(&root) {
@@ -256,19 +260,15 @@ fn validate_actual_write_path(
     Ok(())
 }
 
-fn validate_write_confirmation(
+fn validate_write_execution_scope(
     relative: &str,
     existed: bool,
-    scope: Option<&AgentToolConfirmationScope>,
+    scope: Option<&AgentExecutionScope>,
     policy: WriteTargetPolicy,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let Some(scope) = scope else {
-        return Err(tool_error_json(
-            call,
-            "tool requires confirmed execution scope",
-            "permission_denied",
-        ));
+        return Ok(());
     };
     match policy {
         WriteTargetPolicy::WriteFile => validate_write_file_scope(relative, existed, scope, call),
@@ -279,8 +279,8 @@ fn validate_write_confirmation(
 fn validate_write_file_scope(
     relative: &str,
     existed: bool,
-    scope: &AgentToolConfirmationScope,
-    call: &LlmToolCall,
+    scope: &AgentExecutionScope,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if existed && scope.contains_affected_file(relative) {
         return Ok(());
@@ -291,28 +291,28 @@ fn validate_write_file_scope(
     if scope.contains_new_file(relative) || scope.contains_affected_file(relative) {
         return Err(tool_error_json(
             call,
-            "confirmed file state does not match workspace",
+            "execution scope file state does not match workspace",
             "file_conflict",
         ));
     }
     Err(tool_error_json(
         call,
-        "path is outside confirmed execution scope",
+        "path is outside execution scope",
         "permission_denied",
     ))
 }
 
 fn validate_copy_target_scope(
     relative: &str,
-    scope: &AgentToolConfirmationScope,
-    call: &LlmToolCall,
+    scope: &AgentExecutionScope,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     if scope.contains_new_file(relative) {
         Ok(())
     } else {
         Err(tool_error_json(
             call,
-            "copy_file target must be in confirmed new_files",
+            "copy_file target must be in execution new_files",
             "permission_denied",
         ))
     }

@@ -1,9 +1,12 @@
 use app_server_core::CadQueryRunnerErrorKind;
-use app_server_host::{agent_error_type, validate_cadquery_confirmation};
+use app_server_host::{
+    agent_error_type, validate_cadquery_confirmation, watch_changed_paths_to_handles,
+};
 use app_server_protocol::{
     AgentCadQueryConfirmation, AgentErrorType, CadQueryExecuteRequest, CadQueryExportFormat,
     CadQueryObjectKind, PathHandle, WorkspaceId,
 };
+use std::path::PathBuf;
 
 fn ws() -> WorkspaceId {
     WorkspaceId::new("ws")
@@ -11,6 +14,38 @@ fn ws() -> WorkspaceId {
 
 fn path(segments: &[&str]) -> PathHandle {
     PathHandle::new(ws(), segments.iter().copied()).unwrap()
+}
+
+fn relative_paths(handles: &[PathHandle]) -> Vec<String> {
+    handles.iter().map(PathHandle::display_path).collect()
+}
+
+#[test]
+fn watch_changed_paths_keep_actual_relative_files() {
+    let watched = path(&[]);
+    let root = PathBuf::from("/tmp/workspace");
+    let changed = vec![
+        root.join("examples").join("cube.scad"),
+        root.join("examples").join("cube.scad.json"),
+    ];
+
+    let handles = watch_changed_paths_to_handles(&watched, &root, &changed);
+
+    assert_eq!(
+        relative_paths(&handles),
+        vec!["examples/cube.scad", "examples/cube.scad.json"]
+    );
+}
+
+#[test]
+fn watch_changed_paths_extend_subdirectory_subscription() {
+    let watched = path(&["examples"]);
+    let root = PathBuf::from("/tmp/workspace/examples");
+    let changed = vec![root.join("cube.scad")];
+
+    let handles = watch_changed_paths_to_handles(&watched, &root, &changed);
+
+    assert_eq!(relative_paths(&handles), vec!["examples/cube.scad"]);
 }
 
 fn make_confirmation(

@@ -1,30 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Stop } from "@phosphor-icons/react";
 import type {
-  AgentOperationLevel,
-  AgentPlanProposedEvent,
+  AgentMode,
+  AgentModelRegistryModel as ProtocolAgentModelRegistryModel,
+  AgentModelRegistryProvider as ProtocolAgentModelRegistryProvider,
+  AgentModelRegistryResponse,
+  AgentRuntimeStatus,
+  AgentProviderType,
+  BoundAgentModel,
   SelectionRef,
   SelectionUpdateRequest,
 } from "@budn/app-server-protocol";
+import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import type { WasmClient } from "../wasm-bridge";
+import { useChatSnapshot } from "../state/protocol-store";
 import { preferredRefText } from "./cadquery-agent-scope";
 import { ChatBody } from "./chat-messages";
 import { ChatComposer } from "./chat-composer";
+import { useChatRuntime } from "./chat-runtime";
 import {
   cancelAgentRun,
-  confirmPlan,
-  createChatSession,
-  rejectPlan,
-  previewPlan,
+  activeAgentModelSelection,
   reportError,
+  runSavedPlan,
   selectChatSession,
   sendChatMessage,
 } from "./chat-actions";
 
 type ChatZoneProps = {
   client: WasmClient | null;
-  snapshot: ChatSnapshot | null;
   onStatus?: (message: string) => void;
+  onOpenPlan?: (path: unknown) => void;
 };
 
 export type ChatSnapshot = {
@@ -33,16 +39,35 @@ export type ChatSnapshot = {
   current_chat_session?: string | null;
   current_chat_history?: ChatMessageRecord[];
   agent_run?: AgentRun | null;
+  agent_runtime_status?: AgentRuntimeStatus | null;
   agent_events?: AgentEvent[];
   current_selection?: SelectionUpdateRequest | null;
   llm_configured?: boolean;
+  agent_provider?: AgentProviderCapabilities | null;
+  agent_model_registry?: AgentModelRegistry | null;
+};
+
+export type AgentModelRegistry = AgentModelRegistryResponse;
+export type AgentModelRegistryProvider = ProtocolAgentModelRegistryProvider;
+export type AgentModelRegistryModel = ProtocolAgentModelRegistryModel;
+
+export type AgentModelSelection = {
+  provider_id: string;
+  provider_type: AgentProviderType;
+  model_id: string;
+  reasoning_effort: string | null;
+  service_label: string | null;
 };
 
 export type ChatSessionSummary = {
   session_id: string;
+  agent_id?: string;
   title: string;
   archived: boolean;
   message_count: number;
+  related_files?: unknown[];
+  bound_model?: BoundAgentModel | null;
+  client_request_id?: string;
 };
 
 export type ChatMessageRecord = {
@@ -50,14 +75,41 @@ export type ChatMessageRecord = {
   ts_ms: number;
   role: "user" | "assistant" | "tool" | "meta";
   content: string;
+  related_files?: unknown[];
+  tool_call_id?: string | null;
   tool_calls?: unknown[];
   tool_result?: unknown | null;
   mesh_result?: unknown | null;
+  search_sources?: AgentSearchSource[];
+  run_id?: string | null;
+  agent_id?: string | null;
+  turn_id?: string | null;
+};
+
+export type AgentProviderCapabilities = {
+  provider: string;
+  model?: string | null;
+  native_web_search_enabled: boolean;
+  search_sources_supported: boolean;
+};
+
+type AgentModelParamsSnapshot = {
+  reasoning_effort: string | null;
+  service_label: string | null;
+};
+
+export type AgentSearchSource = {
+  title: string;
+  url: string;
+  start_index?: number | null;
+  end_index?: number | null;
 };
 
 export type AgentRun = {
   session_id: string;
+  agent_id?: string;
   run_id: string;
+  turn_id?: string;
 };
 
 export type AgentEvent = {
@@ -72,8 +124,18 @@ export type ContextPill = {
 
 const MAX_CONTEXT_PILLS = 3;
 
-export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
-  const controller = useChatController({ client, snapshot, onStatus });
+export const ChatZone = memo(function ChatZone({ client, onStatus, onOpenPlan }: ChatZoneProps) {
+  const snapshot = useChatSnapshot();
+  const controller = useChatController({ client, snapshot, onStatus, onOpenPlan });
+  const runtime = useChatRuntime({
+    messages: controller.messages,
+    agentEvents: controller.agentEvents,
+    agentRun: controller.agentRun,
+    onNew: controller.send,
+    onCancel: controller.cancelAgent,
+    disabled: controller.composerDisabled,
+  });
+
   return (
     <section className="chat" data-testid="workbench-chat" aria-label="agent">
       <ChatHeader
@@ -81,128 +143,152 @@ export function ChatZone({ client, snapshot, onStatus }: ChatZoneProps) {
         currentSessionId={controller.currentSessionId}
         disabled={controller.headerDisabled}
         agentRun={controller.agentRun}
-        llmConfigured={snapshot?.llm_configured ?? true}
+        llmConfigured={snapshot.llm_configured ?? true}
+        agentProvider={snapshot.agent_provider ?? null}
+        agentModelRegistry={controller.agentModelRegistry}
+        modelControlsDisabled={controller.modelControlsDisabled}
+        modelControlsReadonlyReason={controller.modelControlsReadonlyReason}
+        boundModel={controller.boundModel}
         onNew={controller.createSession}
         onSelect={controller.selectSession}
         onCancel={controller.cancelAgent}
+        onModelSelect={controller.selectAgentModel}
+        onParamsUpdate={controller.updateAgentModelParams}
       />
-      <ChatBody
-        messages={controller.messages}
-        agentEvents={controller.agentEvents}
-        pendingPlan={controller.pendingPlan}
-        llmConfigured={snapshot?.llm_configured ?? true}
-        streaming={Boolean(controller.agentRun)}
-        streamText={controller.streamText}
-        onPreviewPlan={controller.previewPlan}
-        onConfirmPlan={controller.confirmPlan}
-        onRejectPlan={controller.rejectPlan}
-      />
-      <ChatComposer
-        value={controller.draft}
-        disabled={controller.composerDisabled}
-        operation={controller.operation}
-        contextPills={controller.contextPills}
-        onChange={controller.setDraft}
-        onOperationChange={controller.setOperation}
-        onRemovePill={controller.removePill}
-        onSend={controller.send}
-      />
+      <AssistantRuntimeProvider runtime={runtime}>
+        <ChatBody
+          llmConfigured={snapshot.llm_configured ?? true}
+          planActionDisabled={controller.composerDisabled}
+          onOpenPlan={controller.openPlan}
+          onRunPlan={controller.runPlan}
+        />
+        <ChatComposer
+          disabled={controller.composerDisabled}
+          mode={controller.mode}
+          contextPills={controller.contextPills}
+          onModeChange={controller.setMode}
+          onRemovePill={controller.removePill}
+        />
+      </AssistantRuntimeProvider>
     </section>
   );
-}
+});
 
-function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
-  const [draft, setDraft] = useState("");
-  const [operation, setOperation] = useState<AgentOperationLevel>("auto");
+function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneProps & { snapshot: ChatSnapshot }) {
+  const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
-  const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
-  const [pendingPlan, setPendingPlan] =
-    useState<AgentPlanProposedEvent | null>(null);
-  const [streamText, setStreamText] = useState("");
-  const sessions = snapshot?.chat_sessions ?? [];
+  const [modelBusy, setModelBusy] = useState(false);
+  const removePillRef = useRef<((refText: string) => void) | null>(null);
+  const pendingSelectionRef = useRef<Promise<unknown> | null>(null);
+  const [draftSession, setDraftSession] = useState<ChatSessionSummary | null>(null);
+  const backendSessions = snapshot?.chat_sessions ?? [];
+  const sessions = draftSession ? [draftSession, ...backendSessions] : backendSessions;
+  const snapshotCurrentSessionId = snapshot?.current_chat_session ?? null;
   const currentSessionId =
-    snapshot?.current_chat_session ?? sessions[0]?.session_id ?? null;
-  const messages = snapshot?.current_chat_history ?? [];
+    draftSession?.session_id ?? snapshotCurrentSessionId ?? backendSessions[0]?.session_id ?? null;
+  const currentSession = sessions.find((session) => session.session_id === currentSessionId) ?? null;
+  const currentBoundModel = currentSession?.bound_model ?? null;
+  const backendCurrentSessionId = draftSession ? null : currentSessionId;
+  const messages = draftSession ? [] : snapshot?.current_chat_history ?? [];
   const agentRun = snapshot?.agent_run ?? null;
-  const rawEvents = snapshot?.agent_events ?? [];
+  const agentModelRegistry = snapshot?.agent_model_registry ?? null;
+  const agentModelSelection = useMemo(
+    () => activeAgentModelSelection(agentModelRegistry),
+    [agentModelRegistry],
+  );
+  const rawEvents = draftSession ? [] : snapshot?.agent_events ?? [];
   const sessionEvents = useMemo(
     () =>
       rawEvents.filter((event) =>
-        eventBelongsToCurrentSession(event, currentSessionId),
+        eventBelongsToCurrentSession(event, currentSessionId, currentSession?.agent_id ?? null),
       ),
-    [rawEvents, currentSessionId],
+    [rawEvents, currentSessionId, currentSession?.agent_id],
   );
   const agentEvents = useMemo(
-    () => recentNonTokenEvents(sessionEvents),
-    [sessionEvents],
+    () => recentAgentEvents(sessionEvents, agentRun),
+    [sessionEvents, agentRun],
   );
-
-  useStreamAccumulator(sessionEvents, currentSessionId, setStreamText);
 
   const contextPills = useMemo(() => {
     const selections = snapshot?.current_selection?.selections ?? [];
-    return buildContextPills(selections, removedRefs);
-  }, [snapshot?.current_selection, removedRefs]);
-
-  const prevSelectionRef = useRef(snapshot?.current_selection);
-  useEffect(() => {
-    if (prevSelectionRef.current !== snapshot?.current_selection) {
-      prevSelectionRef.current = snapshot?.current_selection;
-      setRemovedRefs(new Set());
-    }
+    return buildContextPills(selections);
   }, [snapshot?.current_selection]);
 
-  usePlanProposedTracker(agentEvents, setPendingPlan);
+  removePillRef.current = (refText: string) => {
+    if (!client) return;
+    const selections = snapshot?.current_selection?.selections ?? [];
+    const updated = selections.filter((sel) => sel.ref_text !== refText);
+    const prevActive = snapshot?.current_selection?.active_index;
+    const removedIdx = selections.findIndex((sel) => sel.ref_text === refText);
+    let activeIndex: number | null = null;
+    if (typeof prevActive === "number" && prevActive >= 0 && updated.length > 0) {
+      if (removedIdx < prevActive) activeIndex = prevActive - 1;
+      else if (removedIdx > prevActive) activeIndex = prevActive;
+      else activeIndex = Math.min(prevActive, updated.length - 1);
+    }
+    const p = client.dispatchSelectionUpdate({ selections: updated, active_index: activeIndex });
+    pendingSelectionRef.current = p;
+    void p.finally(() => {
+      if (pendingSelectionRef.current === p) pendingSelectionRef.current = null;
+    });
+  };
+
   useInitialChatList(client, onStatus);
-  useAgentDoneHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
+  useInitialChatHistory(
+    client,
+    backendSessions,
+    snapshotCurrentSessionId,
+    onStatus,
+  );
+  useAgentSnapshotSubscription(client, currentSession?.agent_id ?? null, onStatus);
+  useAgentTerminalHistoryRefresh(client, currentSessionId, agentEvents, onStatus);
+  useInitialAgentModelRegistry(client, onStatus);
 
   const actions = useChatActions({
     client,
     sessions,
-    currentSessionId,
+    currentSessionId: backendCurrentSessionId,
     agentRun,
     busy,
-    draft,
-    operation,
-    contextPills,
+    mode,
+    agentModelSelection,
+    pendingSelectionRef,
     onStatus,
     setBusy,
-    setDraft,
+    setModelBusy,
+    draftClientRequestId: draftSession?.client_request_id ?? null,
+    onDraftCreate: () =>
+      setDraftSession({
+        session_id: `draft-${Date.now()}`,
+        client_request_id: newClientRequestId(),
+        title: "Untitled",
+        archived: false,
+        message_count: 0,
+      }),
+    onDraftCommit: () => setDraftSession(null),
+    onBackendSelect: () => setDraftSession(null),
   });
 
   return {
-    draft,
-    setDraft,
-    operation,
-    setOperation,
+    mode,
+    setMode,
     sessions,
     currentSessionId,
     messages,
     agentRun,
     agentEvents,
-    streamText,
     contextPills,
-    pendingPlan,
     headerDisabled: !client || busy,
     composerDisabled: !client || busy || Boolean(agentRun),
+    modelControlsDisabled: !client || busy || modelBusy || Boolean(agentRun) || Boolean(currentBoundModel),
+    modelControlsReadonlyReason: currentBoundModel ? "Model is fixed for this chat" : null,
+    boundModel: currentBoundModel,
+    agentModelRegistry,
+    agentModelSelection,
     removePill: (refText: string) => {
-      setRemovedRefs((prev) => new Set(prev).add(refText));
+      removePillRef.current?.(refText);
     },
-    previewPlan: () => {
-      if (!pendingPlan) return;
-      void previewPlan(client, pendingPlan, onStatus);
-    },
-    confirmPlan: () => {
-      if (!pendingPlan || !snapshot) return;
-      setPendingPlan(null);
-      void confirmPlan(client, pendingPlan, snapshot, onStatus);
-    },
-    rejectPlan: () => {
-      if (!pendingPlan || !currentSessionId) return;
-      const runId = pendingPlan.run_id;
-      setPendingPlan(null);
-      void rejectPlan(client, currentSessionId, runId, onStatus);
-    },
+    openPlan: onOpenPlan,
     ...actions,
   };
 }
@@ -210,58 +296,23 @@ function useChatController({ client, snapshot, onStatus }: ChatZoneProps) {
 function eventBelongsToCurrentSession(
   event: AgentEvent,
   currentSessionId: string | null,
+  currentAgentId: string | null,
 ): boolean {
+  const agentId = event.payload?.["agent_id"];
+  if (typeof agentId === "string" && currentAgentId) {
+    return agentId === currentAgentId;
+  }
   if (!currentSessionId) return true;
   const sessionId = event.payload?.["session_id"];
   if (typeof sessionId !== "string") return true;
   return sessionId === currentSessionId;
 }
 
-function buildContextPills(
-  selections: SelectionRef[],
-  removedRefs: Set<string>,
-): ContextPill[] {
-  return selections
-    .filter((sel) => !removedRefs.has(sel.ref_text))
-    .slice(-MAX_CONTEXT_PILLS)
-    .map((sel) => ({
-      ref_text: sel.ref_text,
-      display: preferredRefText(sel),
-    }));
-}
-
-function usePlanProposedTracker(
-  agentEvents: AgentEvent[],
-  setPendingPlan: (plan: AgentPlanProposedEvent | null) => void,
-) {
-  const trackedRef = useRef<string | null>(null);
-  useEffect(() => {
-    let sawDone = false;
-    for (let i = agentEvents.length - 1; i >= 0; i--) {
-      const ev = agentEvents[i] as AgentEvent | undefined;
-      if (!ev) continue;
-      if (ev.event === "agent.plan_proposed" && ev.payload) {
-        if (!ev.payload["plan_ref"]) {
-          trackedRef.current = null;
-          setPendingPlan(null);
-          return;
-        }
-        const runId = ev.payload["run_id"] as string | undefined;
-        if (runId && trackedRef.current !== runId) {
-          trackedRef.current = runId;
-          setPendingPlan(ev.payload as unknown as AgentPlanProposedEvent);
-        }
-        return;
-      }
-      if (ev.event === "agent.done") {
-        sawDone = true;
-      }
-    }
-    if (sawDone) {
-      trackedRef.current = null;
-      setPendingPlan(null);
-    }
-  }, [agentEvents, setPendingPlan]);
+function buildContextPills(selections: SelectionRef[]): ContextPill[] {
+  return selections.slice(-MAX_CONTEXT_PILLS).map((sel) => ({
+    ref_text: sel.ref_text,
+    display: preferredRefText(sel),
+  }));
 }
 
 function useInitialChatList(
@@ -276,22 +327,98 @@ function useInitialChatList(
   }, [client, onStatus]);
 }
 
-function useAgentDoneHistoryRefresh(
+function useInitialChatHistory(
+  client: WasmClient | null,
+  sessions: ChatSessionSummary[],
+  snapshotCurrentSessionId: string | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  const requestedRef = useRef<string | null>(null);
+  const targetSessionId =
+    snapshotCurrentSessionId ?? sessions[0]?.session_id ?? null;
+  useEffect(() => {
+    if (!client || !targetSessionId) return;
+    if (requestedRef.current === targetSessionId) return;
+    requestedRef.current = targetSessionId;
+    client
+      .dispatchChatHistory({ session_id: targetSessionId, limit: 100 })
+      .catch(reportError(onStatus));
+  }, [client, targetSessionId, onStatus]);
+}
+
+function useAgentTerminalHistoryRefresh(
   client: WasmClient | null,
   currentSessionId: string | null,
   agentEvents: AgentEvent[],
   onStatus: ((message: string) => void) | undefined,
 ) {
-  const refreshedDoneRef = useRef<string | null>(null);
-  const doneKey = lastAgentDoneKey(agentEvents);
+  const refreshedTerminalRef = useRef<string | null>(null);
+  const terminalKey = lastAgentHistoryRefreshTerminalKey(agentEvents);
   useEffect(() => {
-    if (!client || !currentSessionId || !doneKey) return;
-    if (refreshedDoneRef.current === doneKey) return;
-    refreshedDoneRef.current = doneKey;
+    if (!client || !currentSessionId || !terminalKey) return;
+    if (refreshedTerminalRef.current === terminalKey) return;
+    refreshedTerminalRef.current = terminalKey;
     client
       .dispatchChatHistory({ session_id: currentSessionId, limit: 100 })
       .catch(reportError(onStatus));
-  }, [client, currentSessionId, doneKey, onStatus]);
+  }, [client, currentSessionId, terminalKey, onStatus]);
+}
+
+function useAgentSnapshotSubscription(
+  client: WasmClient | null,
+  agentId: string | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  const subscribedAgentRef = useRef<string | null>(null);
+  const clientRef = useRef<WasmClient | null>(null);
+  if (clientRef.current !== client) {
+    clientRef.current = client;
+    subscribedAgentRef.current = null;
+  }
+  useEffect(() => {
+    if (!client || !agentId || subscribedAgentRef.current === agentId) return;
+    subscribedAgentRef.current = agentId;
+    let cancelled = false;
+    client
+      .dispatchAgentSnapshot({ agent_id: agentId, since_event_id: null })
+      .then((response) => {
+        if (cancelled) return null;
+        return client.dispatchAgentSubscribe({
+          agent_id: agentId,
+          since_event_id: latestSnapshotEventId(response),
+        });
+      })
+      .catch((error) => {
+        subscribedAgentRef.current = null;
+        reportError(onStatus)(error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, agentId, onStatus]);
+}
+
+function latestSnapshotEventId(response: unknown): unknown | null {
+  const payload = unwrapCommandPayload(response) as Record<string, unknown>;
+  const events = Array.isArray(payload["events"]) ? payload["events"] : [];
+  const last = events[events.length - 1] as Record<string, unknown> | undefined;
+  return last?.["event_id"] ?? null;
+}
+
+function unwrapCommandPayload(response: unknown): unknown {
+  if (!response || typeof response !== "object") return response;
+  const record = response as Record<string, unknown>;
+  return record["payload"] ?? response;
+}
+
+function useInitialAgentModelRegistry(
+  client: WasmClient | null,
+  onStatus: ((message: string) => void) | undefined,
+) {
+  useEffect(() => {
+    if (!client) return;
+    client.dispatchAgentModelRegistry().catch(reportError(onStatus));
+  }, [client, onStatus]);
 }
 
 function useChatActions(input: {
@@ -300,27 +427,65 @@ function useChatActions(input: {
   currentSessionId: string | null;
   agentRun: AgentRun | null;
   busy: boolean;
-  draft: string;
-  operation: AgentOperationLevel;
-  contextPills: ContextPill[];
+  mode: AgentMode;
+  agentModelSelection: AgentModelSelection | null;
+  pendingSelectionRef: React.MutableRefObject<Promise<unknown> | null>;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
-  setDraft: (value: string) => void;
+  setModelBusy: (value: boolean) => void;
+  draftClientRequestId: string | null;
+  onDraftCreate: () => void;
+  onDraftCommit: () => void;
+  onBackendSelect: () => void;
 }) {
   return {
-    createSession: () =>
-      void createChatSession(
-        input.client,
-        input.sessions,
-        input.onStatus,
-        input.setBusy,
-      ),
-    selectSession: (id: string) =>
-      void selectChatSession(input.client, id, input.onStatus),
+    createSession: input.onDraftCreate,
+    selectSession: (id: string) => {
+      input.onBackendSelect();
+      void selectChatSession(input.client, id, input.onStatus);
+    },
     cancelAgent: () =>
       void cancelAgentRun(input.client, input.agentRun, input.onStatus),
-    send: () => void sendChatMessage(input),
+    send: (text: string) =>
+      void flushPendingSelection(input.pendingSelectionRef).then(() =>
+        sendChatMessage(input, text).then((committed) => {
+          if (committed) input.onDraftCommit();
+        }),
+      ),
+    runPlan: (plan: { planId: string; planRef: unknown }) =>
+      void flushPendingSelection(input.pendingSelectionRef).then(() =>
+        runSavedPlan({
+          ...input,
+          planId: plan.planId,
+          planRef: plan.planRef,
+        }).then((committed) => {
+          if (committed) input.onDraftCommit();
+        }),
+      ),
+    selectAgentModel: (value: string) =>
+      void selectAgentModel(input.client, value, input.onStatus, input.setModelBusy),
+    updateAgentModelParams: (params: AgentModelParamsSnapshot) =>
+      void updateAgentModelParams(
+        input.client,
+        input.agentModelSelection,
+        params,
+        input.onStatus,
+        input.setModelBusy,
+      ),
   };
+}
+
+async function flushPendingSelection(
+  ref: React.MutableRefObject<Promise<unknown> | null>,
+): Promise<void> {
+  if (ref.current) await ref.current.catch(() => {});
+}
+
+function newClientRequestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `request-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function ChatHeader(props: {
@@ -329,9 +494,16 @@ function ChatHeader(props: {
   disabled: boolean;
   agentRun: AgentRun | null;
   llmConfigured: boolean;
+  agentProvider: AgentProviderCapabilities | null;
+  agentModelRegistry: AgentModelRegistry | null;
+  modelControlsDisabled: boolean;
+  modelControlsReadonlyReason: string | null;
+  boundModel: BoundAgentModel | null;
   onNew: () => void;
   onSelect: (id: string) => void;
   onCancel: () => void;
+  onModelSelect: (value: string) => void;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
 }) {
   const active = props.sessions.find(
     (session) => session.session_id === props.currentSessionId,
@@ -339,14 +511,27 @@ function ChatHeader(props: {
   return (
     <header className="chat-head">
       <div>
-        <div className="title">
-          budn&apos; agent{" "}
-          <span
-            className={props.llmConfigured ? "llm-dot llm-dot--ok" : "llm-dot llm-dot--off"}
-            title={props.llmConfigured ? "AI connected" : "AI not configured"}
+        <div className="chat-head-main">
+          <div className="title">
+            budn&apos; agent{" "}
+            <span
+              className={props.llmConfigured ? "llm-dot llm-dot--ok" : "llm-dot llm-dot--off"}
+              title={props.llmConfigured ? "AI connected" : "AI not configured"}
+            />
+          </div>
+          <AgentModelControls
+            registry={props.agentModelRegistry}
+            disabled={props.modelControlsDisabled}
+            disabledReason={props.modelControlsReadonlyReason}
+            boundModel={props.boundModel}
+            onModelSelect={props.onModelSelect}
+            onParamsUpdate={props.onParamsUpdate}
           />
         </div>
-        <div className="sub">{active?.title ?? "no session"}</div>
+        <div className="sub">
+          {active?.title ?? "no session"}
+          {props.agentProvider?.native_web_search_enabled ? " · web search" : ""}
+        </div>
       </div>
       <div className="chat-session-actions">
         <select
@@ -383,52 +568,388 @@ function ChatHeader(props: {
   );
 }
 
-function recentNonTokenEvents(events: AgentEvent[]): AgentEvent[] {
-  return events
-    .filter((event) => event.event.startsWith("agent.") && event.event !== "agent.token")
-    .slice(-10);
+function AgentModelControls(props: {
+  registry: AgentModelRegistry | null;
+  disabled: boolean;
+  disabledReason: string | null;
+  boundModel: BoundAgentModel | null;
+  onModelSelect: (value: string) => void;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
+}) {
+  if (props.boundModel && !props.registry) {
+    return (
+      <BoundAgentModelControls
+        boundModel={props.boundModel}
+        disabledReason={props.disabledReason}
+      />
+    );
+  }
+  const active = selectedAgentModel(props.registry, props.boundModel);
+  if (!props.registry) {
+    return <div className="agent-model-status">agent model registry loading</div>;
+  }
+  if (!active && props.boundModel) {
+    return (
+      <BoundAgentModelControls
+        boundModel={props.boundModel}
+        disabledReason={props.disabledReason}
+        status="bound model unavailable"
+      />
+    );
+  }
+  if (!active) {
+    return <div className="agent-model-status">active agent model missing</div>;
+  }
+  return (
+    <div className="agent-model-controls">
+      <div className="agent-model-row">
+        <select
+          aria-label="agent model"
+          className="agent-model-select"
+          disabled={props.disabled}
+          title={props.disabledReason ?? undefined}
+          value={modelOptionValue(active.provider.id, active.model.id)}
+          onChange={(event) => props.onModelSelect(event.target.value)}
+        >
+          {props.registry.providers.flatMap((provider) =>
+            provider.models.map((model) => (
+              <option
+                key={modelOptionValue(provider.id, model.id)}
+                value={modelOptionValue(provider.id, model.id)}
+              >
+                {modelOptionLabel(provider, model)}
+              </option>
+            )),
+          )}
+        </select>
+        <AgentParamSelects
+          registry={props.registry}
+          disabled={props.disabled}
+          disabledReason={props.disabledReason}
+          boundModel={props.boundModel}
+          onParamsUpdate={props.onParamsUpdate}
+        />
+      </div>
+      <AgentModelStatus
+        registry={props.registry}
+        active={active}
+        boundModel={props.boundModel}
+      />
+    </div>
+  );
 }
 
-function useStreamAccumulator(
-  rawEvents: AgentEvent[],
-  resetKey: string | null,
-  setStreamText: (value: string | ((prev: string) => string)) => void,
-) {
-  const countRef = useRef(0);
-  const resetKeyRef = useRef<string | null>(resetKey);
-  useEffect(() => {
-    if (resetKeyRef.current !== resetKey) {
-      resetKeyRef.current = resetKey;
-      countRef.current = 0;
-      setStreamText("");
-    }
-    const prevCount = countRef.current;
-    countRef.current = rawEvents.length;
-    if (rawEvents.length < prevCount) {
-      setStreamText("");
-      return;
-    }
-    for (let i = prevCount; i < rawEvents.length; i++) {
-      const ev = rawEvents[i];
-      if (!ev) continue;
-      if (ev.event === "agent.token") {
-        const text = ev.payload && typeof ev.payload["text"] === "string" ? ev.payload["text"] : "";
-        if (text) setStreamText((prev) => prev + text);
-      }
-      if (ev.event === "agent.done") {
-        setStreamText("");
-      }
-    }
-  }, [rawEvents, resetKey, setStreamText]);
+function AgentParamSelects(props: {
+  registry: AgentModelRegistry;
+  disabled: boolean;
+  disabledReason: string | null;
+  boundModel: BoundAgentModel | null;
+  onParamsUpdate: (params: AgentModelParamsSnapshot) => void;
+}) {
+  const reasoningEffort = props.boundModel
+    ? props.boundModel.reasoning_effort
+    : props.registry.active_reasoning_effort;
+  const serviceLabel = props.boundModel
+    ? props.boundModel.service_label
+    : props.registry.active_service_label;
+  return (
+    <>
+      <select
+        aria-label="reasoning effort"
+        className="agent-param-select"
+        disabled={props.disabled || props.registry.reasoning_effort_options.length === 0}
+        title={props.disabledReason ?? undefined}
+        value={reasoningEffort ?? ""}
+        onChange={(event) =>
+          props.onParamsUpdate({
+            reasoning_effort: event.target.value || null,
+            service_label: serviceLabel,
+          })
+        }
+      >
+        <option value="">none</option>
+        {props.registry.reasoning_effort_options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+        {props.boundModel?.reasoning_effort &&
+        !props.registry.reasoning_effort_options.includes(props.boundModel.reasoning_effort) ? (
+          <option value={props.boundModel.reasoning_effort}>{props.boundModel.reasoning_effort}</option>
+        ) : null}
+      </select>
+      <select
+        aria-label="service label"
+        className="agent-param-select"
+        disabled={props.disabled || props.registry.service_label_options.length === 0}
+        title={props.disabledReason ?? undefined}
+        value={serviceLabel ?? ""}
+        onChange={(event) =>
+          props.onParamsUpdate({
+            reasoning_effort: reasoningEffort,
+            service_label: event.target.value || null,
+          })
+        }
+      >
+        <option value="">none</option>
+        {props.registry.service_label_options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+        {props.boundModel?.service_label &&
+        !props.registry.service_label_options.includes(props.boundModel.service_label) ? (
+          <option value={props.boundModel.service_label}>{props.boundModel.service_label}</option>
+        ) : null}
+      </select>
+    </>
+  );
 }
 
-function lastAgentDoneKey(events: AgentEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index] as AgentEvent | undefined;
-    if (!event || event.event !== "agent.done") continue;
-    const payload = event.payload ?? {};
-    const runId = typeof payload["run_id"] === "string" ? payload["run_id"] : null;
-    return runId || `done-${index}`;
+function BoundAgentModelControls(props: {
+  boundModel: BoundAgentModel;
+  disabledReason: string | null;
+  status?: string;
+}) {
+  return (
+    <div className="agent-model-controls">
+      <div className="agent-model-row">
+        <select
+          aria-label="agent model"
+          className="agent-model-select"
+          disabled
+          title={props.disabledReason ?? undefined}
+          value={boundModelOptionValue(props.boundModel)}
+        >
+          <option value={boundModelOptionValue(props.boundModel)}>
+            {boundModelOptionLabel(props.boundModel)}
+          </option>
+        </select>
+        <RawBoundParamSelects
+          boundModel={props.boundModel}
+          disabledReason={props.disabledReason}
+        />
+      </div>
+      <div className="agent-model-status">
+        <span>{props.status ?? "bound model"}</span>
+      </div>
+    </div>
+  );
+}
+
+function RawBoundParamSelects(props: {
+  boundModel: BoundAgentModel;
+  disabledReason: string | null;
+}) {
+  return (
+    <>
+      <select
+        aria-label="reasoning effort"
+        className="agent-param-select"
+        disabled
+        title={props.disabledReason ?? undefined}
+        value={props.boundModel.reasoning_effort ?? ""}
+      >
+        <option value="">none</option>
+        {props.boundModel.reasoning_effort ? (
+          <option value={props.boundModel.reasoning_effort}>
+            {props.boundModel.reasoning_effort}
+          </option>
+        ) : null}
+      </select>
+      <select
+        aria-label="service label"
+        className="agent-param-select"
+        disabled
+        title={props.disabledReason ?? undefined}
+        value={props.boundModel.service_label ?? ""}
+      >
+        <option value="">none</option>
+        {props.boundModel.service_label ? (
+          <option value={props.boundModel.service_label}>
+            {props.boundModel.service_label}
+          </option>
+        ) : null}
+      </select>
+    </>
+  );
+}
+
+function AgentModelStatus(props: {
+  registry: AgentModelRegistry;
+  active: ActiveAgentModel;
+  boundModel: BoundAgentModel | null;
+}) {
+  const failedDiscovery = props.registry.providers.find(
+    (provider) => provider.discovery.status === "failed",
+  );
+  return (
+    <div className="agent-model-status">
+      <span>{modelSourceLabel(props.active.model.source)}</span>
+      <span>{webSearchStateLabel(props.active.model)}</span>
+      {props.boundModel ? <span>bound model</span> : null}
+      {!props.registry.active_reasoning_effort_applied ? (
+        !props.boundModel ? <span>reasoning not applied</span> : null
+      ) : null}
+      {!props.registry.active_service_label_applied ? (
+        !props.boundModel ? <span>service label not applied</span> : null
+      ) : null}
+      {failedDiscovery ? (
+        <span>model discovery failed; using configured models</span>
+      ) : null}
+    </div>
+  );
+}
+
+async function selectAgentModel(
+  client: WasmClient | null,
+  value: string,
+  onStatus: ((message: string) => void) | undefined,
+  setModelBusy: (value: boolean) => void,
+): Promise<void> {
+  const [providerId, modelId] = parseModelOptionValue(value);
+  if (!client || !providerId || !modelId) return;
+  setModelBusy(true);
+  try {
+    await client.dispatchAgentModelSelect({ provider_id: providerId, model_id: modelId });
+  } catch (err) {
+    reportError(onStatus)(err);
+  } finally {
+    setModelBusy(false);
+  }
+}
+
+async function updateAgentModelParams(
+  client: WasmClient | null,
+  selection: AgentModelSelection | null,
+  params: AgentModelParamsSnapshot,
+  onStatus: ((message: string) => void) | undefined,
+  setModelBusy: (value: boolean) => void,
+): Promise<void> {
+  if (!client || !selection) return;
+  setModelBusy(true);
+  try {
+    await client.dispatchAgentModelParamsUpdate({
+      provider_id: selection.provider_id,
+      model_id: selection.model_id,
+      reasoning_effort: params.reasoning_effort,
+      service_label: params.service_label,
+    });
+  } catch (err) {
+    reportError(onStatus)(err);
+  } finally {
+    setModelBusy(false);
+  }
+}
+
+type ActiveAgentModel = {
+  provider: AgentModelRegistryProvider;
+  model: AgentModelRegistryModel;
+};
+
+function activeAgentModel(registry: AgentModelRegistry | null): ActiveAgentModel | null {
+  if (!registry) return null;
+  for (const provider of registry.providers) {
+    if (provider.id !== registry.active_provider_id) continue;
+    const model = provider.models.find((item) => item.id === registry.active_model_id);
+    return model ? { provider, model } : null;
   }
   return null;
+}
+
+function selectedAgentModel(
+  registry: AgentModelRegistry | null,
+  boundModel: BoundAgentModel | null,
+): ActiveAgentModel | null {
+  if (!registry || !boundModel) return activeAgentModel(registry);
+  for (const provider of registry.providers) {
+    if (provider.id !== boundModel.provider_id) continue;
+    const model = provider.models.find((item) => item.id === boundModel.model_id);
+    if (model) return { provider, model };
+  }
+  return null;
+}
+
+function modelOptionValue(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`;
+}
+
+function boundModelOptionValue(boundModel: BoundAgentModel): string {
+  return modelOptionValue(boundModel.provider_id, boundModel.model_id);
+}
+
+function boundModelOptionLabel(boundModel: BoundAgentModel): string {
+  return `${boundModel.provider_id} / ${boundModel.model_id}`;
+}
+
+function parseModelOptionValue(value: string): [string | null, string | null] {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) return [null, null];
+  return [value.slice(0, slash), value.slice(slash + 1)];
+}
+
+function modelOptionLabel(
+  provider: AgentModelRegistryProvider,
+  model: AgentModelRegistryModel,
+): string {
+  return `${provider.label ?? provider.id} / ${model.label ?? model.id} · ${model.source}`;
+}
+
+function modelSourceLabel(source: AgentModelRegistryModel["source"]): string {
+  if (source === "discovered_with_override") return "source: discovered override";
+  return `source: ${source}`;
+}
+
+function webSearchStateLabel(model: AgentModelRegistryModel): string {
+  if (!model.native_web_search_enabled) return "web search off";
+  if (model.native_web_search_applied) return "web search active";
+  return "web search unavailable for selected model";
+}
+
+function recentAgentEvents(
+  events: AgentEvent[],
+  agentRun: AgentRun | null,
+): AgentEvent[] {
+  const agentEvents = events.filter((event) => event.event.startsWith("agent."));
+  const visibleRunId = agentRun?.run_id ?? latestAgentRunId(agentEvents);
+  if (!visibleRunId) return agentEvents;
+  return agentEvents.filter((event) => {
+    const runId = agentEventRunId(event);
+    return !runId || runId === visibleRunId;
+  });
+}
+
+function latestAgentRunId(events: AgentEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const runId = agentEventRunId(events[index] as AgentEvent | undefined);
+    if (runId) return runId;
+  }
+  return null;
+}
+
+function agentEventRunId(event: AgentEvent | undefined): string | null {
+  const runId = event?.payload?.["run_id"];
+  return typeof runId === "string" ? runId : null;
+}
+
+function lastAgentHistoryRefreshTerminalKey(events: AgentEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as AgentEvent | undefined;
+    if (!event || !agentTerminalEventWritesChatHistory(event)) continue;
+    const payload = event.payload ?? {};
+    const runId = typeof payload["run_id"] === "string" ? payload["run_id"] : null;
+    return runId ? `${event.event}:${runId}` : `${event.event}:${index}`;
+  }
+  return null;
+}
+
+function agentTerminalEventWritesChatHistory(event: AgentEvent): boolean {
+  if (event.event === "agent.done" || event.event === "agent.error") {
+    return true;
+  }
+  if (event.event !== "agent.state_changed") return false;
+  const state = event.payload?.["state"];
+  return (
+    state === "done" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "interrupted" ||
+    state === "failed_needs_recovery"
+  );
 }

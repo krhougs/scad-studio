@@ -3,6 +3,7 @@
 // watch 订阅 / handshake ack 流程独立成单元。
 
 import { BrowserWebSocketTransport } from "../transport/websocket-transport";
+import { CURRENT_PROTOCOL_VERSION } from "@budn/app-server-protocol";
 import type { WasmClient, WasmClientCallbacks } from "../wasm-bridge";
 
 export type WireOptions = {
@@ -19,7 +20,10 @@ export function buildHandshakeParams() {
     capabilities: {
       client_name: "studio-web" as const,
       platform: "web" as const,
-      protocol_version: { min: 3, max: 3 },
+      protocol_version: {
+        min: CURRENT_PROTOCOL_VERSION,
+        max: CURRENT_PROTOCOL_VERSION,
+      },
       // 核心流：`.scad` → server OpenSCAD → `.3mf` bytes → 前端解码 + 渲染。
       // 所有扩展默认允许 FileRead；真要限制再显式加。
       file_read: { denied_extensions: [] },

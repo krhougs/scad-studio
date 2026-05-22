@@ -54,28 +54,32 @@ pub fn save_cad_plan_input_schema() -> Value {
     object_schema(
         json!({
             "title": string_schema("Plan title."),
+            "request": string_schema("Original user request and relevant context."),
             "target_ref": string_schema("Primary visible target ref."),
-            "resolved_target": string_schema("Workspace target path."),
+            "target_path": string_schema("Workspace target path."),
+            "target_type": {"type": "string", "enum": ["part", "component", "assembly"]},
             "affected_files": string_array_schema(),
             "new_files": string_array_schema(),
             "export_targets": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Runner output paths: outputs/{resolved_target stem}.step, .stl, or .3mf."
+                "description": "Runner output paths: outputs/{target_path stem}.step, .stl, or .3mf."
             },
             "strategy": string_schema("CadQuery strategy."),
             "risks": string_array_schema(),
             "acceptance": string_array_schema(),
-            "execution_boundary": string_schema("Confirmed execution boundary.")
+            "execution_scope": string_schema("Planned execution scope.")
         }),
         &[
             "title",
+            "request",
             "target_ref",
-            "resolved_target",
+            "target_path",
+            "target_type",
             "affected_files",
             "export_targets",
             "strategy",
-            "execution_boundary",
+            "execution_scope",
         ],
     )
 }
@@ -188,10 +192,9 @@ pub fn selection_success_schema() -> Value {
     success_schema(
         json!({
             "selections": {"type": "array", "items": {"type": "object"}},
-            "active_index": {"type": ["integer", "null"]},
-            "context_refs": string_array_schema()
+            "active_index": {"type": ["integer", "null"]}
         }),
-        &["selections", "active_index", "context_refs"],
+        &["selections", "active_index"],
     )
 }
 
@@ -222,29 +225,35 @@ pub fn resolve_ref_success_schema() -> Value {
 pub fn save_cad_plan_success_schema() -> Value {
     success_schema(
         json!({
-            "plan_ref": string_schema("Plan path under plans/."),
-            "display_path": string_schema("User-visible path."),
+            "plan_id": string_schema("Plan package id."),
+            "plan_ref": string_schema("Plan package directory under plans/."),
+            "request_path": string_schema("Workspace path to request.md."),
+            "plan_path": string_schema("Workspace path to plan.md."),
+            "result_path": string_schema("Workspace path to plan-result.md."),
             "hash": string_schema("Stable content hash."),
             "summary": string_schema("Short plan summary."),
-            "target_ref": string_schema("Visible target ref."),
             "target_path": string_schema("Resolved CadQuery target path."),
+            "target_type": {"type": "string", "enum": ["part", "component", "assembly"]},
             "affected_files": string_array_schema(),
             "new_files": string_array_schema(),
             "export_targets": string_array_schema(),
-            "execution_boundary": string_schema("Confirmed execution boundary."),
+            "plan_status": string_schema("Plan package status."),
             "run_id": nullable_string_schema()
         }),
         &[
+            "plan_id",
             "plan_ref",
-            "display_path",
+            "request_path",
+            "plan_path",
+            "result_path",
             "hash",
             "summary",
-            "target_ref",
             "target_path",
+            "target_type",
             "affected_files",
             "new_files",
             "export_targets",
-            "execution_boundary",
+            "plan_status",
             "run_id",
         ],
     )
@@ -273,6 +282,59 @@ pub fn file_write_success_schema() -> Value {
     )
 }
 
+pub fn web_search_input_schema() -> Value {
+    object_schema(
+        json!({
+            "query": string_schema("Search query text."),
+            "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+            "filters": {"type": "object"}
+        }),
+        &["query"],
+    )
+}
+
+pub fn web_search_success_schema() -> Value {
+    success_schema(
+        json!({
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": string_schema("Result title."),
+                        "url": string_schema("Result URL."),
+                        "snippet": string_schema("Result snippet or description."),
+                        "date": nullable_string_schema(),
+                        "source": nullable_string_schema()
+                    }
+                }
+            },
+            "result_count": {"type": "integer"}
+        }),
+        &["results", "result_count"],
+    )
+}
+
+pub fn fetch_url_input_schema() -> Value {
+    object_schema(
+        json!({
+            "url": string_schema("URL to fetch.")
+        }),
+        &["url"],
+    )
+}
+
+pub fn fetch_url_success_schema() -> Value {
+    success_schema(
+        json!({
+            "url": string_schema("Fetched URL."),
+            "content": string_schema("Page content as text or markdown."),
+            "content_length": {"type": "integer"}
+        }),
+        &["url", "content", "content_length"],
+    )
+}
+
 pub fn tool_error_schema() -> Value {
     object_schema(
         json!({
@@ -293,7 +355,8 @@ pub fn tool_error_schema() -> Value {
                     "cadquery_build_error",
                     "topology_mapping_error",
                     "export_error",
-                    "timeout"
+                    "timeout",
+                    "web_search_error"
                 ]
             },
             "retry_allowed": {"type": "boolean"},

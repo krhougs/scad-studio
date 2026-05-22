@@ -4,8 +4,17 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection } from "node:net";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,6 +29,11 @@ export const HOST_WORKSPACE = path.join(
   "tests",
   "studio-web-smoke-workspace",
 );
+const TEST_CADQUERY_RUNNER = path.join(
+  REPO_ROOT,
+  "target",
+  "playwright-fake-cadquery-python.sh",
+);
 
 export type HarnessOptions = {
   bindPort: number;
@@ -31,6 +45,11 @@ export type HarnessOptions = {
    * so the test never writes to the developer's real scad-studio config.
    */
   hostEnv?: Record<string, string>;
+  /**
+   * When true, the host subprocess inherits `process.env` directly — no
+   * isolated HOME, no fake CadQuery runner.  Matches `bun run dev` behaviour.
+   */
+  rawEnv?: boolean;
 };
 
 export type HarnessHandle = {
@@ -40,13 +59,22 @@ export type HarnessHandle = {
   stop: () => Promise<void>;
 };
 
+export type HostEnvHandle = {
+  env: NodeJS.ProcessEnv;
+  cleanup: () => void;
+};
+
 let protocolWasmReady = false;
 
 export function createHarness(opts: HarnessOptions): HarnessHandle {
   const hostBind = `127.0.0.1:${opts.bindPort}`;
   const baseUrl = `http://127.0.0.1:${opts.vitePort}`;
   const wsUrl = `ws://${hostBind}`;
-  const workspacePath = opts.workspacePath ?? HOST_WORKSPACE;
+  const workspace = isolatedWorkspace(opts.workspacePath);
+  const workspacePath = workspace.path;
+  const hostEnv: HostEnvHandle = opts.rawEnv
+    ? { env: loadRepoRootEnv(), cleanup: () => {} }
+    : isolatedHostEnvWithTestCadqueryRunner(opts.hostEnv);
   let hostProc: ChildProcess | null = null;
   let viteProc: ChildProcess | null = null;
 
@@ -71,7 +99,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
         {
           cwd: REPO_ROOT,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, ...(opts.hostEnv ?? {}) },
+          env: hostEnv.env,
         },
       );
       hostProc = host;
@@ -93,7 +121,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
         {
           cwd: path.join(REPO_ROOT, "packages", "studio-web"),
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, VITE_WS_URL: wsUrl },
+          env: { ...process.env, NODE_ENV: "development", VITE_WS_URL: wsUrl },
         },
       );
       viteProc = vite;
@@ -114,8 +142,88 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
       }
       hostProc = null;
       viteProc = null;
+      hostEnv.cleanup();
+      workspace.cleanup();
     },
   };
+}
+
+function loadRepoRootEnv(): NodeJS.ProcessEnv {
+  const dotenv = path.join(REPO_ROOT, ".env");
+  if (!existsSync(dotenv)) return { ...process.env };
+  const merged: NodeJS.ProcessEnv = { ...process.env };
+  for (const line of readFileSync(dotenv, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq);
+    const val = trimmed.slice(eq + 1);
+    if (!(key in merged)) merged[key] = val;
+  }
+  return merged;
+}
+
+function isolatedWorkspace(explicitPath?: string): { path: string; cleanup: () => void } {
+  if (explicitPath) {
+    return { path: explicitPath, cleanup: () => {} };
+  }
+  const tempWorkspace = mkdtempSync(
+    path.join(tmpdir(), "scad-studio-smoke-workspace-"),
+  );
+  cpSync(HOST_WORKSPACE, tempWorkspace, { recursive: true });
+  return {
+    path: tempWorkspace,
+    cleanup: () => rmSync(tempWorkspace, { recursive: true, force: true }),
+  };
+}
+
+export function isolatedHostEnvWithTestCadqueryRunner(
+  overrides: Record<string, string> = {},
+): HostEnvHandle {
+  const configEnv = isolatedHostConfigEnv(overrides);
+  return {
+    env: hostEnvWithTestCadqueryRunner(configEnv.env),
+    cleanup: configEnv.cleanup,
+  };
+}
+
+function isolatedHostConfigEnv(
+  overrides: Record<string, string> = {},
+): { env: Record<string, string>; cleanup: () => void } {
+  if ("HOME" in overrides || "XDG_CONFIG_HOME" in overrides) {
+    return { env: overrides, cleanup: () => {} };
+  }
+  const tempHome = mkdtempSync(path.join(tmpdir(), "scad-studio-smoke-home-"));
+  const realHome = homedir();
+  return {
+    env: {
+      ...overrides,
+      HOME: tempHome,
+      XDG_CONFIG_HOME: path.join(tempHome, ".config"),
+      CARGO_HOME: process.env.CARGO_HOME ?? path.join(realHome, ".cargo"),
+      RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(realHome, ".rustup"),
+    },
+    cleanup: () => rmSync(tempHome, { recursive: true, force: true }),
+  };
+}
+
+export function hostEnvWithTestCadqueryRunner(
+  overrides: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  ensureTestCadqueryRunner();
+  return {
+    ...process.env,
+    CADQUERY_RUNNER_PYTHON: TEST_CADQUERY_RUNNER,
+    ...overrides,
+  };
+}
+
+function ensureTestCadqueryRunner(): void {
+  if (!existsSync(TEST_CADQUERY_RUNNER)) {
+    writeFileSync(TEST_CADQUERY_RUNNER, "#!/bin/sh\nexit 0\n");
+    chmodSync(TEST_CADQUERY_RUNNER, 0o755);
+  }
 }
 
 export async function clearServiceWorkerState(
@@ -162,6 +270,19 @@ export async function installProtocolRecorder(
       return originalSend.call(this, data);
     };
   });
+}
+
+export async function injectStoreState(
+  page: import("@playwright/test").Page,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await page.evaluate(async (state) => {
+    const mod = await import(/* @vite-ignore */ "/src/state/protocol-store.ts");
+    const store = (mod as Record<string, unknown>)["useProtocolStore"] as {
+      setState: (patch: Record<string, unknown>) => void;
+    };
+    store.setState(state);
+  }, patch);
 }
 
 export async function clearRecordedClientCommands(
@@ -255,4 +376,48 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export async function waitForTestClient(
+  page: import("@playwright/test").Page,
+  timeoutMs = 30_000,
+): Promise<void> {
+  await page.waitForFunction(
+    () => !!(window as Window & { __budn_test_client?: unknown }).__budn_test_client,
+    { timeout: timeoutMs },
+  );
+}
+
+export async function dispatchSelectionUpdateInPage(
+  page: import("@playwright/test").Page,
+  params: unknown,
+): Promise<void> {
+  await waitForTestClient(page);
+  await page.evaluate(async (selectionParams) => {
+    const client = (window as Window & { __budn_test_client?: { dispatchSelectionUpdate(p: unknown): Promise<unknown> } })
+      .__budn_test_client;
+    if (!client) throw new Error("__budn_test_client not available (dev mode only)");
+    await client.dispatchSelectionUpdate(selectionParams);
+  }, params);
+}
+
+export async function waitForAssistantMessage(
+  page: import("@playwright/test").Page,
+  timeoutMs = 120_000,
+  minLength = 10,
+): Promise<string> {
+  const selector = '[data-testid="chat-body"] .msg.agent .bubble';
+  let text = "";
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const locator = page.locator(selector).last();
+    const visible = await locator.isVisible().catch(() => false);
+    if (visible) {
+      text = await locator.innerText().catch(() => "");
+      if (text.length >= minLength) return text;
+    }
+    await delay(500);
+  }
+  if (text.length > 0) return text;
+  throw new Error(`no assistant message with >=${minLength} chars after ${timeoutMs}ms`);
 }

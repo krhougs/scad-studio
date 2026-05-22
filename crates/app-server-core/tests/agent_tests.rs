@@ -1,23 +1,4 @@
-use app_server_core::{
-    AgentCadQueryCodeInput, AgentTurnInput, cadquery_agent_system_prompt, draft_agent_turn,
-    generate_cadquery_code, llm_request_for_cadquery_execute, operation_for_tool_loop,
-    rig_backend_decision,
-};
-use app_server_protocol::{
-    AgentOperationLevel, CadQueryObjectKind, ChatMessageRecord, ChatRole, SelectionKind,
-    SelectionRef,
-};
-
-#[test]
-fn rig_backend_decision_records_current_compatible_version() {
-    let decision = rig_backend_decision();
-
-    assert_eq!(decision.crate_name, "rig-core");
-    assert_eq!(decision.evaluated_version, "0.35.0");
-    assert!(decision.selected);
-    assert!(decision.rationale.contains("tool"));
-    assert!(decision.rationale.contains("stream"));
-}
+use app_server_core::cadquery_agent_system_prompt;
 
 #[test]
 fn cadquery_agent_system_prompt_covers_runtime_contract() {
@@ -26,20 +7,21 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
     for section in [
         "Role",
         "Core Principles",
-        "Operation Levels",
+        "Modes",
         "File System Contract",
         "Component / Part / Assembly Rules",
         "Ref Handling Rules",
-        "CAD Plan Rules",
+        "Workspace Plan Package Rules",
         "Tool Permission Rules",
         "Experiment Rules",
         "Response Rules",
     ] {
         assert!(prompt.contains(section), "missing section: {section}");
     }
-    assert!(prompt.contains("Inform"));
-    assert!(prompt.contains("Plan"));
-    assert!(prompt.contains("Execute"));
+    assert!(prompt.contains("`Agent`"));
+    assert!(prompt.contains("`Plan`"));
+    assert!(!prompt.contains("Inform / Plan / Execute"));
+    assert!(!prompt.contains("confirmed_cadquery"));
     assert!(prompt.contains("source of truth"));
     assert!(prompt.contains("`.py` files are model source code"));
     assert!(prompt.contains("`.md` files are semantic design notes"));
@@ -54,322 +36,51 @@ fn cadquery_agent_system_prompt_covers_runtime_contract() {
     assert!(prompt.contains("@vertex"));
     assert!(prompt.contains("Raw face / edge / vertex refs are not long-term truth"));
     assert!(prompt.contains("Do not expose selector refs as MVP protocol selections"));
-    assert!(prompt.contains("confirmed"));
     assert!(prompt.contains("CadQuery execution completed with warnings"));
     assert!(prompt.contains("diagnostics.traceback"));
     assert!(prompt.contains("byte-for-byte variants"));
-    assert!(prompt.contains("Static `cadquery_check_source` is allowed"));
+    assert!(prompt.contains("Static CadQuery source checks"));
     let tool_rules = prompt
         .split("## 8. Tool Permission Rules")
         .nth(1)
         .expect("tool permission section exists");
-    let plan_and_after = tool_rules
-        .split("Plan:")
-        .nth(1)
-        .expect("plan permission block exists");
-    let plan_rules = plan_and_after
-        .split("Execute:")
-        .next()
-        .expect("plan permission block exists");
-    assert!(plan_rules.contains("May use `update_chat_summary`"));
-    assert!(plan_rules.contains("May use `cadquery_check_source`"));
-    assert!(!plan_rules.contains("Do not call CadQuery."));
-    let execute_rules = tool_rules
-        .split("Execute:")
-        .nth(1)
-        .and_then(|section| section.split("Auto:").next())
-        .expect("execute permission block exists");
-    assert!(execute_rules.contains("`update_chat_summary`"));
-    assert!(execute_rules.contains("`cadquery_dry_run`"));
-    assert!(execute_rules.contains("`cadquery_execute`"));
+    assert!(tool_rules.contains("| `update_chat_summary` semantic tool | Not allowed | Allowed |"));
+    assert!(tool_rules.contains("| Static CadQuery source checks | Allowed | Allowed |"));
+    assert!(tool_rules.contains("| `cadquery_dry_run` | Not allowed | Allowed through staging |"));
+    assert!(tool_rules.contains(
+        "| `cadquery_execute` | Not allowed | Allowed through staging and execution scope |"
+    ));
     assert!(!prompt.contains("keyword matching"));
 }
 
 #[test]
-fn cadquery_execute_llm_request_uses_system_prompt_and_structured_context() {
-    let request = llm_request_for_cadquery_execute(AgentCadQueryCodeInput {
-        prompt: "replace this screw with a countersunk version".into(),
-        history: vec![
-            chat_message("msg-1", "initial CAD Plan: preserve head clearance"),
-            chat_message("msg-2", ""),
-            chat_message("msg-3", "explicit confirmation: edit selected component"),
-        ],
-        selections: vec![instance_selection()],
-        active_selection_index: Some(0),
-        target_display_path: "components/screw.py".into(),
-        target_type: CadQueryObjectKind::Component,
-    });
+fn cadquery_agent_system_prompt_uses_domain_neutral_feature_examples() {
+    let prompt = cadquery_agent_system_prompt();
 
-    assert_eq!(request.system_prompt, cadquery_agent_system_prompt());
-    assert!(request.context.contains("Operation: Execute"));
-    assert!(request.context.contains("Target path: components/screw.py"));
-    assert!(request.context.contains("Target type: component"));
-    assert!(request.context.contains("Active selection index: 0"));
-    assert!(
-        request
-            .context
-            .contains("@instance[full_enclosure/screw_1]")
-    );
-    assert!(request.context.contains("owner_ref_text=@component[screw]"));
-    assert!(
-        request
-            .context
-            .contains("initial CAD Plan: preserve head clearance")
-    );
-    assert!(
-        request
-            .context
-            .contains("explicit confirmation: edit selected component")
-    );
-    assert!(!request.context.contains("assembly instance replacement"));
-}
-
-#[test]
-fn draft_agent_turn_uses_prompt_history_selection_and_execute_target() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Execute,
-        prompt: "make the lid taller".into(),
-        history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![selection("@face[top_lid:f_0]")],
-        active_selection_index: Some(0),
-        confirmed_target_path: Some("parts/top_lid.py".into()),
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("Execute"));
-    assert!(draft.text.contains("make the lid taller"));
-    assert!(draft.text.contains("previous plan"));
-    assert!(draft.text.contains("@face[top_lid:f_0]"));
-    assert!(draft.text.contains("parts/top_lid.py"));
-}
-
-#[test]
-fn auto_operation_decision_maps_to_concrete_tool_loop_operation() {
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "解释 CadQuery fillet", false),
-        AgentOperationLevel::Inform
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "给我一个修改方案", false),
-        AgentOperationLevel::Plan
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "解释怎么修改 fillet", false),
-        AgentOperationLevel::Inform
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Auto, "做吧", true),
-        AgentOperationLevel::Execute
-    );
-    assert_eq!(
-        operation_for_tool_loop(AgentOperationLevel::Plan, "解释", false),
-        AgentOperationLevel::Plan
-    );
-}
-
-#[test]
-fn plan_turn_maps_raw_face_selection_to_feature_and_part_target() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "add a vent on this face".into(),
-        history: vec![chat_message("msg-1", "initial enclosure plan")],
-        selections: vec![selection("@face[top_lid:f_0]")],
-        active_selection_index: Some(0),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("## CAD Plan"));
-    assert!(draft.text.contains("@feature[top_lid.top_surface]"));
-    assert!(draft.text.contains("parts/top_lid.py"));
-    assert!(draft.text.contains("part geometry"));
-}
-
-#[test]
-fn local_agent_backend_refuses_part_codegen_without_llm_backend() {
-    let error = generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: "make a 42 mm taller lid from chat".into(),
-        history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![selection("@face[top_lid:f_0]")],
-        active_selection_index: Some(0),
-        target_display_path: "parts/top_lid.py".into(),
-        target_type: CadQueryObjectKind::Part,
-    })
-    .expect_err("local fallback must not generate CadQuery geometry");
-
-    assert!(error.message.contains("LLM"));
-    assert!(!error.message.contains("make a 42 mm taller lid from chat"));
-}
-
-#[test]
-fn local_agent_backend_refuses_assembly_codegen_without_llm_backend() {
-    let error = generate_cadquery_code(AgentCadQueryCodeInput {
-        prompt: "adjust this selected instance".into(),
-        history: vec![chat_message("msg-1", "previous plan")],
-        selections: vec![instance_selection()],
-        active_selection_index: Some(0),
-        target_display_path: "assemblies/full_enclosure.py".into(),
-        target_type: CadQueryObjectKind::Assembly,
-    })
-    .expect_err("local fallback must not generate assembly geometry");
-
-    assert!(error.message.contains("LLM"));
-    assert!(!error.message.contains("cq.Assembly"));
-}
-
-#[test]
-fn plan_turn_does_not_infer_instance_replacement_from_prompt_words() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "replace this screw with a countersunk version".into(),
-        history: vec![chat_message("msg-1", "assembly plan")],
-        selections: vec![instance_selection()],
-        active_selection_index: Some(0),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("Target: components/screw.py"));
-    assert!(draft.text.contains("component geometry"));
-    assert!(!draft.text.contains("assemblies/full_enclosure.py"));
-    assert!(!draft.text.contains("assembly instance replacement"));
-}
-
-#[test]
-fn plan_turn_does_not_infer_instance_movement_from_prompt_words() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "move this screw 5mm right".into(),
-        history: vec![chat_message("msg-1", "assembly plan")],
-        selections: vec![instance_selection()],
-        active_selection_index: Some(0),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("Target: components/screw.py"));
-    assert!(draft.text.contains("component geometry"));
-    assert!(!draft.text.contains("assemblies/full_enclosure.py"));
-    assert!(!draft.text.contains("assembly coordination"));
-}
-
-#[test]
-fn plan_turn_labels_component_body_edit_as_component_geometry() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "make this component wider".into(),
-        history: vec![chat_message("msg-1", "component plan")],
-        selections: vec![component_selection()],
-        active_selection_index: Some(0),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("Target: components/screw.py"));
-    assert!(draft.text.contains("component geometry"));
-    assert!(!draft.text.contains("component placement"));
-}
-
-#[test]
-fn plan_turn_labels_instance_body_edit_as_component_geometry() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "make this selected instance wider".into(),
-        history: vec![chat_message("msg-1", "component plan")],
-        selections: vec![instance_selection()],
-        active_selection_index: Some(0),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("Target: components/screw.py"));
-    assert!(draft.text.contains("component geometry"));
-    assert!(!draft.text.contains("assembly coordination"));
-}
-
-#[test]
-fn plan_turn_uses_active_selection_and_keeps_ambiguous_raw_ref() {
-    let draft = draft_agent_turn(AgentTurnInput {
-        operation: AgentOperationLevel::Plan,
-        prompt: "modify the active face".into(),
-        history: vec![chat_message("msg-1", "initial enclosure plan")],
-        selections: vec![selection("@face[top_lid:f_0]"), ambiguous_selection()],
-        active_selection_index: Some(1),
-        confirmed_target_path: None,
-        context_refs: Vec::new(),
-    });
-
-    assert!(draft.text.contains("@face[top_lid:f_1]"));
-    assert!(!draft.text.contains("@feature[top_lid.ambiguous_surface]"));
-    assert!(draft.text.contains("ambiguous selection"));
-}
-
-fn chat_message(id: &str, content: &str) -> ChatMessageRecord {
-    ChatMessageRecord {
-        message_id: id.into(),
-        ts_ms: 1,
-        role: ChatRole::User,
-        content: content.into(),
-        related_files: Vec::new(),
-        tool_call_id: None,
-        tool_calls: Vec::new(),
-        tool_result: None,
-        mesh_result: None,
+    for forbidden in [
+        "AirPods",
+        "airpods",
+        "charging_pad",
+        "airpods_recess",
+        "wireless charging",
+        "outer_shell",
+        "mounting_boss",
+        "alignment_slot",
+        "cable_relief_channel",
+    ] {
+        assert!(
+            !prompt.contains(forbidden),
+            "system prompt must not contain current acceptance scenario token: {forbidden}"
+        );
     }
 }
 
-fn selection(ref_text: &str) -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Face,
-        ref_text: ref_text.into(),
-        owner_ref_text: Some("@part[top_lid]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Part),
-        instance_path: None,
-        candidate_feature_ref: Some("@feature[top_lid.top_surface]".into()),
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
-    }
-}
+#[test]
+fn cadquery_agent_system_prompt_owns_feature_key_naming() {
+    let prompt = cadquery_agent_system_prompt();
 
-fn instance_selection() -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Instance,
-        ref_text: "@instance[full_enclosure/screw_1]".into(),
-        owner_ref_text: Some("@component[screw]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Component),
-        instance_path: Some("full_enclosure/screw_1".into()),
-        candidate_feature_ref: None,
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
-    }
-}
-
-fn component_selection() -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Component,
-        ref_text: "@component[screw]".into(),
-        owner_ref_text: None,
-        owner_object_kind: None,
-        instance_path: None,
-        candidate_feature_ref: None,
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: false,
-    }
-}
-
-fn ambiguous_selection() -> SelectionRef {
-    SelectionRef {
-        kind: SelectionKind::Face,
-        ref_text: "@face[top_lid:f_1]".into(),
-        owner_ref_text: Some("@part[top_lid]".into()),
-        owner_object_kind: Some(CadQueryObjectKind::Part),
-        instance_path: None,
-        candidate_feature_ref: Some("@feature[top_lid.ambiguous_surface]".into()),
-        build_id: Some("sha256:build".into()),
-        result_id: Some("cq_1".into()),
-        ambiguous: true,
-    }
+    assert!(prompt.contains("REFS.features keys are your responsibility"));
+    assert!(prompt.contains("tool schemas, warnings, and errors describe structure only"));
+    assert!(prompt.contains("do not provide feature names to copy"));
+    assert!(prompt.contains("Preserve existing stable feature keys"));
 }

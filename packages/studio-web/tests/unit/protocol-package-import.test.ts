@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  CURRENT_PROTOCOL_VERSION,
   initProtocolWasm,
   protocol_decode_server_frame,
-  type AppConfigDto,
-  type AgentPlanProposedEvent,
+  type AgentInvokeRequest,
+  type AgentPlanSavedEvent,
   type CadQueryMeshPayload,
   type CadQueryResultReady,
   type CommandSuccess,
+  type AppConfigDto,
   type ServerCapabilities,
 } from "@budn/app-server-protocol";
 
@@ -35,7 +37,10 @@ describe("protocol package import", () => {
 
   it("exposes CadQuery protocol types from the package entrypoint", () => {
     const capabilities: ServerCapabilities = {
-      protocol_version: { min: 3, max: 3 },
+      protocol_version: {
+        min: CURRENT_PROTOCOL_VERSION,
+        max: CURRENT_PROTOCOL_VERSION,
+      },
       reconnect_window_ms: 30_000,
       supports_watch: true,
       supported_preview_kinds: ["geometry_artifact"],
@@ -44,6 +49,7 @@ describe("protocol package import", () => {
       agent: false,
       selection_sync: false,
       llm_configured: false,
+      agent_provider: null,
     };
     const ready: CadQueryResultReady = {
       result_id: "cq_1",
@@ -52,6 +58,16 @@ describe("protocol package import", () => {
       face_count: 1,
       edge_count: 1,
       vertex_count: 1,
+      artifact_relation: {
+        source_path: "parts/top_lid.py",
+        exports: [
+          {
+            name: "step",
+            path: "outputs/top_lid.step",
+            hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+        ],
+      },
     };
     const mesh: CadQueryMeshPayload = {
       result_id: ready.result_id,
@@ -59,19 +75,50 @@ describe("protocol package import", () => {
       unit: "millimeter",
       root_ref_text: "@part[top_lid]",
       root_object_kind: "part",
+      artifact_relation: ready.artifact_relation,
       parts: [],
     };
     const success: CommandSuccess = {
       type: "cad_query_result_ready",
       payload: ready,
     };
-    const proposedPlan: AgentPlanProposedEvent = {
+    const invoke: AgentInvokeRequest = {
       session_id: "chat-1",
-      run_id: "run-1",
+      prompt: "run plan",
+      mode: "agent",
       plan_ref: {
         workspace_id: "ws",
-        path_segments: ["plans", "add-lid-vents.md"],
+        path_segments: ["plans", "2026050100-add-lid-vents"],
       },
+    };
+    const savedPlan: AgentPlanSavedEvent = {
+      session_id: "chat-1",
+      run_id: "run-1",
+      package: {
+        plan_id: "2026050100-add-lid-vents",
+        plan_ref: {
+          workspace_id: "ws",
+          path_segments: ["plans", "2026050100-add-lid-vents"],
+        },
+        request_path: {
+          workspace_id: "ws",
+          path_segments: ["plans", "2026050100-add-lid-vents", "request.md"],
+        },
+        plan_path: {
+          workspace_id: "ws",
+          path_segments: ["plans", "2026050100-add-lid-vents", "plan.md"],
+        },
+        result_path: {
+          workspace_id: "ws",
+          path_segments: [
+            "plans",
+            "2026050100-add-lid-vents",
+            "plan-result.md",
+          ],
+        },
+      },
+      title: "Add lid vents",
+      status: "planned",
       target_path: {
         workspace_id: "ws",
         path_segments: ["parts", "top_lid.py"],
@@ -88,13 +135,21 @@ describe("protocol package import", () => {
         { workspace_id: "ws", path_segments: ["outputs", "top_lid.step"] },
       ],
     };
+    const planModeInvoke: AgentInvokeRequest = {
+      session_id: "chat-1",
+      prompt: "draft a plan",
+      mode: "plan",
+      plan_ref: null,
+    };
 
     expect(capabilities.cadquery).toBe(true);
     expect(mesh.root_object_kind).toBe("part");
     expect(success.payload.result_id).toBe("cq_1");
-    expect(proposedPlan.plan_ref?.path_segments).toEqual([
+    expect(invoke.mode).toBe("agent");
+    expect(planModeInvoke.mode).toBe("plan");
+    expect(savedPlan.package.plan_ref.path_segments).toEqual([
       "plans",
-      "add-lid-vents.md",
+      "2026050100-add-lid-vents",
     ]);
   });
 });

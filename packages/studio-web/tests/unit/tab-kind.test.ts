@@ -23,12 +23,15 @@ describe("resolveTabKind", () => {
 
   it("routes scad and meshes", () => {
     expect(resolveTabKind("cube.scad")).toBe("scad");
+    expect(resolveTabKind("model.py")).toBe("cadquery");
     expect(resolveTabKind("part.stl")).toBe("mesh");
     expect(resolveTabKind("assembly.3mf")).toBe("mesh");
   });
 
   it("returns null for unsupported extensions", () => {
     expect(resolveTabKind("notes.txt")).toBeNull();
+    expect(resolveTabKind("model.step")).toBeNull();
+    expect(resolveTabKind("model.stp")).toBeNull();
     expect(resolveTabKind("blob")).toBeNull();
   });
 });

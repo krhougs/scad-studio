@@ -20,6 +20,7 @@ export function resolveTabKind(label: string): DocumentTabKind | null {
   )
     return "image";
   if (lower.endsWith(".scad")) return "scad";
+  if (lower.endsWith(".py")) return "cadquery";
   if (lower.endsWith(".stl") || lower.endsWith(".3mf")) return "mesh";
   return null;
 }

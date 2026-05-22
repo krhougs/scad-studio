@@ -74,9 +74,21 @@ export function client_dispatch_agent_cancel(handle: ClientHandle, params: any):
 
 export function client_dispatch_agent_invoke(handle: ClientHandle, params: any): bigint;
 
+export function client_dispatch_agent_model_params_update(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_model_registry(handle: ClientHandle): bigint;
+
+export function client_dispatch_agent_model_select(handle: ClientHandle, params: any): bigint;
+
 export function client_dispatch_agent_plan_confirm(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_agent_plan_reject(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_snapshot(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_start_turn(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_agent_subscribe(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_cadquery_execute(handle: ClientHandle, params: any): bigint;
 
@@ -91,6 +103,8 @@ export function client_dispatch_chat_create(handle: ClientHandle, params: any): 
 export function client_dispatch_chat_history(handle: ClientHandle, params: any): bigint;
 
 export function client_dispatch_chat_list(handle: ClientHandle, params: any): bigint;
+
+export function client_dispatch_chat_select(handle: ClientHandle, session_id: string, params: any): bigint;
 
 export function client_dispatch_chat_send(handle: ClientHandle, params: any): bigint;
 

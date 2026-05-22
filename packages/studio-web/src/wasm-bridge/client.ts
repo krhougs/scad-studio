@@ -11,7 +11,7 @@ import { RequestResolverMap } from "./request-resolvers";
 export type HandshakeParams = {
   capabilities: {
     client_name: string;
-    platform: "desktop" | "web" | "other";
+    platform: "web" | "other";
     protocol_version: { min: number; max: number };
     file_read: { denied_extensions: string[] };
     supported_preview_kinds: string[];
@@ -159,6 +159,10 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_chat_history(h, params));
   }
 
+  dispatchChatSelect(sessionId: string, params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_chat_select(h, sessionId, params));
+  }
+
   dispatchChatArchive(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_chat_archive(h, params));
   }
@@ -167,14 +171,40 @@ export class WasmClient {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_invoke(h, params));
   }
 
+  dispatchAgentModelRegistry(): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_registry(h));
+  }
+
+  dispatchAgentModelSelect(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_select(h, params));
+  }
+
+  dispatchAgentModelParamsUpdate(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_model_params_update(h, params));
+  }
+
   dispatchAgentCancel(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_cancel(h, params));
   }
 
+  dispatchAgentStartTurn(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_start_turn(h, params));
+  }
+
+  dispatchAgentSnapshot(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_snapshot(h, params));
+  }
+
+  dispatchAgentSubscribe(params: unknown): Promise<unknown> {
+    return this.dispatchWithId((h) => Wasm.client_dispatch_agent_subscribe(h, params));
+  }
+
+  /** @deprecated Use dispatchAgentInvoke with mode "agent" and plan_ref. */
   dispatchAgentPlanConfirm(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_confirm(h, params));
   }
 
+  /** @deprecated Plan package flow no longer requires a reject command. */
   dispatchAgentPlanReject(params: unknown): Promise<unknown> {
     return this.dispatchWithId((h) => Wasm.client_dispatch_agent_plan_reject(h, params));
   }

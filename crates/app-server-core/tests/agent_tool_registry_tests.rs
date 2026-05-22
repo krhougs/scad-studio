@@ -1,8 +1,8 @@
 use app_server_core::{
     AgentSemanticStore, AgentToolSpec, CadQueryModelFilePolicy, OutputPathPolicy,
-    agent_tool_definitions_for_operation, agent_tool_permission, agent_tool_specs,
+    agent_tool_definitions_for_mode, agent_tool_permission, agent_tool_specs,
 };
-use app_server_protocol::AgentOperationLevel;
+use app_server_protocol::AgentMode;
 
 #[test]
 fn registry_tool_set_matches_mvp_contract() {
@@ -12,7 +12,7 @@ fn registry_tool_set_matches_mvp_contract() {
         .map(|spec| spec.definition.name.as_str())
         .collect::<Vec<_>>();
     actual.sort_unstable();
-    let mut expected = expected_tool_operations()
+    let mut expected = expected_tool_modes()
         .iter()
         .map(|(tool, _)| *tool)
         .collect::<Vec<_>>();
@@ -30,50 +30,45 @@ fn registry_tool_set_matches_mvp_contract() {
 }
 
 #[test]
-fn registry_definitions_are_filtered_by_operation_contract() {
-    for (tool, operations) in expected_tool_operations() {
+fn registry_definitions_are_filtered_by_mode_contract() {
+    for (tool, modes) in expected_tool_modes() {
         let spec = spec_by_name(tool);
-        assert_eq!(
-            spec.allowed_operations, operations,
-            "operation set for {tool}"
-        );
-        for operation in all_operations() {
-            let names = tool_names(operation);
+        assert_eq!(spec.allowed_modes, modes, "mode set for {tool}");
+        for mode in all_modes() {
+            let names = tool_names(mode);
             assert_eq!(
                 names.iter().any(|name| name == tool),
-                operations.contains(&operation),
-                "tool definition visibility for {tool:?} in {operation:?}"
+                modes.contains(&mode),
+                "tool definition visibility for {tool:?} in {mode:?}"
             );
         }
     }
 }
 
 #[test]
-fn registry_permission_reports_confirmation_requirements() {
-    for (tool, operations) in expected_tool_operations() {
+fn registry_permission_reports_execution_scope_requirements() {
+    for (tool, modes) in expected_tool_modes() {
         let spec = spec_by_name(tool);
-        for operation in all_operations() {
-            let without_confirmation = agent_tool_permission(tool, operation, false);
-            let with_confirmation = agent_tool_permission(tool, operation, true);
-            let allowed_by_operation = operations.contains(&operation);
+        for mode in all_modes() {
+            let without_scope = agent_tool_permission(tool, mode, false);
+            let with_scope = agent_tool_permission(tool, mode, true);
+            let allowed_by_mode = modes.contains(&mode);
             assert_eq!(
-                without_confirmation.allowed,
-                allowed_by_operation && !spec.requires_confirmation,
-                "permission without confirmation for {tool:?} in {operation:?}"
+                without_scope.allowed,
+                allowed_by_mode && !spec.requires_execution_scope,
+                "permission without execution scope for {tool:?} in {mode:?}"
             );
             assert_eq!(
-                with_confirmation.allowed, allowed_by_operation,
-                "permission with confirmation for {tool:?} in {operation:?}"
+                with_scope.allowed, allowed_by_mode,
+                "permission with execution scope for {tool:?} in {mode:?}"
             );
             assert_eq!(
-                with_confirmation.requires_confirmation, spec.requires_confirmation,
-                "confirmation flag for {tool}"
+                with_scope.requires_execution_scope, spec.requires_execution_scope,
+                "execution scope flag for {tool}"
             );
         }
     }
-    assert!(
-        !agent_tool_permission("delete_everything", AgentOperationLevel::Execute, true).allowed
-    );
+    assert!(!agent_tool_permission("delete_everything", AgentMode::Agent, true).allowed);
 }
 
 #[test]
@@ -98,7 +93,7 @@ fn registry_declares_path_scope_contracts() {
 
     for tool in ["write_file", "patch_file"] {
         let spec = spec_by_name(tool);
-        assert!(spec.path_policy.requires_confirmation_scope);
+        assert!(spec.path_policy.uses_execution_scope);
         assert_eq!(
             spec.path_policy.cadquery_model_file,
             CadQueryModelFilePolicy::Denied
@@ -116,14 +111,14 @@ fn registry_declares_path_scope_contracts() {
     assert!(!copy_file.path_policy.allowed_roots.contains(&"plans"));
 
     let cadquery_execute = spec_by_name("cadquery_execute");
-    assert!(cadquery_execute.path_policy.requires_confirmation_scope);
+    assert!(cadquery_execute.path_policy.uses_execution_scope);
     assert_eq!(
         cadquery_execute.path_policy.cadquery_model_file,
         CadQueryModelFilePolicy::CadQueryToolOnly
     );
     assert_eq!(
         cadquery_execute.path_policy.output_paths,
-        OutputPathPolicy::ConfirmationOutputsOnly
+        OutputPathPolicy::ExecutionScopeOutputs
     );
 
     let dry_run = spec_by_name("cadquery_dry_run");
@@ -131,7 +126,7 @@ fn registry_declares_path_scope_contracts() {
         dry_run.path_policy.output_paths,
         OutputPathPolicy::TemporaryResultCacheOnly
     );
-    assert!(!dry_run.path_policy.requires_confirmation_scope);
+    assert!(!dry_run.path_policy.uses_execution_scope);
 
     for tool in ["read_file", "list_directory", "cadquery_analyze_source"] {
         assert!(
@@ -145,7 +140,16 @@ fn registry_declares_path_scope_contracts() {
 
 #[test]
 fn registry_uses_specific_canonical_schemas() {
-    assert_required("cadquery_execute", &["target_path", "target_type", "code"]);
+    assert_required(
+        "cadquery_execute",
+        &[
+            "target_path",
+            "target_type",
+            "code",
+            "export_formats",
+            "export_targets",
+        ],
+    );
     assert_required("cadquery_get_result", &["result_id"]);
     assert_required(
         "cadquery_resolve_selection",
@@ -159,25 +163,31 @@ fn registry_uses_specific_canonical_schemas() {
         "save_cad_plan",
         &[
             "title",
+            "request",
             "target_ref",
-            "resolved_target",
+            "target_path",
+            "target_type",
             "affected_files",
             "export_targets",
+            "strategy",
+            "execution_scope",
         ],
     );
     assert_success_required(
         "save_cad_plan",
         &[
+            "plan_id",
             "plan_ref",
-            "display_path",
+            "request_path",
+            "plan_path",
+            "result_path",
             "hash",
-            "summary",
-            "target_ref",
             "target_path",
+            "target_type",
             "affected_files",
             "new_files",
             "export_targets",
-            "execution_boundary",
+            "plan_status",
             "run_id",
         ],
     );
@@ -228,6 +238,33 @@ fn registry_uses_specific_canonical_schemas() {
     );
 }
 
+#[test]
+fn cadquery_tool_schemas_do_not_suggest_placeholder_feature_keys() {
+    for tool in [
+        "cadquery_check_source",
+        "cadquery_dry_run",
+        "cadquery_execute",
+    ] {
+        let schema_text = spec_by_name(tool).definition.parameters.to_string();
+        for forbidden in [
+            "human_readable_feature_name",
+            "semantic_part_feature_name",
+            "semantic_component_feature_name",
+            "semantic_assembly_feature_name",
+            "placement_pocket",
+            "access_notch",
+            "outer_shell",
+            "mounting_boss",
+            "alignment_slot",
+        ] {
+            assert!(
+                !schema_text.contains(forbidden),
+                "CadQuery tool schema should not suggest placeholder feature key {forbidden}"
+            );
+        }
+    }
+}
+
 fn spec_by_name(tool: &str) -> AgentToolSpec {
     agent_tool_specs()
         .into_iter()
@@ -235,13 +272,8 @@ fn spec_by_name(tool: &str) -> AgentToolSpec {
         .unwrap_or_else(|| panic!("missing tool spec: {tool}"))
 }
 
-fn expected_tool_operations() -> Vec<(&'static str, Vec<AgentOperationLevel>)> {
-    let readonly = vec![
-        AgentOperationLevel::Inform,
-        AgentOperationLevel::Plan,
-        AgentOperationLevel::Execute,
-        AgentOperationLevel::Auto,
-    ];
+fn expected_tool_modes() -> Vec<(&'static str, Vec<AgentMode>)> {
+    let readonly = vec![AgentMode::Agent, AgentMode::Plan];
     vec![
         ("read_file", readonly.clone()),
         ("list_directory", readonly.clone()),
@@ -251,39 +283,29 @@ fn expected_tool_operations() -> Vec<(&'static str, Vec<AgentOperationLevel>)> {
         ("resolve_ref", readonly.clone()),
         ("cadquery_analyze_source", readonly.clone()),
         ("cadquery_get_result", readonly.clone()),
-        ("cadquery_resolve_selection", readonly),
-        (
-            "update_chat_summary",
-            vec![
-                AgentOperationLevel::Inform,
-                AgentOperationLevel::Plan,
-                AgentOperationLevel::Execute,
-            ],
-        ),
-        ("save_cad_plan", vec![AgentOperationLevel::Plan]),
+        ("cadquery_resolve_selection", readonly.clone()),
+        ("web_search", readonly.clone()),
+        ("fetch_url", readonly),
+        ("update_chat_summary", vec![AgentMode::Agent]),
+        ("save_cad_plan", vec![AgentMode::Plan]),
         (
             "cadquery_check_source",
-            vec![AgentOperationLevel::Plan, AgentOperationLevel::Execute],
+            vec![AgentMode::Plan, AgentMode::Agent],
         ),
-        ("cadquery_dry_run", vec![AgentOperationLevel::Execute]),
-        ("write_file", vec![AgentOperationLevel::Execute]),
-        ("patch_file", vec![AgentOperationLevel::Execute]),
-        ("copy_file", vec![AgentOperationLevel::Execute]),
-        ("cadquery_execute", vec![AgentOperationLevel::Execute]),
+        ("cadquery_dry_run", vec![AgentMode::Agent]),
+        ("write_file", vec![AgentMode::Agent]),
+        ("patch_file", vec![AgentMode::Agent]),
+        ("copy_file", vec![AgentMode::Agent]),
+        ("cadquery_execute", vec![AgentMode::Agent]),
     ]
 }
 
-fn all_operations() -> [AgentOperationLevel; 4] {
-    [
-        AgentOperationLevel::Inform,
-        AgentOperationLevel::Plan,
-        AgentOperationLevel::Execute,
-        AgentOperationLevel::Auto,
-    ]
+fn all_modes() -> [AgentMode; 2] {
+    [AgentMode::Agent, AgentMode::Plan]
 }
 
-fn tool_names(operation: AgentOperationLevel) -> Vec<String> {
-    agent_tool_definitions_for_operation(operation)
+fn tool_names(mode: AgentMode) -> Vec<String> {
+    agent_tool_definitions_for_mode(mode)
         .into_iter()
         .map(|definition| definition.name)
         .collect()

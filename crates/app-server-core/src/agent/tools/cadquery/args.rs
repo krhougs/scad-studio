@@ -1,17 +1,14 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use app_server_protocol::{
-    AgentOperationLevel, CadQueryExportFormat, CadQueryObjectKind, PathHandle, WorkspaceId,
+    AgentMode, CadQueryExportFormat, CadQueryObjectKind, PathHandle, WorkspaceId,
 };
 use serde_json::Value;
 
-use crate::llm::LlmToolCall;
+use crate::agent::tools::AgentToolCall;
 
 use super::super::{AgentToolRunContext, CadQueryToolRunRequest, tool_error_json};
-use super::support::{is_model_path, source_contract};
+use super::support::{SourceContract, is_model_path, source_contract, target_type_label};
 
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzeArgs {
@@ -26,7 +23,7 @@ pub(super) struct ResolveSelectionArgs {
     pub(super) selection_ref: String,
 }
 
-pub(super) fn analyze_args(call: &LlmToolCall) -> Result<AnalyzeArgs, String> {
+pub(super) fn analyze_args(call: &AgentToolCall) -> Result<AnalyzeArgs, String> {
     let value = parse_object(call)?;
     Ok(AnalyzeArgs {
         target_path: required_string(&value, "target_path", call)?,
@@ -35,7 +32,7 @@ pub(super) fn analyze_args(call: &LlmToolCall) -> Result<AnalyzeArgs, String> {
     })
 }
 
-pub(super) fn source_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn source_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let value = parse_object(call)?;
     let target_path = required_model_path(&value, "target_path", call)?;
     let target_type = target_type_arg(&value, call)?;
@@ -52,13 +49,13 @@ pub(super) fn source_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunR
     })
 }
 
-pub(super) fn dry_run_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn dry_run_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let request = source_request_args(call)?;
     validate_params_json(&request.params_json, call)?;
     Ok(request)
 }
 
-pub(super) fn execute_request_args(call: &LlmToolCall) -> Result<CadQueryToolRunRequest, String> {
+pub(super) fn execute_request_args(call: &AgentToolCall) -> Result<CadQueryToolRunRequest, String> {
     let value = parse_object(call)?;
     let mut request = source_request_args(call)?;
     request.export_formats = export_formats_arg(&value, call)?;
@@ -68,12 +65,12 @@ pub(super) fn execute_request_args(call: &LlmToolCall) -> Result<CadQueryToolRun
     Ok(request)
 }
 
-pub(super) fn result_id_arg(call: &LlmToolCall) -> Result<String, String> {
+pub(super) fn result_id_arg(call: &AgentToolCall) -> Result<String, String> {
     let value = parse_object(call)?;
     required_string(&value, "result_id", call)
 }
 
-pub(super) fn resolve_selection_args(call: &LlmToolCall) -> Result<ResolveSelectionArgs, String> {
+pub(super) fn resolve_selection_args(call: &AgentToolCall) -> Result<ResolveSelectionArgs, String> {
     let value = parse_object(call)?;
     let selection_ref = required_string(&value, "selection_ref", call)?;
     if selection_ref.starts_with("@selector[") || selection_ref.starts_with("@subshape[") {
@@ -90,7 +87,7 @@ pub(super) fn resolve_selection_args(call: &LlmToolCall) -> Result<ResolveSelect
 }
 
 pub(super) fn validate_contract_for_run(
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
 ) -> Result<(), String> {
     let contract = source_contract(&request.target_path, request.target_type, &request.code);
@@ -104,39 +101,127 @@ pub(super) fn validate_contract_for_run(
     } else {
         Err(tool_error_json(
             call,
-            "CadQuery source contract is not satisfied",
+            &format!(
+                "CadQuery source contract is not satisfied: {}. Required source shape includes a module-level REFS dict with type '{}' and a non-empty \"features\" map chosen from the actual model semantics, plus a build(params=None) function.",
+                contract_failure_summary(&contract),
+                target_type_label(request.target_type),
+            ),
             "invalid_arguments",
         ))
     }
 }
 
-pub(super) fn validate_execute_scope(
-    call: &LlmToolCall,
+pub(super) fn validate_execute_product_contract(
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
-    context: &AgentToolRunContext,
+    contract: &SourceContract,
 ) -> Result<(), String> {
-    if context.operation != AgentOperationLevel::Execute {
+    if !contract.has_model_description {
         return Err(tool_error_json(
             call,
-            "cadquery_execute requires Execute operation",
+            "CadQuery model source must include MODEL_DESCRIPTION and MODEL_DETAILS fields purpose, key_dimensions, intended_use, assumptions, interaction_notes, and manufacturing_or_placement_constraints.",
+            "invalid_arguments",
+        ));
+    }
+    if request.export_formats.is_empty() || request.export_targets.is_empty() {
+        return Err(tool_error_json(
+            call,
+            "cadquery_execute requires export_formats and export_targets so the committed .py source and derived .step output stay synchronized.",
             "permission_denied",
         ));
     }
-    let Some(scope) = &context.confirmation_scope else {
+    if !request
+        .export_formats
+        .iter()
+        .any(|format| matches!(format, CadQueryExportFormat::Step))
+        || !request
+            .export_targets
+            .iter()
+            .any(|target| target.ends_with(".step"))
+    {
         return Err(tool_error_json(
             call,
-            "cadquery_execute requires confirmed execution scope",
+            "cadquery_execute requires a step export format and matching outputs/*.step export target.",
             "permission_denied",
         ));
+    }
+    Ok(())
+}
+
+fn contract_failure_summary(contract: &super::support::SourceContract) -> String {
+    let mut missing = Vec::new();
+    if !contract.has_build_function {
+        missing.push("missing build(params=None)");
+    }
+    if !contract.has_refs {
+        missing.push("missing REFS.features");
+    }
+    if !contract.target_type_matches {
+        missing.push("REFS.type does not match target_type");
+    }
+    if !contract.invalid_imports.is_empty() {
+        missing.push("invalid imports");
+    }
+    if !contract.unsafe_calls.is_empty() {
+        missing.push("unsafe calls");
+    }
+    missing.join(", ")
+}
+
+pub(super) fn validate_execute_scope(
+    call: &AgentToolCall,
+    request: &CadQueryToolRunRequest,
+    context: &AgentToolRunContext,
+) -> Result<(), String> {
+    if context.mode != AgentMode::Agent {
+        return Err(tool_error_json(
+            call,
+            "cadquery_execute requires Agent mode",
+            "permission_denied",
+        ));
+    }
+    let Some(scope) = &context.execution_scope else {
+        return Ok(());
     };
+    if let Some(target_path) = &scope.target_path
+        && target_path != &request.target_path
+    {
+        return Err(tool_error_json(
+            call,
+            "target_path does not match execution scope target_path",
+            "permission_denied",
+        ));
+    }
+    if let Some(target_type) = scope.target_type
+        && target_type != request.target_type
+    {
+        return Err(tool_error_json(
+            call,
+            "target_type does not match execution scope target_type",
+            "permission_denied",
+        ));
+    }
     if !scope.affected_files.contains(&request.target_path)
         && !scope.new_files.contains(&request.target_path)
     {
         return Err(tool_error_json(
             call,
-            "target_path is outside confirmed affected_files / new_files",
+            "target_path is outside execution affected_files / new_files",
             "permission_denied",
         ));
+    }
+    if !scope.export_targets.is_empty() {
+        let mut requested = request.export_targets.clone();
+        let mut allowed = scope.export_targets.clone();
+        requested.sort();
+        allowed.sort();
+        if requested != allowed {
+            return Err(tool_error_json(
+                call,
+                "export_targets must match execution scope export_targets",
+                "permission_denied",
+            ));
+        }
     }
     if request
         .export_targets
@@ -145,16 +230,16 @@ pub(super) fn validate_execute_scope(
     {
         return Err(tool_error_json(
             call,
-            "export target is outside confirmed export_targets",
+            "export target is outside execution export_targets",
             "permission_denied",
         ));
     }
     Ok(())
 }
 
-pub(super) fn doc_update_path_for_execute(
+pub(super) async fn doc_update_path_for_execute(
     workspace_root: &Path,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
     request: &CadQueryToolRunRequest,
     context: &AgentToolRunContext,
 ) -> Result<Option<String>, String> {
@@ -163,28 +248,28 @@ pub(super) fn doc_update_path_for_execute(
     };
     let doc_path = format!("{path}.md");
     let absolute = workspace_root.join(&doc_path);
-    if !absolute.exists() {
+    if !tokio::fs::try_exists(&absolute).await.unwrap_or(false) {
         return Ok(None);
     }
-    let Some(scope) = &context.confirmation_scope else {
+    let Some(scope) = &context.execution_scope else {
         return Ok(None);
     };
     if !scope.affected_files.contains(&doc_path) && !scope.new_files.contains(&doc_path) {
         return Err(tool_error_json(
             call,
-            "paired CadQuery document must be in confirmed affected_files / new_files",
+            "paired CadQuery document must be in execution affected_files / new_files",
             "permission_denied",
         ));
     }
-    reject_symlink_workspace_path(workspace_root, &doc_path, call)?;
-    reject_hard_link(&absolute, call)?;
+    reject_symlink_workspace_path(workspace_root, &doc_path, call).await?;
+    reject_hard_link(&absolute, call).await?;
     Ok(Some(doc_path))
 }
 
-pub(super) fn existing_model_path(
+pub(super) async fn existing_model_path(
     root: &Path,
     relative: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<PathBuf, String> {
     let handle = path_handle(relative, call)?;
     if !is_model_path(&handle.display_path()) {
@@ -194,29 +279,31 @@ pub(super) fn existing_model_path(
             "invalid_arguments",
         ));
     }
-    reject_symlink_segments(root, handle.path_segments(), call)?;
+    reject_symlink_segments(root, handle.path_segments(), call).await?;
     crate::resolve_workspace_path(root, &handle)
+        .await
         .map_err(|error| tool_error_json(call, &error.message, "permission_denied"))
 }
 
-fn reject_symlink_workspace_path(
+async fn reject_symlink_workspace_path(
     root: &Path,
     path: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let handle = path_handle(path, call)?;
-    reject_symlink_segments(root, handle.path_segments(), call)
+    reject_symlink_segments(root, handle.path_segments(), call).await
 }
 
-fn reject_symlink_segments(
+async fn reject_symlink_segments(
     root: &Path,
     segments: &[String],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     let mut current = root.to_path_buf();
     for segment in segments {
         current.push(segment);
-        if fs::symlink_metadata(&current)
+        if tokio::fs::symlink_metadata(&current)
+            .await
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
         {
@@ -231,10 +318,11 @@ fn reject_symlink_segments(
 }
 
 #[cfg(unix)]
-fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(path: &Path, call: &AgentToolCall) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
-    if fs::metadata(path)
+    if tokio::fs::metadata(path)
+        .await
         .map(|metadata| metadata.nlink() > 1)
         .unwrap_or(false)
     {
@@ -248,11 +336,11 @@ fn reject_hard_link(path: &Path, call: &LlmToolCall) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn reject_hard_link(_path: &Path, _call: &LlmToolCall) -> Result<(), String> {
+async fn reject_hard_link(_path: &Path, _call: &AgentToolCall) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
+fn parse_object(call: &AgentToolCall) -> Result<Value, String> {
     serde_json::from_str(&call.arguments).map_err(|error| {
         tool_error_json(
             call,
@@ -262,7 +350,7 @@ fn parse_object(call: &LlmToolCall) -> Result<Value, String> {
     })
 }
 
-fn required_model_path(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn required_model_path(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     let handle = path_handle(&required_string(value, key, call)?, call)?;
     let path = handle.display_path();
     if is_model_path(&path) {
@@ -276,7 +364,7 @@ fn required_model_path(value: &Value, key: &str, call: &LlmToolCall) -> Result<S
     }
 }
 
-fn required_string(value: &Value, key: &str, call: &LlmToolCall) -> Result<String, String> {
+fn required_string(value: &Value, key: &str, call: &AgentToolCall) -> Result<String, String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -299,7 +387,7 @@ fn bool_arg(value: &Value, key: &str) -> Option<bool> {
     value.get(key).and_then(Value::as_bool)
 }
 
-fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKind, String> {
+fn target_type_arg(value: &Value, call: &AgentToolCall) -> Result<CadQueryObjectKind, String> {
     match required_string(value, "target_type", call)?.as_str() {
         "part" => Ok(CadQueryObjectKind::Part),
         "component" => Ok(CadQueryObjectKind::Component),
@@ -314,7 +402,7 @@ fn target_type_arg(value: &Value, call: &LlmToolCall) -> Result<CadQueryObjectKi
 
 fn export_formats_arg(
     value: &Value,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<CadQueryExportFormat>, String> {
     value
         .get("export_formats")
@@ -334,7 +422,7 @@ fn export_formats_arg(
         .collect()
 }
 
-fn export_targets_arg(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, String> {
+fn export_targets_arg(value: &Value, call: &AgentToolCall) -> Result<Vec<String>, String> {
     let Some(items) = value.get("export_targets").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
@@ -364,7 +452,7 @@ fn export_targets_arg(value: &Value, call: &LlmToolCall) -> Result<Vec<String>, 
 
 fn validate_export_request(
     request: &CadQueryToolRunRequest,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<(), String> {
     match (
         request.export_formats.is_empty(),
@@ -391,7 +479,7 @@ fn validate_export_request(
 
 fn export_target_formats(
     targets: &[String],
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<Vec<CadQueryExportFormat>, String> {
     targets
         .iter()
@@ -413,13 +501,13 @@ fn targets_match_runner_outputs(request: &CadQueryToolRunRequest) -> bool {
     })
 }
 
-fn export_pairing_error(call: &LlmToolCall, message: &str) -> Result<(), String> {
+fn export_pairing_error(call: &AgentToolCall, message: &str) -> Result<(), String> {
     Err(tool_error_json(call, message, "permission_denied"))
 }
 
 fn export_format_for_target(
     target: &str,
-    call: &LlmToolCall,
+    call: &AgentToolCall,
 ) -> Result<CadQueryExportFormat, String> {
     let lower = target.to_ascii_lowercase();
     if lower.ends_with(".step") || lower.ends_with(".stp") {
@@ -451,7 +539,7 @@ fn expected_export_target(target_path: &str, format: &CadQueryExportFormat) -> S
     format!("outputs/{stem}.{extension}")
 }
 
-fn validate_params_json(params: &str, call: &LlmToolCall) -> Result<(), String> {
+fn validate_params_json(params: &str, call: &AgentToolCall) -> Result<(), String> {
     serde_json::from_str::<Value>(params)
         .map(|_| ())
         .map_err(|error| {
@@ -463,7 +551,7 @@ fn validate_params_json(params: &str, call: &LlmToolCall) -> Result<(), String> 
         })
 }
 
-fn path_handle(path: &str, call: &LlmToolCall) -> Result<PathHandle, String> {
+fn path_handle(path: &str, call: &AgentToolCall) -> Result<PathHandle, String> {
     PathHandle::new(
         WorkspaceId::new("workspace"),
         path.split('/').map(str::to_owned),

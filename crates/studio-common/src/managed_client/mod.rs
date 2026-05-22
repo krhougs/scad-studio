@@ -8,6 +8,7 @@ mod watch;
 use std::collections::{HashMap, VecDeque};
 
 use app_server_protocol::{
+    AgentEventRecord, AgentModelRegistryResponse, AgentProviderCapabilities, AgentRuntimeStatus,
     AgentStartedResponse, CadQueryResultReady, CapabilityHandshakeRequest, ChatMessageRecord,
     ChatSessionId, ChatSessionSummary, PathHandle, RequestId, SelectionUpdateRequest,
     ServerPushEvent,
@@ -45,8 +46,12 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) chat_sessions: Vec<ChatSessionSummary>,
     pub(super) current_chat_session: Option<ChatSessionId>,
     pub(super) current_chat_history: Vec<ChatMessageRecord>,
+    pub(super) latest_chat_history_request: Option<RequestId>,
+    pub(super) pending_chat_session: Option<ChatSessionId>,
     pub(super) agent_run: Option<AgentStartedResponse>,
+    pub(super) agent_runtime_status: Option<AgentRuntimeStatus>,
     pub(super) agent_events: Vec<ServerPushEvent>,
+    pub(super) agent_event_records: Vec<AgentEventRecord>,
     pub(super) current_selection: SelectionUpdateRequest,
     pub(super) cadquery_results: Vec<CadQueryResultReady>,
     pub(super) preview_tasks: HashMap<RequestId, PreviewTaskState>,
@@ -56,6 +61,8 @@ pub struct ManagedClient<T: AppServerTransportPort> {
     pub(super) watch_resubscribe_count: u32,
     pub(super) pending_handshake: Option<Vec<u8>>,
     pub(super) llm_configured: bool,
+    pub(super) agent_provider: Option<AgentProviderCapabilities>,
+    pub(super) agent_model_registry: Option<AgentModelRegistryResponse>,
 }
 
 impl<T: AppServerTransportPort> ManagedClient<T> {
@@ -80,8 +87,12 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             chat_sessions: Vec::new(),
             current_chat_session: None,
             current_chat_history: Vec::new(),
+            latest_chat_history_request: None,
+            pending_chat_session: None,
             agent_run: None,
+            agent_runtime_status: None,
             agent_events: Vec::new(),
+            agent_event_records: Vec::new(),
             current_selection: SelectionUpdateRequest {
                 selections: Vec::new(),
                 active_index: None,
@@ -94,6 +105,8 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             watch_resubscribe_count: 0,
             pending_handshake: None,
             llm_configured: false,
+            agent_provider: None,
+            agent_model_registry: None,
         }
     }
 
@@ -176,7 +189,9 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             current_chat_session: self.current_chat_session.clone(),
             current_chat_history: self.current_chat_history.clone(),
             agent_run: self.agent_run.clone(),
+            agent_runtime_status: self.agent_runtime_status,
             agent_events: self.agent_events.clone(),
+            agent_event_records: self.agent_event_records.clone(),
             current_selection: self.current_selection.clone(),
             cadquery_results: self.cadquery_results.clone(),
             preview_tasks,
@@ -190,6 +205,8 @@ impl<T: AppServerTransportPort> ManagedClient<T> {
             last_error: self.last_error.clone(),
             transport_status: self.transport_status,
             llm_configured: self.llm_configured,
+            agent_provider: self.agent_provider.clone(),
+            agent_model_registry: self.agent_model_registry.clone(),
         }
     }
 

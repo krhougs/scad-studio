@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { FilesPanel } from "../../src/workbench/files-panel";
 import { WorkspaceTree } from "../../src/workbench/workspace-tree";
 
 describe("WorkspaceTree", () => {
@@ -48,5 +49,29 @@ describe("WorkspaceTree", () => {
     expect(screen.getByTestId("entry-kind-bad#file.scad").textContent).toBe(
       "invalid",
     );
+  });
+});
+
+describe("FilesPanel", () => {
+  it("shows a refresh button and calls the refresh handler", () => {
+    const onRefreshFiles = vi.fn();
+    render(
+      <FilesPanel
+        rootName="demo"
+        entries={[]}
+        entriesLoaded={true}
+        activeFilePath={null}
+        expandedDirectories={new Map()}
+        directoryKey={() => "__root__"}
+        onRequestPreview={vi.fn()}
+        onExpandDirectory={vi.fn()}
+        onCollapseDirectory={vi.fn()}
+        onRefreshFiles={onRefreshFiles}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "refresh files" }));
+
+    expect(onRefreshFiles).toHaveBeenCalledTimes(1);
   });
 });

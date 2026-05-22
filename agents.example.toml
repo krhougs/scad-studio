@@ -1,0 +1,57 @@
+active_provider = "openai"
+active_model = "gpt-5.2"
+
+[defaults]
+timeout_secs = 1500
+max_tokens = 65535
+temperature = 0.7
+native_web_search = true
+discover_models = true
+
+[[providers]]
+id = "openai"
+kind = "openai_responses"
+api_key_env = "BUDN_AGENT_OPENAI_API_KEY"
+# OpenAI-compatible endpoint rules:
+# - no trailing slash appends /v1
+# - trailing slash keeps the configured path
+# - trailing # keeps the configured path without appending /v1
+# base_url = "https://openai-compatible.example/api"
+
+[[providers.models]]
+id = "gpt-5.2"
+label = "GPT 5.2"
+reasoning_effort = "high"
+service_label = "default"
+native_web_search = true
+web_search_supported = true
+
+[[providers]]
+id = "openai_completions"
+kind = "openai_completions"
+api_key_env = "BUDN_AGENT_OPENAI_COMPAT_API_KEY"
+base_url = "https://openai-compatible.example/api"
+discover_models = false
+
+[[providers.models]]
+id = "gpt-4o"
+label = "GPT 4o"
+reasoning_effort = "medium"
+service_label = "default"
+native_web_search = false
+web_search_supported = false
+
+[[providers]]
+id = "anthropic"
+kind = "anthropic"
+api_key_env = "BUDN_AGENT_ANTHROPIC_API_KEY"
+# Anthropic endpoints are used as configured and do not append /v1.
+# base_url = "https://anthropic-proxy.example"
+
+[[providers.models]]
+id = "claude-sonnet"
+label = "Claude Sonnet"
+reasoning_effort = "medium"
+service_label = "default"
+native_web_search = true
+web_search_supported = true

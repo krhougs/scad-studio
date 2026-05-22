@@ -1,0 +1,11 @@
+{
+  "id": "b01",
+  "name": "Simple box",
+  "prompt": "Create a rectangular box that is 60mm long, 40mm wide, and 25mm tall.",
+  "criteria": {
+    "cadquery_execute_success": true,
+    "brief_expected": true,
+    "exports_generated": true,
+    "max_dry_run_attempts": 3
+  }
+}

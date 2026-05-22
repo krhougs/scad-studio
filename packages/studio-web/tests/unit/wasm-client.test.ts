@@ -31,6 +31,38 @@ describe("WasmClient", () => {
     expect(client.takeCadQueryMesh("cq_abc")).toBe(mesh);
     expect(onSnapshotDirty).toHaveBeenCalled();
   });
+
+  it("dispatches agent model registry commands through the wasm bridge", () => {
+    const client = new WasmClient({ onSnapshotDirty: vi.fn() });
+    const registrySpy = vi.spyOn(Wasm, "client_dispatch_agent_model_registry");
+    const selectSpy = vi.spyOn(Wasm, "client_dispatch_agent_model_select");
+    const paramsSpy = vi.spyOn(Wasm, "client_dispatch_agent_model_params_update");
+
+    void client.dispatchAgentModelRegistry();
+    void client.dispatchAgentModelSelect({
+      provider_id: "openai",
+      model_id: "gpt-5.2",
+    });
+    void client.dispatchAgentModelParamsUpdate({
+      provider_id: "openai",
+      model_id: "gpt-5.2",
+      reasoning_effort: "high",
+      service_label: "flex",
+    });
+
+    expect(registrySpy).toHaveBeenCalled();
+    expect(selectSpy).toHaveBeenCalledWith(
+      expect.any(Wasm.ClientHandle),
+      expect.objectContaining({ provider_id: "openai", model_id: "gpt-5.2" }),
+    );
+    expect(paramsSpy).toHaveBeenCalledWith(
+      expect.any(Wasm.ClientHandle),
+      expect.objectContaining({
+        reasoning_effort: "high",
+        service_label: "flex",
+      }),
+    );
+  });
 });
 
 type WasmStubControls = typeof Wasm & {

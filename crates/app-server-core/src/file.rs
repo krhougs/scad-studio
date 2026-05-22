@@ -1,31 +1,44 @@
 use app_server_protocol::{
     FileReadContents, FileReadResponse, PathHandle, ProtocolError, ProtocolErrorCode,
 };
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+use tokio::fs;
 
-use crate::resolve_workspace_path;
-
-pub fn read_text_file(path: &Path, context: &str) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|error| format!("读取{context}失败: {error}"))
+pub async fn read_text_file(path: &Path, context: &str) -> Result<String, String> {
+    fs::read_to_string(path)
+        .await
+        .map_err(|error| format!("读取{context}失败: {error}"))
 }
 
-pub fn read_binary_file(path: &Path, context: &str) -> Result<Vec<u8>, String> {
-    fs::read(path).map_err(|error| format!("读取{context}失败: {error}"))
+pub async fn read_binary_file(path: &Path, context: &str) -> Result<Vec<u8>, String> {
+    fs::read(path)
+        .await
+        .map_err(|error| format!("读取{context}失败: {error}"))
 }
 
-pub fn canonicalize_or_original(path: PathBuf) -> PathBuf {
-    fs::canonicalize(&path).unwrap_or(path)
+pub async fn canonicalize_or_original(path: PathBuf) -> PathBuf {
+    fs::canonicalize(path.clone()).await.unwrap_or(path)
 }
 
-pub fn read_file_response(
+pub async fn read_file_response(
     workspace_root: &Path,
     handle: &PathHandle,
     denied_extensions: &[String],
 ) -> Result<FileReadResponse, ProtocolError> {
-    let resolved = resolve_workspace_path(workspace_root, handle)?;
+    read_file_response_owned(
+        workspace_root.to_path_buf(),
+        handle.clone(),
+        denied_extensions.to_vec(),
+    )
+    .await
+}
+
+pub async fn read_file_response_owned(
+    workspace_root: PathBuf,
+    handle: PathHandle,
+    denied_extensions: Vec<String>,
+) -> Result<FileReadResponse, ProtocolError> {
+    let resolved = crate::resolve_workspace_path_owned(workspace_root, handle.clone()).await?;
     let ext = resolved
         .extension()
         .and_then(|value| value.to_str())
@@ -38,7 +51,7 @@ pub fn read_file_response(
             format!("当前 client 不允许读取 {ext} 文件"),
         ));
     }
-    let bytes = fs::read(&resolved).map_err(|error| {
+    let bytes = fs::read(resolved.clone()).await.map_err(|error| {
         ProtocolError::new(
             ProtocolErrorCode::NotFound,
             format!("读取文件失败: {error}"),
@@ -49,7 +62,7 @@ pub fn read_file_response(
         Err(_) => FileReadContents::Binary(bytes),
     };
     Ok(FileReadResponse {
-        path: handle.clone(),
+        path: handle,
         media_type: media_type_for_path(&resolved).to_string(),
         contents,
     })

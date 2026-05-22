@@ -1,7 +1,7 @@
 # studio-web 平台限制说明
 
-本文件列明 `packages/studio-web` 在浏览器环境下相对于桌面端 `studio-app`
-的能力差异与处理方式。所有差异都由协议与服务端处理，不在 client 侧伪装
+本文件列明 `packages/studio-web` 在浏览器环境下的能力边界与处理方式。
+所有差异都由协议与服务端处理，不在 client 侧伪装
 “本平台没 I/O”；详见 `/Users/krhougs/.claude/projects/.../memory/feedback_client_io_capability.md`
 的基线约束。
 
@@ -58,8 +58,8 @@
 - Markdown 链接默认在新浏览器 tab 打开，使用 `rel="noopener noreferrer"`。
 - HTML、URL、图片 URL 和 Mermaid SVG 都经过安全处理。危险协议、iframe、
   内联事件属性和 SVG 危险链接会被拒绝或清理。
-- 若后续需要与桌面端完全一致的 CommonMark / GFM 行为，需要继续补充
-  跨端语法用例；不能恢复旧的简化解析方案。
+- 若后续需要更完整的 CommonMark / GFM 行为，需要继续补充
+  语法用例；不能恢复旧的简化解析方案。
 
 ## 7. 图片查看限制
 

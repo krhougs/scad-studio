@@ -1,7 +1,22 @@
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { clearServiceWorkerState, createHarness } from "./_smoke-harness";
+import {
+  clearServiceWorkerState,
+  createHarness,
+  HOST_WORKSPACE,
+} from "./_smoke-harness";
 
-const HARNESS = createHarness({ bindPort: 39190, vitePort: 5185 });
+const TEST_WORKSPACE = mkdtempSync(
+  path.join(tmpdir(), "scad-studio-layout-workspace-"),
+);
+cpSync(HOST_WORKSPACE, TEST_WORKSPACE, { recursive: true });
+const HARNESS = createHarness({
+  bindPort: 39221,
+  vitePort: 5221,
+  workspacePath: TEST_WORKSPACE,
+});
 
 test.beforeAll(async () => {
   await HARNESS.start();
@@ -9,6 +24,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await HARNESS.stop();
+  rmSync(TEST_WORKSPACE, { recursive: true, force: true });
 });
 
 test.beforeEach(async ({ page }) => {

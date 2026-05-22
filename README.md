@@ -1,6 +1,6 @@
 # budn' (`budn`)
 
-`budn'` 是一个跨端 OpenSCAD 工作台；代码与配置标识符中统一使用 `budn`。桌面端（`studio-app`）与 Web 端（`packages/studio-web`）共享同一份 app-server 协议与核心 client 状态机。
+`budn'` 是一个 Web CAD 工作台；代码与配置标识符中统一使用 `budn`。当前生产 GUI 端是 `packages/studio-web`，通过 WebSocket 连接 app server，并共享 `app-server-protocol` 与 `studio-common` client 状态机。
 
 ## 坐标系约定
 
@@ -23,12 +23,11 @@ scad-studio/
 ├── crates/                        # Rust workspace
 │   ├── app-server-protocol/       # 协议类型与线格式（ClientEnvelope/ServerEnvelope）
 │   ├── app-server-core/           # 文件系统 I/O、OpenSCAD 调用、watch 聚合
-│   ├── app-server-host/           # 可执行入口（websocket-host、in-process host）
+│   ├── app-server-host/           # 可执行入口（websocket-host）
 │   ├── app-server-transport/      # transport trait + WebSocket 客户端实现
-│   ├── studio-common/             # 跨端共享 client 状态机（ManagedClient）
+│   ├── studio-common/             # 共享 client 状态机（ManagedClient）
 │   ├── studio-web-wasm/           # wasm-bindgen 桥接（client / mesh / renderer）
-│   ├── studio-app/                # 桌面 egui 壳
-│   ├── scad-ui / scad-scene / scad-data / scad-viewer
+│   └── scad-scene/                # mesh / STL / 3MF 纯数据能力
 ├── packages/                      # pnpm workspace（实际由 bun 驱动）
 │   ├── studio-web-wasm/           # wasm 产物 npm 包（只 re-export generated/）
 │   └── studio-web/                # React PWA：Vite 6 + React 18 + Zustand
@@ -70,7 +69,7 @@ bun run web
 | 变量 | 默认 | 作用 |
 |------|------|------|
 | `SCAD_STUDIO_WS_URL` | `ws://127.0.0.1:38421` | websocket-host 绑定地址（完整 URL，端口从中解析） |
-| `STUDIO_WEB_WORKSPACE` | `workspace/studio-web/` | host 的工作目录根；首次启动会自动创建 |
+| `STUDIO_WEB_WORKSPACE` | `workspace/budn-web/` | host 的工作目录根；首次启动会自动创建 |
 | `STUDIO_WEB_PORT` | `5173` | Vite dev 端口 |
 
 显式覆盖 WebSocket 时仍可使用 `?ws=ws://host:port`，也可设置 `SCAD_STUDIO_WS_URL`。这两种方式会让前端直接连接指定地址；默认路径继续使用 `/app-server/ws` 代理，避免外部设备把 `127.0.0.1` 解析成设备自身。
@@ -90,14 +89,6 @@ bun run web:build
 
 产物在 `packages/studio-web/dist/`：带 hash 的 wasm + Workbox Service Worker + `index.html`。`bun run --cwd packages/studio-web preview` 起静态服务器预览；Service Worker 仅在生产模式启用。
 
-### 桌面端
-
-```bash
-cargo run -p studio-app
-```
-
-桌面端内嵌 `app-server-host`（`tokio::mpsc` transport），与 web 端共用 `studio-common::ManagedClient` 状态机与 `app-server-protocol` 类型。
-
 ### 测试与 smoke
 
 ```bash
@@ -111,7 +102,7 @@ bun run web:smoke -- --case browser_watch_smoke
 bun run web:smoke -- --case wasm_package_smoke
 bun run web:smoke -- --case markdown_view        # Phase 6 扩展
 bun run web:smoke -- --case image_view           # Phase 6 扩展
-bun run web:smoke -- --case scad_viewer          # Phase 6 扩展
+bun run web:smoke -- --case scad_preview         # Phase 6 扩展
 bun run web:smoke -- --case canvas_interaction   # Phase 7 扩展
 bun run web:smoke -- --case parameters_presets   # Phase 7 扩展
 bun run web:smoke -- --case export_slicer        # Phase 7 扩展
@@ -125,12 +116,28 @@ bun run --cwd packages/studio-web test:unit
 bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版本对齐
 ```
 
+## Agent Provider 配置
+
+Agent provider 配置使用本机私有的 `agents.toml`。仓库只提交 `agents.example.toml` 作为模板。开发环境可以在 `agents.toml` 中直接写 `api_key`，也可以用 `api_key_env` 从环境变量读取；提交到仓库的示例配置不得包含真实 API key：
+
+```bash
+cp agents.example.toml agents.toml
+printf 'BUDN_AGENT_CONFIG=agents.toml\n' >> .env
+```
+
+`agents.toml` 支持 `openai_responses`、`openai_completions` 和 `anthropic` 三类 provider，也支持每个 provider 下配置多个模型。`discover_models` 默认开启；provider 发现到的模型会与手动配置模型合并，同 id 手动模型只覆盖显式字段。OpenAI family 的 `base_url` 未以 `/` 结尾时会补全 `/v1`，以 `/` 结尾时保留原路径，以 `#` 结尾时去掉 `#` 后原样使用；Anthropic 的 `base_url` 不自动追加 `/v1`。
+
+`reasoning_effort` 和 `service_label` 可以在配置文件中设定，也可以在 Web Chat header 中作为当前 host 进程内的运行时参数切换；运行时切换不会写回 `agents.toml`。`native_web_search` 默认开启，若某个模型声明 `web_search_supported = false`，后端会保留“请求搜索”的配置意图，但不会为该模型注入 provider-native web search tool。
+`openai_completions` 面向 Chat Completions 兼容 endpoint，不注入 OpenAI Responses hosted web search、Responses reasoning 或 service tier 参数。
+
+根目录 `llm.toml` 是旧本地开发配置，当前 budn' 产品配置入口只使用 `agents.toml`。
+
 ## 进一步阅读
 
 - `docs/getting-started.md`：完整安装流程、环境变量、故障排查
 - `docs/architecture.md`：crate / package 能力边界与交互图
 - `docs/design-system/studio-datasheet-workbench.md`：Buddin datasheet 设计规范
-- `docs/web-platform-limits.md`：Web 端相对桌面端的平台限制
+- `docs/web-platform-limits.md`：Web 平台约束
 - `docs/known_issues.md`：已确认但当前 phase 不处理的协议 / 能力缺口
 - `docs/feature-roadmap.md`：整体功能路线图
 - `AGENTS.md`：项目协作规范（工具链、plan mode、架构长期约束）
@@ -144,4 +151,4 @@ bun run check:wasm-bindgen                       # 校验 Cargo.toml 与 CLI 版
 - Playwright 浏览器：chromium（`packages/studio-web/playwright.config.ts`）
 - 浏览器端 wasm：`wasm-bindgen` 0.2.117 + Vite `vite-plugin-wasm` + `vite-plugin-top-level-await`
 
-Python 禁止引入；所有脚本以 `bun` 运行 TypeScript。
+项目内脚本默认以 `bun` 运行 TypeScript。Python 只允许作为 `budn_cad_runner` 外部 CAD 工具边界存在；不要新增项目通用 Python 辅助脚本。

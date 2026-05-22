@@ -1,104 +1,14 @@
 mod config;
-mod openai_compat;
 
-pub use config::{LlmConfig, LlmConfigError, build_model_string, load_llm_config};
-pub use openai_compat::{
-    OpenAiCompatibleProvider, build_request_body, extract_delta_content, read_sse_stream,
+#[doc(hidden)]
+pub use config::openai_compatible_models_to_discovered;
+pub use config::{
+    AgentModelSource, AgentProviderKind, AgentProviderRegistry, DiscoveredProviderModel,
+    ModelDiscoveryStatus, ResolvedAgentModel, ResolvedAgentProvider, ResolvedWebSearchProvider,
+    RigAgentConfig, RigAgentConfigError, RigAgentConfigSelection, WebSearchAuth,
+    WebSearchHttpMethod, WebSearchParams, WebSearchResultMap, apply_provider_model_discovery,
+    discover_provider_models, load_agent_provider_registry,
+    load_agent_provider_registry_with_discovery, load_rig_agent_config,
+    load_rig_agent_config_with_discovery, merge_provider_models,
+    rig_config_from_registry_selection,
 };
-
-#[derive(Debug, Clone)]
-pub struct LlmToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LlmToolCall {
-    pub id: String,
-    pub function_name: String,
-    pub arguments: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct LlmResponse {
-    pub content: String,
-    pub tool_calls: Vec<LlmToolCall>,
-}
-
-impl LlmResponse {
-    pub fn has_tool_calls(&self) -> bool {
-        !self.tool_calls.is_empty()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LlmMessage {
-    pub role: String,
-    pub content: String,
-    pub tool_calls: Vec<LlmToolCall>,
-    pub tool_call_id: Option<String>,
-}
-
-impl LlmMessage {
-    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: role.into(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-        }
-    }
-
-    pub fn assistant_with_tool_calls(content: String, tool_calls: Vec<LlmToolCall>) -> Self {
-        Self {
-            role: "assistant".into(),
-            content,
-            tool_calls,
-            tool_call_id: None,
-        }
-    }
-
-    pub fn tool_result(tool_call_id: String, content: String) -> Self {
-        Self {
-            role: "tool".into(),
-            content,
-            tool_calls: Vec::new(),
-            tool_call_id: Some(tool_call_id),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct LlmError {
-    pub message: String,
-}
-
-impl std::fmt::Display for LlmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-pub trait LlmProvider: Send + Sync {
-    fn stream_chat(
-        &self,
-        messages: Vec<LlmMessage>,
-        tools: &[LlmToolDefinition],
-        on_token: &dyn Fn(&str) -> bool,
-    ) -> Result<LlmResponse, LlmError>;
-}
-
-pub fn create_provider() -> Result<Box<dyn LlmProvider>, LlmError> {
-    let config = load_llm_config()
-        .map_err(|e| LlmError { message: e.message })?
-        .ok_or_else(|| LlmError {
-            message: "LLM not configured. Set BUDN_LLM_CONFIG or BUDN_LLM_BASE_URL + BUDN_LLM_API_KEY environment variables.".into(),
-        })?;
-    log::info!(
-        "LLM provider configured: {} (model: {})",
-        config.base_url,
-        config.model
-    );
-    Ok(Box::new(OpenAiCompatibleProvider::new(config)))
-}
