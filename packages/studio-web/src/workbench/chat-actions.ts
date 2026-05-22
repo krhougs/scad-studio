@@ -5,7 +5,6 @@ import type {
   AgentModelRegistry,
   AgentModelRegistryModel,
   AgentModelRegistryProvider,
-  ContextPill,
   AgentRun,
   ChatSessionSummary,
 } from "./chat-zone";
@@ -20,7 +19,6 @@ export async function createChatSession(
   initialTurn?: {
     mode: AgentMode;
     plan_ref: unknown | null;
-    context_refs: string[];
   } | null,
 ): Promise<{ sessionId: string; agentRun: AgentRun | null } | null> {
   if (!client) return null;
@@ -88,7 +86,6 @@ export async function sendChatMessage(params: {
   sessions: ChatSessionSummary[];
   agentRun: AgentRun | null;
   busy: boolean;
-  contextPills: ContextPill[];
   agentModelSelection?: AgentModelSelection | null;
   draftClientRequestId?: string | null;
   onStatus?: (message: string) => void;
@@ -116,7 +113,6 @@ export async function runSavedPlan(params: {
   sessions: ChatSessionSummary[];
   agentRun: AgentRun | null;
   busy: boolean;
-  contextPills: ContextPill[];
   agentModelSelection?: AgentModelSelection | null;
   draftClientRequestId?: string | null;
   onStatus?: (message: string) => void;
@@ -140,7 +136,6 @@ async function sendChatMessageInner(
     mode: AgentMode;
     currentSessionId: string | null;
     sessions: ChatSessionSummary[];
-    contextPills: ContextPill[];
     agentModelSelection?: AgentModelSelection | null;
     draftClientRequestId?: string | null;
     onStatus?: (message: string) => void;
@@ -169,7 +164,6 @@ async function sendChatMessageInner(
       {
         mode,
         plan_ref: null,
-        context_refs: params.contextPills.map((pill) => pill.ref_text),
       },
     ))?.sessionId;
   if (!sessionId) return false;
@@ -189,7 +183,6 @@ async function sendChatMessageInner(
       client_request_id: clientRequestId,
     });
   }
-  const context_refs = params.contextPills.map((pill) => pill.ref_text);
   if (createdNewSession) {
     await client.dispatchChatHistory({ session_id: sessionId, limit: 100 });
     return true;
@@ -201,7 +194,6 @@ async function sendChatMessageInner(
       prompt: displayContent,
       mode,
       plan_ref: null,
-      context_refs,
     });
   } catch (err) {
     throw err;
@@ -216,7 +208,6 @@ async function runSavedPlanInner(params: {
   planRef: unknown;
   currentSessionId: string | null;
   sessions: ChatSessionSummary[];
-  contextPills: ContextPill[];
   agentModelSelection?: AgentModelSelection | null;
   draftClientRequestId?: string | null;
   onStatus?: (message: string) => void;
@@ -240,7 +231,6 @@ async function runSavedPlanInner(params: {
       {
         mode: "agent",
         plan_ref: params.planRef,
-        context_refs: params.contextPills.map((pill) => pill.ref_text),
       },
     ))?.sessionId;
   if (!sessionId) return false;
@@ -262,7 +252,6 @@ async function runSavedPlanInner(params: {
       prompt,
       mode: "agent",
       plan_ref: params.planRef,
-      context_refs: params.contextPills.map((pill) => pill.ref_text),
     });
   } catch (err) {
     throw err;

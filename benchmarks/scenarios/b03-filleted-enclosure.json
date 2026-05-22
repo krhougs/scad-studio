@@ -1,0 +1,11 @@
+{
+  "id": "b03",
+  "name": "Filleted enclosure shell",
+  "prompt": "Create a simple rectangular enclosure (outer 80x60x30mm) with 2mm wall thickness, open top, and 1mm fillet on all outer edges.",
+  "criteria": {
+    "cadquery_execute_success": true,
+    "brief_expected": true,
+    "exports_generated": true,
+    "max_dry_run_attempts": 4
+  }
+}

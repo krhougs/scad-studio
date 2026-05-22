@@ -446,7 +446,6 @@ export interface ChatCreateRequest {
 export interface ChatCreateInitialTurn {
   mode: AgentMode;
   plan_ref: PathHandle | null;
-  context_refs?: string[];
 }
 
 export interface ChatCreatedResponse {
@@ -546,7 +545,6 @@ export interface AgentInvokeRequest {
   prompt: string;
   mode: AgentMode;
   plan_ref: PathHandle | null;
-  context_refs?: string[];
   provider_id?: string | null;
   model_id?: string | null;
   reasoning_effort?: string | null;
@@ -567,7 +565,6 @@ export interface AgentStartTurnRequest {
   prompt: string;
   mode: AgentMode;
   plan_ref: PathHandle | null;
-  context_refs?: string[];
 }
 
 /** Deprecated: use AgentInvokeRequest { mode: "agent", plan_ref }. */

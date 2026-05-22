@@ -244,8 +244,7 @@ pub(super) fn get_selection(call: &AgentToolCall, context: &AgentToolRunContext)
         "tool": call.function_name,
         "message": "selection returned",
         "selections": context.selections,
-        "active_index": context.active_selection_index,
-        "context_refs": context.context_refs
+        "active_index": context.active_selection_index
     })
     .to_string()
 }

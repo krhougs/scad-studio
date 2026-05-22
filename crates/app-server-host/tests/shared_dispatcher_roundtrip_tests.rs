@@ -478,7 +478,6 @@ fn dispatcher_rejects_chat_create_initial_turn_without_model() {
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: Vec::new(),
             }),
         }),
     )
@@ -509,7 +508,6 @@ async fn dispatcher_chat_create_initial_turn_starts_agent_and_persists_bound_mod
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: vec!["@part[hinge]".into()],
             }),
         }),
     )
@@ -583,7 +581,6 @@ async fn dispatcher_chat_create_initial_turn_advances_workspace_run_id_cursor() 
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: Vec::new(),
             }),
         }),
     )
@@ -631,7 +628,6 @@ async fn dispatcher_chat_create_initial_turn_rejects_missing_workspace_event_log
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: Vec::new(),
             }),
         }),
     )
@@ -666,7 +662,6 @@ async fn dispatcher_chat_create_initial_turn_rejects_busy_without_creating_chat(
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: Vec::new(),
             }),
         }),
     )
@@ -696,7 +691,6 @@ async fn dispatcher_chat_create_initial_turn_retry_does_not_start_second_turn() 
         initial_turn: Some(ChatCreateInitialTurn {
             mode: AgentMode::Agent,
             plan_ref: None,
-            context_refs: Vec::new(),
         }),
     };
     let created = match dispatch_async(
@@ -768,7 +762,6 @@ async fn dispatcher_chat_create_initial_turn_deduplicates_concurrent_create_requ
         initial_turn: Some(ChatCreateInitialTurn {
             mode: AgentMode::Agent,
             plan_ref: None,
-            context_refs: Vec::new(),
         }),
     };
 
@@ -2383,7 +2376,6 @@ async fn dispatcher_agent_invoke_accepts_plan_ref_without_confirmation_payload()
             prompt: "run plan".into(),
             mode: AgentMode::Agent,
             plan_ref: Some(path_handle(["plans", "2026050100-add-lid-vents"])),
-            context_refs: Vec::new(),
             provider_id: None,
             model_id: None,
             reasoning_effort: None,
@@ -3108,7 +3100,6 @@ async fn invoke_agent_with_client_request_id(
             prompt: prompt.into(),
             mode: AgentMode::Agent,
             plan_ref: None,
-            context_refs: Vec::new(),
             provider_id: None,
             model_id: None,
             reasoning_effort: None,
@@ -3150,7 +3141,6 @@ async fn start_agent_turn_result_async(
                 prompt: prompt.into(),
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: Vec::new(),
             }),
         )
         .await

@@ -192,10 +192,9 @@ pub fn selection_success_schema() -> Value {
     success_schema(
         json!({
             "selections": {"type": "array", "items": {"type": "object"}},
-            "active_index": {"type": ["integer", "null"]},
-            "context_refs": string_array_schema()
+            "active_index": {"type": ["integer", "null"]}
         }),
-        &["selections", "active_index", "context_refs"],
+        &["selections", "active_index"],
     )
 }
 

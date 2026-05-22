@@ -1,0 +1,9 @@
+{
+  "honest_limitations": 2,
+  "intent_achieved": 1,
+  "no_hallucination": 2,
+  "no_wasted_work": 2,
+  "notes": "Agent wrote reasonable CadQuery code matching all requested features (25mm dia, 15mm tall cylinder, 6mm D-shaft pocket 8mm deep, vertical knurled grooves). However, cadquery_check_source and cadquery_dry_run both errored due to runner unavailability, so no actual 3D model was produced or verified. Agent was fully transparent about the failure and provided executable code for later use. No hallucination of success or fabricated results.",
+  "scenario_id": "b05",
+  "tool_selection": 2
+}

@@ -19,7 +19,7 @@ describe("AgentEventRow", () => {
     expect(screen.queryByTestId("agent-event-row")).toBeNull();
   });
 
-  it("collapses tool details into a single line with modal detail", () => {
+  it("renders cadquery tool result as a CadQueryToolCard", () => {
     render(
       <AgentEventRow
         event={{
@@ -28,33 +28,20 @@ describe("AgentEventRow", () => {
             tool_name: "cadquery_execute",
             tool_call_id: "call_123",
             run_id: "run_456",
-            result_json: "{\"status\":\"ok\",\"result_id\":\"cq_123\"}",
+            result_json: "{\"status\":\"ok\",\"result_id\":\"cq_123\",\"committed_files\":[\"parts/lid.py\"],\"exports\":[\"parts/lid.step\"]}",
           },
         }}
       />,
     );
 
-    expect(screen.getByTestId("agent-event-row").textContent).toContain(
-      "cadquery_execute",
-    );
-    expect(screen.getByTestId("agent-event-row").textContent).toContain(
-      "result ready",
-    );
-    expect(screen.queryByTestId("agent-event-modal")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("agent-event-row"));
-    expect(screen.getByTestId("agent-event-modal").textContent).toContain(
-      "cq_123",
-    );
-    expect(screen.getByTestId("agent-event-modal").textContent).toContain(
-      "call_123",
-    );
-    expect(screen.getByTestId("agent-event-modal").textContent).toContain(
-      "run_456",
-    );
+    const card = screen.getByTestId("cadquery-tool-card");
+    expect(card.textContent).toContain("execute");
+    expect(card.textContent).toContain("success");
+    expect(card.textContent).toContain("parts/lid.py");
+    expect(card.textContent).toContain("parts/lid.step");
   });
 
-  it("keeps tool start metadata available in modal detail", () => {
+  it("renders cadquery tool start as running card with target path", () => {
     render(
       <AgentEventRow
         event={{
@@ -63,22 +50,69 @@ describe("AgentEventRow", () => {
             tool_name: "cadquery_execute",
             tool_call_id: "call_789",
             run_id: "run_999",
-            args_json: "{\"path\":\"parts/fixture_panel.py\"}",
+            args_json: "{\"target_path\":\"parts/fixture_panel.py\"}",
           },
         }}
       />,
     );
 
-    expect(screen.getByTestId("agent-event-row").textContent).toContain(
-      "cadquery_execute",
-    );
-    expect(screen.queryByTestId("agent-event-modal")).toBeNull();
+    const card = screen.getByTestId("cadquery-tool-card");
+    expect(card.textContent).toContain("execute");
+    expect(card.textContent).toContain("running");
+    expect(card.textContent).toContain("parts/fixture_panel.py");
+  });
 
-    fireEvent.click(screen.getByTestId("agent-event-row"));
-    const modalText = screen.getByTestId("agent-event-modal").textContent ?? "";
-    expect(modalText).toContain("parts/fixture_panel.py");
-    expect(modalText).toContain("call_789");
-    expect(modalText).toContain("run_999");
+  it("renders cadquery error with collapsible diagnostics", () => {
+    render(
+      <AgentEventRow
+        event={{
+          event: "agent.tool_result",
+          payload: {
+            tool_name: "cadquery_dry_run",
+            tool_call_id: "call_err",
+            run_id: "run_err",
+            result_json: JSON.stringify({
+              status: "error",
+              error_type: "geometry_invalid",
+              message: "Empty shape after fillet",
+              diagnostics: { traceback: "line 1\nline 2\nline 3\nline 4" },
+            }),
+          },
+        }}
+      />,
+    );
+
+    const card = screen.getByTestId("cadquery-tool-card");
+    expect(card.textContent).toContain("dry_run");
+    expect(card.textContent).toContain("geometry_invalid");
+    expect(card.textContent).toContain("Empty shape after fillet");
+    expect(card.querySelector(".cadquery-tool-traceback")).toBeNull();
+
+    fireEvent.click(screen.getByText("show diagnostics"));
+    const pre = card.querySelector(".cadquery-tool-traceback");
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toContain("line 1");
+    expect(pre!.textContent).toContain("line 3");
+    expect(pre!.textContent).not.toContain("line 4");
+  });
+
+  it("renders non-cadquery tool events as generic rows", () => {
+    render(
+      <AgentEventRow
+        event={{
+          event: "agent.tool_result",
+          payload: {
+            tool_name: "read_file",
+            tool_call_id: "call_rf",
+            run_id: "run_rf",
+            result_json: "{\"status\":\"ok\"}",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.queryByTestId("cadquery-tool-card")).toBeNull();
+    expect(screen.getByTestId("agent-event-row")).toBeTruthy();
   });
 
   it("renders hosted web search requested as searched", () => {

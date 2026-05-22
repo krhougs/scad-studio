@@ -14,13 +14,14 @@ pub use agent::{
     AgentTurnInput, HostedToolRequest, RigAgentCallbacks, RigAgentError, RigAgentTurnResult,
     build_rig_prompt_and_history, build_turn_context, cadquery_agent_system_prompt,
     extract_cadquery_code, hosted_tool_requests_for_config,
+    skills::{SkillInjectionContext, active_skill_names, collect_skill_injections},
     plan_package::{
         ParsedPlanPackage, PlanPackageError, PlanPackagePaths, PlanTimestamp,
         SaveCadPlanPackageInput, SavedPlanPackage, collect_plan_packages, parse_plan_package,
         save_plan_package, save_plan_package_with_timestamp, slugify_plan_title,
     },
     rig_agent_additional_params, rig_agent_temperature_param, run_rig_agent_turn,
-    run_rig_agent_turn_with_config,
+    run_rig_agent_turn_with_config, run_rig_completion,
     tools::{
         AgentExecutionScope, AgentSemanticStore, AgentToolCall, AgentToolCategory,
         AgentToolDefinition, AgentToolObserver, AgentToolPathPolicy, AgentToolPermission,

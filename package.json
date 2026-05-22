@@ -16,7 +16,9 @@
     "protocol:build": "bun scripts/build_protocol_wasm.ts",
     "protocol:smoke": "bun scripts/smoke/protocol_package_smoke.ts",
     "protocol:check-generated": "bun scripts/check_protocol_wasm_generated.ts",
-    "check:wasm-bindgen": "bun scripts/check_wasm_bindgen_version.ts"
+    "check:wasm-bindgen": "bun scripts/check_wasm_bindgen_version.ts",
+    "bench": "bun scripts/run_bench.ts",
+    "bench:rubric": "bun scripts/run_bench_rubric.ts"
   },
   "module": "index.ts",
   "devDependencies": {

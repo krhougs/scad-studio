@@ -45,6 +45,11 @@ export type HarnessOptions = {
    * so the test never writes to the developer's real scad-studio config.
    */
   hostEnv?: Record<string, string>;
+  /**
+   * When true, the host subprocess inherits `process.env` directly — no
+   * isolated HOME, no fake CadQuery runner.  Matches `bun run dev` behaviour.
+   */
+  rawEnv?: boolean;
 };
 
 export type HarnessHandle = {
@@ -67,7 +72,9 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
   const wsUrl = `ws://${hostBind}`;
   const workspace = isolatedWorkspace(opts.workspacePath);
   const workspacePath = workspace.path;
-  const hostEnv = isolatedHostEnvWithTestCadqueryRunner(opts.hostEnv);
+  const hostEnv: HostEnvHandle = opts.rawEnv
+    ? { env: loadRepoRootEnv(), cleanup: () => {} }
+    : isolatedHostEnvWithTestCadqueryRunner(opts.hostEnv);
   let hostProc: ChildProcess | null = null;
   let viteProc: ChildProcess | null = null;
 
@@ -114,7 +121,7 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
         {
           cwd: path.join(REPO_ROOT, "packages", "studio-web"),
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, VITE_WS_URL: wsUrl },
+          env: { ...process.env, NODE_ENV: "development", VITE_WS_URL: wsUrl },
         },
       );
       viteProc = vite;
@@ -139,6 +146,22 @@ export function createHarness(opts: HarnessOptions): HarnessHandle {
       workspace.cleanup();
     },
   };
+}
+
+function loadRepoRootEnv(): NodeJS.ProcessEnv {
+  const dotenv = path.join(REPO_ROOT, ".env");
+  if (!existsSync(dotenv)) return { ...process.env };
+  const merged: NodeJS.ProcessEnv = { ...process.env };
+  for (const line of readFileSync(dotenv, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq);
+    const val = trimmed.slice(eq + 1);
+    if (!(key in merged)) merged[key] = val;
+  }
+  return merged;
 }
 
 function isolatedWorkspace(explicitPath?: string): { path: string; cleanup: () => void } {
@@ -249,6 +272,19 @@ export async function installProtocolRecorder(
   });
 }
 
+export async function injectStoreState(
+  page: import("@playwright/test").Page,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await page.evaluate(async (state) => {
+    const mod = await import(/* @vite-ignore */ "/src/state/protocol-store.ts");
+    const store = (mod as Record<string, unknown>)["useProtocolStore"] as {
+      setState: (patch: Record<string, unknown>) => void;
+    };
+    store.setState(state);
+  }, patch);
+}
+
 export async function clearRecordedClientCommands(
   page: import("@playwright/test").Page,
 ): Promise<void> {
@@ -340,4 +376,48 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export async function waitForTestClient(
+  page: import("@playwright/test").Page,
+  timeoutMs = 30_000,
+): Promise<void> {
+  await page.waitForFunction(
+    () => !!(window as Window & { __budn_test_client?: unknown }).__budn_test_client,
+    { timeout: timeoutMs },
+  );
+}
+
+export async function dispatchSelectionUpdateInPage(
+  page: import("@playwright/test").Page,
+  params: unknown,
+): Promise<void> {
+  await waitForTestClient(page);
+  await page.evaluate(async (selectionParams) => {
+    const client = (window as Window & { __budn_test_client?: { dispatchSelectionUpdate(p: unknown): Promise<unknown> } })
+      .__budn_test_client;
+    if (!client) throw new Error("__budn_test_client not available (dev mode only)");
+    await client.dispatchSelectionUpdate(selectionParams);
+  }, params);
+}
+
+export async function waitForAssistantMessage(
+  page: import("@playwright/test").Page,
+  timeoutMs = 120_000,
+  minLength = 10,
+): Promise<string> {
+  const selector = '[data-testid="chat-body"] .msg.agent .bubble';
+  let text = "";
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const locator = page.locator(selector).last();
+    const visible = await locator.isVisible().catch(() => false);
+    if (visible) {
+      text = await locator.innerText().catch(() => "");
+      if (text.length >= minLength) return text;
+    }
+    await delay(500);
+  }
+  if (text.length > 0) return text;
+  throw new Error(`no assistant message with >=${minLength} chars after ${timeoutMs}ms`);
 }

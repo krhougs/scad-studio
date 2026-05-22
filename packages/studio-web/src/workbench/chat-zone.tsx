@@ -178,7 +178,8 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
   const [mode, setMode] = useState<AgentMode>("agent");
   const [busy, setBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
-  const [removedRefs, setRemovedRefs] = useState<Set<string>>(new Set());
+  const removePillRef = useRef<((refText: string) => void) | null>(null);
+  const pendingSelectionRef = useRef<Promise<unknown> | null>(null);
   const [draftSession, setDraftSession] = useState<ChatSessionSummary | null>(null);
   const backendSessions = snapshot?.chat_sessions ?? [];
   const sessions = draftSession ? [draftSession, ...backendSessions] : backendSessions;
@@ -210,16 +211,27 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
 
   const contextPills = useMemo(() => {
     const selections = snapshot?.current_selection?.selections ?? [];
-    return buildContextPills(selections, removedRefs);
-  }, [snapshot?.current_selection, removedRefs]);
-
-  const prevSelectionRef = useRef(snapshot?.current_selection);
-  useEffect(() => {
-    if (prevSelectionRef.current !== snapshot?.current_selection) {
-      prevSelectionRef.current = snapshot?.current_selection;
-      setRemovedRefs(new Set());
-    }
+    return buildContextPills(selections);
   }, [snapshot?.current_selection]);
+
+  removePillRef.current = (refText: string) => {
+    if (!client) return;
+    const selections = snapshot?.current_selection?.selections ?? [];
+    const updated = selections.filter((sel) => sel.ref_text !== refText);
+    const prevActive = snapshot?.current_selection?.active_index;
+    const removedIdx = selections.findIndex((sel) => sel.ref_text === refText);
+    let activeIndex: number | null = null;
+    if (typeof prevActive === "number" && prevActive >= 0 && updated.length > 0) {
+      if (removedIdx < prevActive) activeIndex = prevActive - 1;
+      else if (removedIdx > prevActive) activeIndex = prevActive;
+      else activeIndex = Math.min(prevActive, updated.length - 1);
+    }
+    const p = client.dispatchSelectionUpdate({ selections: updated, active_index: activeIndex });
+    pendingSelectionRef.current = p;
+    void p.finally(() => {
+      if (pendingSelectionRef.current === p) pendingSelectionRef.current = null;
+    });
+  };
 
   useInitialChatList(client, onStatus);
   useInitialChatHistory(
@@ -239,8 +251,8 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     agentRun,
     busy,
     mode,
-    contextPills,
     agentModelSelection,
+    pendingSelectionRef,
     onStatus,
     setBusy,
     setModelBusy,
@@ -274,7 +286,7 @@ function useChatController({ client, snapshot, onStatus, onOpenPlan }: ChatZoneP
     agentModelRegistry,
     agentModelSelection,
     removePill: (refText: string) => {
-      setRemovedRefs((prev) => new Set(prev).add(refText));
+      removePillRef.current?.(refText);
     },
     openPlan: onOpenPlan,
     ...actions,
@@ -296,17 +308,11 @@ function eventBelongsToCurrentSession(
   return sessionId === currentSessionId;
 }
 
-function buildContextPills(
-  selections: SelectionRef[],
-  removedRefs: Set<string>,
-): ContextPill[] {
-  return selections
-    .filter((sel) => !removedRefs.has(sel.ref_text))
-    .slice(-MAX_CONTEXT_PILLS)
-    .map((sel) => ({
-      ref_text: sel.ref_text,
-      display: preferredRefText(sel),
-    }));
+function buildContextPills(selections: SelectionRef[]): ContextPill[] {
+  return selections.slice(-MAX_CONTEXT_PILLS).map((sel) => ({
+    ref_text: sel.ref_text,
+    display: preferredRefText(sel),
+  }));
 }
 
 function useInitialChatList(
@@ -422,8 +428,8 @@ function useChatActions(input: {
   agentRun: AgentRun | null;
   busy: boolean;
   mode: AgentMode;
-  contextPills: ContextPill[];
   agentModelSelection: AgentModelSelection | null;
+  pendingSelectionRef: React.MutableRefObject<Promise<unknown> | null>;
   onStatus?: (message: string) => void;
   setBusy: (value: boolean) => void;
   setModelBusy: (value: boolean) => void;
@@ -441,17 +447,21 @@ function useChatActions(input: {
     cancelAgent: () =>
       void cancelAgentRun(input.client, input.agentRun, input.onStatus),
     send: (text: string) =>
-      void sendChatMessage(input, text).then((committed) => {
-        if (committed) input.onDraftCommit();
-      }),
+      void flushPendingSelection(input.pendingSelectionRef).then(() =>
+        sendChatMessage(input, text).then((committed) => {
+          if (committed) input.onDraftCommit();
+        }),
+      ),
     runPlan: (plan: { planId: string; planRef: unknown }) =>
-      void runSavedPlan({
-        ...input,
-        planId: plan.planId,
-        planRef: plan.planRef,
-      }).then((committed) => {
-        if (committed) input.onDraftCommit();
-      }),
+      void flushPendingSelection(input.pendingSelectionRef).then(() =>
+        runSavedPlan({
+          ...input,
+          planId: plan.planId,
+          planRef: plan.planRef,
+        }).then((committed) => {
+          if (committed) input.onDraftCommit();
+        }),
+      ),
     selectAgentModel: (value: string) =>
       void selectAgentModel(input.client, value, input.onStatus, input.setModelBusy),
     updateAgentModelParams: (params: AgentModelParamsSnapshot) =>
@@ -463,6 +473,12 @@ function useChatActions(input: {
         input.setModelBusy,
       ),
   };
+}
+
+async function flushPendingSelection(
+  ref: React.MutableRefObject<Promise<unknown> | null>,
+): Promise<void> {
+  if (ref.current) await ref.current.catch(() => {});
 }
 
 function newClientRequestId(): string {

@@ -534,7 +534,6 @@ impl HostRequestDispatcher {
                         initial_user_message,
                         turn.mode,
                         turn.plan_ref,
-                        turn.context_refs,
                         bound_model.clone(),
                         agent_model_state_for_bound_or_current(
                             bound_model.as_ref(),
@@ -922,7 +921,6 @@ impl HostRequestDispatcher {
             request.prompt,
             request.mode,
             request.plan_ref,
-            request.context_refs,
             bound_model,
             model_state,
             persisted_event_id,
@@ -954,7 +952,6 @@ impl HostRequestDispatcher {
             request.prompt,
             request.mode,
             request.plan_ref,
-            request.context_refs,
             bound_model.clone(),
             agent_model_state_for_bound_or_current(bound_model.as_ref(), &self.agent_model_state),
             persisted_event_id,
@@ -970,7 +967,6 @@ impl HostRequestDispatcher {
         prompt: String,
         mode: AgentMode,
         plan_ref: Option<PathHandle>,
-        context_refs: Vec<String>,
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
         persisted_event_id: Option<AgentEventId>,
@@ -1009,7 +1005,6 @@ impl HostRequestDispatcher {
             prompt,
             mode,
             plan_ref,
-            context_refs,
             model_state,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
@@ -1030,7 +1025,6 @@ impl HostRequestDispatcher {
         prompt: String,
         mode: AgentMode,
         plan_ref: Option<PathHandle>,
-        context_refs: Vec<String>,
         bound_model: Option<BoundAgentModel>,
         model_state: AgentModelRuntimeState,
         persisted_event_id: Option<AgentEventId>,
@@ -1061,7 +1055,6 @@ impl HostRequestDispatcher {
             prompt,
             mode,
             plan_ref,
-            context_refs,
             model_state,
             selection_snapshot: self.selection_snapshot.clone(),
             workspace_root: self.workspace_root()?.to_path_buf(),
@@ -2384,7 +2377,6 @@ struct AgentWorker {
     prompt: String,
     mode: AgentMode,
     plan_ref: Option<PathHandle>,
-    context_refs: Vec<String>,
     model_state: AgentModelRuntimeState,
     selection_snapshot: SelectionUpdateRequest,
     workspace_root: PathBuf,
@@ -3203,7 +3195,6 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
         selections: worker.selection_snapshot.selections.clone(),
         active_selection_index: worker.selection_snapshot.active_index,
         plan_ref: worker.plan_ref.clone(),
-        context_refs: worker.context_refs.clone(),
         native_web_search_enabled: config.native_web_search,
         function_web_search_available: web_search_provider.is_some(),
         execution_scope: execution_scope.clone(),
@@ -3228,7 +3219,6 @@ async fn run_text_agent_rig(worker: &AgentWorker) -> Option<String> {
     tool_context.run_id = Some(worker.run.run_id.clone());
     tool_context.selections = worker.selection_snapshot.selections.clone();
     tool_context.active_selection_index = worker.selection_snapshot.active_index;
-    tool_context.context_refs = worker.context_refs.clone();
     tool_context.execution_scope = execution_scope;
     tool_context.web_search_available = web_search_available;
     let tool_observer = AgentToolEventRecorder {
@@ -4651,7 +4641,6 @@ mod tests {
             prompt: "inspect".into(),
             mode: AgentMode::Agent,
             plan_ref: None,
-            context_refs: Vec::new(),
             provider_id: Some(provider_id.into()),
             model_id: Some(model_id.into()),
             reasoning_effort: reasoning_effort.map(str::to_owned),

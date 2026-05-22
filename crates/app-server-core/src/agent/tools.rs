@@ -217,7 +217,6 @@ pub struct AgentToolRunContext {
     pub mode: AgentMode,
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
-    pub context_refs: Vec<String>,
     pub execution_scope: Option<AgentExecutionScope>,
     pub web_search_available: bool,
 }
@@ -231,7 +230,6 @@ impl AgentToolRunContext {
             mode,
             selections: Vec::new(),
             active_selection_index: None,
-            context_refs: Vec::new(),
             execution_scope: None,
             web_search_available: false,
         }

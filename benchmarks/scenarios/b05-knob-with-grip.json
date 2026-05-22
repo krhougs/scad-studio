@@ -1,0 +1,11 @@
+{
+  "id": "b05",
+  "name": "Cylindrical knob with grip pattern",
+  "prompt": "Create a knob: 25mm diameter, 15mm tall cylinder with a 6mm D-shaft hole in the bottom (8mm deep). Add a knurled grip pattern (vertical grooves around the outside).",
+  "criteria": {
+    "cadquery_execute_success": true,
+    "brief_expected": true,
+    "exports_generated": true,
+    "max_dry_run_attempts": 5
+  }
+}

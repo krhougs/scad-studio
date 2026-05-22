@@ -99,6 +99,13 @@ export function CadQueryViewer(props: CadQueryViewerProps) {
       mode={mode}
       onMode={setMode}
       availableModes={cadQueryAvailableSelectionModes(scene)}
+      selectionCount={(props.selectionSnapshot?.selections ?? []).length}
+      onClearSelection={() => {
+        void props.client.dispatchSelectionUpdate({
+          selections: [],
+          active_index: null,
+        });
+      }}
       pending={selection.pending}
       activeSelection={selection.activeSelection}
       interactionMode={interactionMode}
@@ -181,6 +188,8 @@ function CadQueryViewerFrame(props: {
   label: string;
   mode: CadQueryViewerMode;
   availableModes: CadQuerySelectionMode[];
+  selectionCount: number;
+  onClearSelection: () => void;
   pending: PendingSelection | null;
   activeSelection: SelectionRef | null;
   interactionMode: "select" | "preview";
@@ -198,7 +207,9 @@ function CadQueryViewerFrame(props: {
           <CadQuerySelectionDock
             mode={props.mode === "preview" ? null : props.mode}
             availableModes={props.availableModes}
+            selectionCount={props.selectionCount}
             onMode={props.onMode}
+            onClear={props.onClearSelection}
           />
           <CadQuerySelectionStatus selection={props.activeSelection} />
         </>
@@ -390,28 +401,83 @@ function useCameraEffects(
   }, [props.cameraOverride, viewerRef]);
 }
 
+const OBJECT_MODES: CadQuerySelectionMode[] = [
+  "component",
+  "part",
+  "assembly",
+  "instance",
+];
+const GEOMETRY_MODES: CadQuerySelectionMode[] = [
+  "feature",
+  "face",
+  "edge",
+  "vertex",
+];
+
 function CadQuerySelectionDock(props: {
   mode: CadQuerySelectionMode | null;
   availableModes: CadQuerySelectionMode[];
+  selectionCount: number;
   onMode: (mode: CadQueryViewerMode) => void;
+  onClear: () => void;
 }) {
   const modes =
     props.availableModes.length > 0
       ? props.availableModes
       : CADQUERY_SELECTION_MODES;
+  const objectModes = modes.filter((m) => OBJECT_MODES.includes(m));
+  const geometryModes = modes.filter((m) => GEOMETRY_MODES.includes(m));
   return (
     <div className="cadquery-select-dock" data-testid="cadquery-select-dock">
-      {modes.map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          className={props.mode === mode ? "active" : undefined}
-          onClick={() => props.onMode(mode)}
-          data-testid={`cadquery-select-mode-${mode}`}
-        >
-          {mode}
-        </button>
-      ))}
+      {objectModes.length > 0 && (
+        <div className="cadquery-select-dock__group">
+          {objectModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={props.mode === mode ? "active" : undefined}
+              onClick={() => props.onMode(mode)}
+              data-testid={`cadquery-select-mode-${mode}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      )}
+      {objectModes.length > 0 && geometryModes.length > 0 && (
+        <div className="cadquery-select-dock__sep" />
+      )}
+      {geometryModes.length > 0 && (
+        <div className="cadquery-select-dock__group">
+          {geometryModes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={props.mode === mode ? "active" : undefined}
+              onClick={() => props.onMode(mode)}
+              data-testid={`cadquery-select-mode-${mode}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      )}
+      {props.selectionCount > 0 && (
+        <>
+          <div className="cadquery-select-dock__sep" />
+          <span className="cadquery-select-dock__count">
+            {props.selectionCount}
+          </span>
+          <button
+            type="button"
+            className="cadquery-select-dock__clear"
+            onClick={props.onClear}
+            data-testid="cadquery-select-clear"
+          >
+            clear
+          </button>
+        </>
+      )}
     </div>
   );
 }

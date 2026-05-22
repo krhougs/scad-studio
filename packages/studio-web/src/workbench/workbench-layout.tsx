@@ -561,6 +561,10 @@ export function WorkbenchLayout() {
       }),
     );
     clientRef.current = client;
+    if (import.meta.env.DEV) {
+      (window as Window & { __budn_test_client?: WasmClient }).
+        __budn_test_client = client;
+    }
     setClientReady(true);
 
     const transport = createTransport({
@@ -603,6 +607,10 @@ export function WorkbenchLayout() {
       transport.stop();
       client.destroy();
       clientRef.current = null;
+      if (import.meta.env.DEV) {
+        (window as Window & { __budn_test_client?: WasmClient }).
+          __budn_test_client = undefined;
+      }
       setClientReady(false);
       watchActiveRef.current = false;
     };
@@ -667,7 +675,6 @@ export function WorkbenchLayout() {
         sessions: chatSessions,
         agentRun,
         busy: markdownPlanBusy,
-        contextPills: [],
         agentModelSelection,
         onStatus: setMessage,
         setBusy: setMarkdownPlanBusy,

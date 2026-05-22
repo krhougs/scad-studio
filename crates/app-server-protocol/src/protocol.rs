@@ -697,8 +697,6 @@ pub enum AgentRuntimeStatus {
 pub struct ChatCreateInitialTurn {
     pub mode: AgentMode,
     pub plan_ref: Option<PathHandle>,
-    #[serde(default)]
-    pub context_refs: Vec<String>,
 }
 
 #[derive(
@@ -870,8 +868,6 @@ pub struct AgentInvokeRequest {
     pub mode: AgentMode,
     pub plan_ref: Option<PathHandle>,
     #[serde(default)]
-    pub context_refs: Vec<String>,
-    #[serde(default)]
     pub provider_id: Option<String>,
     #[serde(default)]
     pub model_id: Option<String>,
@@ -889,8 +885,6 @@ pub struct AgentStartTurnRequest {
     pub prompt: String,
     pub mode: AgentMode,
     pub plan_ref: Option<PathHandle>,
-    #[serde(default)]
-    pub context_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

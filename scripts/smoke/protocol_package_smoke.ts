@@ -112,7 +112,6 @@ const agentInvokeRequest: AgentInvokeRequest = {
   prompt: "run plan",
   mode: "agent",
   plan_ref: protocol_path_handle("ws", ["plans", "2026050100-add-lid-vents"]) as PathHandle,
-  context_refs: ["@part[top_lid]"],
 };
 const agentInvokeFrame = protocol_encode_agent_invoke_request(8n, agentInvokeRequest);
 assert(

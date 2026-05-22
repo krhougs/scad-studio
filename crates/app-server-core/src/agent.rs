@@ -1,4 +1,5 @@
 pub mod plan_package;
+pub mod skills;
 pub mod tools;
 pub mod web_search;
 
@@ -17,7 +18,7 @@ use app_server_protocol::{
 use futures_util::{Stream, StreamExt};
 use rig::{
     agent::{MultiTurnStreamItem, PromptHook, ToolCallHookAction},
-    completion::{CompletionModel, Message, ToolDefinition},
+    completion::{Chat, CompletionModel, Message, ToolDefinition},
     message::{ReasoningContent, ToolResultContent},
     prelude::*,
     streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat},
@@ -45,7 +46,6 @@ pub struct AgentTurnInput {
     pub selections: Vec<SelectionRef>,
     pub active_selection_index: Option<u32>,
     pub plan_ref: Option<PathHandle>,
-    pub context_refs: Vec<String>,
     pub native_web_search_enabled: bool,
     pub function_web_search_available: bool,
     pub execution_scope: Option<tools::AgentExecutionScope>,
@@ -150,6 +150,62 @@ pub async fn run_rig_agent_turn_with_config(
             .await
         }
     }
+}
+
+pub async fn run_rig_completion(
+    config: RigAgentConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, RigAgentError> {
+    match config.provider_kind {
+        AgentProviderKind::OpenAiResponses => {
+            let mut builder =
+                rig::providers::openai::Client::builder().api_key(&config.api_key);
+            if let Some(base_url) = config.base_url.as_deref() {
+                builder = builder.base_url(base_url);
+            }
+            let client = builder.build().map_err(|e| RigAgentError {
+                message: format!("Cannot create OpenAI Responses client: {e}"),
+            })?;
+            run_simple_chat(client, &config, system_prompt, user_prompt).await
+        }
+        AgentProviderKind::OpenAiCompletions => {
+            let mut builder =
+                rig::providers::openai::CompletionsClient::builder().api_key(&config.api_key);
+            if let Some(base_url) = config.base_url.as_deref() {
+                builder = builder.base_url(base_url);
+            }
+            let client = builder.build().map_err(|e| RigAgentError {
+                message: format!("Cannot create OpenAI Completions client: {e}"),
+            })?;
+            run_simple_chat(client, &config, system_prompt, user_prompt).await
+        }
+        AgentProviderKind::Anthropic => {
+            let client = anthropic_client(&config)?;
+            run_simple_chat(client, &config, system_prompt, user_prompt).await
+        }
+    }
+}
+
+async fn run_simple_chat<C>(
+    client: C,
+    config: &RigAgentConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, RigAgentError>
+where
+    C: rig::client::completion::CompletionClient + Clone + Send + Sync + 'static,
+{
+    let agent = client
+        .agent(config.model.clone())
+        .preamble(system_prompt)
+        .max_tokens(config.max_tokens)
+        .build();
+    let history: Vec<Message> = vec![];
+    let response = agent.chat(user_prompt, history).await.map_err(|e| RigAgentError {
+        message: format!("CompletionError: {e}"),
+    })?;
+    Ok(response)
 }
 
 async fn run_openai_responses_rig_agent_turn_with_config(
@@ -794,12 +850,6 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
     if let Some(plan_ref) = &input.plan_ref {
         parts.push(format!("Plan ref: {}", plan_ref.display_path()));
     }
-    if !input.context_refs.is_empty() {
-        parts.push(format!(
-            "User-attached context refs: {}",
-            input.context_refs.join(", ")
-        ));
-    }
     parts.push(web_search_capabilities_context(
         input.native_web_search_enabled,
         input.function_web_search_available,
@@ -816,11 +866,46 @@ pub fn build_turn_context(input: &AgentTurnInput) -> String {
     }
     if !input.selections.is_empty() {
         parts.push(format!(
-            "Current Web preview selection:\n{}",
+            "Current selection:\n{}",
             selection_context(&input.selections)
         ));
     }
+    let skill_ctx = build_skill_injection_context(input);
+    let skill_text = skills::collect_skill_injections(&skill_ctx);
+    if !skill_text.is_empty() {
+        parts.push(skill_text);
+    }
     parts.join("\n")
+}
+
+fn build_skill_injection_context(input: &AgentTurnInput) -> skills::SkillInjectionContext {
+    let cadquery_execution_tools_registered = input.mode == AgentMode::Agent;
+    let last_turn_cadquery_error = has_last_turn_cadquery_error(&input.history);
+    skills::SkillInjectionContext {
+        mode: input.mode,
+        cadquery_execution_tools_registered,
+        last_turn_cadquery_error,
+    }
+}
+
+fn has_last_turn_cadquery_error(history: &[ChatMessageRecord]) -> bool {
+    for msg in history.iter().rev() {
+        if msg.role == ChatRole::User {
+            break;
+        }
+        if let Some(ref result) = msg.tool_result {
+            if result.tool_name == "cadquery_dry_run"
+                || result.tool_name == "cadquery_execute"
+            {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&result.result_json) {
+                    if value.get("status").and_then(|v| v.as_str()) == Some("error") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn web_search_capabilities_context(

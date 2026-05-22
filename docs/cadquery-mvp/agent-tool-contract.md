@@ -135,7 +135,7 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `list_directory` | `path`、`entries`、`entry_count`、`truncated` |
 | `search_files` | `query`、`matches`、`truncated` |
 | `get_project_context` | `objects`、`plans`、`chats`、`warnings` |
-| `get_selection` | `selections`、`active_index`、`context_refs` |
+| `get_selection` | `selections`、`active_index` |
 | `resolve_ref` / `cadquery_resolve_selection` | `owner_ref_text`、`owner_path`、`candidate_feature_ref`、`stable_ref`、`ambiguous`、`risks` |
 | `save_cad_plan` | `plan_id`、`plan_ref`、`request_path`、`plan_path`、`result_path`、`target_path`、`target_type`、`affected_files`、`new_files`、`export_targets`、`plan_status`、`run_id` |
 | `update_chat_summary` | `session_id`、`message_id`、`updated_fields` |
@@ -156,7 +156,7 @@ Rust registry 中的 `AgentToolPathPolicy` 是运行时权限实现的 canonical
 | `list_directory` | `path` | `status`、`tool`、`path`、`entries`、`entry_count`、`truncated` |
 | `search_files` | `query` | `status`、`tool`、`query`、`matches`、`truncated` |
 | `get_project_context` | 无 | `status`、`tool`、`objects`、`plans`、`chats`、`warnings` |
-| `get_selection` | 无 | `status`、`tool`、`selections`、`active_index`、`context_refs` |
+| `get_selection` | 无 | `status`、`tool`、`selections`、`active_index` |
 | `resolve_ref` | `ref_text` | `status`、`tool`、`owner_ref_text`、`owner_path`、`stable_ref`、`ambiguous`、`risks` |
 | `save_cad_plan` | `title`、`request`、`target_ref`、`target_path`、`target_type`、`affected_files`、`new_files`、`export_targets`、`strategy`、`execution_scope` | `status`、`tool`、`plan_id`、`plan_ref`、`request_path`、`plan_path`、`result_path`、`target_path`、`target_type`、`affected_files`、`new_files`、`export_targets`、`run_id`、`plan_status` |
 | `update_chat_summary` | `summary`、`goal`；可选 `related_files`、`open_questions` | `status`、`tool`、`session_id`、`message_id`、`updated_fields` |

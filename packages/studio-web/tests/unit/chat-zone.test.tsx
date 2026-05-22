@@ -56,7 +56,6 @@ describe("ChatZone", () => {
         agent_id: "agent-main",
         mode: "agent",
         plan_ref: null,
-        context_refs: [],
       }),
     );
   });
@@ -622,7 +621,6 @@ describe("ChatZone", () => {
         initial_turn: expect.objectContaining({
           mode: "plan",
           plan_ref: null,
-          context_refs: [],
         }),
       }),
     );
@@ -711,7 +709,7 @@ describe("ChatZone", () => {
       sessions: [],
       agentRun: null,
       busy: false,
-      contextPills: [],
+
       agentModelSelection: agentModelSelection(),
       setBusy,
     }, "start from draft");
@@ -773,9 +771,43 @@ describe("ChatZone", () => {
         agent_id: "agent-main",
         mode: "agent",
         plan_ref: null,
-        context_refs: ["@face[top_lid:f_0]"],
       }),
     );
+  });
+
+  it("waits for pending selection update before sending agent turn", async () => {
+    let resolveSelection!: () => void;
+    const selectionPromise = new Promise<void>((r) => { resolveSelection = r; });
+    const client = {
+      ...fakeClient(),
+      dispatchSelectionUpdate: vi.fn().mockReturnValue(selectionPromise),
+    };
+    const sel2 = { ...faceSelection(), ref_text: "@face[top_lid:f_1]" };
+    setSnapshot(chatSnapshot({
+      selections: [faceSelection(), sel2],
+      active_index: 0,
+    }));
+    render(
+      <ChatZone
+        client={client as unknown as WasmClient}
+      />,
+    );
+
+    const pills = screen.getAllByRole("button", { name: /^remove /i });
+    await userEvent.setup().click(pills[0]!);
+
+    expect(client.dispatchSelectionUpdate).toHaveBeenCalled();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByTestId("chat-input"), "modify this");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(client.dispatchAgentStartTurn).not.toHaveBeenCalled();
+
+    resolveSelection();
+
+    await waitFor(() => expect(client.dispatchAgentStartTurn).toHaveBeenCalled());
   });
 
   it("sends explicit mode when using slash command", async () => {
@@ -843,7 +875,6 @@ describe("ChatZone", () => {
           path_segments: ["plans", "2026050100-add-lid-vents"],
         },
         prompt: "Run plan 2026050100-add-lid-vents",
-        context_refs: [],
       }),
     );
     expect(onStatus).toHaveBeenCalledWith(
@@ -865,7 +896,7 @@ describe("ChatZone", () => {
       sessions: [],
       agentRun: null,
       busy: false,
-      contextPills: [],
+
       agentModelSelection: agentModelSelection(),
       draftClientRequestId: "draft-request",
       setBusy: vi.fn(),
@@ -897,7 +928,7 @@ describe("ChatZone", () => {
       sessions: [],
       agentRun: null,
       busy: false,
-      contextPills: [],
+
       agentModelSelection: agentModelSelection(),
       setBusy: vi.fn(),
     });
@@ -937,7 +968,7 @@ describe("ChatZone", () => {
       sessions: [],
       agentRun: null,
       busy: false,
-      contextPills: [],
+
       agentModelSelection: agentModelSelection(),
       onStatus,
       setBusy: vi.fn(),

@@ -90,7 +90,6 @@ describe("protocol package import", () => {
         workspace_id: "ws",
         path_segments: ["plans", "2026050100-add-lid-vents"],
       },
-      context_refs: ["@part[top_lid]"],
     };
     const savedPlan: AgentPlanSavedEvent = {
       session_id: "chat-1",
@@ -141,7 +140,6 @@ describe("protocol package import", () => {
       prompt: "draft a plan",
       mode: "plan",
       plan_ref: null,
-      context_refs: [],
     };
 
     expect(capabilities.cadquery).toBe(true);

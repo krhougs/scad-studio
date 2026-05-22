@@ -78,7 +78,6 @@ fn build_rig_prompt_and_history_includes_prompt_context_and_history() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: false,
         execution_scope: None,
@@ -103,7 +102,6 @@ fn build_rig_prompt_and_history_skips_empty_and_tool_history() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: false,
         execution_scope: None,
@@ -124,7 +122,6 @@ fn build_turn_context_includes_mode_plan_ref_and_selection() {
         plan_ref: Some(
             PathHandle::new(WorkspaceId::new("ws"), ["plans", "2026050100-lid"]).unwrap(),
         ),
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: false,
         execution_scope: Some(AgentExecutionScope::for_plan(
@@ -143,7 +140,7 @@ fn build_turn_context_includes_mode_plan_ref_and_selection() {
     assert!(context.contains("Execution scope"));
     assert!(context.contains("target_path=parts/lid.py"));
     assert!(context.contains("plan_result_path=plans/2026050100-lid/plan-result.md"));
-    assert!(context.contains("Web preview selection"));
+    assert!(context.contains("Current selection:"));
 }
 
 #[test]
@@ -155,36 +152,43 @@ fn build_turn_context_omits_selection_when_empty() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: false,
         execution_scope: None,
     };
     let context = build_turn_context(&input);
     assert!(context.contains("Mode: Agent"));
-    assert!(!context.contains("Web preview selection"));
+    assert!(!context.contains("Current selection:"));
     assert!(!context.contains("Plan ref"));
 }
 
 #[test]
-fn build_turn_context_includes_context_refs() {
+fn build_turn_context_includes_unified_selection() {
     let input = AgentTurnInput {
         mode: AgentMode::Agent,
         prompt: "unused".into(),
         history: Vec::new(),
-        selections: Vec::new(),
-        active_selection_index: None,
+        selections: vec![SelectionRef {
+            kind: SelectionKind::Face,
+            ref_text: "@face[top_lid:f_0]".into(),
+            owner_ref_text: Some("@part[top_lid]".into()),
+            owner_object_kind: Some(CadQueryObjectKind::Part),
+            instance_path: None,
+            candidate_feature_ref: None,
+            build_id: None,
+            result_id: None,
+            ambiguous: false,
+        }],
+        active_selection_index: Some(0),
         plan_ref: None,
-        context_refs: vec!["@face[top_lid:f_0]".into(), "@part[bottom_case]".into()],
         native_web_search_enabled: true,
         function_web_search_available: false,
         execution_scope: None,
     };
     let context = build_turn_context(&input);
-    assert!(context.contains("context refs"));
+    assert!(context.contains("Current selection:"));
     assert!(context.contains("@face[top_lid:f_0]"));
-    assert!(context.contains("@part[bottom_case]"));
-    assert!(context.contains("`web_search`: available this turn"));
+    assert!(!context.contains("context refs"));
 }
 
 #[test]
@@ -196,7 +200,6 @@ fn build_turn_context_lists_current_turn_tools() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: true,
         function_web_search_available: false,
         execution_scope: None,
@@ -221,7 +224,6 @@ fn build_turn_context_shows_function_web_search_when_available() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: true,
         execution_scope: None,
@@ -254,7 +256,6 @@ fn build_turn_context_hides_web_search_tool_when_unavailable() {
         selections: Vec::new(),
         active_selection_index: None,
         plan_ref: None,
-        context_refs: Vec::new(),
         native_web_search_enabled: false,
         function_web_search_available: false,
         execution_scope: None,
@@ -2112,7 +2113,6 @@ async fn live_web_search_agent_turn() {
         selections: vec![],
         active_selection_index: None,
         plan_ref: None,
-        context_refs: vec![],
         native_web_search_enabled: true,
         function_web_search_available: false,
         execution_scope: None,

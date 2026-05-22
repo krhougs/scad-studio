@@ -1,0 +1,32 @@
+{
+  "agent_text": "The CadQuery runner (`budn_cad_runner`) is not available in this environment — both the static check and dry run fail with `No module named budn_cad_runner`. This is an infrastructure/environment issue, not a code issue.\n\n**I cannot commit the model** because CadQuery `.py` source must go through the staging/execute pipeline, and that pipeline is currently unavailable.\n\nHere is the complete, contract-compliant source ready to go once the runner is restored:\n\n```python\nMODEL_DESCRIPTION = \"A simple rectangular solid box, 60mm long, 40mm wide, and 25mm tall.\"\n\nMODEL_DETAILS = {\n    \"purpose\": \"A basic rectangular box primitive for use as a standalone part or as a base shape for further modification.\",\n    \"key_dimensions\": {\n        \"length\": \"60 mm (X-axis)\",\n        \"width\": \"40 mm (Y-axis)\",\n        \"height\": \"25 mm (Z-axis)\"\n    },\n    \"intended_use\": \"General-purpose solid rectangular block; can serve as a blank for machining, a base for mounting, or a housing enclosure.\",\n    \"assumptions\": [\n        \"Z-up coordinate convention\",\n        \"Origin centered on the bottom face (geometric center of XY at Z=0)\",\n        \"No internal features, cavities, or wall thickness — this is a solid block\"\n    ],\n    \"interaction_notes\": \"Select faces, edges, or vertices in the Viewer for further operations such as filleting, pocketing, or hole placement.\",\n    \"manufacturing_or_placement_constraints\": \"Can be 3D printed, CNC milled, or laser-cut (if sliced). No undercuts or draft angles required.\"\n}\n\nREFS = {\n    \"type\": \"part\",\n    \"features\": {\n        \"box_body\": \"The complete 60×40×25 mm rectangular solid volume\",\n        \"bottom_face\": \"The bottom face at Z=0, flush with the XY plane\",\n        \"top_face\": \"The top face at Z=25 mm\",\n        \"front_face\": \"The front face at Y=+20 mm\",\n        \"back_face\": \"The back face at Y=-20 mm\",\n        \"right_face\": \"The right face at X=+30 mm\",\n        \"left_face\": \"The left face at X=-30 mm\"\n    }\n}\n\nimport cadquery as cq\n\ndef build(params=None):\n    box = cq.Workplane(\"XY\").box(60, 40, 25)\n    return box\n```\n\n**Status summary:**\n- **Mode:** Agent\n- **Files changed:** None (runner unavailable)\n- **Outputs generated:** None\n- **Target:** `parts/rectangular_box.py` → `outputs/rectangular_box.step`\n- **Blocker:** `budn_cad_runner` Python module is not installed in the current environment. Once the runner is available, I can retry the dry_run → execute pipeline to commit this model.",
+  "agent_text_length": 2463,
+  "agent_text_preview": "The CadQuery runner (`budn_cad_runner`) is not available in this environment — both the static check and dry run fail with `No module named budn_cad_runner`. This is an infrastructure/environment issue, not a code issue.\n\n**I cannot commit the model** because CadQuery `.py` source must go through the staging/execute pipeline, and that pipeline is currently unavailable.\n\nHere is the complete, contract-compliant source ready to go once the runner is restored:\n\n```python\nMODEL_DESCRIPTION = \"A si...",
+  "failure_reason": "cadquery_execute did not succeed; no brief found in agent output; exports_generated required but cadquery_execute did not succeed",
+  "passed": false,
+  "prompt": "Create a rectangular box that is 60mm long, 40mm wide, and 25mm tall.",
+  "scenario_id": "b01",
+  "scenario_name": "Simple box",
+  "tool_traces": [
+    {
+      "arguments_summary": "{}",
+      "result_status": "ok",
+      "tool": "get_project_context"
+    },
+    {
+      "arguments_summary": "{\"path\":\".\"}",
+      "result_status": "ok",
+      "tool": "list_directory"
+    },
+    {
+      "arguments_summary": "{\"code\":\"\\nMODEL_DESCRIPTION = \\\"A simple rectangular solid box, 60mm long, 40mm wide, and 25mm tall.\\\"\\n\\nMODEL_DETAILS = {\\n    \\\"purpose\\\": \\\"A basic rectangular box primitive for use as a standalo...",
+      "result_status": "error",
+      "tool": "cadquery_check_source"
+    },
+    {
+      "arguments_summary": "{\"code\":\"\\nMODEL_DESCRIPTION = \\\"A simple rectangular solid box, 60mm long, 40mm wide, and 25mm tall.\\\"\\n\\nMODEL_DETAILS = {\\n    \\\"purpose\\\": \\\"A basic rectangular box primitive for use as a standalo...",
+      "result_status": "error",
+      "tool": "cadquery_dry_run"
+    }
+  ]
+}

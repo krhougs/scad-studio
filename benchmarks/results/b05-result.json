@@ -1,0 +1,32 @@
+{
+  "agent_text": "**Status summary:**\n- **Mode:** Agent\n- **Files changed:** `parts/grip_knob_README.md` (placeholder only)\n- **Outputs:** None — runner unavailable\n- **Plan:** No plan package (single-step creation)\n\n---\n\n**Complete model code ready for execution:**\n\n```python\n\"\"\"\nKnob – 25mm grip knob with D-shaft pocket and knurled grip.\n\"\"\"\n\nimport cadquery as cq\nimport math\n\nMODEL_DESCRIPTION = \"A 25mm diameter, 15mm tall grip knob with a 6mm D-shaft pocket (8mm deep) and vertical knurled groove pattern on the outer surface.\"\n\nMODEL_DETAILS = {\n    \"purpose\": \"Hand-operated knob for a 6mm D-shaft encoder or potentiometer\",\n    \"key_dimensions\": {\n        \"outer_diameter\": \"25 mm\",\n        \"total_height\": \"15 mm\",\n        \"d_shaft_diameter\": \"6 mm\",\n        \"d_shaft_flat_depth\": \"0.5 mm\",\n        \"d_shaft_pocket_depth\": \"8 mm\",\n        \"knurl_groove_depth\": \"0.5 mm\",\n        \"knurl_groove_count\": 36\n    },\n    \"intended_use\": \"Pressed or friction-fit onto a 6mm D-shaft; gripped by hand to rotate\",\n    \"assumptions\": \"D-shaft follows standard 6mm round with 0.5mm flat; knurl grooves are vertical (parallel to axis); pocket open from bottom; 3D printing tolerances apply\",\n    \"interaction_notes\": \"User grips the knurled circumference; the D-shaft pocket ensures rotational coupling\",\n    \"manufacturing_or_placement_constraints\": \"FDM/SLA printable in upright orientation; no supports needed for the bottom pocket; minimum wall 4.5mm around shaft pocket\"\n}\n\nREFS = {\n    \"type\": \"part\",\n    \"features\": {\n        \"knob_body\": \"Main cylindrical body of the knob\",\n        \"d_shaft_pocket\": \"6mm D-shaft pocket, 8mm deep from the bottom face\",\n        \"knurled_grip\": \"Vertical groove pattern around the outer circumference for grip\",\n        \"top_edge_fillet\": \"Fillet on the top rim of the knob for comfort\"\n    }\n}\n\n\ndef build(params=None):\n    outer_dia = 25.0\n    height = 15.0\n    shaft_dia = 6.0\n    shaft_flat_depth = 0.5\n    pocket_depth = 8.0\n    knurl_depth = 0.5\n    knurl_count = 36\n    top_fillet = 0.8\n    body_r = outer_dia / 2\n\n    # 1. Main cylinder\n    body = cq.Workplane(\"XY\").circle(body_r).extrude(height)\n\n    # 2. Knurled grip — 36 vertical radial grooves\n    knurl_angle_step = 360.0 / knurl_count\n    arc_pitch = math.pi * outer_dia / knurl_count\n    tangential_width = arc_pitch * 0.4\n\n    for i in range(knurl_count):\n        angle_deg = i * knurl_angle_step\n        groove = (\n            cq.Workplane(\"XY\")\n            .rect(knurl_depth, tangential_width)\n            .extrude(height)\n            .translate((body_r - knurl_depth / 2, 0, 0))\n            .rotateAboutCenter((0, 0, 1), angle_deg)\n        )\n        body = body.cut(groove)\n\n    # 3. D-shaft pocket from bottom (8mm deep)\n    d_radius = shaft_dia / 2.0\n    bore = (\n        cq.Workplane(\"XY\")\n        .circle(d_radius)\n        .extrude(pocket_depth + 0.01)\n        .translate((0, 0, -0.005))\n    )\n    body = body.cut(bore)\n\n    # D-flat cut on +X side\n    flat_x = d_radius - shaft_flat_depth\n    flat_cut = (\n        cq.Workplane(\"XY\")\n        .rect(shaft_flat_depth * 2, shaft_dia + 0.1)\n        .extrude(pocket_depth + 0.01)\n        .translate((flat_x + shaft_flat_depth, 0, -0.005))\n    )\n    body = body.cut(flat_cut)\n\n    # 4. Top edge comfort fillet\n    body = body.edges(\n        cq.selectors.NearestToPointSelector((0, 0, height))\n    ).fillet(top_fillet)\n\n    return body\n```\n\n**Design details:**\n| Feature | Value |\n|---|---|\n| Outer diameter | 25 mm |\n| Height | 15 mm |\n| D-shaft bore | 6 mm diameter, 8 mm deep |\n| D-flat | 0.5 mm deep on one side |\n| Knurl grooves | 36 grooves, 0.5 mm deep, ~40% arc coverage |\n| Top fillet | 0.8 mm comfort radius |\n| Min wall (around pocket) | 4.25 mm ✓ |\n\n**Next action:** Once the CadQuery runner environment is configured, I can re-run this model through `cadquery_dry_run` → `cadquery_execute` to commit `parts/grip_knob.py` and export `outputs/grip_knob.step`. Would you like me to retry, or do you need help setting up the runner?",
+  "agent_text_length": 3992,
+  "agent_text_preview": "**Status summary:**\n- **Mode:** Agent\n- **Files changed:** `parts/grip_knob_README.md` (placeholder only)\n- **Outputs:** None — runner unavailable\n- **Plan:** No plan package (single-step creation)\n\n---\n\n**Complete model code ready for execution:**\n\n```python\n\"\"\"\nKnob – 25mm grip knob with D-shaft pocket and knurled grip.\n\"\"\"\n\nimport cadquery as cq\nimport math\n\nMODEL_DESCRIPTION = \"A 25mm diameter, 15mm tall grip knob with a 6mm D-shaft pocket (8mm deep) and vertical knurled groove pattern o...",
+  "failure_reason": "cadquery_execute did not succeed; no brief found in agent output; exports_generated required but cadquery_execute did not succeed",
+  "passed": false,
+  "prompt": "Create a knob: 25mm diameter, 15mm tall cylinder with a 6mm D-shaft hole in the bottom (8mm deep). Add a knurled grip pattern (vertical grooves around the outside).",
+  "scenario_id": "b05",
+  "scenario_name": "Cylindrical knob with grip pattern",
+  "tool_traces": [
+    {
+      "arguments_summary": "{}",
+      "result_status": "ok",
+      "tool": "get_project_context"
+    },
+    {
+      "arguments_summary": "{\"code\":\"\\\"\\\"\\\"\\nKnob – 25mm grip knob with D-shaft pocket and knurled grip.\\n\\\"\\\"\\\"\\n\\nimport cadquery as cq\\nimport math\\n\\nMODEL_DESCRIPTION = \\\"A 25mm diameter, 15mm tall grip knob with a 6mm D-...",
+      "result_status": "error",
+      "tool": "cadquery_check_source"
+    },
+    {
+      "arguments_summary": "{\"code\":\"\\\"\\\"\\\"\\nKnob – 25mm grip knob with D-shaft pocket and knurled grip.\\n\\\"\\\"\\\"\\n\\nimport cadquery as cq\\nimport math\\n\\nMODEL_DESCRIPTION = \\\"A 25mm diameter, 15mm tall grip knob with a 6mm D-...",
+      "result_status": "error",
+      "tool": "cadquery_dry_run"
+    },
+    {
+      "arguments_summary": "{\"contents\":\"# parts/grip_knob.py\\n#\\n# Status: PENDING — CadQuery runner not available in this workspace.\\n# To execute: ensure budn_cad_runner is installed, then run through Agent mode.\\n#\\n# This...",
+      "result_status": "ok",
+      "tool": "write_file"
+    }
+  ]
+}

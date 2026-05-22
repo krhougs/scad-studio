@@ -127,7 +127,6 @@ fn agent_identity_commands_snapshot_and_events_roundtrip() {
             initial_turn: Some(ChatCreateInitialTurn {
                 mode: AgentMode::Agent,
                 plan_ref: None,
-                context_refs: vec!["@part[case]".into()],
             }),
         }),
     });
@@ -142,7 +141,6 @@ fn agent_identity_commands_snapshot_and_events_roundtrip() {
             prompt: "continue".into(),
             mode: AgentMode::Agent,
             plan_ref: None,
-            context_refs: vec!["@part[case]".into()],
         }),
     });
     let decoded = decode_client_frame(&encode_client_frame(&start).unwrap()).unwrap();
@@ -677,7 +675,6 @@ fn agent_push_events_and_busy_error_roundtrip() {
             prompt: "make a taller lid".into(),
             mode: AgentMode::Plan,
             plan_ref: None,
-            context_refs: Vec::new(),
             provider_id: Some("openai".into()),
             model_id: Some("gpt-5.2".into()),
             reasoning_effort: Some("high".into()),
@@ -907,7 +904,6 @@ fn agent_push_events_and_busy_error_roundtrip() {
             prompt: "run plan".into(),
             mode: AgentMode::Agent,
             plan_ref: Some(plan_ref),
-            context_refs: vec!["@part[top_lid]".into()],
             provider_id: Some("anthropic".into()),
             model_id: Some("claude-sonnet".into()),
             reasoning_effort: Some("medium".into()),

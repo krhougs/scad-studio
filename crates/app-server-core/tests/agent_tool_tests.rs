@@ -3312,7 +3312,6 @@ fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
     let executor = WorkspaceToolExecutor::new(dir.path().to_path_buf());
     let mut context = tool_context(AgentMode::Agent, None);
     context.active_selection_index = Some(0);
-    context.context_refs = vec!["@part[lid]".into()];
     context.selections = vec![SelectionRef {
         kind: SelectionKind::Face,
         ref_text: "@face[lid:f_1]".into(),
@@ -3329,7 +3328,6 @@ fn workspace_tool_executor_get_selection_uses_tool_context_snapshot() {
     let result: serde_json::Value = serde_json::from_str(&tool_result).unwrap();
     assert_eq!(result["status"], "ok");
     assert_eq!(result["active_index"], 0);
-    assert_eq!(result["context_refs"][0], "@part[lid]");
     assert_eq!(result["selections"][0]["ref_text"], "@face[lid:f_1]");
     assert_eq!(
         result["selections"][0]["candidate_feature_ref"],

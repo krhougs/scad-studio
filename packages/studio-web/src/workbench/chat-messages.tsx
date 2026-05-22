@@ -272,6 +272,16 @@ export function AgentEventRow({
   if (event.event === "agent.done") {
     return <AgentDoneMark cancelled={event.payload?.["cancelled"] === true} />;
   }
+  if (isCadQueryToolEvent(event)) {
+    return <CadQueryToolCard event={event} />;
+  }
+  if (event.event === "agent.mesh_ready") {
+    return (
+      <div className="cadquery-tool-card is-mesh-ready" data-testid="cadquery-mesh-ready">
+        <span className="cadquery-tool-status is-success">model updated</span>
+      </div>
+    );
+  }
   if (event.event === "agent.plan_saved") {
     const plan = parsePlanSavedEvent(event);
     if (plan) {
@@ -307,6 +317,93 @@ export function AgentEventRow({
       ) : null}
     </>
   );
+}
+
+const CADQUERY_TOOL_NAMES = new Set([
+  "cadquery_dry_run",
+  "cadquery_execute",
+  "cadquery_analyze_source",
+  "cadquery_check_source",
+  "cadquery_get_result",
+  "cadquery_resolve_selection",
+]);
+
+function isCadQueryToolEvent(event: AgentEvent): boolean {
+  if (event.event !== "agent.tool_start" && event.event !== "agent.tool_result")
+    return false;
+  const tool = stringField(event.payload ?? {}, "tool_name");
+  return CADQUERY_TOOL_NAMES.has(tool);
+}
+
+function parseCadQueryToolEvent(event: AgentEvent) {
+  const payload = event.payload ?? {};
+  const toolName = stringField(payload, "tool_name");
+  const isResult = event.event === "agent.tool_result";
+  const args = safeParse(stringField(payload, "args_json"));
+  const parsed = safeParse(stringField(payload, "result_json"));
+  const isError = parsed?.status === "error";
+  const diagnostics = parsed?.diagnostics as Record<string, unknown> | undefined;
+  return {
+    label: toolName.replace("cadquery_", ""),
+    targetPath: args?.target_path as string | undefined,
+    isResult,
+    isError,
+    errorType: parsed?.error_type as string | undefined,
+    errorMessage: parsed?.message as string | undefined,
+    traceback: diagnostics?.traceback as string | undefined,
+    exports: parsed?.exports as string[] | undefined,
+    committedFiles: parsed?.committed_files as string[] | undefined,
+    statusClass: isResult ? (isError ? "is-error" : "is-success") : "is-running",
+    statusText: isResult ? (isError ? ((parsed?.error_type as string) ?? "error") : "success") : "running",
+  };
+}
+
+function CadQueryToolCard({ event }: { event: AgentEvent }) {
+  const [diagOpen, setDiagOpen] = useState(false);
+  const d = parseCadQueryToolEvent(event);
+
+  return (
+    <div className={`cadquery-tool-card ${d.statusClass}`} data-testid="cadquery-tool-card">
+      <div className="cadquery-tool-header">
+        <code className="cadquery-tool-name">{d.label}</code>
+        {d.targetPath && <code className="cadquery-tool-target">{d.targetPath}</code>}
+        <span className={`cadquery-tool-status ${d.statusClass}`}>{d.statusText}</span>
+      </div>
+      {d.isResult && !d.isError && (d.committedFiles?.length || d.exports?.length) ? (
+        <div className="cadquery-tool-detail">
+          {d.committedFiles?.map((f) => <code key={f}>{f}</code>)}
+          {d.exports?.map((e) => <code key={e}>{e}</code>)}
+        </div>
+      ) : null}
+      {d.isError && d.errorMessage && (
+        <div className="cadquery-tool-error">
+          <p>{d.errorMessage}</p>
+          {d.traceback && (
+            <button
+              type="button"
+              className="cadquery-diag-toggle"
+              onClick={() => setDiagOpen(!diagOpen)}
+            >
+              {diagOpen ? "hide diagnostics" : "show diagnostics"}
+            </button>
+          )}
+          {diagOpen && d.traceback && (
+            <pre className="cadquery-tool-traceback">
+              {d.traceback.split("\n").slice(0, 3).join("\n")}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function safeParse(json: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }
 
 function AgentDoneMark({ cancelled }: { cancelled: boolean }) {

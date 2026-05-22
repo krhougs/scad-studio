@@ -230,6 +230,71 @@ describe("CadQueryViewer", () => {
 
     expect(onMode).toHaveBeenCalledWith("edge");
   });
+
+  it("groups dock buttons into object and geometry levels with separator", async () => {
+    const client = fakeClient({ scene: "assembly" });
+
+    render(
+      <CadQueryViewer
+        resultId="cq_123"
+        client={client}
+        label="full_adapter"
+        selectionMode="face"
+        onPreviewStatus={() => undefined}
+        onInfo={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(viewer.setCadQueryMesh).toHaveBeenCalled());
+
+    const dock = screen.getByTestId("cadquery-select-dock");
+    const groups = dock.querySelectorAll(".cadquery-select-dock__group");
+    expect(groups.length).toBe(2);
+    const seps = dock.querySelectorAll(".cadquery-select-dock__sep");
+    expect(seps.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows selection count and clear button when selections exist", async () => {
+    const client = fakeClient();
+    const selections = [
+      {
+        kind: "face" as const,
+        ref_text: "@face[top_lid:f_0]",
+        owner_ref_text: "@part[top_lid]",
+        owner_object_kind: "part" as const,
+        instance_path: null,
+        candidate_feature_ref: null,
+        build_id: "b1",
+        result_id: "cq_123",
+        ambiguous: false,
+      },
+    ];
+
+    render(
+      <CadQueryViewer
+        resultId="cq_123"
+        client={client}
+        label="top_lid"
+        selectionMode="face"
+        selectionSnapshot={{ selections, active_index: 0 }}
+        onPreviewStatus={() => undefined}
+        onInfo={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(viewer.setCadQueryMesh).toHaveBeenCalled());
+
+    const dock = screen.getByTestId("cadquery-select-dock");
+    expect(dock.querySelector(".cadquery-select-dock__count")?.textContent).toBe("1");
+    const clearBtn = screen.getByTestId("cadquery-select-clear");
+    expect(clearBtn).toBeTruthy();
+
+    fireEvent.click(clearBtn);
+    expect(client.dispatchSelectionUpdate).toHaveBeenCalledWith({
+      selections: [],
+      active_index: null,
+    });
+  });
 });
 
 function fakeClient(

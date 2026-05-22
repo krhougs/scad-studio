@@ -272,7 +272,7 @@ fn spec(
 fn cadquery_analyze_source_spec() -> AgentToolSpec {
     spec(
         "cadquery_analyze_source",
-        "Analyze existing CadQuery source and paired design notes without executing Python.",
+        "Analyze existing CadQuery source and paired design notes without executing Python. Use this to understand an existing model's structure, features, and parameters before modifying it. Typically follow with cadquery_check_source or cadquery_dry_run to validate changes.",
         cadquery_analyze_source_input_schema(),
         cadquery_analyze_source_success_schema(),
         AgentToolCategory::CadQuery,
@@ -285,7 +285,7 @@ fn cadquery_analyze_source_spec() -> AgentToolSpec {
 fn cadquery_check_source_spec() -> AgentToolSpec {
     spec(
         "cadquery_check_source",
-        "Check proposed complete CadQuery source against the static model contract.",
+        "Check proposed complete CadQuery source against the static model contract without executing Python. Use this to validate structure, naming, and contract compliance before committing to a dry_run. Available in both Plan and Agent mode.",
         cadquery_check_source_input_schema(),
         cadquery_check_source_success_schema(),
         AgentToolCategory::CadQuery,
@@ -298,7 +298,7 @@ fn cadquery_check_source_spec() -> AgentToolSpec {
 fn cadquery_dry_run_spec() -> AgentToolSpec {
     spec(
         "cadquery_dry_run",
-        "Run proposed CadQuery code in staging and cache a temporary preview result.",
+        "Run proposed CadQuery code in staging without committing to the workspace. Use this to validate geometry, check for errors, and preview the result before calling cadquery_execute. Always dry_run before execute, especially after modifying code to fix a failure.",
         cadquery_dry_run_input_schema(),
         cadquery_run_success_schema(),
         AgentToolCategory::CadQuery,
@@ -311,7 +311,7 @@ fn cadquery_dry_run_spec() -> AgentToolSpec {
 fn cadquery_execute_spec() -> AgentToolSpec {
     spec(
         "cadquery_execute",
-        "Commit CadQuery source and declared outputs through staging in Agent mode.",
+        "Commit CadQuery source and declared outputs through staging in Agent mode. This writes the model to the workspace and generates exports. Only call after a successful cadquery_dry_run. One successful execute per Agent run.",
         cadquery_execute_input_schema(),
         cadquery_execute_success_schema(),
         AgentToolCategory::CadQuery,
@@ -324,7 +324,7 @@ fn cadquery_execute_spec() -> AgentToolSpec {
 fn cadquery_get_result_spec() -> AgentToolSpec {
     spec(
         "cadquery_get_result",
-        "Return a lightweight CadQuery result summary without full mesh arrays.",
+        "Return a lightweight CadQuery result summary (topology, features, bounding box, export paths) without full mesh arrays. Use this to inspect the current model state, verify a previous execute succeeded, or gather context before modification.",
         cadquery_get_result_input_schema(),
         cadquery_get_result_success_schema(),
         AgentToolCategory::CadQuery,
@@ -337,7 +337,7 @@ fn cadquery_get_result_spec() -> AgentToolSpec {
 fn cadquery_resolve_selection_spec() -> AgentToolSpec {
     spec(
         "cadquery_resolve_selection",
-        "Map a result-local selection to owner, feature and stability risk.",
+        "Map a Viewer selection (face/edge/vertex pick) to its owning component, feature, and stability risk. Use this when the user selects geometry in the Viewer and you need to understand which model feature it belongs to before making targeted modifications.",
         cadquery_resolve_selection_input_schema(),
         resolve_ref_success_schema(),
         AgentToolCategory::CadQuery,
